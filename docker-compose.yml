@@ -17,7 +17,8 @@ services:
     environment:
       DATABASE_URL: postgresql://dashboard:dashboard@db:5432/dashboard
     depends_on:
-      - db
+      - db:
+        condition: service_healthy
 
   db:
     image: postgres:16
@@ -29,6 +30,11 @@ services:
       POSTGRES_PASSWORD: dashboard
     volumes:
       - dashboard-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dashboard"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   dashboard-db:
