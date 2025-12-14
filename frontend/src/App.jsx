@@ -13,7 +13,6 @@ export default function App() {
 
   return (
     <div style={{display:"flex"}}>
-      <h1>Hello World!</h1>
       <div style={{flex:1, padding:20}}>
         {customers.map(c => <CustomerCard key={c.id} customer={c} />)}
       </div>
