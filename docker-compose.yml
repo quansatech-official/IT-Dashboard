@@ -18,7 +18,6 @@ services:
       DATABASE_URL: postgresql://dashboard:dashboard@db:5432/dashboard
     depends_on:
       - db:
-        condition: service_healthy
 
   db:
     image: postgres:16
