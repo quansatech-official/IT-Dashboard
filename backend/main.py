@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from fastapi.middleware.cors import CORSMiddleware
 import os
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -27,23 +28,36 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Browser kann Frontend überall hosten
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+from pydantic import BaseModel
+
+class CustomerModel(BaseModel):
+    id: int
+    name: str
+
 @app.get("/customers")
 def get_customers():
-    db = SessionLocal()
-    customers = db.query(Customer).all()
-    return [
-        {
-            "id": c.id,
-            "name": c.name,
-            "tasks": [{"id": t.id, "title": t.title, "billable": t.billable} for t in c.tasks]
-        }
-        for c in customers
-    ]
+    with SessionLocal() as db:
+        customers_db = db.query(Customer).all()
+        return [
+            {
+                "id": c.id,
+                "name": c.name,
+                "tasks": [{"id": t.id, "title": t.title, "billable": t.billable} for t in c.tasks]
+            } for c in customers_db
+        ]
 
 @app.post("/customers")
-def create_customer(name: str):
-    db = SessionLocal()
-    c = Customer(name=name)
-    db.add(c)
-    db.commit()
+def create_customer(customer: CustomerModel):
+    with SessionLocal() as db:
+        c = Customer(id=customer.id, name=customer.name)
+        db.add(c)
+        db.commit()
     return {"status": "ok"}
