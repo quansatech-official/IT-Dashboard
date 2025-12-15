@@ -127,9 +127,23 @@ export default function App() {
 
   useEffect(() => {
     fetch("/api/customers")
-      .then(r => r.json())
+      .then(r => {
+        // Prüfe auf HTTP-Fehler (Status 4xx oder 5xx)
+        if (!r.ok) {
+            throw new Error(`HTTP-Status ${r.status}: Konnte Kundendaten nicht laden.`);
+        }
+        return r.json();
+      })
       .then(data => {
-        const normalized = data.map(c => ({ ...c, tasks: Array.isArray(c.tasks) ? c.tasks : [] }));
+        // KORREKTUR: Prüfe, ob die Daten ein Array sind, um 'map' sicher aufzurufen.
+        // Wenn 'data' kein Array ist (z.B. null oder ein Fehlerobjekt), verwende ein leeres Array.
+        const customersArray = Array.isArray(data) ? data : [];
+        
+        const normalized = customersArray.map(c => ({ 
+            ...c, 
+            tasks: Array.isArray(c.tasks) ? c.tasks : [] 
+        }));
+        
         setCustomers(normalized);
         setLoading(false);
       })
