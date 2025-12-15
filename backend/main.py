@@ -2,12 +2,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, BigInteger
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, BigInteger, ForeignKey
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
 import time
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard")
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL", 
+    "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
+)
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
@@ -18,12 +21,12 @@ class Customer(Base):
     __tablename__ = "customers"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    tasks = []
+    tasks = relationship("Task", back_populates="customer", cascade="all, delete-orphan")
 
 class Task(Base):
     __tablename__ = "tasks"
     id = Column(Integer, primary_key=True, index=True)
-    customer_id = Column(Integer)
+    customer_id = Column(Integer, ForeignKey("customers.id"))
     title = Column(String, nullable=False)
     erledigt = Column(Boolean, default=False)
     aberechnet = Column(Boolean, default=False)
@@ -31,6 +34,8 @@ class Task(Base):
     elapsed = Column(BigInteger, default=0)
     running = Column(Boolean, default=False)
     startTime = Column(BigInteger, default=0)
+
+    customer = relationship("Customer", back_populates="tasks")
 
 class PinNote(Base):
     __tablename__ = "pin_notes"
@@ -83,73 +88,87 @@ def serialize_task(t: Task) -> Dict[str, Any]:
         "startTime": t.startTime
     }
 
+def serialize_customer(c: Customer) -> Dict[str, Any]:
+    return {
+        "id": c.id,
+        "name": c.name,
+        "tasks": [serialize_task(t) for t in c.tasks]
+    }
+
 # ----------------- Endpoints -----------------
+
 @app.get("/api/customers")
 def get_customers():
     with SessionLocal() as db:
-        customers = db.execute("SELECT * FROM customers").fetchall()
-        result = []
-        for c in customers:
-            tasks = db.execute(f"SELECT * FROM tasks WHERE customer_id={c.id}").fetchall()
-            task_list = [serialize_task(Task(**dict(t))) for t in tasks]
-            result.append({"id": c.id, "name": c.name, "tasks": task_list})
-        return result
+        customers = db.query(Customer).all()
+        return [serialize_customer(c) for c in customers]
 
 @app.post("/api/customers")
 def create_customer(c: CustomerCreate):
     with SessionLocal() as db:
-        db.execute(f"INSERT INTO customers (name) VALUES ('{c.name}')")
+        customer = Customer(name=c.name)
+        db.add(customer)
         db.commit()
-        return {"name": c.name}
+        db.refresh(customer)
+        return serialize_customer(customer)
 
 @app.post("/api/tasks")
 def create_task(t: TaskCreate):
-    now = int(time.time() * 1000)
     with SessionLocal() as db:
-        db.execute(f"INSERT INTO tasks (customer_id, title, elapsed, running, startTime) VALUES ({t.customer_id}, '{t.title}', 0, false, 0)")
+        task = Task(customer_id=t.customer_id, title=t.title)
+        db.add(task)
         db.commit()
-        return {"title": t.title}
+        db.refresh(task)
+        return serialize_task(task)
 
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: int, t_update: TaskUpdate):
     with SessionLocal() as db:
-        task = db.execute(f"SELECT * FROM tasks WHERE id={task_id}").first()
+        task = db.query(Task).filter(Task.id == task_id).first()
         if not task:
-            raise HTTPException(status_code=404)
-        for k, v in t_update.dict(exclude_unset=True).items():
-            db.execute(f"UPDATE tasks SET {k}='{v}' WHERE id={task_id}")
+            raise HTTPException(status_code=404, detail="Task not found")
+        for field, value in t_update.dict(exclude_unset=True).items():
+            setattr(task, field, value)
         db.commit()
-        return {"id": task_id}
+        db.refresh(task)
+        return serialize_task(task)
 
 @app.patch("/api/tasks/{task_id}/toggle_timer")
 def toggle_task_timer(task_id: int):
     now = int(time.time() * 1000)
     with SessionLocal() as db:
-        task = db.execute(f"SELECT * FROM tasks WHERE id={task_id}").first()
+        task = db.query(Task).filter(Task.id == task_id).first()
         if not task:
-            raise HTTPException(status_code=404)
-        t = dict(task)
-        if t["running"]:
-            elapsed = t["elapsed"] + (now - t["startTime"])
-            db.execute(f"UPDATE tasks SET running=false, elapsed={elapsed}, startTime=0 WHERE id={task_id}")
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task.running:
+            task.elapsed += now - task.startTime
+            task.running = False
+            task.startTime = 0
         else:
-            db.execute(f"UPDATE tasks SET running=true, startTime={now} WHERE id={task_id}")
+            task.running = True
+            task.startTime = now
         db.commit()
-        return {"id": task_id}
+        db.refresh(task)
+        return serialize_task(task)
 
 @app.get("/api/pinboard")
 def get_pinboard():
     with SessionLocal() as db:
-        note = db.execute("SELECT * FROM pin_notes LIMIT 1").first()
+        note = db.query(PinNote).first()
         if not note:
-            db.execute("INSERT INTO pin_notes (content) VALUES ('')")
+            note = PinNote(content="")
+            db.add(note)
             db.commit()
-            note = db.execute("SELECT * FROM pin_notes LIMIT 1").first()
+            db.refresh(note)
         return {"id": note.id, "content": note.content}
 
 @app.patch("/api/pinboard/{note_id}")
-def update_pinboard(note_id: int, note: PinNoteUpdate):
+def update_pinboard(note_id: int, data: PinNoteUpdate):
     with SessionLocal() as db:
-        db.execute(f"UPDATE pin_notes SET content='{note.content}' WHERE id={note_id}")
+        note = db.query(PinNote).filter(PinNote.id == note_id).first()
+        if not note:
+            raise HTTPException(status_code=404, detail="Pinboard not found")
+        note.content = data.content
         db.commit()
-        return {"id": note_id, "content": note.content}
+        db.refresh(note)
+        return {"id": note.id, "content": note.content}
