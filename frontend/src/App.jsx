@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import CustomerCard from "./components/CustomerCard";
 import Pinboard from "./components/Pinboard";
+import NewCustomerForm from "./components/NewCustomerForm";
 
 export default function App() {
   const [customers, setCustomers] = useState([]);
@@ -30,6 +31,7 @@ export default function App() {
   return (
     <div style={{ display: "flex", height: "100vh", backgroundColor: "#f0f2f5" }}>
       <div style={{ flex: 1, padding: 20, overflowY: "auto" }}>
+        <NewCustomerForm onCreated={c => setCustomers(prev => [c, ...prev])}/>
         <h1>Customers</h1>
         {customers.length === 0
           ? <div>No customers found.</div>
