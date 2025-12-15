@@ -14,7 +14,7 @@ import {
 
 // ----- Utilities -----
 
-const API_BASE = "http://localhost:8000/api"; // Deine FastAPI-URL
+const API_BASE = "http://backend:8000/api"; // Deine FastAPI-URL
 
 const formatTime = (ms) => {
   const totalSeconds = Math.floor(ms / 1000);
