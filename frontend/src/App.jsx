@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 
 // ----- Customer Card -----
 function CustomerCard({ customer, onTaskUpdate, onNewTask, onTaskDelete }) {
-  const [_, forceUpdate] = useState(0); // Für Live-Timer
+  const [_, forceUpdate] = useState(0);
 
   useEffect(() => {
     const interval = setInterval(() => forceUpdate(n => n + 1), 1000);
@@ -46,41 +46,51 @@ function CustomerCard({ customer, onTaskUpdate, onNewTask, onTaskDelete }) {
   };
 
   return (
-    <div className="bg-white p-4 rounded-lg shadow-md mb-4 relative">
-      <div className="font-bold text-lg">{customer.name}</div>
-      <div className="absolute top-4 right-4 text-sm text-gray-500">
-        Gesamtzeit: {Math.floor(totalTime / 1000 / 60)} min
+    <div className="bg-white rounded-xl shadow-lg p-6 mb-6 hover:shadow-2xl transition-shadow duration-300">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-xl font-semibold">{customer.name}</h2>
+        <span className="text-sm text-gray-500">
+          Gesamt: {Math.floor(totalTime / 1000 / 60)} min
+        </span>
       </div>
 
-      <div className="mt-2">
+      <div className="space-y-2">
         {(customer.tasks || []).map(task => {
           const elapsed = (task.elapsed || 0) + (task.running && task.startTime ? Date.now() - task.startTime : 0);
           return (
-            <div key={task.id} className="flex items-center mb-2 gap-2">
-              <input type="checkbox" checked={task.erledigt} onChange={() => toggleTask(task.id, "erledigt")} className="w-4 h-4" />
-              <input type="checkbox" checked={task.aberechnet} onChange={() => toggleTask(task.id, "aberechnet")} className="w-4 h-4" />
-              <input type="checkbox" checked={task.kulant} onChange={() => toggleTask(task.id, "kulant")} className="w-4 h-4" />
+            <div
+              key={task.id}
+              className={`flex items-center gap-2 p-2 rounded-lg transition-colors duration-200
+                ${task.erledigt ? "bg-gray-100 text-gray-400 line-through" : "bg-gray-50 hover:bg-gray-100"}
+              `}
+            >
+              <input type="checkbox" checked={task.erledigt} onChange={() => toggleTask(task.id, "erledigt")} className="w-5 h-5" />
+              <input type="checkbox" checked={task.aberechnet} onChange={() => toggleTask(task.id, "aberechnet")} className="w-5 h-5" />
+              <input type="checkbox" checked={task.kulant} onChange={() => toggleTask(task.id, "kulant")} className="w-5 h-5" />
 
               <input
                 type="text"
                 value={task.title}
                 onChange={e => handleEdit(task.id, e.target.value)}
-                className="border rounded px-2 py-1 flex-1"
+                className="flex-1 bg-transparent border-none focus:outline-none text-sm"
               />
 
               <button
                 onClick={() => toggleTimer(task.id)}
-                className={`px-2 py-1 rounded ${task.running ? "bg-red-500 hover:bg-red-600 text-white" : "bg-blue-500 hover:bg-blue-600 text-white"}`}
+                className={`px-3 py-1 rounded-md text-white text-sm font-medium transition-colors
+                  ${task.running ? "bg-red-500 hover:bg-red-600" : "bg-blue-500 hover:bg-blue-600"}
+                `}
               >
                 {task.running ? "⏹" : "⏱"}
               </button>
-              <span className="text-sm text-gray-600">
-                {Math.floor(elapsed / 1000 / 60)}:{Math.floor((elapsed / 1000) % 60).toString().padStart(2, "0")} min
+
+              <span className="text-sm text-gray-600 w-16 text-right">
+                {Math.floor(elapsed / 1000 / 60)}:{Math.floor((elapsed / 1000) % 60).toString().padStart(2, "0")}
               </span>
 
               <button
                 onClick={() => onTaskDelete(customer.id, task.id)}
-                className="px-2 py-1 bg-gray-300 hover:bg-gray-400 rounded"
+                className="px-2 py-1 bg-gray-300 hover:bg-gray-400 rounded text-sm"
               >
                 🗑
               </button>
@@ -88,7 +98,7 @@ function CustomerCard({ customer, onTaskUpdate, onNewTask, onTaskDelete }) {
           );
         })}
 
-        <div className="flex mt-1 gap-2">
+        <div className="flex mt-2 gap-2">
           <input type="text" placeholder="Neue Aufgabe" id={`task-${customer.id}`} className="border rounded px-2 py-1 flex-1" />
           <button
             onClick={() => {
@@ -98,7 +108,7 @@ function CustomerCard({ customer, onTaskUpdate, onNewTask, onTaskDelete }) {
                 document.getElementById(`task-${customer.id}`).value = "";
               }
             }}
-            className="px-2 py-1 bg-green-500 hover:bg-green-600 text-white rounded"
+            className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white rounded-md"
           >
             +
           </button>
@@ -120,15 +130,18 @@ function NewCustomerForm({ onCreated }) {
   };
 
   return (
-    <div className="flex mb-4 gap-2">
+    <div className="flex mb-6 gap-2">
       <input
         type="text"
         placeholder="Neuer Kunde"
         value={name}
         onChange={e => setName(e.target.value)}
-        className="border rounded px-2 py-1 flex-1"
+        className="border rounded px-3 py-1 flex-1"
       />
-      <button onClick={addCustomer} className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white rounded">
+      <button
+        onClick={addCustomer}
+        className="px-4 py-1 bg-green-500 hover:bg-green-600 text-white rounded-md"
+      >
         +
       </button>
     </div>
@@ -151,11 +164,11 @@ function Pinboard() {
   };
 
   return (
-    <div className="fixed top-5 right-5 w-72 min-h-[150px] bg-white p-4 rounded-lg shadow-md">
+    <div className="fixed top-5 right-5 w-80 min-h-[180px] bg-white p-4 rounded-xl shadow-lg">
       <textarea
         value={text}
         onChange={e => save(e.target.value)}
-        className="w-full h-full border-none resize-none"
+        className="w-full h-full border-none resize-none focus:outline-none"
         placeholder="Notiz eingeben..."
       />
     </div>
@@ -187,10 +200,13 @@ export default function App() {
   const addCustomer = c => setCustomers(prev => [c, ...prev]);
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-100 p-5">
-      <img src="https://www.quansatech.at/wp-content/uploads/2022/09/cropped-quansatech_logo_2022.svg" alt="Quansatech" className="h-10 mb-4" />
+    <div className="flex flex-col min-h-screen bg-gray-100 p-6">
+      <img src="https://static.wixstatic.com/media/d613cf_81e665f4b1be40469a05c0b3b30b6cb4~mv2.png/v1/fill/w_239,h_41,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/d613cf_81e665f4b1be40469a05c0b3b30b6cb4~mv2.png" alt="Logo" className="h-10 mb-6" />
       <NewCustomerForm onCreated={addCustomer} />
-      {customers.length === 0 ? <div>Keine Kunden vorhanden.</div> :
+
+      {customers.length === 0 ? (
+        <div className="text-gray-500">Keine Kunden vorhanden.</div>
+      ) : (
         customers.map(c => (
           <CustomerCard
             key={c.id}
@@ -200,7 +216,8 @@ export default function App() {
             onTaskDelete={deleteTask}
           />
         ))
-      }
+      )}
+
       <Pinboard />
     </div>
   );
