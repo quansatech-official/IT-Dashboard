@@ -7,27 +7,15 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const API_URL = import.meta.env.VITE_API_URL
-
   useEffect(() => {
-    const fetchCustomers = async () => {
-      try {
-        const res = await fetch(`${API_URL}/customers`);
-        if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`);
-        }
-        const data = await res.json();
-        setCustomers(data);
-      } catch (err) {
-        console.error("Failed to fetch customers:", err);
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchCustomers();
-  }, [API_URL]);
+  fetch("/api/customers")
+    .then(r => {
+      if (!r.ok) throw new Error(r.status);
+      return r.json();
+    })
+    .then(setCustomers)
+    .catch(console.error);
+}, []);
 
   if (loading) return <div style={{ padding: 20 }}>Loading customers...</div>;
   if (error) return <div style={{ padding: 20, color: "red" }}>Error: {error}</div>;
