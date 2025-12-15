@@ -7,12 +7,13 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
 import time
 
+# ----------------- Database -----------------
 DATABASE_URL = os.environ.get(
     "DATABASE_URL", 
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
 )
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
@@ -97,6 +98,7 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
 
 # ----------------- Endpoints -----------------
 
+# --- Customers ---
 @app.get("/api/customers")
 def get_customers():
     with SessionLocal() as db:
@@ -112,6 +114,17 @@ def create_customer(c: CustomerCreate):
         db.refresh(customer)
         return serialize_customer(customer)
 
+@app.delete("/api/customers/{customer_id}")
+def delete_customer(customer_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).filter(Customer.id == customer_id).first()
+        if not customer:
+            raise HTTPException(status_code=404, detail="Customer not found")
+        db.delete(customer)
+        db.commit()
+        return {"detail": "Customer deleted"}
+
+# --- Tasks ---
 @app.post("/api/tasks")
 def create_task(t: TaskCreate):
     with SessionLocal() as db:
@@ -151,6 +164,7 @@ def toggle_task_timer(task_id: int):
         db.refresh(task)
         return serialize_task(task)
 
+# --- Pinboard ---
 @app.get("/api/pinboard")
 def get_pinboard():
     with SessionLocal() as db:
