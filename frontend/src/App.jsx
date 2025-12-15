@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { Play, Square, CheckCircle, DollarSign, Heart, Trash2, Plus, Clock, Users, StickyNote } from "lucide-react";
 
 // ----- API -----
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
+const API_BASE =  "/api"
 
 async function fetchCustomers() { const res = await fetch(`${API_BASE}/customers`); return res.json(); }
 async function createCustomer(name) { const res = await fetch(`${API_BASE}/customers`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({name})}); return res.json(); }
