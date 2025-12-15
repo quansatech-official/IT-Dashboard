@@ -55,36 +55,8 @@ const msToMMSS = (ms) => {
   return `${m}:${(s % 60).toString().padStart(2, "0")}`;
 };
 
-/* ================= Time Editor ================= */
-function TimeEditor({ task, currentElapsed, onUpdate }) {
-  const [val, setVal] = useState(msToMMSS(currentElapsed));
-
-  useEffect(() => {
-    setVal(msToMMSS(currentElapsed));
-  }, [currentElapsed]);
-
-  const commit = () => {
-    const match = val.match(/^(\d+):([0-5]\d)$/);
-    if (!match) return;
-
-    const ms = (parseInt(match[1]) * 60 + parseInt(match[2])) * 1000;
-    onUpdate(task.id, { elapsed: ms, running: false, startTime: 0 });
-  };
-
-  return (
-    <input
-      value={val}
-      onChange={e => setVal(e.target.value)}
-      onBlur={commit}
-      onKeyDown={e => e.key === "Enter" && commit()}
-      className="w-16 text-xs font-mono text-right border rounded px-1 bg-slate-50"
-      title="MM:SS"
-    />
-  );
-}
-
 /* ================= Task ================= */
-function TaskItem({ task, onUpdate, onDelete, onToggle }) {
+function TaskItem({ task, reload }) {
   const currentElapsed =
     (task.elapsed || 0) +
     (task.running && task.startTime ? Date.now() - task.startTime : 0);
@@ -93,7 +65,7 @@ function TaskItem({ task, onUpdate, onDelete, onToggle }) {
     <div className="border rounded-lg p-3 bg-white space-y-2">
       <div className="flex gap-3 items-start">
         <button
-          onClick={() => onToggle(task.id)}
+          onClick={() => api.toggleTimer(task.id).then(reload)}
           className={`w-8 h-8 rounded-full flex items-center justify-center
           ${task.running ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"}`}
         >
@@ -102,36 +74,44 @@ function TaskItem({ task, onUpdate, onDelete, onToggle }) {
 
         <textarea
           value={task.title}
-          onChange={e => onUpdate(task.id, { title: e.target.value })}
+          onChange={e => api.updateTask(task.id, { title: e.target.value }).then(reload)}
           rows={2}
           className={`flex-1 resize-none text-sm border-none focus:ring-0
           ${task.erledigt ? "line-through text-slate-400" : ""}`}
         />
 
-        <TimeEditor
-          task={task}
-          currentElapsed={currentElapsed}
-          onUpdate={onUpdate}
+        <input
+          className="w-16 text-xs font-mono text-right border rounded px-1 bg-slate-50"
+          value={msToMMSS(currentElapsed)}
+          onBlur={e => {
+            const m = e.target.value.match(/^(\d+):([0-5]\d)$/);
+            if (!m) return;
+            const ms = (parseInt(m[1]) * 60 + parseInt(m[2])) * 1000;
+            api.updateTask(task.id, { elapsed: ms, running: false, startTime: 0 }).then(reload);
+          }}
         />
       </div>
 
       <div className="flex gap-1 items-center">
-        <button onClick={() => onUpdate(task.id, { erledigt: !task.erledigt })}
+        <button onClick={() => api.updateTask(task.id, { erledigt: !task.erledigt }).then(reload)}
           className={`p-1 rounded ${task.erledigt ? "bg-green-100 text-green-600" : "text-slate-300"}`}>
           <CheckCircle size={16} />
         </button>
 
-        <button onClick={() => onUpdate(task.id, { aberechnet: !task.aberechnet })}
+        <button onClick={() => api.updateTask(task.id, { aberechnet: !task.aberechnet }).then(reload)}
           className={`p-1 rounded ${task.aberechnet ? "bg-amber-100 text-amber-600" : "text-slate-300"}`}>
           <DollarSign size={16} />
         </button>
 
-        <button onClick={() => onUpdate(task.id, { kulant: !task.kulant })}
+        <button onClick={() => api.updateTask(task.id, { kulant: !task.kulant }).then(reload)}
           className={`p-1 rounded ${task.kulant ? "bg-rose-100 text-rose-600" : "text-slate-300"}`}>
           <Heart size={16} />
         </button>
 
-        <button onClick={() => onDelete(task.id)} className="ml-auto text-red-500">
+        <button
+          onClick={() => confirm("Aufgabe löschen?") && api.deleteTask(task.id).then(reload)}
+          className="ml-auto text-red-500"
+        >
           <Trash2 size={16} />
         </button>
       </div>
@@ -143,13 +123,6 @@ function TaskItem({ task, onUpdate, onDelete, onToggle }) {
 function CustomerCard({ customer, reload }) {
   const inputRef = useRef();
 
-  useEffect(() => {
-    if (customer.tasks.some(t => t.running)) {
-      const i = setInterval(reload, 1000);
-      return () => clearInterval(i);
-    }
-  }, [customer.tasks]);
-
   const total = customer.tasks.reduce((s, t) => {
     let e = t.elapsed || 0;
     if (t.running && t.startTime) e += Date.now() - t.startTime;
@@ -157,72 +130,55 @@ function CustomerCard({ customer, reload }) {
   }, 0);
 
   return (
-    <div className="bg-white rounded-xl p-4 shadow flex flex-col min-h-[320px]">
-      <div className="flex justify-between mb-3">
-        <h2 className="font-bold">{customer.name}</h2>
-        <span className="text-sm flex items-center gap-1 text-slate-500">
-          <Clock size={14} /> {msToMMSS(total)}
-        </span>
+    <div className="bg-white rounded-2xl p-5 shadow space-y-4">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-lg font-bold">{customer.name}</h2>
+          <div className="text-sm text-slate-500 flex gap-1 items-center">
+            <Clock size={14} /> {msToMMSS(total)}
+          </div>
+        </div>
+
+        <button
+          onClick={() =>
+            confirm(`Kunde "${customer.name}" wirklich löschen?`)
+            && api.deleteCustomer(customer.id).then(reload)
+          }
+          className="text-red-500 hover:bg-red-50 rounded-full p-2"
+        >
+          <Trash2 size={18} />
+        </button>
       </div>
 
-      <div className="flex-1 space-y-2 overflow-y-auto">
+      <div className="space-y-2 max-h-[360px] overflow-y-auto">
         {customer.tasks.map(t => (
-          <TaskItem
-            key={t.id}
-            task={t}
-            onUpdate={(id, data) => api.updateTask(id, data).then(reload)}
-            onToggle={(id) => api.toggleTimer(id).then(reload)}
-            onDelete={(id) => {
-              if (confirm("Aufgabe löschen?"))
-                api.deleteTask(id).then(reload);
-            }}
-          />
+          <TaskItem key={t.id} task={t} reload={reload} />
         ))}
       </div>
 
-      <div className="mt-3 flex gap-2">
+      <div className="flex gap-2">
         <input
           ref={inputRef}
           placeholder="Neue Aufgabe…"
-          className="flex-1 border rounded px-2 text-sm"
-          onKeyDown={e => e.key === "Enter" && (
-            api.addTask(customer.id, inputRef.current.value)
-              .then(() => { inputRef.current.value = ""; reload(); })
-          )}
+          className="flex-1 border rounded px-3 py-1 text-sm"
+          onKeyDown={e => {
+            if (e.key === "Enter" && inputRef.current.value.trim()) {
+              api.addTask(customer.id, inputRef.current.value.trim())
+                .then(() => { inputRef.current.value = ""; reload(); });
+            }
+          }}
         />
         <button
           className="bg-blue-600 text-white rounded px-3"
           onClick={() => {
-            api.addTask(customer.id, inputRef.current.value)
+            if (!inputRef.current.value.trim()) return;
+            api.addTask(customer.id, inputRef.current.value.trim())
               .then(() => { inputRef.current.value = ""; reload(); });
           }}
         >
           <Plus size={16} />
         </button>
       </div>
-    </div>
-  );
-}
-
-/* ================= Pinboard ================= */
-function Pinboard() {
-  const [note, setNote] = useState({ id: null, content: "" });
-
-  useEffect(() => { api.pinboard().then(setNote); }, []);
-
-  return (
-    <div className="bg-yellow-50 rounded-xl p-4 shadow h-full">
-      <div className="flex gap-2 mb-2 font-semibold text-yellow-800">
-        <StickyNote size={18} /> Notizen
-      </div>
-      <textarea
-        value={note.content}
-        onChange={e => {
-          setNote({ ...note, content: e.target.value });
-          if (note.id) api.savePinboard(note.id, e.target.value);
-        }}
-        className="w-full h-full resize-none bg-transparent border-none focus:ring-0"
-      />
     </div>
   );
 }
@@ -236,7 +192,7 @@ export default function App() {
 
   useEffect(() => {
     load();
-    const i = setInterval(load, 2000); // Live Reload
+    const i = setInterval(load, 2000);
     return () => clearInterval(i);
   }, []);
 
@@ -252,37 +208,32 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <div className="lg:col-span-3 space-y-6">
-          <div className="bg-white p-4 rounded-xl flex gap-3 shadow">
-            <Users />
-            <input
-              value={newCustomer}
-              onChange={e => setNewCustomer(e.target.value)}
-              placeholder="Neuen Kunden anlegen…"
-              className="flex-1 border-none focus:ring-0"
-            />
-            <button
-              className="bg-slate-900 text-white rounded px-4"
-              onClick={() => {
-                api.addCustomer(newCustomer).then(() => {
-                  setNewCustomer("");
-                  load();
-                });
-              }}
-            >
-              Erstellen
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            {customers.map(c => (
-              <CustomerCard key={c.id} customer={c} reload={load} />
-            ))}
-          </div>
+      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="col-span-full bg-white p-4 rounded-xl shadow flex gap-3">
+          <Users />
+          <input
+            value={newCustomer}
+            onChange={e => setNewCustomer(e.target.value)}
+            placeholder="Neuen Kunden anlegen…"
+            className="flex-1 border-none focus:ring-0"
+          />
+          <button
+            className="bg-slate-900 text-white rounded px-4"
+            onClick={() => {
+              if (!newCustomer.trim()) return;
+              api.addCustomer(newCustomer.trim()).then(() => {
+                setNewCustomer("");
+                load();
+              });
+            }}
+          >
+            Erstellen
+          </button>
         </div>
 
-        <Pinboard />
+        {customers.map(c => (
+          <CustomerCard key={c.id} customer={c} reload={load} />
+        ))}
       </main>
     </div>
   );
