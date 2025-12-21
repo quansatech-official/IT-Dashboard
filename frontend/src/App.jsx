@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Play, Square, CheckCircle, DollarSign, Heart,
   Trash2, Plus, Clock, Users, StickyNote
@@ -79,6 +79,29 @@ function TimeEditor({ task, elapsed, onSave }) {
 /* ================= Task ================= */
 function TaskItem({ task, reload }) {
   const elapsed = (task.elapsed || 0) + (task.running && task.startTime ? Date.now() - task.startTime : 0);
+  const [title, setTitle] = useState(task.title || "");
+  const saveTimer = useRef(null);
+
+  const saveTitle = useCallback(
+    (nextTitle) => api.updateTask(task.id, { title: nextTitle }).then(reload),
+    [task.id, reload]
+  );
+
+  useEffect(() => {
+    setTitle(task.title || "");
+  }, [task.title]);
+
+  useEffect(() => {
+    if (title === task.title) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null;
+      saveTitle(title);
+    }, 600);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [title, task.title, saveTitle]);
 
   return (
     <div className="border rounded-lg p-3 bg-white space-y-2">
@@ -91,8 +114,13 @@ function TaskItem({ task, reload }) {
         </button>
 
         <textarea
-          value={task.title}
-          onChange={e => api.updateTask(task.id, { title: e.target.value }).then(reload)}
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          onBlur={() => {
+            if (saveTimer.current) clearTimeout(saveTimer.current);
+            saveTimer.current = null;
+            if (title !== task.title) saveTitle(title);
+          }}
           rows={2}
           className={`flex-1 resize-none text-sm border-none focus:ring-0 ${task.erledigt ? "line-through text-slate-400" : ""}`}
         />
@@ -119,7 +147,16 @@ function CustomerCard({ customer, reload }) {
       const i = setInterval(reload, 1000);
       return () => clearInterval(i);
     }
-  }, [customer.tasks]);
+  }, [customer.tasks, reload]);
+
+  const submitTask = () => {
+    const value = inputRef.current?.value.trim();
+    if (!value) return;
+    api.addTask(customer.id, value).then(() => {
+      inputRef.current.value = "";
+      reload();
+    });
+  };
 
   const total = customer.tasks.reduce((s, t) => {
     let e = t.elapsed || 0;
@@ -150,11 +187,11 @@ function CustomerCard({ customer, reload }) {
           ref={inputRef}
           placeholder="Neue Aufgabe…"
           className="flex-1 border rounded px-2 text-sm"
-          onKeyDown={e => e.key === "Enter" && inputRef.current.value.trim() && api.addTask(customer.id, inputRef.current.value.trim()).then(() => { inputRef.current.value = ""; reload(); })}
+          onKeyDown={e => e.key === "Enter" && submitTask()}
         />
         <button
           className="bg-blue-600 text-white rounded px-3"
-          onClick={() => inputRef.current.value.trim() && api.addTask(customer.id, inputRef.current.value.trim()).then(() => { inputRef.current.value = ""; reload(); })}
+          onClick={submitTask}
         >
           <Plus size={16} />
         </button>
@@ -166,18 +203,26 @@ function CustomerCard({ customer, reload }) {
 /* ================= Pinboard ================= */
 function Pinboard() {
   const [note, setNote] = useState({ id: null, content: "" });
+  const saveTimer = useRef(null);
 
   useEffect(() => { api.pinboard().then(setNote); }, []);
+  useEffect(() => {
+    if (!note.id) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      api.savePinboard(note.id, note.content);
+    }, 800);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    };
+  }, [note.id, note.content]);
 
   return (
     <div className="bg-yellow-50 rounded-xl p-4 shadow h-full">
       <div className="flex gap-2 mb-2 font-semibold text-yellow-800"><StickyNote size={18} /> Notizen</div>
       <textarea
         value={note.content}
-        onChange={e => {
-          setNote({ ...note, content: e.target.value });
-          if (note.id) api.savePinboard(note.id, e.target.value);
-        }}
+        onChange={e => setNote({ ...note, content: e.target.value })}
         className="w-full h-full resize-none bg-transparent border-none focus:ring-0"
       />
     </div>
@@ -189,13 +234,13 @@ export default function App() {
   const [customers, setCustomers] = useState([]);
   const [newCustomer, setNewCustomer] = useState("");
 
-  const load = () => api.customers().then(setCustomers);
+  const load = useCallback(() => api.customers().then(setCustomers), []);
 
   useEffect(() => {
     load();
     const i = setInterval(load, 2000);
     return () => clearInterval(i);
-  }, []);
+  }, [load]);
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -213,7 +258,12 @@ export default function App() {
         <div className="lg:col-span-3 space-y-6">
           <div className="bg-white p-4 rounded-xl flex gap-3 shadow">
             <Users />
-            <input value={newCustomer} onChange={e => setNewCustomer(e.target.value)} placeholder="Neuen Kunden anlegen…" className="flex-1 border-none focus:ring-0" />
+            <input
+              value={newCustomer}
+              onChange={e => setNewCustomer(e.target.value)}
+              placeholder="Neuen Kunden anlegen…"
+              className="flex-1 border-none focus:ring-0"
+            />
             <button className="bg-slate-900 text-white rounded px-4" onClick={() => newCustomer.trim() && api.addCustomer(newCustomer.trim()).then(() => { setNewCustomer(""); load(); })}>Erstellen</button>
           </div>
 
