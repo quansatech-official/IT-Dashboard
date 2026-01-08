@@ -1,22 +1,5 @@
 export const customers = ["Albatros GmbH", "Nordlicht AG", "Rheinline Systems", "Stadtwerke Hafen"];
 
-export const months = [
-  "Januar",
-  "Februar",
-  "März",
-  "April",
-  "Mai",
-  "Juni",
-  "Juli",
-  "August",
-  "September",
-  "Oktober",
-  "November",
-  "Dezember"
-];
-
-export const years = [2024, 2025, 2026];
-
 export const catalog = [
   {
     title: "Serversystem Update",

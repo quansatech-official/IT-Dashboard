@@ -8,8 +8,7 @@ const emptyItem = {
   impact: "Keine Unterbrechung",
   duration: "",
   cost: "",
-  priority: "Planbar",
-  security_note: ""
+  priority: "Planbar"
 };
 
 export default function CatalogManager({ items, onAdd, onRemove, onUpdate }) {
@@ -117,15 +116,6 @@ export default function CatalogManager({ items, onAdd, onRemove, onUpdate }) {
             ))}
           </select>
         </label>
-        <label className="text-xs uppercase tracking-wide text-sand-600">
-          Security-/CVE-Hinweis
-          <input
-            value={draft.security_note}
-            onChange={(event) => setDraft((prev) => ({ ...prev, security_note: event.target.value }))}
-            className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-            placeholder="CVE-2024-XXXX"
-          />
-        </label>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -173,12 +163,11 @@ export default function CatalogManager({ items, onAdd, onRemove, onUpdate }) {
                     system: item.system || "",
                     why_text: item.why_text || "",
                     impact: item.impact || "Keine Unterbrechung",
-                    duration: item.duration || "",
-                    cost: item.cost || "",
-                    priority: item.priority || "Planbar",
-                    security_note: item.security_note || ""
-                  });
-                }}
+                  duration: item.duration || "",
+                  cost: item.cost || "",
+                  priority: item.priority || "Planbar"
+                });
+              }}
                 className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
               >
                 <Edit3 size={12} /> Bearbeiten

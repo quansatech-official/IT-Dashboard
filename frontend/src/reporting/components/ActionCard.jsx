@@ -93,15 +93,6 @@ export default function ActionCard({ action, onChange, onRemove }) {
         </label>
       </div>
 
-      <label className="text-xs uppercase tracking-wide text-sand-600 block">
-        Security-/CVE-Hinweis (optional)
-        <input
-          value={action.security_note}
-          onChange={(event) => onChange({ security_note: event.target.value })}
-          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-          placeholder="CVE-2024-XXXX"
-        />
-      </label>
     </div>
   );
 }
