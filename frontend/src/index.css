@@ -1,3 +1,88 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    --sand-50: #f6f1e8;
+    --sand-100: #efe7db;
+    --sand-200: #e7ded1;
+    --sand-400: #c9b9a8;
+    --sand-600: #6f655a;
+    --sand-900: #1f1a14;
+  }
+
+  body {
+    font-family: "Space Grotesk", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--sand-900);
+    background: var(--sand-50);
+  }
+}
+
+@layer components {
+  .font-display {
+    font-family: "Fraunces", "Times New Roman", serif;
+  }
+
+  .shadow-soft {
+    box-shadow: 0 18px 40px rgba(36, 27, 18, 0.12);
+  }
+
+  .bg-hero-pattern {
+    background:
+      radial-gradient(circle at 10% 10%, rgba(255, 214, 170, 0.4), transparent 45%),
+      radial-gradient(circle at 90% 15%, rgba(186, 230, 253, 0.45), transparent 40%),
+      radial-gradient(circle at 20% 80%, rgba(255, 237, 213, 0.6), transparent 40%),
+      linear-gradient(135deg, #f6f1e8 0%, #f3ede3 100%);
+  }
+
+  .bg-sand-50 {
+    background-color: var(--sand-50);
+  }
+
+  .bg-sand-100 {
+    background-color: var(--sand-100);
+  }
+
+  .bg-sand-100-70 {
+    background-color: rgba(239, 231, 219, 0.7);
+  }
+
+  .bg-sand-100-60 {
+    background-color: rgba(239, 231, 219, 0.6);
+  }
+
+  .border-sand-200 {
+    border-color: var(--sand-200);
+  }
+
+  .border-sand-300 {
+    border-color: var(--sand-400);
+  }
+
+  .text-sand-500 {
+    color: var(--sand-600);
+  }
+
+  .text-sand-600 {
+    color: var(--sand-600);
+  }
+
+  .text-sand-700 {
+    color: #594f45;
+  }
+
+  .text-sand-800 {
+    color: #40362e;
+  }
+
+  .text-sand-900 {
+    color: var(--sand-900);
+  }
+
+  .bg-sand-900 {
+    background-color: var(--sand-900);
+  }
+}
