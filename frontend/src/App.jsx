@@ -9,7 +9,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       <div className="flex min-h-screen">
-        <aside className="w-64 bg-white border-r border-sand-200 p-5 flex flex-col gap-6">
+        <aside className="w-56 bg-white border-r border-sand-200 p-4 flex flex-col gap-6">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
               <Sparkles size={16} />

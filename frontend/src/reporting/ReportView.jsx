@@ -41,6 +41,11 @@ const defaultReport = {
   customer: customers[0],
   period: getCurrentPeriod(),
   status: "Gelb",
+  status_note: "Kurzfristiger Handlungsbedarf, bitte Freigaben zeitnah prüfen.",
+  intro_text:
+    "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste, bei denen derzeit Handlungsbedarf besteht.",
+  priority_note:
+    "Die Auflistung ist in dringend empfohlene Maßnahmen und planbare Updates unterteilt.",
   summary: "Die Systeme laufen stabil, wir empfehlen jedoch eine zeitnahe Aktualisierung des Servers.",
   customer_action_text: "Bitte Freigabe für Option A oder B bis nächsten Mittwoch.",
   actions: [
@@ -196,7 +201,7 @@ export default function ReportView() {
             />
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-              <h1 className="text-2xl font-display">QT IT-Kundenbericht</h1>
+              <h1 className="text-2xl font-display">IT-Kundenbericht</h1>
             </div>
           </div>
           <div className="flex flex-wrap gap-3 items-center justify-end">
@@ -211,9 +216,9 @@ export default function ReportView() {
       </header>
 
       {section === "builder" && (
-        <main className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-8">
+        <main className="max-w-7xl mx-auto px-6 py-7 grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-6">
           <section className="space-y-6">
-            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-5">
+            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-5 shadow-soft space-y-5">
               <div>
                 <h2 className="text-lg font-display">Bericht zusammenstellen</h2>
                 <p className="text-sm text-sand-600">
@@ -261,6 +266,42 @@ export default function ReportView() {
                 />
               </div>
 
+              <label className="text-xs uppercase tracking-wide text-sand-600 block">
+                Status-Hinweis (kurz)
+                <input
+                  value={report.status_note}
+                  onChange={(event) =>
+                    setReport((prev) => ({ ...prev, status_note: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                  placeholder="z. B. Dringender Handlungsbedarf in Teilbereichen"
+                />
+              </label>
+
+              <label className="text-xs uppercase tracking-wide text-sand-600 block">
+                Einleitung
+                <textarea
+                  value={report.intro_text}
+                  onChange={(event) =>
+                    setReport((prev) => ({ ...prev, intro_text: event.target.value }))
+                  }
+                  rows={3}
+                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                />
+              </label>
+
+              <label className="text-xs uppercase tracking-wide text-sand-600 block">
+                Prioritäten-Hinweis
+                <textarea
+                  value={report.priority_note}
+                  onChange={(event) =>
+                    setReport((prev) => ({ ...prev, priority_note: event.target.value }))
+                  }
+                  rows={2}
+                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                />
+              </label>
+
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <label className="text-xs uppercase tracking-wide text-sand-600 block">
                   Kurz-Zusammenfassung
@@ -286,7 +327,7 @@ export default function ReportView() {
 
             </div>
 
-            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
+            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-5 shadow-soft space-y-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                   <h2 className="text-lg font-display">Bausteine zusammenstellen</h2>
@@ -339,7 +380,7 @@ export default function ReportView() {
           </section>
 
           <aside className="space-y-6">
-            <div className="bg-white border border-sand-200 rounded-3xl p-5 shadow-soft">
+            <div className="bg-white border border-sand-200 rounded-3xl p-4 shadow-soft">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-display">Live Preview</h3>
                 <span

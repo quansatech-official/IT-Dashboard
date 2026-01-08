@@ -6,24 +6,27 @@
 
 @layer base {
   :root {
-    --sand-50: #f6f1e8;
-    --sand-100: #efe7db;
-    --sand-200: #e7ded1;
-    --sand-400: #c9b9a8;
-    --sand-600: #6f655a;
-    --sand-900: #1f1a14;
+    --sand-50: #f4f7fb;
+    --sand-100: #e8eef6;
+    --sand-200: #d9e3ef;
+    --sand-400: #9fb1c7;
+    --sand-600: #5a6a7c;
+    --sand-900: #1f2a37;
   }
 
   body {
     font-family: "Space Grotesk", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     color: var(--sand-900);
     background: var(--sand-50);
+    font-size: 15px;
+    line-height: 1.5;
   }
 }
 
 @layer components {
   .font-display {
     font-family: "Fraunces", "Times New Roman", serif;
+    letter-spacing: -0.01em;
   }
 
   .shadow-soft {
@@ -32,10 +35,10 @@
 
   .bg-hero-pattern {
     background:
-      radial-gradient(circle at 10% 10%, rgba(255, 214, 170, 0.4), transparent 45%),
-      radial-gradient(circle at 90% 15%, rgba(186, 230, 253, 0.45), transparent 40%),
-      radial-gradient(circle at 20% 80%, rgba(255, 237, 213, 0.6), transparent 40%),
-      linear-gradient(135deg, #f6f1e8 0%, #f3ede3 100%);
+      radial-gradient(circle at 15% 10%, rgba(186, 230, 253, 0.55), transparent 45%),
+      radial-gradient(circle at 85% 15%, rgba(199, 210, 254, 0.5), transparent 40%),
+      radial-gradient(circle at 20% 80%, rgba(224, 231, 255, 0.6), transparent 45%),
+      linear-gradient(135deg, #f4f7fb 0%, #eef2f7 100%);
   }
 
   .bg-sand-50 {
