@@ -265,7 +265,23 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
 
 def coerce_action_fields(payload: Dict[str, Any]) -> Dict[str, str]:
     fields = ["title", "system", "why_text", "impact", "duration", "cost", "priority"]
-    return {field: str(payload.get(field) or "") for field in fields}
+    normalized = {field: str(payload.get(field) or "") for field in fields}
+    impact_options = {"Keine Unterbrechung", "Kurzunterbrechung", "Wartungsfenster"}
+    if normalized["impact"] not in impact_options:
+        normalized["impact"] = "Keine Unterbrechung"
+    cost = normalized["cost"]
+    if cost:
+        cleaned = (
+            cost.replace("€", "")
+            .replace("EUR", "")
+            .replace("eur", "")
+            .replace("ca.", "")
+            .replace("ca", "")
+            .replace("etwa", "")
+        )
+        cleaned = "".join(ch for ch in cleaned if ch.isdigit() or ch in {",", ".", "-"})
+        normalized["cost"] = cleaned.strip()
+    return normalized
 
 
 def parse_action_json(raw: Any) -> Optional[Dict[str, str]]:
@@ -445,17 +461,27 @@ def generate_action(data: ActionAiRequest):
         "Erzeuge aus dem Text eine konkrete Massnahme als JSON. "
         "Antworte ausschliesslich mit JSON und den Schluesseln: "
         "title, system, why_text, impact, duration, cost, priority. "
-        "Nutze deutsche Begriffe. Wenn der Text sehr kurz ist, "
-        "ergaenze sinnvolle Standardwerte und eine plausible Massnahme "
-        "anstatt den Text nur zu wiederholen. "
+        "Nutze deutsche Begriffe. "
+        "Alle Felder muessen befuellt sein (keine leeren Strings). "
+        "Wenn Informationen fehlen, setze plausible Standardwerte. "
+        "Fuelle fehlende Details aktiv auf, statt den Text nur zu wiederholen. "
         "priority ist Dringend, Planbar oder Hinweis.\n\n"
+        "Heuristiken: "
+        "Systeme: Server, Client, Netzwerk, Firewall, Backup, M365/Exchange, WLAN, Storage, Drucker, Allgemein. "
+        "Leite system anhand des Texts ab, sonst \"Allgemein\". "
+        "Impact abschaetzen: "
+        "Updates/Reboots/Firewall/Netzwerk -> \"Kurzunterbrechung\" oder \"Wartungsfenster\"; "
+        "Pruefungen/Monitoring/Reports -> \"Keine Unterbrechung\". "
+        "Dauer fuer Updates: \"0,5-1 Std\" (sonst \"30 Min\"). "
+        "Kosten: 120 EUR pro Stunde; rechne passend zur Dauer. "
+        "Gib Kosten als reine Zahl oder Zahlenbereich ohne Zusatztext an (z. B. \"60-120\").\n\n"
         "Beispiel fuer Kurztext 'test': "
         "{\"title\":\"Kurze Systempruefung\","
         "\"system\":\"Allgemein\","
         "\"why_text\":\"Kurzer Schnellcheck, um Auffaelligkeiten zu erkennen.\","
         "\"impact\":\"Keine Unterbrechung\","
         "\"duration\":\"15 Min\","
-        "\"cost\":\"ca. 30 EUR\","
+        "\"cost\":\"30\","
         "\"priority\":\"Planbar\"}\n\n"
         f"Text: {text}"
     )

@@ -52,9 +52,14 @@ export const renderReportHTML = (report) => {
         <div style="margin-top: 8px; font-size: 13px;">${escapeHTML(action.why_text)}</div>
         <table style="margin-top: 10px; width: 100%; font-size: 12px;">
           <tr>
-            <td style="padding: 6px 0;"><strong>Auswirkung:</strong> ${escapeHTML(action.impact)}</td>
+            <td style="padding: 6px 0;" colspan="3"><strong>Auswirkung:</strong> ${escapeHTML(
+              action.impact
+            )}</td>
+          </tr>
+          <tr>
             <td style="padding: 6px 0;"><strong>Dauer:</strong> ${escapeHTML(action.duration)}</td>
             <td style="padding: 6px 0;"><strong>Kosten:</strong> ${escapeHTML(action.cost)}</td>
+            <td style="padding: 6px 0;"></td>
           </tr>
         </table>
       </td>
@@ -175,7 +180,8 @@ export const buildPlainText = (report) => {
       "",
       `${idx + 1}. ${action.title} (${action.system}, ${action.priority})`,
       `Warum/Nutzen: ${action.why_text}`,
-      `Auswirkung: ${action.impact} | Dauer: ${action.duration} | Kosten: ${action.cost}`,
+      `Auswirkung: ${action.impact}`,
+      `Dauer: ${action.duration} | Kosten: ${action.cost}`
     );
   });
 
