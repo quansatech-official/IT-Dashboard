@@ -47,15 +47,14 @@ services:
     container_name: it-dashboard-ollama
     restart: unless-stopped
     pull_policy: missing
+    entrypoint: ["/bin/bash", "-c"]
     command: >
-      sh -c "
-        ollama serve &
-        until ollama list >/dev/null 2>&1; do sleep 1; done;
-        if ! ollama list | awk '{print $1}' | grep -q \"^${OLLAMA_MODEL:-llama3.1}$\"; then
-          ollama pull ${OLLAMA_MODEL:-llama3.1};
-        fi;
-        wait -n
-      "
+      ollama serve &
+      until ollama list >/dev/null 2>&1; do sleep 1; done;
+      if ! ollama list | awk '{print $1}' | grep -q "^${OLLAMA_MODEL:-llama3.1}$"; then
+        ollama pull ${OLLAMA_MODEL:-llama3.1};
+      fi;
+      wait -n
     volumes:
       - ollama-data:/root/.ollama
     ports:
