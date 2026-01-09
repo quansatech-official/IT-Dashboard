@@ -240,6 +240,35 @@ export default function ReportView() {
     }
   };
 
+  const printHtml = (contentHtml) => {
+    const htmlDoc = `
+      <html>
+        <head>
+          <title>IT-Kundenbericht</title>
+          <style>
+            @page { size: A4; margin: 16mm; }
+            body { margin: 0; font-family: Arial, sans-serif; }
+          </style>
+        </head>
+        <body>${contentHtml}</body>
+      </html>
+    `;
+    const popup = window.open("", "_blank", "width=960,height=720");
+    if (!popup) {
+      setToast("Popup blockiert.");
+      return;
+    }
+    popup.document.open();
+    popup.document.write(htmlDoc);
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  };
+
+  const downloadPdf = () => {
+    printHtml(previewHtml);
+  };
+
   const addAction = (payload = {}) => {
     setReport((prev) => ({
       ...prev,
@@ -312,11 +341,15 @@ export default function ReportView() {
   };
 
   const archiveReport = async () => {
+    if (!report.customer?.trim()) {
+      setToast("Bitte Kunde angeben.");
+      return;
+    }
     const res = await fetch("/api/reports", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        customer: report.customer,
+        customer: report.customer.trim(),
         period: report.period,
         status: report.status,
         summary: report.summary,
@@ -324,6 +357,10 @@ export default function ReportView() {
         items: report.actions
       })
     });
+    if (!res.ok) {
+      setToast("Speichern fehlgeschlagen.");
+      return;
+    }
     const created = await res.json();
     setToast("Archiviert.");
     setArchiveItems((prev) => {
@@ -344,6 +381,16 @@ export default function ReportView() {
       }
       return [{ customer: created.customer, reports: [entry] }, ...grouped];
     });
+    setReport({ ...defaultReport, period: getCurrentPeriod() });
+    setCustomerInput(defaultReport.customer);
+    setSection("builder");
+  };
+
+  const resetReport = () => {
+    if (!confirm("Aktuellen Bericht verwerfen?")) return;
+    setReport({ ...defaultReport, period: getCurrentPeriod() });
+    setCustomerInput(defaultReport.customer);
+    setSection("builder");
   };
 
   const deleteArchivedReport = async (item) => {
@@ -361,6 +408,39 @@ export default function ReportView() {
     setToast("Gelöscht.");
   };
 
+  const fetchArchivedReport = async (item) => {
+    if (!item?.id) return null;
+    const res = await fetch(`/api/reports/${item.id}`);
+    if (!res.ok) {
+      setToast("Report nicht gefunden.");
+      return null;
+    }
+    return res.json();
+  };
+
+  const normalizeReport = (data) => ({
+    customer: data.customer,
+    period: data.period,
+    status: data.status,
+    summary: data.summary,
+    customer_action_text: data.customer_action_text,
+    actions: data.items || []
+  });
+
+  const exportArchivedHtml = async (item) => {
+    const data = await fetchArchivedReport(item);
+    if (!data) return;
+    const html = renderReportHTML(normalizeReport(data));
+    copyToClipboard(html);
+  };
+
+  const exportArchivedPdf = async (item) => {
+    const data = await fetchArchivedReport(item);
+    if (!data) return;
+    const html = renderReportHTML(normalizeReport(data));
+    printHtml(html);
+  };
+
   const headerActions = (
     <div className="flex flex-wrap gap-2">
       <button
@@ -370,17 +450,31 @@ export default function ReportView() {
         <ClipboardCopy size={14} /> HTML kopieren
       </button>
       <button
+        onClick={resetReport}
+        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+      >
+        Neuer Bericht
+      </button>
+      <button
         onClick={() => copyToClipboard(plainText)}
         className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
       >
         <FileText size={14} /> Plain-Text
       </button>
-      <button className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100">
+      <button
+        onClick={downloadPdf}
+        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+      >
         <FileDown size={14} /> PDF
       </button>
       <button
         onClick={archiveReport}
-        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+        disabled={!report.customer?.trim()}
+        className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
+          report.customer?.trim()
+            ? "border-sand-300 bg-white hover:bg-sand-100"
+            : "border-sand-200 bg-sand-100 text-sand-500 cursor-not-allowed"
+        }`}
       >
         <Save size={14} /> Archivieren
       </button>
@@ -592,7 +686,12 @@ export default function ReportView() {
 
       {section === "archive" && (
         <main className="max-w-6xl mx-auto px-6 py-8">
-          <ArchivePanel archive={archiveItems} onDelete={deleteArchivedReport} />
+          <ArchivePanel
+            archive={archiveItems}
+            onDelete={deleteArchivedReport}
+            onExportHtml={exportArchivedHtml}
+            onExportPdf={exportArchivedPdf}
+          />
         </main>
       )}
 

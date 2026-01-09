@@ -60,7 +60,7 @@ export default function ActionCard({ action, onChange, onRemove }) {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <label className="text-xs uppercase tracking-wide text-sand-600">
-          Impact
+          Auswirkung
           <select
             value={action.impact}
             onChange={(event) => onChange({ impact: event.target.value })}

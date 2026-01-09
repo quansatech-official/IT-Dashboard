@@ -11,6 +11,8 @@ export const renderReportHTML = (report) => {
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
+  const introText =
+    "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste mit Handlungsbedarf.";
   const statusBadge = (status = "") => {
     const map = {
       Grün: { bg: "#dcfce7", text: "#15803d", border: "#bbf7d0" },
@@ -50,7 +52,7 @@ export const renderReportHTML = (report) => {
         <div style="margin-top: 8px; font-size: 13px;">${escapeHTML(action.why_text)}</div>
         <table style="margin-top: 10px; width: 100%; font-size: 12px;">
           <tr>
-            <td style="padding: 6px 0;"><strong>Impact:</strong> ${escapeHTML(action.impact)}</td>
+            <td style="padding: 6px 0;"><strong>Auswirkung:</strong> ${escapeHTML(action.impact)}</td>
             <td style="padding: 6px 0;"><strong>Dauer:</strong> ${escapeHTML(action.duration)}</td>
             <td style="padding: 6px 0;"><strong>Kosten:</strong> ${escapeHTML(action.cost)}</td>
           </tr>
@@ -85,7 +87,7 @@ export const renderReportHTML = (report) => {
         <tr>
           <td style="padding-top: 16px;">
             <div style="font-size: 13px; color: #3f3a33; white-space: pre-line;">${escapeHTML(
-              report.intro_text || ""
+              introText
             )}</div>
           </td>
         </tr>
@@ -140,27 +142,32 @@ export const buildPlainText = (report) => {
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
+  const introText =
+    "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste mit Handlungsbedarf.";
   const lines = [
     `IT-Kundenbericht – ${report.customer}`,
     `${period} | Status: ${report.status}`,
-    "",
-    "Maßnahmen:"
+    ""
   ];
 
+  lines.push(introText, "");
+
   if (summary) {
-    lines.push("", "Kurz-Zusammenfassung:", summary);
+    lines.push("Kurz-Zusammenfassung:", summary, "");
   }
 
   if (customerAction) {
-    lines.push("", "Was wir vom Kunden benötigen:", customerAction);
+    lines.push("Was wir vom Kunden benötigen:", customerAction, "");
   }
+
+  lines.push("Maßnahmen:");
 
   report.actions.forEach((action, idx) => {
     lines.push(
       "",
       `${idx + 1}. ${action.title} (${action.system}, ${action.priority})`,
       `Warum/Nutzen: ${action.why_text}`,
-      `Impact: ${action.impact} | Dauer: ${action.duration} | Kosten: ${action.cost}`,
+      `Auswirkung: ${action.impact} | Dauer: ${action.duration} | Kosten: ${action.cost}`,
     );
   });
 

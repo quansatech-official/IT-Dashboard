@@ -393,6 +393,15 @@ def get_reports():
         return [serialize_report(r) for r in reports]
 
 
+@app.get("/api/reports/{report_id}")
+def get_report(report_id: int):
+    with SessionLocal() as db:
+        report = db.query(Report).get(report_id)
+        if not report:
+            raise HTTPException(404, "Report not found")
+        return serialize_report(report)
+
+
 @app.post("/api/reports")
 def create_report(data: ReportCreate):
     with SessionLocal() as db:

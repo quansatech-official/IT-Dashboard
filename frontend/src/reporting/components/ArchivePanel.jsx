@@ -1,7 +1,7 @@
-import { ClipboardCopy, Trash2 } from "lucide-react";
+import { ClipboardCopy, FileDown, Trash2 } from "lucide-react";
 import { statusStyles } from "../constants";
 
-export default function ArchivePanel({ archive, onDelete }) {
+export default function ArchivePanel({ archive, onDelete, onExportHtml, onExportPdf }) {
   return (
     <div className="bg-white border border-sand-200 rounded-3xl p-5 shadow-soft">
       <h3 className="text-lg font-display mb-3">Archiv nach Kunden</h3>
@@ -24,8 +24,17 @@ export default function ArchivePanel({ archive, onDelete }) {
                   >
                     {item.status}
                   </span>
-                  <button className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100">
-                    <ClipboardCopy size={12} /> Duplizieren
+                  <button
+                    onClick={() => onExportHtml?.(item)}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <ClipboardCopy size={12} /> HTML
+                  </button>
+                  <button
+                    onClick={() => onExportPdf?.(item)}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <FileDown size={12} /> PDF
                   </button>
                   <button
                     onClick={() => onDelete?.(item)}
