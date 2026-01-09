@@ -9,12 +9,16 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
 import time
+import json
+import requests
 
 # ================= DATABASE =================
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
 )
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -113,10 +117,6 @@ class IntegrationSettings(Base):
     rmm_host = Column(String, default="")
     rmm_user = Column(String, default="")
     rmm_password = Column(String, default="")
-    ai_provider = Column(String, default="Gemini")
-    ai_backend_url = Column(String, default="")
-    ai_api_key = Column(String, default="")
-    ai_model = Column(String, default="")
 
 Base.metadata.create_all(bind=engine)
 
@@ -185,10 +185,9 @@ class IntegrationSettingsUpdate(BaseModel):
     rmm_host: Optional[str] = None
     rmm_user: Optional[str] = None
     rmm_password: Optional[str] = None
-    ai_provider: Optional[str] = None
-    ai_backend_url: Optional[str] = None
-    ai_api_key: Optional[str] = None
-    ai_model: Optional[str] = None
+
+class ActionAiRequest(BaseModel):
+    text: str
 
 # ================= APP ======================
 app = FastAPI(title="QT-Workbench Backend")
@@ -263,11 +262,29 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "rmm_host": settings.rmm_host,
         "rmm_user": settings.rmm_user,
         "rmm_password": settings.rmm_password,
-        "ai_provider": settings.ai_provider,
-        "ai_backend_url": settings.ai_backend_url,
-        "ai_api_key": settings.ai_api_key,
-        "ai_model": settings.ai_model,
     }
+
+def coerce_action_fields(payload: Dict[str, Any]) -> Dict[str, str]:
+    fields = ["title", "system", "why_text", "impact", "duration", "cost", "priority"]
+    return {field: str(payload.get(field) or "") for field in fields}
+
+
+def parse_action_json(raw: Any) -> Optional[Dict[str, str]]:
+    if isinstance(raw, dict):
+        return coerce_action_fields(raw)
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        return coerce_action_fields(json.loads(raw))
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        try:
+            return coerce_action_fields(json.loads(raw[start : end + 1]))
+        except json.JSONDecodeError:
+            return None
 
 # ================= CUSTOMERS =================
 @app.get("/api/customers")
@@ -416,6 +433,45 @@ def update_integrations(data: IntegrationSettingsUpdate):
 
         db.commit()
         return serialize_integration_settings(settings)
+
+# ============== OLLAMA AI =================
+@app.post("/api/ai_action")
+def generate_action(data: ActionAiRequest):
+    text = (data.text or "").strip()
+    if not text:
+        raise HTTPException(400, "Text required")
+
+    prompt = (
+        "Du bist ein Assistent fuer IT-Kundenberichte. "
+        "Extrahiere aus dem Text eine konkrete Massnahme als JSON. "
+        "Antworte ausschliesslich mit JSON und den Schluesseln: "
+        "title, system, why_text, impact, duration, cost, priority. "
+        "Nutze deutsche Begriffe. Falls unbekannt, nutze leere Strings. "
+        "priority ist Dringend, Planbar oder Hinweis.\n\n"
+        f"Text: {text}"
+    )
+
+    try:
+        res = requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0.2},
+            },
+            timeout=60,
+        )
+        res.raise_for_status()
+        payload = res.json()
+    except requests.RequestException as exc:
+        raise HTTPException(502, "Ollama request failed") from exc
+
+    action = parse_action_json(payload.get("response"))
+    if not action:
+        raise HTTPException(502, "Invalid AI response")
+    return {"action": action}
 
 # ============== REPORT CATALOG =============
 @app.get("/api/report_catalog")

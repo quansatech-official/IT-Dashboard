@@ -200,14 +200,11 @@ export default function ReportView() {
   const [toast, setToast] = useState("");
   const [customerInput, setCustomerInput] = useState(defaultReport.customer);
   const [freeText, setFreeText] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
   const [integrationSettings, setIntegrationSettings] = useState({
     rmm_host: "",
     rmm_user: "",
-    rmm_password: "",
-    ai_provider: "Gemini",
-    ai_backend_url: "",
-    ai_api_key: "",
-    ai_model: ""
+    rmm_password: ""
   });
 
   const updateIntegration = (patch) =>
@@ -395,14 +392,30 @@ export default function ReportView() {
     }
   };
 
-  const addFromFreeText = () => {
+  const addFromFreeText = async () => {
     if (!freeText.trim()) {
       setToast("Bitte Freitext eingeben.");
       return;
     }
-    const payload = parseActionFromText(freeText);
-    addAction(payload);
-    setFreeText("");
+    setIsGenerating(true);
+    try {
+      const res = await fetch("/api/ai_action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: freeText })
+      });
+      if (!res.ok) throw new Error("ai_failed");
+      const data = await res.json();
+      if (!data?.action) throw new Error("ai_invalid");
+      addAction(data.action);
+      setFreeText("");
+    } catch (error) {
+      const payload = parseActionFromText(freeText);
+      addAction(payload);
+      setToast("KI nicht erreichbar, Freitext lokal ausgewertet.");
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const saveIntegrations = async () => {
@@ -815,9 +828,10 @@ export default function ReportView() {
                   <button
                     type="button"
                     onClick={addFromFreeText}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                    disabled={isGenerating}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <Plus size={14} /> Aus Freitext erzeugen
+                    <Plus size={14} /> {isGenerating ? "KI erstellt ..." : "Aus Freitext erzeugen"}
                   </button>
                 </div>
                 <textarea
@@ -918,7 +932,7 @@ export default function ReportView() {
               <div>
                 <h2 className="text-lg font-display">Anbindungen pflegen</h2>
                 <p className="text-sm text-sand-600">
-                  Zugangsdaten und API-Endpunkte für RMM sowie KI-Backends.
+                  Zugangsdaten und API-Endpunkte für die RMM-Datenbank.
                 </p>
               </div>
               <button
@@ -931,7 +945,7 @@ export default function ReportView() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-6">
             <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
               <div>
                 <h3 className="text-base font-display">RMM Datenbank</h3>
@@ -964,59 +978,6 @@ export default function ReportView() {
                     onChange={(event) => updateIntegration({ rmm_password: event.target.value })}
                     className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     placeholder="••••••••"
-                  />
-                </label>
-              </div>
-            </div>
-
-            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
-              <div>
-                <h3 className="text-base font-display">KI API Backend</h3>
-                <p className="text-sm text-sand-600">
-                  Gemini, Azure oder eigener Endpoint.
-                </p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <label className="text-xs uppercase tracking-wide text-sand-600">
-                  Provider
-                  <select
-                    value={integrationSettings.ai_provider}
-                    onChange={(event) => updateIntegration({ ai_provider: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                  >
-                    {["Gemini", "Azure OpenAI", "Microsoft Azure", "Eigener Endpoint"].map((item) => (
-                      <option key={item} value={item}>
-                        {item}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-xs uppercase tracking-wide text-sand-600">
-                  Backend URL
-                  <input
-                    value={integrationSettings.ai_backend_url}
-                    onChange={(event) => updateIntegration({ ai_backend_url: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    placeholder="https://api.example.com"
-                  />
-                </label>
-                <label className="text-xs uppercase tracking-wide text-sand-600">
-                  API Key
-                  <input
-                    type="password"
-                    value={integrationSettings.ai_api_key}
-                    onChange={(event) => updateIntegration({ ai_api_key: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    placeholder="sk-..."
-                  />
-                </label>
-                <label className="text-xs uppercase tracking-wide text-sand-600">
-                  Modell (optional)
-                  <input
-                    value={integrationSettings.ai_model}
-                    onChange={(event) => updateIntegration({ ai_model: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    placeholder="gemini-1.5-pro"
                   />
                 </label>
               </div>
