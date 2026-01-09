@@ -446,6 +446,23 @@ export default function ReportView() {
     if (!catalogPick) setCatalogPick(created?.id ?? next[0]?.id ?? "");
   };
 
+  const addActionToCatalog = async (action) => {
+    if (!action?.title?.trim()) {
+      setToast("Titel fehlt.");
+      return;
+    }
+    await addCatalogItem({
+      title: action.title,
+      system: action.system || "",
+      why_text: action.why_text || "",
+      impact: action.impact || "",
+      duration: action.duration || "",
+      cost: action.cost || "",
+      priority: action.priority || "Planbar"
+    });
+    setToast("Baustein gespeichert.");
+  };
+
   const removeCatalogItem = async (id) => {
     await fetch(`/api/report_catalog/${id}`, { method: "DELETE" });
     const next = catalogItems.filter((item) => item.id !== id);
@@ -786,7 +803,10 @@ export default function ReportView() {
                 <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
                     <p className="text-xs uppercase tracking-wide text-sand-600 flex items-center gap-2">
-                      <PenLine size={14} /> Freitext in Maßnahme umwandeln (KI)
+                      <PenLine size={14} /> Freitext in Maßnahme umwandeln
+                      <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] font-semibold tracking-wide text-sand-700">
+                        <Sparkles size={10} /> KI
+                      </span>
                     </p>
                     <p className="text-sm text-sand-600">
                       Stichpunkte oder kurzer Text, wir füllen die bekannten Felder vor.
@@ -816,6 +836,7 @@ export default function ReportView() {
                     action={action}
                     onChange={(patch) => updateAction(action.id, patch)}
                     onRemove={() => removeAction(action.id)}
+                    onSaveToCatalog={() => addActionToCatalog(action)}
                   />
                 ))}
               </div>

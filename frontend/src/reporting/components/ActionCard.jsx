@@ -1,7 +1,7 @@
-import { Trash2 } from "lucide-react";
+import { BookmarkPlus, Trash2 } from "lucide-react";
 import { priorityStyles } from "../constants";
 
-export default function ActionCard({ action, onChange, onRemove }) {
+export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog }) {
   return (
     <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-soft space-y-3">
       <div className="flex items-center gap-3">
@@ -16,7 +16,15 @@ export default function ActionCard({ action, onChange, onRemove }) {
           className="flex-1 text-sm font-semibold border-b border-transparent focus:border-sand-400 focus:outline-none"
           placeholder="Titel der Maßnahme"
         />
-        <button onClick={onRemove} className="text-slate-400 hover:text-rose-500">
+        <button
+          type="button"
+          onClick={onSaveToCatalog}
+          className="text-slate-400 hover:text-sand-700"
+          title="Als Baustein speichern"
+        >
+          <BookmarkPlus size={16} />
+        </button>
+        <button type="button" onClick={onRemove} className="text-slate-400 hover:text-rose-500">
           <Trash2 size={16} />
         </button>
       </div>
