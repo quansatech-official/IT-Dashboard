@@ -13,12 +13,11 @@ import json
 import requests
 
 # ================= DATABASE =================
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
+DATABASE_URL = os.environ.get("DATABASE_URL") or (
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
 )
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL") or "http://ollama:11434"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "llama3.1"
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
