@@ -96,7 +96,7 @@ export default function CatalogManager({ items, onAdd, onRemove, onUpdate }) {
             value={draft.cost}
             onChange={(event) => setDraft((prev) => ({ ...prev, cost: event.target.value }))}
             className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-            placeholder="60-120"
+            placeholder="60-120 €"
           />
         </label>
       </div>

@@ -831,7 +831,16 @@ export default function ReportView() {
                     disabled={isGenerating}
                     className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <Plus size={14} /> {isGenerating ? "KI erstellt ..." : "Aus Freitext erzeugen"}
+                    {isGenerating ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span className="h-3.5 w-3.5 rounded-full border-2 border-sand-300 border-t-sand-700 animate-spin" />
+                        KI erstellt ...
+                      </span>
+                    ) : (
+                      <>
+                        <Plus size={14} /> Aus Freitext erzeugen
+                      </>
+                    )}
                   </button>
                 </div>
                 <textarea

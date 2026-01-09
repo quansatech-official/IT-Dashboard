@@ -269,6 +269,54 @@ def coerce_action_fields(payload: Dict[str, Any]) -> Dict[str, str]:
     impact_options = {"Keine Unterbrechung", "Kurzunterbrechung", "Wartungsfenster"}
     if normalized["impact"] not in impact_options:
         normalized["impact"] = "Keine Unterbrechung"
+    duration_range = None
+    duration = normalized["duration"].strip()
+    if duration:
+        lower = duration.lower()
+        is_minutes = "min" in lower
+
+        def parse_number(raw: str) -> Optional[float]:
+            cleaned = "".join(ch for ch in raw if ch.isdigit() or ch in {",", "."})
+            if not cleaned:
+                return None
+            return float(cleaned.replace(",", "."))
+
+        def round_quarter(value: float) -> float:
+            return round(value * 4) / 4
+
+        def fmt_hours(value: float) -> str:
+            rounded = round_quarter(value)
+            if rounded.is_integer():
+                return f"{int(rounded)}"
+            text = f"{rounded:.2f}".rstrip("0").rstrip(".")
+            return text.replace(".", ",")
+
+        if "-" in duration:
+            parts = [p for p in duration.split("-") if p.strip()]
+            if len(parts) >= 2:
+                start = parse_number(parts[0])
+                end = parse_number(parts[1])
+                if start is not None and end is not None:
+                    if is_minutes:
+                        start /= 60
+                        end /= 60
+                    if end < start:
+                        start, end = end, start
+                    duration_range = (start, end)
+                    normalized["duration"] = f"{fmt_hours(start)}-{fmt_hours(end)} h"
+                else:
+                    normalized["duration"] = ""
+            else:
+                normalized["duration"] = ""
+        else:
+            value = parse_number(duration)
+            if value is None:
+                normalized["duration"] = ""
+            else:
+                if is_minutes:
+                    value /= 60
+                duration_range = (value, value)
+                normalized["duration"] = f"{fmt_hours(value)} h"
     cost = normalized["cost"]
     if cost:
         cleaned = (
@@ -280,7 +328,34 @@ def coerce_action_fields(payload: Dict[str, Any]) -> Dict[str, str]:
             .replace("etwa", "")
         )
         cleaned = "".join(ch for ch in cleaned if ch.isdigit() or ch in {",", ".", "-"})
-        normalized["cost"] = cleaned.strip()
+        digits = "".join(ch for ch in cleaned if ch.isdigit())
+        if digits:
+            value = int(digits)
+            low = value
+            high = value
+            if "-" in cleaned:
+                parts = [p for p in cleaned.split("-") if p.strip()]
+                if len(parts) >= 2:
+                    try:
+                        low = int("".join(ch for ch in parts[0] if ch.isdigit()))
+                        high = int("".join(ch for ch in parts[1] if ch.isdigit()))
+                    except ValueError:
+                        low = value
+                        high = value
+            if high < low:
+                low, high = high, low
+            normalized["cost"] = f"{low}-{high} €"
+        else:
+            normalized["cost"] = ""
+    if not normalized["cost"]:
+        if duration_range:
+            low = int(round(duration_range[0] * 120))
+            high = int(round(duration_range[1] * 120))
+            if high < low:
+                low, high = high, low
+            normalized["cost"] = f"{low}-{high} €"
+        else:
+            normalized["cost"] = "0-0 €"
     return normalized
 
 
@@ -461,7 +536,8 @@ def generate_action(data: ActionAiRequest):
         "Erzeuge aus dem Text eine konkrete Massnahme als JSON. "
         "Antworte ausschliesslich mit JSON und den Schluesseln: "
         "title, system, why_text, impact, duration, cost, priority. "
-        "Nutze deutsche Begriffe. "
+        "Nutze deutsche Begriffe und einfache, klare Sprache, "
+        "die Kunden ohne IT-Kenntnisse verstehen. "
         "Alle Felder muessen befuellt sein (keine leeren Strings). "
         "Wenn Informationen fehlen, setze plausible Standardwerte. "
         "Fuelle fehlende Details aktiv auf, statt den Text nur zu wiederholen. "
@@ -472,16 +548,17 @@ def generate_action(data: ActionAiRequest):
         "Impact abschaetzen: "
         "Updates/Reboots/Firewall/Netzwerk -> \"Kurzunterbrechung\" oder \"Wartungsfenster\"; "
         "Pruefungen/Monitoring/Reports -> \"Keine Unterbrechung\". "
-        "Dauer fuer Updates: \"0,5-1 Std\" (sonst \"30 Min\"). "
+        "Dauer immer in 0,25h Schritten (z. B. \"0,5-1,0 h\" oder \"0,75 h\"). "
+        "Dauer fuer Updates: \"0,5-1,0 h\" (sonst \"0,5 h\"). "
         "Kosten: 120 EUR pro Stunde; rechne passend zur Dauer. "
-        "Gib Kosten als reine Zahl oder Zahlenbereich ohne Zusatztext an (z. B. \"60-120\").\n\n"
+        "Gib Kosten immer als zwei Werte mit Euro (z. B. \"60-120 €\").\n\n"
         "Beispiel fuer Kurztext 'test': "
         "{\"title\":\"Kurze Systempruefung\","
         "\"system\":\"Allgemein\","
         "\"why_text\":\"Kurzer Schnellcheck, um Auffaelligkeiten zu erkennen.\","
         "\"impact\":\"Keine Unterbrechung\","
-        "\"duration\":\"15 Min\","
-        "\"cost\":\"30\","
+        "\"duration\":\"0,25 h\","
+        "\"cost\":\"30-30 €\","
         "\"priority\":\"Planbar\"}\n\n"
         f"Text: {text}"
     )
