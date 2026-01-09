@@ -11,6 +11,18 @@ export const renderReportHTML = (report) => {
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
+  const statusBadge = (status = "") => {
+    const map = {
+      Grün: { bg: "#dcfce7", text: "#15803d", border: "#bbf7d0" },
+      Gelb: { bg: "#fef3c7", text: "#a16207", border: "#fde68a" },
+      Rot: { bg: "#fee2e2", text: "#b91c1c", border: "#fecaca" }
+    };
+    const fallback = { bg: "#f5f5f4", text: "#44403c", border: "#e7e5e4" };
+    const style = map[status] || fallback;
+    return `<div style="display: inline-block; padding: 6px 12px; border-radius: 999px; background: ${style.bg}; color: ${style.text}; border: 1px solid ${style.border}; font-size: 12px;">
+      Status: ${escapeHTML(status || "Status")}
+    </div>`;
+  };
   const priorityBadge = (priority = "") => {
     const map = {
       Dringend: { bg: "#fee2e2", text: "#b91c1c", border: "#fecaca" },
@@ -64,9 +76,7 @@ export const renderReportHTML = (report) => {
                   )} · ${escapeHTML(period)}</div>
                 </td>
                 <td style="text-align: right; vertical-align: top;">
-                  <div style="display: inline-block; padding: 6px 12px; border-radius: 999px; background: #fef3c7; font-size: 12px;">
-                    Status: ${escapeHTML(report.status)}
-                  </div>
+                  ${statusBadge(report.status)}
                 </td>
               </tr>
             </table>
@@ -76,22 +86,6 @@ export const renderReportHTML = (report) => {
           <td style="padding-top: 16px;">
             <div style="font-size: 13px; color: #3f3a33; white-space: pre-line;">${escapeHTML(
               report.intro_text || ""
-            )}</div>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding-top: 12px;">
-            <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665f;">Status-Hinweis</div>
-            <div style="margin-top: 6px; font-size: 13px; color: #3f3a33;">${escapeHTML(
-              report.status_note || ""
-            )}</div>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding-top: 12px;">
-            <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665f;">Prioritäten</div>
-            <div style="margin-top: 6px; font-size: 13px; color: #3f3a33;">${escapeHTML(
-              report.priority_note || ""
             )}</div>
           </td>
         </tr>
@@ -149,14 +143,6 @@ export const buildPlainText = (report) => {
   const lines = [
     `IT-Kundenbericht – ${report.customer}`,
     `${period} | Status: ${report.status}`,
-    "",
-    report.intro_text || "",
-    "",
-    "Status-Hinweis:",
-    report.status_note || "",
-    "",
-    "Prioritäten:",
-    report.priority_note || "",
     "",
     "Maßnahmen:"
   ];

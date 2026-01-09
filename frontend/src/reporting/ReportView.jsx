@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ClipboardCopy,
   FileDown,
@@ -13,9 +13,67 @@ import ActionCard from "./components/ActionCard";
 import ArchivePanel from "./components/ArchivePanel";
 import CatalogManager from "./components/CatalogManager";
 import StatusPicker from "./components/StatusPicker";
-import useLocalStorage from "./hooks/useLocalStorage";
-import { archiveByCustomer, catalog as defaultCatalog, customers } from "./constants";
+import { catalog as defaultCatalog, customers as fallbackCustomers } from "./constants";
 import { buildPlainText, renderReportHTML, uid } from "./utils";
+
+function CustomerCombobox({ customers, value, onChange }) {
+  const [query, setQuery] = useState(value || "");
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    setQuery(value || "");
+  }, [value]);
+
+  const filtered = customers.filter((item) =>
+    item.toLowerCase().includes(query.trim().toLowerCase())
+  );
+
+  const selectValue = (nextValue) => {
+    onChange(nextValue);
+    setQuery(nextValue);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <input
+        value={query}
+        onChange={(event) => {
+          const next = event.target.value;
+          setQuery(next);
+          onChange(next);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          setTimeout(() => setOpen(false), 120);
+        }}
+        className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+        placeholder="Kunde suchen oder frei eingeben…"
+        role="combobox"
+        aria-expanded={open}
+      />
+      {open ? (
+        <div className="absolute z-20 mt-2 w-full rounded-2xl border border-sand-200 bg-white shadow-soft max-h-48 overflow-auto">
+          {filtered.length ? (
+            filtered.map((item) => (
+              <button
+                key={item}
+                type="button"
+                onMouseDown={() => selectValue(item)}
+                className="w-full text-left px-4 py-2 text-sm hover:bg-sand-100"
+              >
+                {item}
+              </button>
+            ))
+          ) : (
+            <div className="px-4 py-2 text-xs text-sand-500">Kein Treffer — freie Eingabe möglich.</div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 const monthNames = [
   "Januar",
@@ -38,14 +96,9 @@ const getCurrentPeriod = () => {
 };
 
 const defaultReport = {
-  customer: customers[0],
+  customer: fallbackCustomers[0],
   period: getCurrentPeriod(),
   status: "Gelb",
-  status_note: "Kurzfristiger Handlungsbedarf, bitte Freigaben zeitnah prüfen.",
-  intro_text:
-    "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste, bei denen derzeit Handlungsbedarf besteht.",
-  priority_note:
-    "Die Auflistung ist in dringend empfohlene Maßnahmen und planbare Updates unterteilt.",
   summary: "Die Systeme laufen stabil, wir empfehlen jedoch eine zeitnahe Aktualisierung des Servers.",
   customer_action_text: "Bitte Freigabe für Option A oder B bis nächsten Mittwoch.",
   actions: [
@@ -70,16 +123,122 @@ const ensureCatalogIds = (items) =>
 
 export default function ReportView() {
   const [report, setReport] = useState(defaultReport);
-  const [catalogItems, setCatalogItems] = useLocalStorage(
-    "report_catalog_v1",
-    ensureCatalogIds(defaultCatalog)
-  );
-  const [catalogPick, setCatalogPick] = useState(catalogItems[0]?.id ?? "");
-  const [archiveItems] = useLocalStorage("report_archive_v1", archiveByCustomer);
+  const [catalogItems, setCatalogItems] = useState(ensureCatalogIds(defaultCatalog));
+  const [catalogPick, setCatalogPick] = useState("");
+  const [archiveItems, setArchiveItems] = useState([]);
+  const [customerList, setCustomerList] = useState(fallbackCustomers);
   const [section, setSection] = useState("builder");
+  const [toast, setToast] = useState("");
+  const [customerInput, setCustomerInput] = useState(defaultReport.customer);
 
   const previewHtml = useMemo(() => renderReportHTML(report), [report]);
   const plainText = useMemo(() => buildPlainText(report), [report]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(""), 1800);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    setCustomerInput(report.customer || "");
+  }, [report.customer]);
+
+  useEffect(() => {
+    const loadCustomers = async () => {
+      try {
+        const res = await fetch("/api/customers");
+        const data = await res.json();
+        if (Array.isArray(data) && data.length) {
+          setCustomerList(data.map((item) => item.name));
+        }
+      } catch (error) {
+        // Keep fallback list.
+      }
+    };
+
+    const loadCatalog = async () => {
+      try {
+        const res = await fetch("/api/report_catalog");
+        const data = await res.json();
+        if (Array.isArray(data) && data.length) {
+          setCatalogItems(data);
+          setCatalogPick(data[0]?.id ?? "");
+          return;
+        }
+
+        const seeded = await Promise.all(
+          defaultCatalog.map((item) =>
+            fetch("/api/report_catalog", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(item)
+            }).then((r) => r.json())
+          )
+        );
+        setCatalogItems(seeded);
+        setCatalogPick(seeded[0]?.id ?? "");
+      } catch (error) {
+        setCatalogPick((prev) => prev || catalogItems[0]?.id || "");
+      }
+    };
+
+    const loadReports = async () => {
+      try {
+        const res = await fetch("/api/reports");
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          const grouped = data.reduce((acc, reportItem) => {
+            const key = reportItem.customer || "Unbekannt";
+            const entry = acc[key] || { customer: key, reports: [] };
+            entry.reports.push({
+              id: reportItem.id,
+              label: reportItem.period || "Bericht",
+              status: reportItem.status || "",
+              period: reportItem.period || ""
+            });
+            acc[key] = entry;
+            return acc;
+          }, {});
+          setArchiveItems(Object.values(grouped));
+        }
+      } catch (error) {
+        // Keep empty list.
+      }
+    };
+
+    loadCustomers();
+    loadCatalog();
+    loadReports();
+  }, []);
+
+
+  const copyToClipboard = async (value) => {
+    if (!value) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        setToast("Kopiert.");
+        return;
+      }
+    } catch (error) {
+      // Fallback below.
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+      document.execCommand("copy");
+      setToast("Kopiert.");
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  };
 
   const addAction = (payload = {}) => {
     setReport((prev) => ({
@@ -123,34 +282,95 @@ export default function ReportView() {
     }));
   };
 
-  const addCatalogItem = (item) => {
-    const next = [...catalogItems, { ...item, id: uid() }];
+  const addCatalogItem = async (item) => {
+    const res = await fetch("/api/report_catalog", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(item)
+    });
+    const created = await res.json();
+    const next = [...catalogItems, created];
     setCatalogItems(next);
-    if (!catalogPick) setCatalogPick(next[0]?.id ?? "");
+    if (!catalogPick) setCatalogPick(created?.id ?? next[0]?.id ?? "");
   };
 
-  const removeCatalogItem = (id) => {
+  const removeCatalogItem = async (id) => {
+    await fetch(`/api/report_catalog/${id}`, { method: "DELETE" });
     const next = catalogItems.filter((item) => item.id !== id);
     setCatalogItems(next);
     if (catalogPick === id) setCatalogPick(next[0]?.id ?? "");
   };
 
-  const updateCatalogItem = (id, patch) => {
-    setCatalogItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...patch } : item))
+  const updateCatalogItem = async (id, patch) => {
+    const res = await fetch(`/api/report_catalog/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    const updated = await res.json();
+    setCatalogItems((prev) => prev.map((item) => (item.id === id ? updated : item)));
+  };
+
+  const archiveReport = async () => {
+    const res = await fetch("/api/reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        customer: report.customer,
+        period: report.period,
+        status: report.status,
+        summary: report.summary,
+        customer_action_text: report.customer_action_text,
+        items: report.actions
+      })
+    });
+    const created = await res.json();
+    setToast("Archiviert.");
+    setArchiveItems((prev) => {
+      const grouped = [...prev];
+      const idx = grouped.findIndex((item) => item.customer === created.customer);
+      const entry = {
+        id: created.id,
+        label: created.period || "Bericht",
+        status: created.status || "",
+        period: created.period || ""
+      };
+      if (idx >= 0) {
+        grouped[idx] = {
+          ...grouped[idx],
+          reports: [entry, ...grouped[idx].reports]
+        };
+        return grouped;
+      }
+      return [{ customer: created.customer, reports: [entry] }, ...grouped];
+    });
+  };
+
+  const deleteArchivedReport = async (item) => {
+    if (!item?.id) return;
+    if (!confirm("Archivierten Bericht löschen?")) return;
+    await fetch(`/api/reports/${item.id}`, { method: "DELETE" });
+    setArchiveItems((prev) =>
+      prev
+        .map((group) => ({
+          ...group,
+          reports: group.reports.filter((reportItem) => reportItem.id !== item.id)
+        }))
+        .filter((group) => group.reports.length)
     );
+    setToast("Gelöscht.");
   };
 
   const headerActions = (
     <div className="flex flex-wrap gap-2">
       <button
-        onClick={() => navigator.clipboard?.writeText(previewHtml)}
+        onClick={() => copyToClipboard(previewHtml)}
         className="inline-flex items-center gap-2 rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
       >
         <ClipboardCopy size={14} /> HTML kopieren
       </button>
       <button
-        onClick={() => navigator.clipboard?.writeText(plainText)}
+        onClick={() => copyToClipboard(plainText)}
         className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
       >
         <FileText size={14} /> Plain-Text
@@ -158,7 +378,10 @@ export default function ReportView() {
       <button className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100">
         <FileDown size={14} /> PDF
       </button>
-      <button className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100">
+      <button
+        onClick={archiveReport}
+        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+      >
         <Save size={14} /> Archivieren
       </button>
     </div>
@@ -190,6 +413,11 @@ export default function ReportView() {
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       <div className="absolute inset-0 -z-10 bg-hero-pattern" />
+      {toast ? (
+        <div className="fixed top-5 right-6 z-50 bg-sand-900 text-white text-xs uppercase tracking-wide px-4 py-2 rounded-full shadow-soft">
+          {toast}
+        </div>
+      ) : null}
 
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -229,19 +457,14 @@ export default function ReportView() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <label className="text-xs uppercase tracking-wide text-sand-600">
                   Kunde
-                  <select
-                    value={report.customer}
-                    onChange={(event) =>
-                      setReport((prev) => ({ ...prev, customer: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                  >
-                    {customers.map((customer) => (
-                      <option key={customer} value={customer}>
-                        {customer}
-                      </option>
-                    ))}
-                  </select>
+                  <CustomerCombobox
+                    customers={customerList}
+                    value={customerInput}
+                    onChange={(nextValue) => {
+                      setCustomerInput(nextValue);
+                      setReport((prev) => ({ ...prev, customer: nextValue }));
+                    }}
+                  />
                 </label>
                 <label className="text-xs uppercase tracking-wide text-sand-600 md:col-span-2">
                   Zeitraum (optional)
@@ -265,42 +488,6 @@ export default function ReportView() {
                   onChange={(status) => setReport((prev) => ({ ...prev, status }))}
                 />
               </div>
-
-              <label className="text-xs uppercase tracking-wide text-sand-600 block">
-                Status-Hinweis (kurz)
-                <input
-                  value={report.status_note}
-                  onChange={(event) =>
-                    setReport((prev) => ({ ...prev, status_note: event.target.value }))
-                  }
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                  placeholder="z. B. Dringender Handlungsbedarf in Teilbereichen"
-                />
-              </label>
-
-              <label className="text-xs uppercase tracking-wide text-sand-600 block">
-                Einleitung
-                <textarea
-                  value={report.intro_text}
-                  onChange={(event) =>
-                    setReport((prev) => ({ ...prev, intro_text: event.target.value }))
-                  }
-                  rows={3}
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                />
-              </label>
-
-              <label className="text-xs uppercase tracking-wide text-sand-600 block">
-                Prioritäten-Hinweis
-                <textarea
-                  value={report.priority_note}
-                  onChange={(event) =>
-                    setReport((prev) => ({ ...prev, priority_note: event.target.value }))
-                  }
-                  rows={2}
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                />
-              </label>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <label className="text-xs uppercase tracking-wide text-sand-600 block">
@@ -405,7 +592,7 @@ export default function ReportView() {
 
       {section === "archive" && (
         <main className="max-w-6xl mx-auto px-6 py-8">
-          <ArchivePanel archive={archiveItems} />
+          <ArchivePanel archive={archiveItems} onDelete={deleteArchivedReport} />
         </main>
       )}
 
