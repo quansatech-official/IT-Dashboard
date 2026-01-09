@@ -522,6 +522,7 @@ export default function ReportView() {
         status: report.status,
         summary: report.summary,
         customer_action_text: report.customer_action_text,
+        actions_title: report.actions_title,
         items: report.actions
       })
     });
@@ -586,15 +587,15 @@ export default function ReportView() {
     return res.json();
   };
 
-const normalizeReport = (data) => ({
-  customer: data.customer,
-  period: data.period,
-  status: data.status,
-  summary: data.summary,
-  customer_action_text: data.customer_action_text,
-  actions_title: defaultReport.actions_title,
-  actions: data.items || []
-});
+  const normalizeReport = (data) => ({
+    customer: data.customer,
+    period: data.period,
+    status: data.status,
+    summary: data.summary,
+    customer_action_text: data.customer_action_text,
+    actions_title: data.actions_title || defaultReport.actions_title,
+    actions: data.items || []
+  });
 
   const exportArchivedHtml = async (item) => {
     const data = await fetchArchivedReport(item);
@@ -749,7 +750,12 @@ const normalizeReport = (data) => ({
               </div>
 
               <label className="text-xs uppercase tracking-wide text-sand-600 block">
-                Überschrift Maßnahmen
+                <span className="inline-flex items-center gap-2">
+                  Überschrift Maßnahmen
+                  <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] font-semibold tracking-wide text-sand-700">
+                    <PenLine size={10} /> editierbar
+                  </span>
+                </span>
                 <input
                   value={report.actions_title}
                   onChange={(event) =>
@@ -806,7 +812,7 @@ const normalizeReport = (data) => ({
                 <p className="text-sm text-sand-600">Standard-Textbausteine plus individuelle Ergänzungen.</p>
               </div>
 
-              <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
                   <div className="flex items-center gap-2 text-sand-700">
                     <Plus size={16} />
@@ -850,7 +856,7 @@ const normalizeReport = (data) => ({
                   </button>
                 </div>
 
-                <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
+                <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 lg:col-span-2">
                   <div className="flex items-center gap-2 text-sand-700">
                     <Sparkles size={16} />
                     <p className="text-xs uppercase tracking-wide text-sand-600">Mit KI erstellen</p>
