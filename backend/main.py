@@ -536,6 +536,8 @@ def generate_action(data: ActionAiRequest):
         "Alle Felder muessen befuellt sein (keine leeren Strings). "
         "Wenn Informationen fehlen, setze plausible Standardwerte. "
         "Fuelle fehlende Details aktiv auf, statt den Text nur zu wiederholen. "
+        "Die Antwort darf etwas ausfuehrlicher sein: "
+        "why_text 1-2 Saetze, title kurz und klar, system konkret. "
         "priority ist Dringend, Planbar oder Hinweis.\n\n"
         "Heuristiken: "
         "Systeme: Server, Client, Netzwerk, Firewall, Backup, M365/Exchange, WLAN, Storage, Drucker, Allgemein. "
