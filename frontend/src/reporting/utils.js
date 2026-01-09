@@ -71,7 +71,7 @@ export const renderReportHTML = (report) => {
             <table style="width: 100%; border-collapse: collapse;">
               <tr>
                 <td>
-                  <img src="/QTLogo.jpg" alt="Quansatech" style="height: 24px;" />
+                  <img src="/QTLogo.jpg" alt="Quansatech" style="height: 32px; object-fit: contain;" />
                   <div style="font-size: 16px; font-weight: 700; margin-top: 8px;">IT-Kundenbericht</div>
                   <div style="font-size: 12px; color: #6b665f;">${escapeHTML(
                     report.customer

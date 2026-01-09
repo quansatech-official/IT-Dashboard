@@ -511,7 +511,7 @@ export default function ReportView() {
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <img src="/QTLogo.jpg" alt="Quansatech" className="h-9" />
+            <img src="/QTLogo.jpg" alt="Quansatech" className="h-11 w-auto object-contain" />
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
               <h1 className="text-2xl font-display">IT-Kundenbericht</h1>
