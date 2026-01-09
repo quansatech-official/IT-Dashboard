@@ -1097,7 +1097,7 @@ export default function ReportView() {
                   {report.status}
                 </span>
               </div>
-              <div className="border border-sand-200 rounded-2xl p-4 bg-white overflow-auto max-w-[820px] mx-auto">
+              <div className="border border-sand-200 rounded-2xl p-4 bg-white overflow-auto max-w-[700px] mx-auto">
                 <div className="max-w-full" dangerouslySetInnerHTML={{ __html: previewHtml }} />
               </div>
             </div>
