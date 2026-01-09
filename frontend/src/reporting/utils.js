@@ -69,85 +69,93 @@ export const renderReportHTML = (report) => {
     .join("");
 
   return `
-    <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; color: #1e1b16; background: #ffffff; border: 1px solid #e7e5e4; border-radius: 20px; padding: 26px; box-shadow: 0 14px 28px rgba(30, 27, 22, 0.08);">
-      <table style="width: 100%; border-collapse: collapse;">
-        <tr>
-          <td style="padding-bottom: 18px; border-bottom: 1px solid #ebe4da;">
-            <table style="width: 100%; border-collapse: collapse;">
-              <tr>
-                <td>
-                  <table style="border-collapse: collapse;">
-                    <tr>
-                      <td style="padding-right: 12px;">
-                        <img src="/QTLogo.jpg" alt="Quansatech" style="height: 72px; width: 72px; object-fit: contain;" />
-                      </td>
-                      <td>
-                        <div style="font-size: 18px; font-weight: 700; letter-spacing: 0.01em;">IT-Kundenbericht</div>
-                        <div style="font-size: 12px; color: #6b665f; margin-top: 4px;">${escapeHTML(
-                          report.customer
-                        )} · ${escapeHTML(period)}</div>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-                <td style="text-align: right; vertical-align: top;">
-                  ${statusBadge(report.status)}
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding-top: 16px;">
-            <div style="font-size: 13px; color: #3f3a33; white-space: pre-line;">${escapeHTML(
-              introText
-            )}</div>
-          </td>
-        </tr>
-        ${
-          summary
-            ? `<tr>
-          <td style="padding-top: 14px;">
-            <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665f;">Kurz-Zusammenfassung</div>
-            <div style="margin-top: 6px; font-size: 13px; color: #3f3a33;">${escapeHTML(
+    <table style="width: 100%; border-collapse: collapse; background: #f7f2ea; padding: 24px 0;">
+      <tr>
+        <td align="center" style="padding: 24px;">
+          <table style="width: 640px; max-width: 100%; border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);">
+            <tr>
+              <td style="background: #1f1b16; padding: 18px 24px;">
+                <table style="width: 100%; border-collapse: collapse;">
+                  <tr>
+                    <td style="vertical-align: middle;">
+                      <table style="border-collapse: collapse;">
+                        <tr>
+                          <td style="padding-right: 14px;">
+                            <img src="/QTLogo.jpg" alt="Quansatech" style="height: 56px; width: 56px; object-fit: contain; display: block;" />
+                          </td>
+                          <td>
+                            <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 700; color: #ffffff; letter-spacing: 0.02em;">IT-Kundenbericht</div>
+                            <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #d7cec3; margin-top: 4px;">${escapeHTML(
+                              report.customer
+                            )} · ${escapeHTML(period)}</div>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                    <td align="right" style="vertical-align: middle;">
+                      ${statusBadge(report.status)}
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 22px 24px 10px;">
+                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 13px; color: #3f3a33; line-height: 1.55; white-space: pre-line;">
+                  ${escapeHTML(introText)}
+                </div>
+              </td>
+            </tr>
+            ${
               summary
-            )}</div>
-          </td>
-        </tr>`
-            : ""
-        }
-        ${
-          customerAction
-            ? `<tr>
-          <td style="padding-top: 14px;">
-            <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665f;">Was wir vom Kunden benötigen</div>
-            <div style="margin-top: 6px; font-size: 13px; color: #3f3a33;">${escapeHTML(
+                ? `<tr>
+              <td style="padding: 10px 24px;">
+                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">Kurz-Zusammenfassung</div>
+                <div style="margin-top: 8px; font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 13px; color: #3f3a33; line-height: 1.55;">${escapeHTML(
+                  summary
+                )}</div>
+              </td>
+            </tr>`
+                : ""
+            }
+            ${
               customerAction
-            )}</div>
-          </td>
-        </tr>`
-            : ""
-        }
-        <tr>
-          <td style="padding-top: 18px;">
-            <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665f;">Maßnahmen</div>
-            <table style="margin-top: 8px; width: 100%; border-collapse: collapse; gap: 12px;">
-              ${actionBlocks}
-            </table>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding-top: 16px; border-top: 1px solid #eadfd2;">
-            <div style="font-size: 11px; color: #6b665f;">
-              Kosten und Dauer sind Schätzwerte und stellen kein verbindliches Angebot dar.
-            </div>
-            <div style="margin-top: 6px; font-size: 11px; color: #6b665f;">
-              Prioritäten: Dringend = kurzfristig empfohlen, Planbar = in den nächsten Wochen, Hinweis = sinnvoll, aber optional.
-            </div>
-          </td>
-        </tr>
-      </table>
-    </div>
+                ? `<tr>
+              <td style="padding: 10px 24px;">
+                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">Was wir vom Kunden benötigen</div>
+                <div style="margin-top: 8px; font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 13px; color: #3f3a33; line-height: 1.55;">${escapeHTML(
+                  customerAction
+                )}</div>
+              </td>
+            </tr>`
+                : ""
+            }
+            <tr>
+              <td style="padding: 16px 24px 6px;">
+                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">Maßnahmen</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 0 24px 10px;">
+                <table style="width: 100%; border-collapse: separate; border-spacing: 0 12px;">
+                  ${actionBlocks}
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 14px 24px 22px; border-top: 1px solid #efe7db;">
+                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #7a7064; line-height: 1.5;">
+                  Kosten und Dauer sind Schätzwerte und stellen kein verbindliches Angebot dar.
+                </div>
+                <div style="margin-top: 6px; font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #7a7064; line-height: 1.5;">
+                  Prioritäten: Dringend = kurzfristig empfohlen, Planbar = in den nächsten Wochen, Hinweis = sinnvoll, aber optional.
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   `;
 };
 

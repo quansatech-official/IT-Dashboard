@@ -605,32 +605,76 @@ export default function ReportView() {
     actions: data.items || []
   });
 
-  const downloadEmailDraft = (data) => {
+  const blobToBase64 = (blob) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+
+  const chunkBase64 = (value, size = 76) => {
+    const chunks = [];
+    for (let i = 0; i < value.length; i += size) {
+      chunks.push(value.slice(i, i + size));
+    }
+    return chunks.join("\r\n");
+  };
+
+  const downloadEmailDraft = async (data) => {
     if (!data?.customer?.trim()) {
       setToast("Bitte Kunde angeben.");
       return;
     }
-    const subject = `IT-Kundenbericht – ${data.customer} (${data.period || "ohne Zeitraum"})`;
-    const htmlBody = renderReportHTML(data);
-    const eml = [
-      "MIME-Version: 1.0",
-      "Content-Type: text/html; charset=utf-8",
-      `Subject: ${subject}`,
-      "",
-      htmlBody
-    ].join("\r\n");
-    const blob = new Blob([eml], { type: "message/rfc822;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const filename = `IT-Kundenbericht_${data.customer}_${data.period || "ohne Zeitraum"}.eml`
-      .replaceAll(" ", "_")
-      .replaceAll("/", "-");
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+    try {
+      const subject = `IT-Kundenbericht – ${data.customer} (${data.period || "ohne Zeitraum"})`;
+      const htmlBody = renderReportHTML(data).replace(
+        /src="\/QTLogo\.jpg"/g,
+        'src="cid:qtlogo"'
+      );
+      const logoRes = await fetch("/QTLogo.jpg");
+      if (!logoRes.ok) throw new Error("logo_missing");
+      const logoBlob = await logoRes.blob();
+      const logoDataUrl = await blobToBase64(logoBlob);
+      const logoBase64 = String(logoDataUrl).split(",")[1] || "";
+      const boundary = `----qt-report-${uid()}`;
+      const eml = [
+        "MIME-Version: 1.0",
+        `Subject: ${subject}`,
+        `Content-Type: multipart/related; boundary="${boundary}"`,
+        "",
+        `--${boundary}`,
+        'Content-Type: text/html; charset="utf-8"',
+        "Content-Transfer-Encoding: 7bit",
+        "",
+        htmlBody,
+        "",
+        `--${boundary}`,
+        "Content-Type: image/jpeg",
+        "Content-Transfer-Encoding: base64",
+        "Content-ID: <qtlogo>",
+        'Content-Disposition: inline; filename="QTLogo.jpg"',
+        "",
+        chunkBase64(logoBase64),
+        "",
+        `--${boundary}--`,
+        ""
+      ].join("\r\n");
+      const blob = new Blob([eml], { type: "message/rfc822;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const filename = `IT-Kundenbericht_${data.customer}_${data.period || "ohne Zeitraum"}.eml`
+        .replaceAll(" ", "_")
+        .replaceAll("/", "-");
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setToast("E-Mail-Entwurf konnte nicht erstellt werden.");
+    }
   };
 
   const exportArchivedHtml = async (item) => {
