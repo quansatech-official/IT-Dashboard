@@ -824,8 +824,7 @@ export default function ReportView() {
     { id: "builder", label: "Bericht erstellen" },
     { id: "archive", label: "Archiv" },
     { id: "templates", label: "Vorlagenverwaltung" },
-    { id: "blocks", label: "Textbausteine" },
-    { id: "customer-actions", label: "Kundenbedarf" }
+    { id: "blocks", label: "Textbausteine" }
   ];
 
   const subnav = (
@@ -955,7 +954,7 @@ export default function ReportView() {
                     <select
                       value={customerActionPick}
                       onChange={(event) => setCustomerActionPick(event.target.value)}
-                      className="rounded-full border border-sand-200 px-3 py-1 text-xs bg-white uppercase tracking-wide text-sand-600"
+                      className="rounded-full border border-sand-200 px-3 py-1 text-xs bg-white uppercase tracking-wide text-sand-600 max-w-[260px] w-auto"
                     >
                       {customerActionItems.length ? (
                         customerActionItems.map((item) => (
@@ -1098,7 +1097,7 @@ export default function ReportView() {
                   {report.status}
                 </span>
               </div>
-              <div className="border border-sand-200 rounded-2xl p-4 bg-white">
+              <div className="border border-sand-200 rounded-2xl p-4 bg-white overflow-auto">
                 <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
               </div>
             </div>
@@ -1134,38 +1133,36 @@ export default function ReportView() {
 
       {section === "blocks" && (
         <main className="w-full px-6 py-8">
-          <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
-            <div>
-              <h2 className="text-lg font-display">Textbausteine verwalten</h2>
-              <p className="text-sm text-sand-600">
-                Bausteine sind global und stehen für alle Kundenberichte zur Verfügung.
-              </p>
+          <div className="space-y-6">
+            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
+              <div>
+                <h2 className="text-lg font-display">Textbausteine verwalten</h2>
+                <p className="text-sm text-sand-600">
+                  Bausteine sind global und stehen für alle Kundenberichte zur Verfügung.
+                </p>
+              </div>
+              <CatalogManager
+                items={catalogItems}
+                onAdd={addCatalogItem}
+                onRemove={removeCatalogItem}
+                onUpdate={updateCatalogItem}
+              />
             </div>
-            <CatalogManager
-              items={catalogItems}
-              onAdd={addCatalogItem}
-              onRemove={removeCatalogItem}
-              onUpdate={updateCatalogItem}
-            />
-          </div>
-        </main>
-      )}
 
-      {section === "customer-actions" && (
-        <main className="w-full px-6 py-8">
-          <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
-            <div>
-              <h2 className="text-lg font-display">Kundenbedarf verwalten</h2>
-              <p className="text-sm text-sand-600">
-                Vorschläge für das Feld „Was wir vom Kunden benötigen“.
-              </p>
+            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
+              <div>
+                <h2 className="text-lg font-display">Kundenbedarf verwalten</h2>
+                <p className="text-sm text-sand-600">
+                  Vorschläge für das Feld „Was wir vom Kunden benötigen“.
+                </p>
+              </div>
+              <CustomerActionManager
+                items={customerActionItems}
+                onAdd={addCustomerActionItem}
+                onRemove={removeCustomerActionItem}
+                onUpdate={updateCustomerActionItem}
+              />
             </div>
-            <CustomerActionManager
-              items={customerActionItems}
-              onAdd={addCustomerActionItem}
-              onRemove={removeCustomerActionItem}
-              onUpdate={updateCustomerActionItem}
-            />
           </div>
         </main>
       )}

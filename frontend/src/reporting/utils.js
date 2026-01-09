@@ -9,12 +9,15 @@ export const escapeHTML = (value = "") =>
 
 export const renderReportHTML = (report, options = {}) => {
   const isEmail = options.mode === "email";
+  const enableMso = isEmail;
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
   const introText =
     "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste mit Handlungsbedarf.";
-  const vmlRoundRect = ({ fill, stroke, arc, height, content, textStyle }) => `
+  const vmlRoundRect = ({ fill, stroke, arc, height, content, textStyle }) =>
+    enableMso
+      ? `
     <!--[if mso]>
     <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="${arc}" fillcolor="${fill}" strokecolor="${stroke}" strokeweight="1px" style="height:${height}; v-text-anchor:middle; mso-fit-shape-to-text:t;">
       <w:anchorlock/>
@@ -22,10 +25,9 @@ export const renderReportHTML = (report, options = {}) => {
     </v:roundrect>
     <![endif]-->
     <!--[if !mso]><!-- -->
-  `;
-  const vmlRoundRectEnd = `
-    <!--<![endif]-->
-  `;
+  `
+      : "";
+  const vmlRoundRectEnd = enableMso ? `<!--<![endif]-->` : "";
   const statusBadge = (status = "") => {
     const map = {
       Grün: { bg: "#dcfce7", text: "#15803d", border: "#bbf7d0" },
@@ -35,20 +37,25 @@ export const renderReportHTML = (report, options = {}) => {
     const fallback = { bg: "#f5f5f4", text: "#44403c", border: "#e7e5e4" };
     const style = map[status] || fallback;
     const label = `Status: ${escapeHTML(status || "Status")}`;
-    return `
-      ${vmlRoundRect({
-        fill: style.bg,
-        stroke: style.border,
-        arc: "50%",
-        height: "24px",
-        textStyle: `color:${style.text}; font-family: Arial, sans-serif; font-size:12px; font-weight:600; padding:0 12px;`,
-        content: label
-      })}
-      <div style="display: inline-block; padding: 6px 12px; border-radius: 999px; background: ${style.bg}; color: ${style.text}; border: 1px solid ${style.border}; font-size: 12px;">
-        ${label}
-      </div>
-      ${vmlRoundRectEnd}
-    `;
+    if (enableMso) {
+      return `
+        ${vmlRoundRect({
+          fill: style.bg,
+          stroke: style.border,
+          arc: "50%",
+          height: "24px",
+          textStyle: `color:${style.text}; font-family: Arial, sans-serif; font-size:12px; font-weight:600; padding:0 12px;`,
+          content: label
+        })}
+        <div style="display: inline-block; padding: 6px 12px; border-radius: 999px; background: ${style.bg}; color: ${style.text}; border: 1px solid ${style.border}; font-size: 12px;">
+          ${label}
+        </div>
+        ${vmlRoundRectEnd}
+      `;
+    }
+    return `<div style="display: inline-block; padding: 6px 12px; border-radius: 999px; background: ${style.bg}; color: ${style.text}; border: 1px solid ${style.border}; font-size: 12px;">
+      ${label}
+    </div>`;
   };
   const priorityBadge = (priority = "") => {
     const map = {
@@ -59,18 +66,21 @@ export const renderReportHTML = (report, options = {}) => {
     const fallback = { bg: "#f5f5f4", text: "#44403c", border: "#e7e5e4" };
     const style = map[priority] || fallback;
     const label = escapeHTML(priority || "Priorität");
-    return `
-      ${vmlRoundRect({
-        fill: style.bg,
-        stroke: style.border,
-        arc: "50%",
-        height: "20px",
-        textStyle: `color:${style.text}; font-family: Arial, sans-serif; font-size:11px; font-weight:600; letter-spacing:0.03em; padding:0 10px;`,
-        content: label
-      })}
-      <span style="display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border: 1px solid ${style.border}; background: ${style.bg}; color: ${style.text};">${label}</span>
-      ${vmlRoundRectEnd}
-    `;
+    if (enableMso) {
+      return `
+        ${vmlRoundRect({
+          fill: style.bg,
+          stroke: style.border,
+          arc: "50%",
+          height: "20px",
+          textStyle: `color:${style.text}; font-family: Arial, sans-serif; font-size:11px; font-weight:600; letter-spacing:0.03em; padding:0 10px;`,
+          content: label
+        })}
+        <span style="display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border: 1px solid ${style.border}; background: ${style.bg}; color: ${style.text};">${label}</span>
+        ${vmlRoundRectEnd}
+      `;
+    }
+    return `<span style="display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border: 1px solid ${style.border}; background: ${style.bg}; color: ${style.text};">${label}</span>`;
   };
   const actionBlockContent = (action) => `
     <table style="width: 100%; border-collapse: collapse;">
@@ -105,26 +115,37 @@ export const renderReportHTML = (report, options = {}) => {
   const actionBlocks = report.actions
     .map((action) => {
       const content = actionBlockContent(action);
+      if (enableMso) {
+        return `
+          <tr>
+            <td style="padding: 0;">
+              <!--[if mso]>
+              <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="12%" fillcolor="#f8fafc" strokecolor="#e2e8f0" strokeweight="1px" style="width:100%; mso-width-percent:1000;">
+                <w:anchorlock/>
+                <table style="width: 100%; border-collapse: collapse;">
+                  <tr>
+                    <td style="padding: 16px;">
+                      ${content}
+                    </td>
+                  </tr>
+                </table>
+              </v:roundrect>
+              <![endif]-->
+              <!--[if !mso]><!-- -->
+              <div style="padding: 16px; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 14px;">
+                ${content}
+              </div>
+              <!--<![endif]-->
+            </td>
+          </tr>
+        `;
+      }
       return `
         <tr>
           <td style="padding: 0;">
-            <!--[if mso]>
-            <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="12%" fillcolor="#f8fafc" strokecolor="#e2e8f0" strokeweight="1px" style="width:100%; mso-width-percent:1000;">
-              <w:anchorlock/>
-              <table style="width: 100%; border-collapse: collapse;">
-                <tr>
-                  <td style="padding: 16px;">
-                    ${content}
-                  </td>
-                </tr>
-              </table>
-            </v:roundrect>
-            <![endif]-->
-            <!--[if !mso]><!-- -->
             <div style="padding: 16px; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 14px;">
               ${content}
             </div>
-            <!--<![endif]-->
           </td>
         </tr>
       `;
@@ -133,10 +154,10 @@ export const renderReportHTML = (report, options = {}) => {
 
   const containerStyle = isEmail
     ? "width: 640px; max-width: 100%;"
-    : "width: 100%;";
+    : "width: 900px; max-width: 100%; margin: 0 auto;";
   const containerMsoStyle = isEmail
     ? "width: 640px;"
-    : "width: 100%; mso-width-percent: 1000;";
+    : "width: 900px;";
 
   const innerTable = `
             <tr>
@@ -220,23 +241,31 @@ export const renderReportHTML = (report, options = {}) => {
             </tr>
   `;
 
+  const emailContainer = enableMso
+    ? `
+    <!--[if mso]>
+    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="10%" fillcolor="#ffffff" strokecolor="#e7e1d7" strokeweight="1px" style="${containerMsoStyle}">
+      <w:anchorlock/>
+      <table style="width: 100%; border-collapse: collapse;">
+        ${innerTable}
+      </table>
+    </v:roundrect>
+    <![endif]-->
+    <!--[if !mso]><!-- -->
+    <table style="${containerStyle} border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);">
+      ${innerTable}
+    </table>
+    <!--<![endif]-->`
+    : `
+    <table style="${containerStyle} border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);">
+      ${innerTable}
+    </table>`;
+
   return `
     <table style="width: 100%; border-collapse: collapse; background: #f7f2ea; padding: 24px 0;">
       <tr>
         <td align="center" style="padding: 24px;">
-          <!--[if mso]>
-          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="10%" fillcolor="#ffffff" strokecolor="#e7e1d7" strokeweight="1px" style="${containerMsoStyle}">
-            <w:anchorlock/>
-            <table style="width: 100%; border-collapse: collapse;">
-              ${innerTable}
-            </table>
-          </v:roundrect>
-          <![endif]-->
-          <!--[if !mso]><!-- -->
-          <table style="${containerStyle} border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);">
-            ${innerTable}
-          </table>
-          <!--<![endif]-->
+          ${emailContainer}
         </td>
       </tr>
     </table>
