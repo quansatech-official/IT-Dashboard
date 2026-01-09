@@ -1,4 +1,4 @@
-export const customers = ["Albatros GmbH", "Nordlicht AG", "Rheinline Systems", "Stadtwerke Hafen"];
+export const customers = [];
 
 export const catalog = [
   {

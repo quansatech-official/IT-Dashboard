@@ -387,12 +387,7 @@ def get_customers():
 # ============ REPORT CUSTOMERS (DUMMY) ============
 @app.get("/api/report_customers")
 def get_report_customers():
-    # Placeholder list until RMM/Django integration is wired.
-    return [
-        {"name": "RMM Kundenkonto Alpha"},
-        {"name": "RMM Kundenkonto Beta"},
-        {"name": "RMM Kundenkonto Gamma"},
-    ]
+    return []
 
 
 @app.post("/api/customers")

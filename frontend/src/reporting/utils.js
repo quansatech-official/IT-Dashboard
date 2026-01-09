@@ -79,7 +79,7 @@ export const renderReportHTML = (report) => {
                   <table style="border-collapse: collapse;">
                     <tr>
                       <td style="padding-right: 12px;">
-                        <img src="/QTLogo.jpg" alt="Quansatech" style="height: 52px; width: 52px; object-fit: contain;" />
+                        <img src="/QTLogo.jpg" alt="Quansatech" style="height: 72px; width: 72px; object-fit: contain;" />
                       </td>
                       <td>
                         <div style="font-size: 18px; font-weight: 700; letter-spacing: 0.01em;">IT-Kundenbericht</div>

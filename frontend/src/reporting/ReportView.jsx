@@ -640,8 +640,7 @@ export default function ReportView() {
     { id: "builder", label: "Bericht erstellen" },
     { id: "archive", label: "Archiv" },
     { id: "templates", label: "Vorlagenverwaltung" },
-    { id: "blocks", label: "Textbausteine" },
-    { id: "integrations", label: "Anbindungen" }
+    { id: "blocks", label: "Textbausteine" }
   ];
 
   const subnav = (
@@ -759,6 +758,14 @@ export default function ReportView() {
                 </label>
                 <label className="text-xs uppercase tracking-wide text-sand-600 block">
                   Was wir vom Kunden benötigen
+                  <textarea
+                    value={report.customer_action_text}
+                    onChange={(event) =>
+                      setReport((prev) => ({ ...prev, customer_action_text: event.target.value }))
+                    }
+                    rows={4}
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                  />
                   <div className="mt-2">
                     <button
                       type="button"
@@ -774,14 +781,6 @@ export default function ReportView() {
                       Vorschlag übernehmen
                     </button>
                   </div>
-                  <textarea
-                    value={report.customer_action_text}
-                    onChange={(event) =>
-                      setReport((prev) => ({ ...prev, customer_action_text: event.target.value }))
-                    }
-                    rows={4}
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                  />
                 </label>
               </div>
 
@@ -812,7 +811,7 @@ export default function ReportView() {
 
                 <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
                   <div className="flex items-center gap-2 text-sand-700">
-                    <Sparkles size={16} />
+                    <PenLine size={16} />
                     <p className="text-xs uppercase tracking-wide text-sand-600">Aus Baustein</p>
                   </div>
                   <p className="text-sm text-sand-600">
@@ -839,7 +838,7 @@ export default function ReportView() {
 
                 <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
                   <div className="flex items-center gap-2 text-sand-700">
-                    <PenLine size={16} />
+                    <Sparkles size={16} />
                     <p className="text-xs uppercase tracking-wide text-sand-600">Mit KI erstellen</p>
                     <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] font-semibold tracking-wide text-sand-700">
                       <Sparkles size={10} /> KI
