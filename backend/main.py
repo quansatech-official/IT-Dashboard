@@ -84,7 +84,6 @@ class Report(Base):
     status = Column(String, default="")
     summary = Column(String, default="")
     customer_action_text = Column(String, default="")
-    actions_title = Column(String, default="Maßnahmen")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
     items = relationship(
@@ -179,7 +178,6 @@ class ReportCreate(BaseModel):
     status: Optional[str] = ""
     summary: Optional[str] = ""
     customer_action_text: Optional[str] = ""
-    actions_title: Optional[str] = "Maßnahmen"
     items: List[ReportItemSchema] = []
 
 class IntegrationSettingsUpdate(BaseModel):
@@ -253,7 +251,6 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "status": report.status,
         "summary": report.summary,
         "customer_action_text": report.customer_action_text,
-        "actions_title": report.actions_title,
         "created_at": report.created_at,
         "items": [serialize_report_item(i) for i in report.items],
     }
@@ -650,7 +647,6 @@ def create_report(data: ReportCreate):
             status=data.status or "",
             summary=data.summary or "",
             customer_action_text=data.customer_action_text or "",
-            actions_title=data.actions_title or "Maßnahmen",
         )
         db.add(report)
         db.flush()

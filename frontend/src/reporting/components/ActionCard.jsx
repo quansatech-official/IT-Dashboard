@@ -10,12 +10,15 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
         >
           {action.priority}
         </span>
-        <input
-          value={action.title}
-          onChange={(event) => onChange({ title: event.target.value })}
-          className="flex-1 text-sm font-semibold border-b border-transparent focus:border-sand-400 focus:outline-none"
-          placeholder="Titel der Maßnahme"
-        />
+        <label className="flex-1">
+          <span className="text-[10px] uppercase tracking-wide text-sand-500">Überschrift</span>
+          <input
+            value={action.title}
+            onChange={(event) => onChange({ title: event.target.value })}
+            className="mt-1 w-full text-sm font-semibold border-b border-sand-200 focus:border-sand-400 focus:outline-none"
+            placeholder="Titel der Maßnahme"
+          />
+        </label>
         <button
           type="button"
           onClick={onSaveToCatalog}

@@ -102,7 +102,6 @@ const defaultReport = {
   status: "Gelb",
   summary: "Die Systeme laufen stabil, wir empfehlen jedoch eine zeitnahe Aktualisierung des Servers.",
   customer_action_text: "",
-  actions_title: "Maßnahmen",
   actions: [
     {
       id: "a1",
@@ -522,7 +521,6 @@ export default function ReportView() {
         status: report.status,
         summary: report.summary,
         customer_action_text: report.customer_action_text,
-        actions_title: report.actions_title,
         items: report.actions
       })
     });
@@ -587,15 +585,14 @@ export default function ReportView() {
     return res.json();
   };
 
-  const normalizeReport = (data) => ({
-    customer: data.customer,
-    period: data.period,
-    status: data.status,
-    summary: data.summary,
-    customer_action_text: data.customer_action_text,
-    actions_title: data.actions_title || defaultReport.actions_title,
-    actions: data.items || []
-  });
+const normalizeReport = (data) => ({
+  customer: data.customer,
+  period: data.period,
+  status: data.status,
+  summary: data.summary,
+  customer_action_text: data.customer_action_text,
+  actions: data.items || []
+});
 
   const exportArchivedHtml = async (item) => {
     const data = await fetchArchivedReport(item);
@@ -748,23 +745,6 @@ export default function ReportView() {
                   onChange={(status) => setReport((prev) => ({ ...prev, status }))}
                 />
               </div>
-
-              <label className="text-xs uppercase tracking-wide text-sand-600 block">
-                <span className="inline-flex items-center gap-2">
-                  Überschrift Maßnahmen
-                  <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] font-semibold tracking-wide text-sand-700">
-                    <PenLine size={10} /> editierbar
-                  </span>
-                </span>
-                <input
-                  value={report.actions_title}
-                  onChange={(event) =>
-                    setReport((prev) => ({ ...prev, actions_title: event.target.value }))
-                  }
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                  placeholder="z. B. Empfohlene Maßnahmen"
-                />
-              </label>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <label className="text-xs uppercase tracking-wide text-sand-600 block">

@@ -130,9 +130,7 @@ export const renderReportHTML = (report) => {
         }
         <tr>
           <td style="padding-top: 18px;">
-            <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665f;">${escapeHTML(
-              report.actions_title || "Maßnahmen"
-            )}</div>
+            <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665f;">Maßnahmen</div>
             <table style="margin-top: 8px; width: 100%; border-collapse: collapse; gap: 12px;">
               ${actionBlocks}
             </table>
@@ -175,7 +173,7 @@ export const buildPlainText = (report) => {
     lines.push("Was wir vom Kunden benötigen:", customerAction, "");
   }
 
-  lines.push(`${report.actions_title || "Maßnahmen"}:`);
+  lines.push("Maßnahmen:");
 
   report.actions.forEach((action, idx) => {
     lines.push(
