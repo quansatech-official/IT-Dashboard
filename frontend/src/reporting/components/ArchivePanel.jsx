@@ -1,8 +1,8 @@
-import { ClipboardCopy, FileDown, Search, Trash2 } from "lucide-react";
+import { ClipboardCopy, FileDown, Mail, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { statusStyles } from "../constants";
 
-export default function ArchivePanel({ archive, onDelete, onExportHtml, onExportPdf }) {
+export default function ArchivePanel({ archive, onDelete, onExportHtml, onExportPdf, onExportEmail }) {
   const [query, setQuery] = useState("");
   const filteredArchive = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -55,6 +55,12 @@ export default function ArchivePanel({ archive, onDelete, onExportHtml, onExport
                     className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
                   >
                     <FileDown size={12} /> PDF
+                  </button>
+                  <button
+                    onClick={() => onExportEmail?.(item)}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <Mail size={12} /> E-Mail
                   </button>
                   <button
                     onClick={() => onDelete?.(item)}

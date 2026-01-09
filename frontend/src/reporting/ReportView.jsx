@@ -4,6 +4,7 @@ import {
   FileDown,
   FileText,
   Flag,
+  Mail,
   Plus,
   Save,
   Sparkles,
@@ -596,14 +597,25 @@ export default function ReportView() {
     return res.json();
   };
 
-const normalizeReport = (data) => ({
-  customer: data.customer,
-  period: data.period,
-  status: data.status,
-  summary: data.summary,
-  customer_action_text: data.customer_action_text,
-  actions: data.items || []
-});
+  const normalizeReport = (data) => ({
+    customer: data.customer,
+    period: data.period,
+    status: data.status,
+    summary: data.summary,
+    customer_action_text: data.customer_action_text,
+    actions: data.items || []
+  });
+
+  const openEmailDraft = (data) => {
+    if (!data?.customer?.trim()) {
+      setToast("Bitte Kunde angeben.");
+      return;
+    }
+    const subject = `IT-Kundenbericht – ${data.customer} (${data.period || "ohne Zeitraum"})`;
+    const body = buildPlainText(data).replaceAll("\n", "\r\n");
+    const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.assign(mailto);
+  };
 
   const exportArchivedHtml = async (item) => {
     const data = await fetchArchivedReport(item);
@@ -619,6 +631,12 @@ const normalizeReport = (data) => ({
     printHtml(html);
   };
 
+  const exportArchivedEmail = async (item) => {
+    const data = await fetchArchivedReport(item);
+    if (!data) return;
+    openEmailDraft(normalizeReport(data));
+  };
+
   const headerActions = (
     <div className="flex flex-wrap gap-2">
       <button
@@ -626,6 +644,12 @@ const normalizeReport = (data) => ({
         className="inline-flex items-center gap-2 rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
       >
         <ClipboardCopy size={14} /> HTML kopieren
+      </button>
+      <button
+        onClick={() => openEmailDraft(report)}
+        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+      >
+        <Mail size={14} /> E-Mail Entwurf
       </button>
       <button
         onClick={downloadPdf}
@@ -925,13 +949,14 @@ const normalizeReport = (data) => ({
 
       {section === "archive" && (
         <main className="max-w-6xl mx-auto px-6 py-8">
-          <ArchivePanel
-            archive={archiveItems}
-            onDelete={deleteArchivedReport}
-            onExportHtml={exportArchivedHtml}
-            onExportPdf={exportArchivedPdf}
-          />
-        </main>
+            <ArchivePanel
+              archive={archiveItems}
+              onDelete={deleteArchivedReport}
+              onExportHtml={exportArchivedHtml}
+              onExportPdf={exportArchivedPdf}
+              onExportEmail={exportArchivedEmail}
+            />
+          </main>
       )}
 
       {section === "templates" && (
