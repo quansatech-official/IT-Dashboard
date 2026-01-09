@@ -792,7 +792,7 @@ const normalizeReport = (data) => ({
                 <p className="text-sm text-sand-600">Standard-Textbausteine plus individuelle Ergänzungen.</p>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[0.85fr_1.15fr]">
                 <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
                   <div className="flex items-center gap-2 text-sand-700">
                     <Plus size={16} />
