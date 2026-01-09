@@ -740,7 +740,7 @@ export default function ReportView() {
 
   const subnav = (
     <div className="border-t border-sand-200 bg-white/80 backdrop-blur">
-      <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
+      <div className="w-full px-6 flex items-center justify-between">
         <div className="flex flex-wrap gap-2">
           {subnavItems.map((item) => (
             <button
@@ -776,7 +776,7 @@ export default function ReportView() {
       ) : null}
 
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div className="w-full px-6 py-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             <img src="/QTLogo.jpg" alt="Quansatech" className="h-11 w-auto object-contain" />
             <div>
@@ -796,7 +796,7 @@ export default function ReportView() {
       </header>
 
       {section === "builder" && (
-        <main className="max-w-7xl mx-auto px-6 py-7 grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-6">
+        <main className="w-full px-6 py-7 grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-6">
           <section className="space-y-6">
             <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-5 shadow-soft space-y-5">
               <div>
@@ -1008,7 +1008,7 @@ export default function ReportView() {
       )}
 
       {section === "archive" && (
-        <main className="max-w-6xl mx-auto px-6 py-8">
+        <main className="w-full px-6 py-8">
             <ArchivePanel
               archive={archiveItems}
               onDelete={deleteArchivedReport}
@@ -1020,7 +1020,7 @@ export default function ReportView() {
       )}
 
       {section === "templates" && (
-        <main className="max-w-6xl mx-auto px-6 py-8">
+        <main className="w-full px-6 py-8">
           <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft space-y-3">
             <h2 className="text-lg font-display">Vorlagenverwaltung</h2>
             <p className="text-sm text-sand-600">
@@ -1034,7 +1034,7 @@ export default function ReportView() {
       )}
 
       {section === "blocks" && (
-        <main className="max-w-6xl mx-auto px-6 py-8">
+        <main className="w-full px-6 py-8">
           <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
             <div>
               <h2 className="text-lg font-display">Textbausteine verwalten</h2>
@@ -1053,7 +1053,7 @@ export default function ReportView() {
       )}
 
       {section === "integrations" && (
-        <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+        <main className="w-full px-6 py-8 space-y-6">
           <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft space-y-2">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
