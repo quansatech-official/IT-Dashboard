@@ -215,6 +215,20 @@ export default function ReportView() {
 
   const previewHtml = useMemo(() => renderReportHTML(report), [report]);
   const plainText = useMemo(() => buildPlainText(report), [report]);
+  const suggestedCustomers = useMemo(() => {
+    const seen = new Set();
+    const merged = [];
+    const push = (name) => {
+      const trimmed = (name || "").trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      merged.push(trimmed);
+    };
+
+    customerList.forEach(push);
+    archiveItems.forEach((group) => push(group.customer));
+    return merged;
+  }, [archiveItems, customerList]);
 
   useEffect(() => {
     if (!toast) return;
@@ -679,7 +693,7 @@ export default function ReportView() {
           <div className="flex flex-wrap gap-3 items-center justify-end">
             <div className="flex items-center gap-2 text-xs text-sand-500">
               <Users2 size={16} />
-              4 Kunden
+              {suggestedCustomers.length} Kunden
             </div>
             {headerActions}
           </div>
@@ -702,7 +716,7 @@ export default function ReportView() {
                 <label className="text-xs uppercase tracking-wide text-sand-600">
                   Kunde
                   <CustomerCombobox
-                    customers={customerList}
+                    customers={suggestedCustomers}
                     value={customerInput}
                     onChange={(nextValue) => {
                       setCustomerInput(nextValue);
@@ -779,7 +793,7 @@ export default function ReportView() {
                 <p className="text-sm text-sand-600">Standard-Textbausteine plus individuelle Ergänzungen.</p>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="flex flex-col gap-4">
                 <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
                   <div className="flex items-center gap-2 text-sand-700">
                     <Plus size={16} />
