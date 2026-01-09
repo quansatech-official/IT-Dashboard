@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Clock, FileText, Sparkles } from "lucide-react";
+import { Clock, FileText, Monitor, Sparkles } from "lucide-react";
 import ReportView from "./reporting/ReportView";
 import TimeTrackingView from "./timetracking/TimeTrackingView";
+import RmmDashboardView from "./rmm/RmmDashboardView";
 
 export default function App() {
   const [activeView, setActiveView] = useState("report");
@@ -41,6 +42,16 @@ export default function App() {
             >
               <FileText size={18} /> Kundenbericht
             </button>
+            <button
+              onClick={() => setActiveView("rmm")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "rmm"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <Monitor size={18} /> RMM Dashboard
+            </button>
           </nav>
 
           <div className="mt-auto text-xs text-sand-500">
@@ -48,7 +59,15 @@ export default function App() {
           </div>
         </aside>
 
-        <div className="flex-1">{activeView === "time" ? <TimeTrackingView /> : <ReportView />}</div>
+        <div className="flex-1">
+          {activeView === "time" ? (
+            <TimeTrackingView />
+          ) : activeView === "rmm" ? (
+            <RmmDashboardView />
+          ) : (
+            <ReportView />
+          )}
+        </div>
       </div>
     </div>
   );
