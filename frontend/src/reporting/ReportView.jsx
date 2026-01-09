@@ -628,7 +628,7 @@ export default function ReportView() {
     }
     try {
       const subject = `IT-Kundenbericht – ${data.customer} (${data.period || "ohne Zeitraum"})`;
-      const htmlBody = renderReportHTML(data).replace(
+      const htmlBody = renderReportHTML(data, { mode: "email" }).replace(
         /src="\/QTLogo\.jpg"/g,
         'src="cid:qtlogo"'
       );

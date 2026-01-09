@@ -7,7 +7,8 @@ export const escapeHTML = (value = "") =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
 
-export const renderReportHTML = (report) => {
+export const renderReportHTML = (report, options = {}) => {
+  const isEmail = options.mode === "email";
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
@@ -68,24 +69,28 @@ export const renderReportHTML = (report) => {
     )
     .join("");
 
+  const containerStyle = isEmail
+    ? "width: 640px; max-width: 100%;"
+    : "width: 100%;";
+
   return `
     <table style="width: 100%; border-collapse: collapse; background: #f7f2ea; padding: 24px 0;">
       <tr>
         <td align="center" style="padding: 24px;">
-          <table style="width: 640px; max-width: 100%; border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);">
+          <table style="${containerStyle} border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);">
             <tr>
-              <td style="background: #1f1b16; padding: 18px 24px;">
+              <td style="background: #24425a; padding: 18px 24px;">
                 <table style="width: 100%; border-collapse: collapse;">
                   <tr>
                     <td style="vertical-align: middle;">
                       <table style="border-collapse: collapse;">
                         <tr>
                           <td style="padding-right: 14px;">
-                            <img src="/QTLogo.jpg" alt="Quansatech" style="height: 56px; width: 56px; object-fit: contain; display: block;" />
+                            <img src="/QTLogo.jpg" alt="Quansatech" width="44" height="44" style="height: 44px; width: 44px; object-fit: contain; display: block;" />
                           </td>
                           <td>
                             <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 700; color: #ffffff; letter-spacing: 0.02em;">IT-Kundenbericht</div>
-                            <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #d7cec3; margin-top: 4px;">${escapeHTML(
+                            <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #d9e2ea; margin-top: 4px;">${escapeHTML(
                               report.customer
                             )} · ${escapeHTML(period)}</div>
                           </td>
