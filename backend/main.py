@@ -106,6 +106,18 @@ class ReportItem(Base):
 
     report = relationship("Report", back_populates="items")
 
+class IntegrationSettings(Base):
+    __tablename__ = "integration_settings"
+
+    id = Column(Integer, primary_key=True)
+    rmm_host = Column(String, default="")
+    rmm_user = Column(String, default="")
+    rmm_password = Column(String, default="")
+    ai_provider = Column(String, default="Gemini")
+    ai_backend_url = Column(String, default="")
+    ai_api_key = Column(String, default="")
+    ai_model = Column(String, default="")
+
 Base.metadata.create_all(bind=engine)
 
 # ================= SCHEMAS ==================
@@ -168,6 +180,15 @@ class ReportCreate(BaseModel):
     summary: Optional[str] = ""
     customer_action_text: Optional[str] = ""
     items: List[ReportItemSchema] = []
+
+class IntegrationSettingsUpdate(BaseModel):
+    rmm_host: Optional[str] = None
+    rmm_user: Optional[str] = None
+    rmm_password: Optional[str] = None
+    ai_provider: Optional[str] = None
+    ai_backend_url: Optional[str] = None
+    ai_api_key: Optional[str] = None
+    ai_model: Optional[str] = None
 
 # ================= APP ======================
 app = FastAPI(title="QT-Workbench Backend")
@@ -234,6 +255,18 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "customer_action_text": report.customer_action_text,
         "created_at": report.created_at,
         "items": [serialize_report_item(i) for i in report.items],
+    }
+
+def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, Any]:
+    return {
+        "id": settings.id,
+        "rmm_host": settings.rmm_host,
+        "rmm_user": settings.rmm_user,
+        "rmm_password": settings.rmm_password,
+        "ai_provider": settings.ai_provider,
+        "ai_backend_url": settings.ai_backend_url,
+        "ai_api_key": settings.ai_api_key,
+        "ai_model": settings.ai_model,
     }
 
 # ================= CUSTOMERS =================
@@ -356,6 +389,33 @@ def update_pinboard(note_id: int, data: PinNoteUpdate):
         note.content = data.content
         db.commit()
         return {"id": note.id, "content": note.content}
+
+# ============ INTEGRATION SETTINGS ============
+@app.get("/api/integrations")
+def get_integrations():
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        return serialize_integration_settings(settings)
+
+
+@app.put("/api/integrations")
+def update_integrations(data: IntegrationSettingsUpdate):
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.flush()
+
+        for field, value in data.dict(exclude_unset=True).items():
+            setattr(settings, field, value)
+
+        db.commit()
+        return serialize_integration_settings(settings)
 
 # ============== REPORT CATALOG =============
 @app.get("/api/report_catalog")

@@ -41,7 +41,7 @@ export const renderReportHTML = (report) => {
     .map(
       (action) => `
     <tr>
-      <td style="padding: 16px; border: 1px solid #e7ded1; background: #fff7ee; border-radius: 12px;">
+      <td style="padding: 16px; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 14px;">
         <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
           <div style="font-weight: 600; font-size: 14px;">${escapeHTML(action.title)}</div>
           ${priorityBadge(action.priority)}
@@ -64,18 +64,26 @@ export const renderReportHTML = (report) => {
     .join("");
 
   return `
-    <div style="font-family: Arial, sans-serif; color: #1e1b16; background: #fffdf9; border: 1px solid #eadfd2; border-radius: 18px; padding: 24px;">
+    <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; color: #1e1b16; background: #ffffff; border: 1px solid #e7e5e4; border-radius: 20px; padding: 26px; box-shadow: 0 14px 28px rgba(30, 27, 22, 0.08);">
       <table style="width: 100%; border-collapse: collapse;">
         <tr>
-          <td style="padding-bottom: 16px; border-bottom: 1px solid #eadfd2;">
+          <td style="padding-bottom: 18px; border-bottom: 1px solid #ebe4da;">
             <table style="width: 100%; border-collapse: collapse;">
               <tr>
                 <td>
-                  <img src="/QTLogo.jpg" alt="Quansatech" style="height: 32px; object-fit: contain;" />
-                  <div style="font-size: 16px; font-weight: 700; margin-top: 8px;">IT-Kundenbericht</div>
-                  <div style="font-size: 12px; color: #6b665f;">${escapeHTML(
-                    report.customer
-                  )} · ${escapeHTML(period)}</div>
+                  <table style="border-collapse: collapse;">
+                    <tr>
+                      <td style="padding-right: 12px;">
+                        <img src="/QTLogo.jpg" alt="Quansatech" style="height: 52px; width: 52px; object-fit: contain;" />
+                      </td>
+                      <td>
+                        <div style="font-size: 18px; font-weight: 700; letter-spacing: 0.01em;">IT-Kundenbericht</div>
+                        <div style="font-size: 12px; color: #6b665f; margin-top: 4px;">${escapeHTML(
+                          report.customer
+                        )} · ${escapeHTML(period)}</div>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
                 <td style="text-align: right; vertical-align: top;">
                   ${statusBadge(report.status)}

@@ -122,6 +122,74 @@ const ensureCatalogIds = (items) =>
     ...item
   }));
 
+const parseActionFromText = (rawText) => {
+  const text = rawText.trim();
+  const base = {
+    priority: "Planbar",
+    title: "Neue Maßnahme",
+    system: "",
+    why_text: "",
+    impact: "Keine Unterbrechung",
+    duration: "",
+    cost: ""
+  };
+
+  if (!text) return base;
+
+  const normalized = text.toLowerCase();
+  const fields = { ...base };
+  const unusedLines = [];
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+
+  const matchLabel = (label) => {
+    const key = label.toLowerCase();
+    if (key.includes("titel") || key.includes("maßnahme") || key.includes("title")) return "title";
+    if (key.includes("system") || key.includes("betreff")) return "system";
+    if (key.includes("warum") || key.includes("nutzen") || key.includes("grund") || key.includes("why"))
+      return "why_text";
+    if (key.includes("priorit")) return "priority";
+    if (key.includes("auswirkung") || key.includes("impact")) return "impact";
+    if (key.includes("dauer") || key.includes("zeit") || key.includes("duration")) return "duration";
+    if (key.includes("kosten") || key.includes("cost") || key.includes("budget")) return "cost";
+    return "";
+  };
+
+  lines.forEach((line) => {
+    const match = line.match(/^([^:]+):\s*(.+)$/);
+    if (match) {
+      const field = matchLabel(match[1]);
+      if (field) {
+        fields[field] = match[2].trim();
+        return;
+      }
+    }
+    unusedLines.push(line);
+  });
+
+  if (!fields.title || fields.title === base.title) {
+    const firstLine = unusedLines[0] || text;
+    fields.title = firstLine.split(".")[0].trim() || base.title;
+  }
+
+  if (!fields.why_text) {
+    const remainder = unusedLines.slice(1).join(" ").trim();
+    fields.why_text = remainder || "";
+  }
+
+  if (!fields.priority || fields.priority === base.priority) {
+    if (normalized.includes("dringend") || normalized.includes("sofort")) fields.priority = "Dringend";
+    if (normalized.includes("hinweis") || normalized.includes("optional")) fields.priority = "Hinweis";
+  }
+
+  if (!fields.impact || fields.impact === base.impact) {
+    if (normalized.includes("wartungsfenster")) fields.impact = "Wartungsfenster";
+    if (normalized.includes("kurzunterbrechung") || normalized.includes("kurze unterbrechung"))
+      fields.impact = "Kurzunterbrechung";
+  }
+
+  return fields;
+};
+
 export default function ReportView() {
   const [report, setReport] = useState(defaultReport);
   const [catalogItems, setCatalogItems] = useState(ensureCatalogIds(defaultCatalog));
@@ -131,6 +199,22 @@ export default function ReportView() {
   const [section, setSection] = useState("builder");
   const [toast, setToast] = useState("");
   const [customerInput, setCustomerInput] = useState(defaultReport.customer);
+  const [freeText, setFreeText] = useState("");
+  const [integrationSettings, setIntegrationSettings] = useState({
+    rmm_host: "",
+    rmm_user: "",
+    rmm_password: "",
+    ai_provider: "Gemini",
+    ai_backend_url: "",
+    ai_api_key: "",
+    ai_model: ""
+  });
+
+  const updateIntegration = (patch) =>
+    setIntegrationSettings((prev) => ({
+      ...prev,
+      ...patch
+    }));
 
   const previewHtml = useMemo(() => renderReportHTML(report), [report]);
   const plainText = useMemo(() => buildPlainText(report), [report]);
@@ -208,9 +292,22 @@ export default function ReportView() {
       }
     };
 
+    const loadIntegrations = async () => {
+      try {
+        const res = await fetch("/api/integrations");
+        const data = await res.json();
+        if (data) {
+          setIntegrationSettings((prev) => ({ ...prev, ...data }));
+        }
+      } catch (error) {
+        // Keep defaults.
+      }
+    };
+
     loadCustomers();
     loadCatalog();
     loadReports();
+    loadIntegrations();
   }, []);
 
 
@@ -295,6 +392,31 @@ export default function ReportView() {
     if (item) {
       const { id, ...payload } = item;
       addAction(payload);
+    }
+  };
+
+  const addFromFreeText = () => {
+    if (!freeText.trim()) {
+      setToast("Bitte Freitext eingeben.");
+      return;
+    }
+    const payload = parseActionFromText(freeText);
+    addAction(payload);
+    setFreeText("");
+  };
+
+  const saveIntegrations = async () => {
+    try {
+      const res = await fetch("/api/integrations", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(integrationSettings)
+      });
+      const data = await res.json();
+      setIntegrationSettings((prev) => ({ ...prev, ...data }));
+      setToast("Anbindungen gespeichert.");
+    } catch (error) {
+      setToast("Speichern fehlgeschlagen.");
     }
   };
 
@@ -474,7 +596,8 @@ export default function ReportView() {
     { id: "builder", label: "Bericht erstellen" },
     { id: "archive", label: "Archiv" },
     { id: "templates", label: "Vorlagenverwaltung" },
-    { id: "blocks", label: "Textbausteine" }
+    { id: "blocks", label: "Textbausteine" },
+    { id: "integrations", label: "Anbindungen" }
   ];
 
   const subnav = (
@@ -659,6 +782,33 @@ export default function ReportView() {
                 </button>
               </div>
 
+              <div className="bg-white border border-sand-200 rounded-2xl p-4 space-y-3">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-sand-600 flex items-center gap-2">
+                      <PenLine size={14} /> Freitext in Maßnahme umwandeln (KI)
+                    </p>
+                    <p className="text-sm text-sand-600">
+                      Stichpunkte oder kurzer Text, wir füllen die bekannten Felder vor.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addFromFreeText}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <Plus size={14} /> Aus Freitext erzeugen
+                  </button>
+                </div>
+                <textarea
+                  value={freeText}
+                  onChange={(event) => setFreeText(event.target.value)}
+                  rows={3}
+                  className="w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                  placeholder="z. B. Server-Updates einspielen, um kritische Sicherheitslücken zu schließen. Wartungsfenster nötig. Dauer 1h, ca. €200."
+                />
+              </div>
+
               <div className="space-y-4">
                 {report.actions.map((action) => (
                   <ActionCard
@@ -736,6 +886,120 @@ export default function ReportView() {
               onRemove={removeCatalogItem}
               onUpdate={updateCatalogItem}
             />
+          </div>
+        </main>
+      )}
+
+      {section === "integrations" && (
+        <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+          <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft space-y-2">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-lg font-display">Anbindungen pflegen</h2>
+                <p className="text-sm text-sand-600">
+                  Zugangsdaten und API-Endpunkte für RMM sowie KI-Backends.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={saveIntegrations}
+                className="inline-flex items-center gap-2 rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+              >
+                <Save size={14} /> Speichern
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
+              <div>
+                <h3 className="text-base font-display">RMM Datenbank</h3>
+                <p className="text-sm text-sand-600">Host/IP, Benutzer und Passwort.</p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="text-xs uppercase tracking-wide text-sand-600">
+                  IP / Host
+                  <input
+                    value={integrationSettings.rmm_host}
+                    onChange={(event) => updateIntegration({ rmm_host: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    placeholder="192.168.10.12"
+                  />
+                </label>
+                <label className="text-xs uppercase tracking-wide text-sand-600">
+                  Benutzer
+                  <input
+                    value={integrationSettings.rmm_user}
+                    onChange={(event) => updateIntegration({ rmm_user: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    placeholder="rmm_readonly"
+                  />
+                </label>
+                <label className="text-xs uppercase tracking-wide text-sand-600 md:col-span-2">
+                  Passwort
+                  <input
+                    type="password"
+                    value={integrationSettings.rmm_password}
+                    onChange={(event) => updateIntegration({ rmm_password: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    placeholder="••••••••"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
+              <div>
+                <h3 className="text-base font-display">KI API Backend</h3>
+                <p className="text-sm text-sand-600">
+                  Gemini, Azure oder eigener Endpoint.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="text-xs uppercase tracking-wide text-sand-600">
+                  Provider
+                  <select
+                    value={integrationSettings.ai_provider}
+                    onChange={(event) => updateIntegration({ ai_provider: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                  >
+                    {["Gemini", "Azure OpenAI", "Microsoft Azure", "Eigener Endpoint"].map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-xs uppercase tracking-wide text-sand-600">
+                  Backend URL
+                  <input
+                    value={integrationSettings.ai_backend_url}
+                    onChange={(event) => updateIntegration({ ai_backend_url: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    placeholder="https://api.example.com"
+                  />
+                </label>
+                <label className="text-xs uppercase tracking-wide text-sand-600">
+                  API Key
+                  <input
+                    type="password"
+                    value={integrationSettings.ai_api_key}
+                    onChange={(event) => updateIntegration({ ai_api_key: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    placeholder="sk-..."
+                  />
+                </label>
+                <label className="text-xs uppercase tracking-wide text-sand-600">
+                  Modell (optional)
+                  <input
+                    value={integrationSettings.ai_model}
+                    onChange={(event) => updateIntegration({ ai_model: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    placeholder="gemini-1.5-pro"
+                  />
+                </label>
+              </div>
+            </div>
           </div>
         </main>
       )}
