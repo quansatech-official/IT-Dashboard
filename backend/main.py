@@ -442,11 +442,21 @@ def generate_action(data: ActionAiRequest):
 
     prompt = (
         "Du bist ein Assistent fuer IT-Kundenberichte. "
-        "Extrahiere aus dem Text eine konkrete Massnahme als JSON. "
+        "Erzeuge aus dem Text eine konkrete Massnahme als JSON. "
         "Antworte ausschliesslich mit JSON und den Schluesseln: "
         "title, system, why_text, impact, duration, cost, priority. "
-        "Nutze deutsche Begriffe. Falls unbekannt, nutze leere Strings. "
+        "Nutze deutsche Begriffe. Wenn der Text sehr kurz ist, "
+        "ergaenze sinnvolle Standardwerte und eine plausible Massnahme "
+        "anstatt den Text nur zu wiederholen. "
         "priority ist Dringend, Planbar oder Hinweis.\n\n"
+        "Beispiel fuer Kurztext 'test': "
+        "{\"title\":\"Kurze Systempruefung\","
+        "\"system\":\"Allgemein\","
+        "\"why_text\":\"Kurzer Schnellcheck, um Auffaelligkeiten zu erkennen.\","
+        "\"impact\":\"Keine Unterbrechung\","
+        "\"duration\":\"15 Min\","
+        "\"cost\":\"ca. 30 EUR\","
+        "\"priority\":\"Planbar\"}\n\n"
         f"Text: {text}"
     )
 
