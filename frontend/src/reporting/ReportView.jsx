@@ -16,7 +16,7 @@ import ArchivePanel from "./components/ArchivePanel";
 import CatalogManager from "./components/CatalogManager";
 import StatusPicker from "./components/StatusPicker";
 import { catalog as defaultCatalog, customers as fallbackCustomers } from "./constants";
-import { buildPlainText, renderReportHTML, uid } from "./utils";
+import { renderReportHTML, uid } from "./utils";
 
 function CustomerCombobox({ customers, value, onChange }) {
   const [query, setQuery] = useState(value || "");
@@ -217,7 +217,6 @@ export default function ReportView() {
     }));
 
   const previewHtml = useMemo(() => renderReportHTML(report), [report]);
-  const plainText = useMemo(() => buildPlainText(report), [report]);
   const suggestedCustomers = useMemo(() => {
     const seen = new Set();
     const merged = [];
@@ -606,15 +605,32 @@ export default function ReportView() {
     actions: data.items || []
   });
 
-  const openEmailDraft = (data) => {
+  const downloadEmailDraft = (data) => {
     if (!data?.customer?.trim()) {
       setToast("Bitte Kunde angeben.");
       return;
     }
     const subject = `IT-Kundenbericht – ${data.customer} (${data.period || "ohne Zeitraum"})`;
-    const body = buildPlainText(data).replaceAll("\n", "\r\n");
-    const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.assign(mailto);
+    const htmlBody = renderReportHTML(data);
+    const eml = [
+      "MIME-Version: 1.0",
+      "Content-Type: text/html; charset=utf-8",
+      `Subject: ${subject}`,
+      "",
+      htmlBody
+    ].join("\r\n");
+    const blob = new Blob([eml], { type: "message/rfc822;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const filename = `IT-Kundenbericht_${data.customer}_${data.period || "ohne Zeitraum"}.eml`
+      .replaceAll(" ", "_")
+      .replaceAll("/", "-");
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
   };
 
   const exportArchivedHtml = async (item) => {
@@ -634,7 +650,7 @@ export default function ReportView() {
   const exportArchivedEmail = async (item) => {
     const data = await fetchArchivedReport(item);
     if (!data) return;
-    openEmailDraft(normalizeReport(data));
+    downloadEmailDraft(normalizeReport(data));
   };
 
   const headerActions = (
@@ -646,7 +662,7 @@ export default function ReportView() {
         <ClipboardCopy size={14} /> HTML kopieren
       </button>
       <button
-        onClick={() => openEmailDraft(report)}
+        onClick={() => downloadEmailDraft(report)}
         className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
       >
         <Mail size={14} /> E-Mail Entwurf
