@@ -122,6 +122,8 @@ const ensureCatalogIds = (items) =>
     ...item
   }));
 
+const normalizeCatalogId = (value) => (value === null || value === undefined ? "" : String(value));
+
 const parseActionFromText = (rawText) => {
   const text = rawText.trim();
   const base = {
@@ -241,6 +243,12 @@ export default function ReportView() {
   }, [report.customer]);
 
   useEffect(() => {
+    if (!catalogPick && catalogItems.length) {
+      setCatalogPick(normalizeCatalogId(catalogItems[0]?.id ?? ""));
+    }
+  }, [catalogItems, catalogPick]);
+
+  useEffect(() => {
     const loadCustomers = async () => {
       try {
         const res = await fetch("/api/report_customers");
@@ -253,15 +261,15 @@ export default function ReportView() {
       }
     };
 
-    const loadCatalog = async () => {
-      try {
-        const res = await fetch("/api/report_catalog");
-        const data = await res.json();
-        if (Array.isArray(data) && data.length) {
-          setCatalogItems(data);
-          setCatalogPick(data[0]?.id ?? "");
-          return;
-        }
+  const loadCatalog = async () => {
+    try {
+      const res = await fetch("/api/report_catalog");
+      const data = await res.json();
+      if (Array.isArray(data) && data.length) {
+        setCatalogItems(data);
+        setCatalogPick(normalizeCatalogId(data[0]?.id ?? ""));
+        return;
+      }
 
         const seeded = await Promise.all(
           defaultCatalog.map((item) =>
@@ -273,9 +281,9 @@ export default function ReportView() {
           )
         );
         setCatalogItems(seeded);
-        setCatalogPick(seeded[0]?.id ?? "");
+        setCatalogPick(normalizeCatalogId(seeded[0]?.id ?? ""));
       } catch (error) {
-        setCatalogPick((prev) => prev || catalogItems[0]?.id || "");
+        setCatalogPick((prev) => prev || normalizeCatalogId(catalogItems[0]?.id ?? ""));
       }
     };
 
@@ -399,7 +407,8 @@ export default function ReportView() {
   };
 
   const addFromCatalog = () => {
-    const item = catalogItems.find((entry) => entry.id === catalogPick);
+    const pick = catalogPick || normalizeCatalogId(catalogItems[0]?.id ?? "");
+    const item = catalogItems.find((entry) => normalizeCatalogId(entry.id) === pick);
     if (item) {
       const { id, ...payload } = item;
       addAction(payload);
@@ -470,7 +479,7 @@ export default function ReportView() {
     const created = await res.json();
     const next = [...catalogItems, created];
     setCatalogItems(next);
-    if (!catalogPick) setCatalogPick(created?.id ?? next[0]?.id ?? "");
+    if (!catalogPick) setCatalogPick(normalizeCatalogId(created?.id ?? next[0]?.id ?? ""));
   };
 
   const addActionToCatalog = async (action) => {
@@ -494,7 +503,9 @@ export default function ReportView() {
     await fetch(`/api/report_catalog/${id}`, { method: "DELETE" });
     const next = catalogItems.filter((item) => item.id !== id);
     setCatalogItems(next);
-    if (catalogPick === id) setCatalogPick(next[0]?.id ?? "");
+    if (catalogPick === normalizeCatalogId(id)) {
+      setCatalogPick(normalizeCatalogId(next[0]?.id ?? ""));
+    }
   };
 
   const updateCatalogItem = async (id, patch) => {
@@ -823,7 +834,7 @@ const normalizeReport = (data) => ({
                     className="rounded-full border border-sand-200 px-4 py-2 text-sm bg-white"
                   >
                     {catalogItems.map((item) => (
-                      <option key={item.id} value={item.id}>
+                      <option key={item.id} value={normalizeCatalogId(item.id)}>
                         {item.title}
                       </option>
                     ))}
