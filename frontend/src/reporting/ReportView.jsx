@@ -14,8 +14,13 @@ import {
 import ActionCard from "./components/ActionCard";
 import ArchivePanel from "./components/ArchivePanel";
 import CatalogManager from "./components/CatalogManager";
+import CustomerActionManager from "./components/CustomerActionManager";
 import StatusPicker from "./components/StatusPicker";
-import { catalog as defaultCatalog, customers as fallbackCustomers } from "./constants";
+import {
+  catalog as defaultCatalog,
+  customerActionSuggestions as defaultCustomerActions,
+  customers as fallbackCustomers
+} from "./constants";
 import { renderReportHTML, uid } from "./utils";
 
 function CustomerCombobox({ customers, value, onChange }) {
@@ -123,7 +128,13 @@ const ensureCatalogIds = (items) =>
     ...item
   }));
 
-const normalizeCatalogId = (value) => (value === null || value === undefined ? "" : String(value));
+const ensureCustomerActionIds = (items) =>
+  items.map((item) => ({
+    id: item.id || uid(),
+    ...item
+  }));
+
+const normalizeId = (value) => (value === null || value === undefined ? "" : String(value));
 
 const parseActionFromText = (rawText) => {
   const text = rawText.trim();
@@ -197,6 +208,10 @@ export default function ReportView() {
   const [report, setReport] = useState(defaultReport);
   const [catalogItems, setCatalogItems] = useState(ensureCatalogIds(defaultCatalog));
   const [catalogPick, setCatalogPick] = useState("");
+  const [customerActionItems, setCustomerActionItems] = useState(
+    ensureCustomerActionIds(defaultCustomerActions)
+  );
+  const [customerActionPick, setCustomerActionPick] = useState("");
   const [archiveItems, setArchiveItems] = useState([]);
   const [customerList, setCustomerList] = useState(fallbackCustomers);
   const [section, setSection] = useState("builder");
@@ -244,9 +259,15 @@ export default function ReportView() {
 
   useEffect(() => {
     if (!catalogPick && catalogItems.length) {
-      setCatalogPick(normalizeCatalogId(catalogItems[0]?.id ?? ""));
+      setCatalogPick(normalizeId(catalogItems[0]?.id ?? ""));
     }
   }, [catalogItems, catalogPick]);
+
+  useEffect(() => {
+    if (!customerActionPick && customerActionItems.length) {
+      setCustomerActionPick(normalizeId(customerActionItems[0]?.id ?? ""));
+    }
+  }, [customerActionItems, customerActionPick]);
 
   useEffect(() => {
     const loadCustomers = async () => {
@@ -261,15 +282,15 @@ export default function ReportView() {
       }
     };
 
-  const loadCatalog = async () => {
-    try {
-      const res = await fetch("/api/report_catalog");
-      const data = await res.json();
-      if (Array.isArray(data) && data.length) {
-        setCatalogItems(data);
-        setCatalogPick(normalizeCatalogId(data[0]?.id ?? ""));
-        return;
-      }
+    const loadCatalog = async () => {
+      try {
+        const res = await fetch("/api/report_catalog");
+        const data = await res.json();
+        if (Array.isArray(data) && data.length) {
+          setCatalogItems(data);
+          setCatalogPick(normalizeId(data[0]?.id ?? ""));
+          return;
+        }
 
         const seeded = await Promise.all(
           defaultCatalog.map((item) =>
@@ -281,9 +302,35 @@ export default function ReportView() {
           )
         );
         setCatalogItems(seeded);
-        setCatalogPick(normalizeCatalogId(seeded[0]?.id ?? ""));
+        setCatalogPick(normalizeId(seeded[0]?.id ?? ""));
       } catch (error) {
-        setCatalogPick((prev) => prev || normalizeCatalogId(catalogItems[0]?.id ?? ""));
+        setCatalogPick((prev) => prev || normalizeId(catalogItems[0]?.id ?? ""));
+      }
+    };
+
+    const loadCustomerActions = async () => {
+      try {
+        const res = await fetch("/api/report_customer_actions");
+        const data = await res.json();
+        if (Array.isArray(data) && data.length) {
+          setCustomerActionItems(data);
+          setCustomerActionPick(normalizeId(data[0]?.id ?? ""));
+          return;
+        }
+
+        const seeded = await Promise.all(
+          defaultCustomerActions.map((item) =>
+            fetch("/api/report_customer_actions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(item)
+            }).then((r) => r.json())
+          )
+        );
+        setCustomerActionItems(seeded);
+        setCustomerActionPick(normalizeId(seeded[0]?.id ?? ""));
+      } catch (error) {
+        setCustomerActionPick((prev) => prev || normalizeId(customerActionItems[0]?.id ?? ""));
       }
     };
 
@@ -325,6 +372,7 @@ export default function ReportView() {
 
     loadCustomers();
     loadCatalog();
+    loadCustomerActions();
     loadReports();
     loadIntegrations();
   }, []);
@@ -407,12 +455,22 @@ export default function ReportView() {
   };
 
   const addFromCatalog = () => {
-    const pick = catalogPick || normalizeCatalogId(catalogItems[0]?.id ?? "");
-    const item = catalogItems.find((entry) => normalizeCatalogId(entry.id) === pick);
+    const pick = catalogPick || normalizeId(catalogItems[0]?.id ?? "");
+    const item = catalogItems.find((entry) => normalizeId(entry.id) === pick);
     if (item) {
       const { id, ...payload } = item;
       addAction(payload);
     }
+  };
+
+  const applyCustomerActionSuggestion = () => {
+    const pick = customerActionPick || normalizeId(customerActionItems[0]?.id ?? "");
+    const item = customerActionItems.find((entry) => normalizeId(entry.id) === pick);
+    if (!item) {
+      setToast("Kein Vorschlag gewählt.");
+      return;
+    }
+    setReport((prev) => ({ ...prev, customer_action_text: item.text || "" }));
   };
 
   const addFromFreeText = async () => {
@@ -479,7 +537,7 @@ export default function ReportView() {
     const created = await res.json();
     const next = [...catalogItems, created];
     setCatalogItems(next);
-    if (!catalogPick) setCatalogPick(normalizeCatalogId(created?.id ?? next[0]?.id ?? ""));
+    if (!catalogPick) setCatalogPick(normalizeId(created?.id ?? next[0]?.id ?? ""));
   };
 
   const addActionToCatalog = async (action) => {
@@ -503,8 +561,8 @@ export default function ReportView() {
     await fetch(`/api/report_catalog/${id}`, { method: "DELETE" });
     const next = catalogItems.filter((item) => item.id !== id);
     setCatalogItems(next);
-    if (catalogPick === normalizeCatalogId(id)) {
-      setCatalogPick(normalizeCatalogId(next[0]?.id ?? ""));
+    if (catalogPick === normalizeId(id)) {
+      setCatalogPick(normalizeId(next[0]?.id ?? ""));
     }
   };
 
@@ -516,6 +574,37 @@ export default function ReportView() {
     });
     const updated = await res.json();
     setCatalogItems((prev) => prev.map((item) => (item.id === id ? updated : item)));
+  };
+
+  const addCustomerActionItem = async (item) => {
+    const res = await fetch("/api/report_customer_actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(item)
+    });
+    const created = await res.json();
+    const next = [...customerActionItems, created];
+    setCustomerActionItems(next);
+    if (!customerActionPick) setCustomerActionPick(normalizeId(created?.id ?? next[0]?.id ?? ""));
+  };
+
+  const removeCustomerActionItem = async (id) => {
+    await fetch(`/api/report_customer_actions/${id}`, { method: "DELETE" });
+    const next = customerActionItems.filter((item) => item.id !== id);
+    setCustomerActionItems(next);
+    if (customerActionPick === normalizeId(id)) {
+      setCustomerActionPick(normalizeId(next[0]?.id ?? ""));
+    }
+  };
+
+  const updateCustomerActionItem = async (id, patch) => {
+    const res = await fetch(`/api/report_customer_actions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    const updated = await res.json();
+    setCustomerActionItems((prev) => prev.map((item) => (item.id === id ? updated : item)));
   };
 
   const archiveReport = async () => {
@@ -735,7 +824,8 @@ export default function ReportView() {
     { id: "builder", label: "Bericht erstellen" },
     { id: "archive", label: "Archiv" },
     { id: "templates", label: "Vorlagenverwaltung" },
-    { id: "blocks", label: "Textbausteine" }
+    { id: "blocks", label: "Textbausteine" },
+    { id: "customer-actions", label: "Kundenbedarf" }
   ];
 
   const subnav = (
@@ -861,16 +951,25 @@ export default function ReportView() {
                     rows={4}
                     className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                   />
-                  <div className="mt-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <select
+                      value={customerActionPick}
+                      onChange={(event) => setCustomerActionPick(event.target.value)}
+                      className="rounded-full border border-sand-200 px-3 py-1 text-xs bg-white uppercase tracking-wide text-sand-600"
+                    >
+                      {customerActionItems.length ? (
+                        customerActionItems.map((item) => (
+                          <option key={item.id} value={normalizeId(item.id)}>
+                            {item.text.length > 60 ? `${item.text.slice(0, 57)}...` : item.text}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">Keine Vorschläge</option>
+                      )}
+                    </select>
                     <button
                       type="button"
-                      onClick={() =>
-                        setReport((prev) => ({
-                          ...prev,
-                          customer_action_text:
-                            "Bitte geben Sie uns Bescheid, ob und welche Maßnahmen wir für Sie erledigen dürfen."
-                        }))
-                      }
+                      onClick={applyCustomerActionSuggestion}
                       className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
                     >
                       Vorschlag übernehmen
@@ -918,7 +1017,7 @@ export default function ReportView() {
                     className="rounded-full border border-sand-200 px-4 py-2 text-sm bg-white"
                   >
                     {catalogItems.map((item) => (
-                      <option key={item.id} value={normalizeCatalogId(item.id)}>
+                      <option key={item.id} value={normalizeId(item.id)}>
                         {item.title}
                       </option>
                     ))}
@@ -1047,6 +1146,25 @@ export default function ReportView() {
               onAdd={addCatalogItem}
               onRemove={removeCatalogItem}
               onUpdate={updateCatalogItem}
+            />
+          </div>
+        </main>
+      )}
+
+      {section === "customer-actions" && (
+        <main className="w-full px-6 py-8">
+          <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
+            <div>
+              <h2 className="text-lg font-display">Kundenbedarf verwalten</h2>
+              <p className="text-sm text-sand-600">
+                Vorschläge für das Feld „Was wir vom Kunden benötigen“.
+              </p>
+            </div>
+            <CustomerActionManager
+              items={customerActionItems}
+              onAdd={addCustomerActionItem}
+              onRemove={removeCustomerActionItem}
+              onUpdate={updateCustomerActionItem}
             />
           </div>
         </main>

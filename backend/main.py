@@ -74,6 +74,12 @@ class ReportCatalogItem(Base):
     cost = Column(String, default="")
     priority = Column(String, default="Planbar")
 
+class CustomerActionSuggestion(Base):
+    __tablename__ = "report_customer_actions"
+
+    id = Column(Integer, primary_key=True)
+    text = Column(String, nullable=False)
+
 
 class Report(Base):
     __tablename__ = "reports"
@@ -163,6 +169,15 @@ class ReportCatalogItemUpdate(BaseModel):
     cost: Optional[str] = None
     priority: Optional[str] = None
 
+class CustomerActionSuggestionBase(BaseModel):
+    text: str
+
+class CustomerActionSuggestionCreate(CustomerActionSuggestionBase):
+    pass
+
+class CustomerActionSuggestionUpdate(BaseModel):
+    text: Optional[str] = None
+
 class ReportItemSchema(BaseModel):
     priority: Optional[str] = "Planbar"
     title: Optional[str] = ""
@@ -229,6 +244,12 @@ def serialize_catalog_item(item: ReportCatalogItem) -> Dict[str, Any]:
         "duration": item.duration,
         "cost": item.cost,
         "priority": item.priority,
+    }
+
+def serialize_customer_action(item: CustomerActionSuggestion) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "text": item.text,
     }
 
 def serialize_report_item(item: ReportItem) -> Dict[str, Any]:
@@ -617,6 +638,45 @@ def delete_report_catalog_item(item_id: int):
         item = db.query(ReportCatalogItem).get(item_id)
         if not item:
             raise HTTPException(404, "Catalog item not found")
+        db.delete(item)
+        db.commit()
+        return {"status": "deleted"}
+
+# ============== CUSTOMER ACTIONS =============
+@app.get("/api/report_customer_actions")
+def get_report_customer_actions():
+    with SessionLocal() as db:
+        items = db.query(CustomerActionSuggestion).all()
+        return [serialize_customer_action(i) for i in items]
+
+
+@app.post("/api/report_customer_actions")
+def create_report_customer_action(data: CustomerActionSuggestionCreate):
+    with SessionLocal() as db:
+        item = CustomerActionSuggestion(**data.dict())
+        db.add(item)
+        db.commit()
+        return serialize_customer_action(item)
+
+
+@app.patch("/api/report_customer_actions/{item_id}")
+def update_report_customer_action(item_id: int, data: CustomerActionSuggestionUpdate):
+    with SessionLocal() as db:
+        item = db.query(CustomerActionSuggestion).get(item_id)
+        if not item:
+            raise HTTPException(404, "Customer action not found")
+        for field, value in data.dict(exclude_unset=True).items():
+            setattr(item, field, value)
+        db.commit()
+        return serialize_customer_action(item)
+
+
+@app.delete("/api/report_customer_actions/{item_id}")
+def delete_report_customer_action(item_id: int):
+    with SessionLocal() as db:
+        item = db.query(CustomerActionSuggestion).get(item_id)
+        if not item:
+            raise HTTPException(404, "Customer action not found")
         db.delete(item)
         db.commit()
         return {"status": "deleted"}

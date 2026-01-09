@@ -14,6 +14,18 @@ export const renderReportHTML = (report, options = {}) => {
   const customerAction = report.customer_action_text?.trim() || "";
   const introText =
     "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste mit Handlungsbedarf.";
+  const vmlRoundRect = ({ fill, stroke, arc, height, content, textStyle }) => `
+    <!--[if mso]>
+    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="${arc}" fillcolor="${fill}" strokecolor="${stroke}" strokeweight="1px" style="height:${height}; v-text-anchor:middle; mso-fit-shape-to-text:t;">
+      <w:anchorlock/>
+      <center style="${textStyle}">${content}</center>
+    </v:roundrect>
+    <![endif]-->
+    <!--[if !mso]><!-- -->
+  `;
+  const vmlRoundRectEnd = `
+    <!--<![endif]-->
+  `;
   const statusBadge = (status = "") => {
     const map = {
       Grün: { bg: "#dcfce7", text: "#15803d", border: "#bbf7d0" },
@@ -22,9 +34,21 @@ export const renderReportHTML = (report, options = {}) => {
     };
     const fallback = { bg: "#f5f5f4", text: "#44403c", border: "#e7e5e4" };
     const style = map[status] || fallback;
-    return `<div style="display: inline-block; padding: 6px 12px; border-radius: 999px; background: ${style.bg}; color: ${style.text}; border: 1px solid ${style.border}; font-size: 12px;">
-      Status: ${escapeHTML(status || "Status")}
-    </div>`;
+    const label = `Status: ${escapeHTML(status || "Status")}`;
+    return `
+      ${vmlRoundRect({
+        fill: style.bg,
+        stroke: style.border,
+        arc: "50%",
+        height: "24px",
+        textStyle: `color:${style.text}; font-family: Arial, sans-serif; font-size:12px; font-weight:600; padding:0 12px;`,
+        content: label
+      })}
+      <div style="display: inline-block; padding: 6px 12px; border-radius: 999px; background: ${style.bg}; color: ${style.text}; border: 1px solid ${style.border}; font-size: 12px;">
+        ${label}
+      </div>
+      ${vmlRoundRectEnd}
+    `;
   };
   const priorityBadge = (priority = "") => {
     const map = {
@@ -34,50 +58,87 @@ export const renderReportHTML = (report, options = {}) => {
     };
     const fallback = { bg: "#f5f5f4", text: "#44403c", border: "#e7e5e4" };
     const style = map[priority] || fallback;
-    return `<span style="display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border: 1px solid ${style.border}; background: ${style.bg}; color: ${style.text};">${escapeHTML(
-      priority || "Priorität"
-    )}</span>`;
+    const label = escapeHTML(priority || "Priorität");
+    return `
+      ${vmlRoundRect({
+        fill: style.bg,
+        stroke: style.border,
+        arc: "50%",
+        height: "20px",
+        textStyle: `color:${style.text}; font-family: Arial, sans-serif; font-size:11px; font-weight:600; letter-spacing:0.03em; padding:0 10px;`,
+        content: label
+      })}
+      <span style="display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border: 1px solid ${style.border}; background: ${style.bg}; color: ${style.text};">${label}</span>
+      ${vmlRoundRectEnd}
+    `;
   };
+  const actionBlockContent = (action) => `
+    <table style="width: 100%; border-collapse: collapse;">
+      <tr>
+        <td style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif;">
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="font-weight: 600; font-size: 14px;">${escapeHTML(action.title)}</td>
+              <td align="right" style="vertical-align: top;">${priorityBadge(action.priority)}</td>
+            </tr>
+          </table>
+          <div style="color: #6b665f; font-size: 12px; margin-top: 2px;">${escapeHTML(
+            action.system
+          )}</div>
+          <div style="margin-top: 8px; font-size: 13px;">${escapeHTML(action.why_text)}</div>
+          <table style="margin-top: 10px; width: 100%; font-size: 12px;">
+            <tr>
+              <td style="padding: 6px 0;" colspan="3"><strong>Auswirkung:</strong> ${escapeHTML(
+                action.impact
+              )}</td>
+            </tr>
+            <tr>
+              <td style="padding: 6px 0;"><strong>Dauer:</strong> ${escapeHTML(action.duration)}</td>
+              <td style="padding: 6px 0;"><strong>Kosten:</strong> ${escapeHTML(action.cost)}</td>
+              <td style="padding: 6px 0;"></td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  `;
   const actionBlocks = report.actions
-    .map(
-      (action) => `
-    <tr>
-      <td style="padding: 16px; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 14px;">
-        <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px;">
-          <div style="font-weight: 600; font-size: 14px;">${escapeHTML(action.title)}</div>
-          ${priorityBadge(action.priority)}
-        </div>
-        <div style="color: #6b665f; font-size: 12px; margin-top: 2px;">${escapeHTML(
-          action.system
-        )}</div>
-        <div style="margin-top: 8px; font-size: 13px;">${escapeHTML(action.why_text)}</div>
-        <table style="margin-top: 10px; width: 100%; font-size: 12px;">
-          <tr>
-            <td style="padding: 6px 0;" colspan="3"><strong>Auswirkung:</strong> ${escapeHTML(
-              action.impact
-            )}</td>
-          </tr>
-          <tr>
-            <td style="padding: 6px 0;"><strong>Dauer:</strong> ${escapeHTML(action.duration)}</td>
-            <td style="padding: 6px 0;"><strong>Kosten:</strong> ${escapeHTML(action.cost)}</td>
-            <td style="padding: 6px 0;"></td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  `
-    )
+    .map((action) => {
+      const content = actionBlockContent(action);
+      return `
+        <tr>
+          <td style="padding: 0;">
+            <!--[if mso]>
+            <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="12%" fillcolor="#f8fafc" strokecolor="#e2e8f0" strokeweight="1px" style="width:100%; mso-width-percent:1000;">
+              <w:anchorlock/>
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 16px;">
+                    ${content}
+                  </td>
+                </tr>
+              </table>
+            </v:roundrect>
+            <![endif]-->
+            <!--[if !mso]><!-- -->
+            <div style="padding: 16px; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 14px;">
+              ${content}
+            </div>
+            <!--<![endif]-->
+          </td>
+        </tr>
+      `;
+    })
     .join("");
 
   const containerStyle = isEmail
     ? "width: 640px; max-width: 100%;"
     : "width: 100%;";
+  const containerMsoStyle = isEmail
+    ? "width: 640px;"
+    : "width: 100%; mso-width-percent: 1000;";
 
-  return `
-    <table style="width: 100%; border-collapse: collapse; background: #f7f2ea; padding: 24px 0;">
-      <tr>
-        <td align="center" style="padding: 24px;">
-          <table style="${containerStyle} border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);">
+  const innerTable = `
             <tr>
               <td style="background: #24425a; padding: 18px 24px;">
                 <table style="width: 100%; border-collapse: collapse;">
@@ -157,7 +218,25 @@ export const renderReportHTML = (report, options = {}) => {
                 </div>
               </td>
             </tr>
+  `;
+
+  return `
+    <table style="width: 100%; border-collapse: collapse; background: #f7f2ea; padding: 24px 0;">
+      <tr>
+        <td align="center" style="padding: 24px;">
+          <!--[if mso]>
+          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="10%" fillcolor="#ffffff" strokecolor="#e7e1d7" strokeweight="1px" style="${containerMsoStyle}">
+            <w:anchorlock/>
+            <table style="width: 100%; border-collapse: collapse;">
+              ${innerTable}
+            </table>
+          </v:roundrect>
+          <![endif]-->
+          <!--[if !mso]><!-- -->
+          <table style="${containerStyle} border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);">
+            ${innerTable}
           </table>
+          <!--<![endif]-->
         </td>
       </tr>
     </table>

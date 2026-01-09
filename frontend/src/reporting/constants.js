@@ -30,6 +30,18 @@ export const catalog = [
   }
 ];
 
+export const customerActionSuggestions = [
+  {
+    text: "Bitte geben Sie uns Bescheid, ob und welche Maßnahmen wir für Sie erledigen dürfen."
+  },
+  {
+    text: "Bitte bestätigen Sie das Wartungsfenster und die Freigabe für die geplanten Arbeiten."
+  },
+  {
+    text: "Bitte teilen Sie uns einen Ansprechpartner und ein passendes Zeitfenster mit."
+  }
+];
+
 export const archiveByCustomer = [
   {
     customer: "Albatros GmbH",
