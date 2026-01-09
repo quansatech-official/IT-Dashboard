@@ -885,7 +885,7 @@ export default function ReportView() {
       </header>
 
       {section === "builder" && (
-        <main className="w-full px-6 py-7 grid grid-cols-1 xl:grid-cols-[1.3fr_0.7fr] gap-6">
+        <main className="w-full px-6 py-7 grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-6">
           <section className="space-y-6">
             <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-5 shadow-soft space-y-5">
               <div>
