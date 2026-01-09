@@ -774,62 +774,78 @@ export default function ReportView() {
             </div>
 
             <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-5 shadow-soft space-y-4">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <h2 className="text-lg font-display">Bausteine zusammenstellen</h2>
-                  <p className="text-sm text-sand-600">Standard-Textbausteine plus individuelle Ergänzungen.</p>
-                </div>
-                <div className="flex gap-2">
+              <div>
+                <h2 className="text-lg font-display">Bausteine zusammenstellen</h2>
+                <p className="text-sm text-sand-600">Standard-Textbausteine plus individuelle Ergänzungen.</p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
+                  <div className="flex items-center gap-2 text-sand-700">
+                    <Plus size={16} />
+                    <p className="text-xs uppercase tracking-wide text-sand-600">Neue Maßnahme</p>
+                  </div>
+                  <p className="text-sm text-sand-600">
+                    Leeres Formular für individuelle Inhalte starten.
+                  </p>
                   <button
                     onClick={() => addAction()}
-                    className="inline-flex items-center gap-2 rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                    className="mt-auto inline-flex items-center gap-2 rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
                   >
-                    <Plus size={14} /> Neue Maßnahme
+                    <Plus size={14} /> Jetzt anlegen
                   </button>
                 </div>
-              </div>
 
-              <div className="flex flex-wrap gap-3 items-center bg-sand-100-70 border border-sand-200 rounded-2xl p-3">
-                <label className="text-xs uppercase tracking-wide text-sand-600 flex items-center gap-2">
-                  <Sparkles size={14} /> Aus Bausteinen
-                </label>
-                <select
-                  value={catalogPick}
-                  onChange={(event) => setCatalogPick(event.target.value)}
-                  className="rounded-full border border-sand-200 px-4 py-2 text-sm bg-white"
-                >
-                  {catalogItems.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.title}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={addFromCatalog}
-                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-                >
-                  <Plus size={14} /> Hinzufügen
-                </button>
-              </div>
-
-              <div className="bg-white border border-sand-200 rounded-2xl p-4 space-y-3">
-                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <p className="text-xs uppercase tracking-wide text-sand-600 flex items-center gap-2">
-                      <PenLine size={14} /> Freitext in Maßnahme umwandeln
-                      <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] font-semibold tracking-wide text-sand-700">
-                        <Sparkles size={10} /> KI
-                      </span>
-                    </p>
-                    <p className="text-sm text-sand-600">
-                      Stichpunkte oder kurzer Text, wir füllen die bekannten Felder vor.
-                    </p>
+                <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
+                  <div className="flex items-center gap-2 text-sand-700">
+                    <Sparkles size={16} />
+                    <p className="text-xs uppercase tracking-wide text-sand-600">Aus Baustein</p>
                   </div>
+                  <p className="text-sm text-sand-600">
+                    Vorgefertigten Textbaustein auswählen und übernehmen.
+                  </p>
+                  <select
+                    value={catalogPick}
+                    onChange={(event) => setCatalogPick(event.target.value)}
+                    className="rounded-full border border-sand-200 px-4 py-2 text-sm bg-white"
+                  >
+                    {catalogItems.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.title}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={addFromCatalog}
+                    className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <Plus size={14} /> Hinzufügen
+                  </button>
+                </div>
+
+                <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3">
+                  <div className="flex items-center gap-2 text-sand-700">
+                    <PenLine size={16} />
+                    <p className="text-xs uppercase tracking-wide text-sand-600">Mit KI erstellen</p>
+                    <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] font-semibold tracking-wide text-sand-700">
+                      <Sparkles size={10} /> KI
+                    </span>
+                  </div>
+                  <p className="text-sm text-sand-600">
+                    Kurzer Freitext, wir füllen die bekannten Felder vor.
+                  </p>
+                  <textarea
+                    value={freeText}
+                    onChange={(event) => setFreeText(event.target.value)}
+                    rows={3}
+                    className="w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    placeholder="z. B. Server-Updates einspielen, um kritische Sicherheitslücken zu schließen. Wartungsfenster nötig. Dauer 1h."
+                  />
                   <button
                     type="button"
                     onClick={addFromFreeText}
                     disabled={isGenerating}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {isGenerating ? (
                       <span className="inline-flex items-center gap-2">
@@ -843,13 +859,6 @@ export default function ReportView() {
                     )}
                   </button>
                 </div>
-                <textarea
-                  value={freeText}
-                  onChange={(event) => setFreeText(event.target.value)}
-                  rows={3}
-                  className="w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                  placeholder="z. B. Server-Updates einspielen, um kritische Sicherheitslücken zu schließen. Wartungsfenster nötig. Dauer 1h, ca. €200."
-                />
               </div>
 
               <div className="space-y-4">
