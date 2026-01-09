@@ -18,13 +18,13 @@ export const renderReportHTML = (report, options = {}) => {
   const vmlRoundRect = ({ fill, stroke, arc, height, content, textStyle }) =>
     enableMso
       ? `
-    <!--[if mso]>
-    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="${arc}" fillcolor="${fill}" strokecolor="${stroke}" strokeweight="1px" style="height:${height}; v-text-anchor:middle; mso-fit-shape-to-text:t;">
-      <w:anchorlock/>
-      <center style="${textStyle}">${content}</center>
-    </v:roundrect>
-    <![endif]-->
-    <!--[if !mso]><!-- -->
+        <!--[if mso]>
+        <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="${arc}" fillcolor="${fill}" strokecolor="${stroke}" strokeweight="1px" style="height:${height}; v-text-anchor:middle; mso-fit-shape-to-text:t;">
+          <w:anchorlock/>
+          <center style="${textStyle}">${content}</center>
+        </v:roundrect>
+        <![endif]-->
+        <!--[if !mso]><!-- -->
   `
       : "";
   const vmlRoundRectEnd = enableMso ? `<!--<![endif]-->` : "";
@@ -39,18 +39,17 @@ export const renderReportHTML = (report, options = {}) => {
     const label = `Status: ${escapeHTML(status || "Status")}`;
     if (enableMso) {
       return `
-        ${vmlRoundRect({
-          fill: style.bg,
-          stroke: style.border,
-          arc: "50%",
-          height: "24px",
-          textStyle: `color:${style.text}; font-family: Arial, sans-serif; font-size:12px; font-weight:600; padding:0 12px;`,
-          content: label
-        })}
+        <!--[if mso]>
+        <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="50%" fillcolor="${style.bg}" strokecolor="${style.border}" strokeweight="1px" style="height:24px; v-text-anchor:middle; mso-fit-shape-to-text:t;">
+          <w:anchorlock/>
+          <center style="color:${style.text}; font-family: Arial, sans-serif; font-size:12px; font-weight:600; padding:0 12px;">${label}</center>
+        </v:roundrect>
+        <![endif]-->
+        <!--[if !mso]><!-- -->
         <div style="display: inline-block; padding: 6px 12px; border-radius: 999px; background: ${style.bg}; color: ${style.text}; border: 1px solid ${style.border}; font-size: 12px;">
           ${label}
         </div>
-        ${vmlRoundRectEnd}
+        <!--<![endif]-->
       `;
     }
     return `<div style="display: inline-block; padding: 6px 12px; border-radius: 999px; background: ${style.bg}; color: ${style.text}; border: 1px solid ${style.border}; font-size: 12px;">
@@ -68,16 +67,15 @@ export const renderReportHTML = (report, options = {}) => {
     const label = escapeHTML(priority || "Priorität");
     if (enableMso) {
       return `
-        ${vmlRoundRect({
-          fill: style.bg,
-          stroke: style.border,
-          arc: "50%",
-          height: "20px",
-          textStyle: `color:${style.text}; font-family: Arial, sans-serif; font-size:11px; font-weight:600; letter-spacing:0.03em; padding:0 10px;`,
-          content: label
-        })}
+        <!--[if mso]>
+        <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" arcsize="50%" fillcolor="${style.bg}" strokecolor="${style.border}" strokeweight="1px" style="height:20px; v-text-anchor:middle; mso-fit-shape-to-text:t;">
+          <w:anchorlock/>
+          <center style="color:${style.text}; font-family: Arial, sans-serif; font-size:11px; font-weight:600; letter-spacing:0.03em; padding:0 10px;">${label}</center>
+        </v:roundrect>
+        <![endif]-->
+        <!--[if !mso]><!-- -->
         <span style="display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border: 1px solid ${style.border}; background: ${style.bg}; color: ${style.text};">${label}</span>
-        ${vmlRoundRectEnd}
+        <!--<![endif]-->
       `;
     }
     return `<span style="display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border: 1px solid ${style.border}; background: ${style.bg}; color: ${style.text};">${label}</span>`;
