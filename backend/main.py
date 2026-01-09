@@ -244,6 +244,17 @@ def get_customers():
         return [serialize_customer(c) for c in customers]
 
 
+# ============ REPORT CUSTOMERS (DUMMY) ============
+@app.get("/api/report_customers")
+def get_report_customers():
+    # Placeholder list until RMM/Django integration is wired.
+    return [
+        {"name": "RMM Kundenkonto Alpha"},
+        {"name": "RMM Kundenkonto Beta"},
+        {"name": "RMM Kundenkonto Gamma"},
+    ]
+
+
 @app.post("/api/customers")
 def create_customer(data: CustomerCreate):
     with SessionLocal() as db:

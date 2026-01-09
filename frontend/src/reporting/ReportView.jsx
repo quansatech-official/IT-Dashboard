@@ -100,7 +100,7 @@ const defaultReport = {
   period: getCurrentPeriod(),
   status: "Gelb",
   summary: "Die Systeme laufen stabil, wir empfehlen jedoch eine zeitnahe Aktualisierung des Servers.",
-  customer_action_text: "Bitte Freigabe für Option A oder B bis nächsten Mittwoch.",
+  customer_action_text: "",
   actions: [
     {
       id: "a1",
@@ -147,10 +147,10 @@ export default function ReportView() {
   useEffect(() => {
     const loadCustomers = async () => {
       try {
-        const res = await fetch("/api/customers");
+        const res = await fetch("/api/report_customers");
         const data = await res.json();
         if (Array.isArray(data) && data.length) {
-          setCustomerList(data.map((item) => item.name));
+          setCustomerList(data.map((item) => item.name).filter(Boolean));
         }
       } catch (error) {
         // Keep fallback list.
@@ -450,18 +450,6 @@ export default function ReportView() {
         <ClipboardCopy size={14} /> HTML kopieren
       </button>
       <button
-        onClick={resetReport}
-        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-      >
-        Neuer Bericht
-      </button>
-      <button
-        onClick={() => copyToClipboard(plainText)}
-        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-      >
-        <FileText size={14} /> Plain-Text
-      </button>
-      <button
         onClick={downloadPdf}
         className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
       >
@@ -485,13 +473,20 @@ export default function ReportView() {
     <div className="flex flex-wrap gap-2 border-t border-sand-200 bg-white/80 backdrop-blur">
       {[
         { id: "builder", label: "Bericht erstellen" },
+        { id: "new", label: "Neuer Bericht" },
         { id: "archive", label: "Archiv" },
         { id: "templates", label: "Vorlagenverwaltung" },
         { id: "blocks", label: "Textbausteine" }
       ].map((item) => (
         <button
           key={item.id}
-          onClick={() => setSection(item.id)}
+          onClick={() => {
+            if (item.id === "new") {
+              resetReport();
+              return;
+            }
+            setSection(item.id);
+          }}
           className={`px-4 py-3 text-xs uppercase tracking-wide border-b-2 ${
             section === item.id
               ? "border-sand-900 text-sand-900"
@@ -516,11 +511,7 @@ export default function ReportView() {
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <img
-              src="https://static.wixstatic.com/media/d613cf_81e665f4b1be40469a05c0b3b30b6cb4~mv2.png"
-              alt="Quansatech"
-              className="h-9"
-            />
+            <img src="/QTLogo.jpg" alt="Quansatech" className="h-9" />
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
               <h1 className="text-2xl font-display">IT-Kundenbericht</h1>
@@ -595,6 +586,21 @@ export default function ReportView() {
                 </label>
                 <label className="text-xs uppercase tracking-wide text-sand-600 block">
                   Was wir vom Kunden benötigen
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setReport((prev) => ({
+                          ...prev,
+                          customer_action_text:
+                            "Bitte geben Sie uns Bescheid, ob und welche Maßnahmen wir für Sie erledigen dürfen."
+                        }))
+                      }
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      Vorschlag übernehmen
+                    </button>
+                  </div>
                   <textarea
                     value={report.customer_action_text}
                     onChange={(event) =>
