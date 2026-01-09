@@ -7,7 +7,8 @@ import {
   Plus,
   Save,
   Sparkles,
-  Users2
+  Users2,
+  PenLine
 } from "lucide-react";
 import ActionCard from "./components/ActionCard";
 import ArchivePanel from "./components/ArchivePanel";
@@ -469,33 +470,38 @@ export default function ReportView() {
     </div>
   );
 
+  const subnavItems = [
+    { id: "builder", label: "Bericht erstellen" },
+    { id: "archive", label: "Archiv" },
+    { id: "templates", label: "Vorlagenverwaltung" },
+    { id: "blocks", label: "Textbausteine" }
+  ];
+
   const subnav = (
-    <div className="flex flex-wrap gap-2 border-t border-sand-200 bg-white/80 backdrop-blur">
-      {[
-        { id: "builder", label: "Bericht erstellen" },
-        { id: "new", label: "Neuer Bericht" },
-        { id: "archive", label: "Archiv" },
-        { id: "templates", label: "Vorlagenverwaltung" },
-        { id: "blocks", label: "Textbausteine" }
-      ].map((item) => (
+    <div className="border-t border-sand-200 bg-white/80 backdrop-blur">
+      <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
+        <div className="flex flex-wrap gap-2">
+          {subnavItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setSection(item.id)}
+              className={`px-4 py-3 text-xs uppercase tracking-wide border-b-2 ${
+                section === item.id
+                  ? "border-sand-900 text-sand-900"
+                  : "border-transparent text-sand-500 hover:text-sand-900"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
         <button
-          key={item.id}
-          onClick={() => {
-            if (item.id === "new") {
-              resetReport();
-              return;
-            }
-            setSection(item.id);
-          }}
-          className={`px-4 py-3 text-xs uppercase tracking-wide border-b-2 ${
-            section === item.id
-              ? "border-sand-900 text-sand-900"
-              : "border-transparent text-sand-500 hover:text-sand-900"
-          }`}
+          onClick={resetReport}
+          className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
         >
-          {item.label}
+          <PenLine size={14} /> Verwerfen
         </button>
-      ))}
+      </div>
     </div>
   );
 
