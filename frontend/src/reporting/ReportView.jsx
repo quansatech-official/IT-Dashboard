@@ -885,7 +885,7 @@ export default function ReportView() {
       </header>
 
       {section === "builder" && (
-        <main className="w-full px-6 py-7 grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
+        <main className="w-full px-6 py-7 grid grid-cols-1 xl:grid-cols-[1.3fr_0.7fr] gap-6">
           <section className="space-y-6">
             <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-5 shadow-soft space-y-5">
               <div>
@@ -1097,8 +1097,8 @@ export default function ReportView() {
                   {report.status}
                 </span>
               </div>
-              <div className="border border-sand-200 rounded-2xl p-4 bg-white overflow-auto max-w-[700px] mx-auto">
-                <div className="max-w-full" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+              <div className="border border-sand-200 rounded-2xl p-4 bg-white overflow-x-hidden">
+                <div className="w-full" dangerouslySetInnerHTML={{ __html: previewHtml }} />
               </div>
             </div>
           </aside>
