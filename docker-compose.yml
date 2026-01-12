@@ -34,6 +34,21 @@ services:
     ports:
       - "${BACKEND_PORT:-9873}:8000"
 
+  telephony:
+    build:
+      context: ./backend
+    container_name: it-dashboard-telephony
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-it_user}:${POSTGRES_PASSWORD:-it_secret_password}@db:5432/${POSTGRES_DB:-it_dashboard}}
+      NFON_CTI_BASE_URL: ${NFON_CTI_BASE_URL:-}
+      NFON_CTI_USER: ${NFON_CTI_USER:-}
+      NFON_CTI_PASSWORD: ${NFON_CTI_PASSWORD:-}
+      TELEPHONY_STREAM_ENABLED: ${TELEPHONY_STREAM_ENABLED:-}
+    command: ["uvicorn", "telephony.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
   frontend:
     build:
       context: ./frontend

@@ -3,6 +3,8 @@ import { Clock, FileText, Monitor, Sparkles } from "lucide-react";
 import ReportView from "./reporting/ReportView";
 import TimeTrackingView from "./timetracking/TimeTrackingView";
 import RmmDashboardView from "./rmm/RmmDashboardView";
+import TelephonyMenu from "./telephony/TelephonyMenu";
+import TelephonyView from "./telephony/TelephonyView";
 
 export default function App() {
   const [activeView, setActiveView] = useState("report");
@@ -52,6 +54,10 @@ export default function App() {
             >
               <Monitor size={18} /> RMM Dashboard
             </button>
+            <TelephonyMenu
+              active={activeView === "telephony"}
+              onClick={() => setActiveView("telephony")}
+            />
           </nav>
 
           <div className="mt-auto text-xs text-sand-500">
@@ -64,6 +70,8 @@ export default function App() {
             <TimeTrackingView />
           ) : activeView === "rmm" ? (
             <RmmDashboardView />
+          ) : activeView === "telephony" ? (
+            <TelephonyView />
           ) : (
             <ReportView />
           )}
