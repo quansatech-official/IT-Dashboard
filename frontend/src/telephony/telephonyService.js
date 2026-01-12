@@ -22,11 +22,9 @@ export const telephonyService = {
       return await safeJson(response);
     } catch (error) {
       return {
-        total: 0,
-        answered: 0,
-        missed: 0,
-        avgDuration: 0,
-        byHour: []
+        today: { total: 0, answered: 0, missed: 0, avgDuration: 0 },
+        last24h: { total: 0, answered: 0, missed: 0, avgDuration: 0 },
+        last7d: { total: 0, answered: 0, missed: 0, avgDuration: 0 }
       };
     }
   },

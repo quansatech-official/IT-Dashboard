@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List
 
 from sqlalchemy import func
@@ -13,40 +13,47 @@ def _start_of_day_ms() -> int:
     return int(start.timestamp() * 1000)
 
 
-def _bucket_stats(calls: List[TelephonyCall]) -> List[Dict[str, int]]:
-    buckets = [{"hour": hour, "answered": 0, "missed": 0} for hour in range(24)]
-    for call in calls:
-        if not call.start_time:
-            continue
-        hour = datetime.fromtimestamp(call.start_time / 1000).hour
-        if call.answered:
-            buckets[hour]["answered"] += 1
-        else:
-            buckets[hour]["missed"] += 1
-    return buckets
+def _since_ms(delta: timedelta) -> int:
+    now = datetime.now()
+    return int((now - delta).timestamp() * 1000)
 
 
-def calculate_stats(session: Session) -> Dict:
-    start_ms = _start_of_day_ms()
-    calls = (
-        session.query(TelephonyCall)
-        .filter(TelephonyCall.start_time >= start_ms)
-        .order_by(TelephonyCall.start_time.desc())
-        .all()
-    )
+def _stats_for_calls(calls: List[TelephonyCall]) -> Dict[str, int]:
     total = len(calls)
     answered = sum(1 for c in calls if c.answered)
     missed = total - answered
     avg_duration = 0
     if total:
         avg_duration = int(sum(c.duration or 0 for c in calls) / total)
-
     return {
         "total": total,
         "answered": answered,
         "missed": missed,
         "avgDuration": avg_duration,
-        "byHour": _bucket_stats(calls),
+    }
+
+
+def calculate_stats(session: Session) -> Dict:
+    today_calls = (
+        session.query(TelephonyCall)
+        .filter(TelephonyCall.start_time >= _start_of_day_ms())
+        .all()
+    )
+    last_24h_calls = (
+        session.query(TelephonyCall)
+        .filter(TelephonyCall.start_time >= _since_ms(timedelta(hours=24)))
+        .all()
+    )
+    last_7d_calls = (
+        session.query(TelephonyCall)
+        .filter(TelephonyCall.start_time >= _since_ms(timedelta(days=7)))
+        .all()
+    )
+
+    return {
+        "today": _stats_for_calls(today_calls),
+        "last24h": _stats_for_calls(last_24h_calls),
+        "last7d": _stats_for_calls(last_7d_calls),
     }
 
 

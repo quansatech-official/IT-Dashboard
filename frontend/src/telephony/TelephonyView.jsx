@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import CallListView from "./CallListView";
 import CallStatsView from "./CallStatsView";
 import { telephonyService } from "./telephonyService";
@@ -26,8 +26,6 @@ export default function TelephonyView() {
   const [settingsStatus, setSettingsStatus] = useState("idle");
   const [apiStatus, setApiStatus] = useState("idle");
 
-  const hasStats = useMemo(() => stats.byHour && stats.byHour.length > 0, [stats.byHour]);
-
   useEffect(() => {
     let active = true;
     telephonyService.fetchSettings().then((data) => {
@@ -52,7 +50,14 @@ export default function TelephonyView() {
       if (!active) return;
       setCalls(nextCalls);
       setStats(nextStats);
-      setApiStatus(isHealthy ? "connected" : "error");
+      const hasPasswordAuth = settings.hasPassword && settings.username?.trim();
+      const hasRefreshAuth = settings.hasRefreshToken;
+      const hasCredentials = Boolean(hasPasswordAuth || hasRefreshAuth);
+      if (!hasCredentials) {
+        setApiStatus("missing");
+      } else {
+        setApiStatus(isHealthy ? "connected" : "error");
+      }
     };
 
     load();
@@ -66,13 +71,30 @@ export default function TelephonyView() {
   return (
     <div className="min-h-screen bg-hero-pattern">
       <div className="max-w-6xl mx-auto px-6 py-10 space-y-8">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-sand-500">NFON CTI</p>
-          <h1 className="text-3xl font-display text-sand-900">Telefonie Monitoring</h1>
-          <p className="text-sand-600 max-w-2xl">
-            Live-Status fuer eingehende und ausgehende Anrufe inklusive KPI-Widgets und
-            CRM-Mapping.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">NFON CTI</p>
+            <h1 className="text-3xl font-display text-sand-900">Telefonie Monitoring</h1>
+            <p className="text-sand-600 max-w-2xl">
+              Live-Status fuer eingehende und ausgehende Anrufe inklusive KPI-Widgets und
+              CRM-Mapping.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-sand-600">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                apiStatus === "connected" ? "bg-emerald-500" : "bg-rose-500"
+              }`}
+            />
+            <span>
+              API{" "}
+              {apiStatus === "connected"
+                ? "aktiv"
+                : apiStatus === "missing"
+                ? "Zugangsdaten fehlen"
+                : "getrennt"}
+            </span>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-3">
@@ -100,33 +122,7 @@ export default function TelephonyView() {
 
         {activeTab === "monitoring" ? (
           <>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <CallStatsView stats={stats} />
-              <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Setup</p>
-                <h2 className="text-xl font-display mb-2">Integration</h2>
-                <p className="text-sm text-sand-600">
-                  Der Stream nutzt die gespeicherten API-Zugangsdaten. Aktiviere den
-                  Live-Stream im Settings-Tab oder setze
-                  <span className="font-semibold"> TELEPHONY_STREAM_ENABLED</span> als Fallback.
-                </p>
-                {!hasStats && (
-                  <p className="mt-4 text-xs text-sand-500">
-                    Noch keine Statistikdaten verfuegbar. Pruefe die API-Konfiguration.
-                  </p>
-                )}
-                <div className="mt-4 flex items-center justify-end gap-2 text-xs">
-                  <span
-                    className={`h-2 w-2 rounded-full ${
-                      apiStatus === "connected" ? "bg-emerald-500" : "bg-rose-500"
-                    }`}
-                  />
-                  <span className="text-sand-500">
-                    API-Verbindung {apiStatus === "connected" ? "aktiv" : "getrennt"}
-                  </span>
-                </div>
-              </div>
-            </div>
+            <CallStatsView stats={stats} />
             <CallListView calls={calls} />
           </>
         ) : (
