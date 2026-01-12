@@ -24,6 +24,7 @@ export default function TelephonyView() {
   const [activeTab, setActiveTab] = useState("monitoring");
   const [settings, setSettings] = useState(defaultSettings);
   const [settingsStatus, setSettingsStatus] = useState("idle");
+  const [apiStatus, setApiStatus] = useState("idle");
 
   const hasStats = useMemo(() => stats.byHour && stats.byHour.length > 0, [stats.byHour]);
 
@@ -43,13 +44,15 @@ export default function TelephonyView() {
     let active = true;
 
     const load = async () => {
-      const [nextCalls, nextStats] = await Promise.all([
+      const [nextCalls, nextStats, isHealthy] = await Promise.all([
         telephonyService.fetchCalls(),
-        telephonyService.fetchStats()
+        telephonyService.fetchStats(),
+        telephonyService.fetchHealth()
       ]);
       if (!active) return;
       setCalls(nextCalls);
       setStats(nextStats);
+      setApiStatus(isHealthy ? "connected" : "error");
     };
 
     load();
@@ -112,6 +115,16 @@ export default function TelephonyView() {
                     Noch keine Statistikdaten verfuegbar. Pruefe die API-Konfiguration.
                   </p>
                 )}
+                <div className="mt-4 flex items-center justify-end gap-2 text-xs">
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      apiStatus === "connected" ? "bg-emerald-500" : "bg-rose-500"
+                    }`}
+                  />
+                  <span className="text-sand-500">
+                    API-Verbindung {apiStatus === "connected" ? "aktiv" : "getrennt"}
+                  </span>
+                </div>
               </div>
             </div>
             <CallListView calls={calls} />

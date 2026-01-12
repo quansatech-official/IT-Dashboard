@@ -134,3 +134,9 @@ def update_settings(payload: SettingsUpdate) -> Dict:
         session.commit()
         session.refresh(settings)
         return _serialize_settings(settings)
+
+
+@app.get("/telephony/health")
+@app.get("/api/telephony/health")
+def health() -> Dict:
+    return {"status": "ok"}

@@ -55,5 +55,13 @@ export const telephonyService = {
     } catch (error) {
       return null;
     }
+  },
+  fetchHealth: async () => {
+    try {
+      const response = await fetch(`${API}/health`);
+      return response.ok;
+    } catch (error) {
+      return false;
+    }
   }
 };
