@@ -39,6 +39,7 @@ export const telephonyService = {
         baseUrl: "",
         username: "",
         hasPassword: false,
+        hasRefreshToken: false,
         streamEnabled: false
       };
     }

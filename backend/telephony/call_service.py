@@ -71,6 +71,7 @@ def start_stream_listener(session_factory, api_client: Optional[NfonCtiClient] =
                                 "base_url": settings.base_url or None,
                                 "username": settings.username or None,
                                 "password": settings.password or None,
+                                "refresh_token": settings.refresh_token or None,
                             }
                             stream_client = NfonCtiClient(**client_config)
                         else:

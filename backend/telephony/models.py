@@ -32,4 +32,5 @@ class TelephonySettings(Base):
     base_url = Column(String, default="")
     username = Column(String, default="")
     password = Column(String, default="")
+    refresh_token = Column(String, default="")
     stream_enabled = Column(Boolean, default=False)

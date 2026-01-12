@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from .call_service import start_stream_listener
@@ -14,6 +14,22 @@ engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_refresh_token_column() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("telephony_settings"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("telephony_settings")}
+    if "refresh_token" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE telephony_settings ADD COLUMN refresh_token VARCHAR")
+        )
+
+
+_ensure_refresh_token_column()
 
 app = FastAPI(title="Telephony Module")
 
@@ -54,6 +70,7 @@ def _serialize_settings(settings: TelephonySettings) -> Dict:
         "baseUrl": settings.base_url,
         "username": settings.username,
         "hasPassword": bool(settings.password),
+        "hasRefreshToken": bool(settings.refresh_token),
         "streamEnabled": settings.stream_enabled,
     }
 
@@ -62,6 +79,7 @@ class SettingsUpdate(BaseModel):
     baseUrl: Optional[str] = None
     username: Optional[str] = None
     password: Optional[str] = None
+    refreshToken: Optional[str] = None
     streamEnabled: Optional[bool] = None
 
 
@@ -105,6 +123,8 @@ def update_settings(payload: SettingsUpdate) -> Dict:
             settings.username = payload.username
         if payload.password is not None and payload.password != "":
             settings.password = payload.password
+        if payload.refreshToken is not None and payload.refreshToken != "":
+            settings.refresh_token = payload.refreshToken
         if payload.streamEnabled is not None:
             settings.stream_enabled = payload.streamEnabled
         session.commit()

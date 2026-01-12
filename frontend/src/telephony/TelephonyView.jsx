@@ -7,8 +7,10 @@ const defaultSettings = {
   baseUrl: "",
   username: "",
   password: "",
+  refreshToken: "",
   streamEnabled: false,
-  hasPassword: false
+  hasPassword: false,
+  hasRefreshToken: false
 };
 
 export default function TelephonyView() {
@@ -30,7 +32,7 @@ export default function TelephonyView() {
     let active = true;
     telephonyService.fetchSettings().then((data) => {
       if (!active) return;
-      setSettings({ ...defaultSettings, ...data, password: "" });
+      setSettings({ ...defaultSettings, ...data, password: "", refreshToken: "" });
     });
     return () => {
       active = false;
@@ -154,6 +156,18 @@ export default function TelephonyView() {
                   placeholder={settings.hasPassword ? "Gespeichert" : "••••••••"}
                 />
               </div>
+              <div>
+                <label className="text-xs text-sand-500">Refresh Token</label>
+                <input
+                  type="password"
+                  value={settings.refreshToken}
+                  onChange={(event) =>
+                    setSettings((current) => ({ ...current, refreshToken: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                  placeholder={settings.hasRefreshToken ? "Gespeichert" : "••••••••"}
+                />
+              </div>
               <div className="flex items-center gap-3 mt-4">
                 <input
                   id="telephony-stream"
@@ -179,6 +193,7 @@ export default function TelephonyView() {
                     baseUrl: settings.baseUrl,
                     username: settings.username,
                     password: settings.password,
+                    refreshToken: settings.refreshToken,
                     streamEnabled: settings.streamEnabled
                   };
                   const result = await telephonyService.updateSettings(payload);
@@ -201,7 +216,7 @@ export default function TelephonyView() {
                 <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
               )}
               <span className="text-xs text-sand-500">
-                Passwort leer lassen, um das bestehende zu behalten.
+                Passwort/Refresh Token leer lassen, um das bestehende zu behalten.
               </span>
             </div>
           </div>
