@@ -14,8 +14,9 @@ class NfonCtiClient:
         password: Optional[str] = None,
         refresh_token: Optional[str] = None,
     ):
+        default_base_url = "https://providersupportdata.cloud-cfg.com"
         self.base_url = (
-            base_url or os.environ.get("NFON_CTI_BASE_URL") or ""
+            base_url or os.environ.get("NFON_CTI_BASE_URL") or default_base_url
         ).rstrip("/")
         self.username = username or os.environ.get("NFON_CTI_USER")
         self.password = password or os.environ.get("NFON_CTI_PASSWORD")
@@ -45,11 +46,20 @@ class NfonCtiClient:
             )
         response.raise_for_status()
         data = response.json()
-        token = data.get("accessToken") or data.get("access_token") or data.get("token")
+        token = (
+            data.get("accessToken")
+            or data.get("access_token")
+            or data.get("access-token")
+            or data.get("token")
+        )
         if not token:
             raise RuntimeError("Login succeeded but no token returned")
         self._token = token
-        refresh_token = data.get("refreshToken") or data.get("refresh_token")
+        refresh_token = (
+            data.get("refreshToken")
+            or data.get("refresh_token")
+            or data.get("refresh-token")
+        )
         if refresh_token:
             self._refresh_token = refresh_token
         ttl = data.get("expiresIn") or data.get("expires_in") or 3600

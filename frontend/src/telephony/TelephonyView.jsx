@@ -4,10 +4,9 @@ import CallStatsView from "./CallStatsView";
 import { telephonyService } from "./telephonyService";
 
 const defaultSettings = {
-  baseUrl: "",
+  baseUrl: "https://providersupportdata.cloud-cfg.com",
   username: "",
   password: "",
-  refreshToken: "",
   streamEnabled: false,
   hasPassword: false,
   hasRefreshToken: false
@@ -32,7 +31,7 @@ export default function TelephonyView() {
     let active = true;
     telephonyService.fetchSettings().then((data) => {
       if (!active) return;
-      setSettings({ ...defaultSettings, ...data, password: "", refreshToken: "" });
+      setSettings({ ...defaultSettings, ...data, password: "" });
     });
     return () => {
       active = false;
@@ -130,7 +129,7 @@ export default function TelephonyView() {
                     setSettings((current) => ({ ...current, baseUrl: event.target.value }))
                   }
                   className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                  placeholder="https://cti.nfon.example"
+                  placeholder="https://providersupportdata.cloud-cfg.com"
                 />
               </div>
               <div>
@@ -154,18 +153,6 @@ export default function TelephonyView() {
                   }
                   className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
                   placeholder={settings.hasPassword ? "Gespeichert" : "••••••••"}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-sand-500">Refresh Token</label>
-                <input
-                  type="password"
-                  value={settings.refreshToken}
-                  onChange={(event) =>
-                    setSettings((current) => ({ ...current, refreshToken: event.target.value }))
-                  }
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                  placeholder={settings.hasRefreshToken ? "Gespeichert" : "••••••••"}
                 />
               </div>
               <div className="flex items-center gap-3 mt-4">
@@ -193,7 +180,6 @@ export default function TelephonyView() {
                     baseUrl: settings.baseUrl,
                     username: settings.username,
                     password: settings.password,
-                    refreshToken: settings.refreshToken,
                     streamEnabled: settings.streamEnabled
                   };
                   const result = await telephonyService.updateSettings(payload);
@@ -218,6 +204,11 @@ export default function TelephonyView() {
               <span className="text-xs text-sand-500">
                 Passwort/Refresh Token leer lassen, um das bestehende zu behalten.
               </span>
+              {settings.hasRefreshToken && (
+                <span className="text-xs text-sand-500">
+                  Refresh Token wird automatisch vom API hinterlegt.
+                </span>
+              )}
             </div>
           </div>
         )}

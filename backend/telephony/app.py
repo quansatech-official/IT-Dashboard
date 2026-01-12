@@ -89,6 +89,7 @@ def _startup() -> None:
 
 
 @app.get("/telephony/calls")
+@app.get("/api/telephony/calls")
 def list_calls(limit: int = 200) -> List[Dict]:
     with SessionLocal() as session:
         calls = (
@@ -101,12 +102,14 @@ def list_calls(limit: int = 200) -> List[Dict]:
 
 
 @app.get("/telephony/stats")
+@app.get("/api/telephony/stats")
 def stats() -> Dict:
     with SessionLocal() as session:
         return calculate_stats(session)
 
 
 @app.get("/telephony/settings")
+@app.get("/api/telephony/settings")
 def get_settings() -> Dict:
     with SessionLocal() as session:
         settings = _get_settings(session)
@@ -114,6 +117,7 @@ def get_settings() -> Dict:
 
 
 @app.put("/telephony/settings")
+@app.put("/api/telephony/settings")
 def update_settings(payload: SettingsUpdate) -> Dict:
     with SessionLocal() as session:
         settings = _get_settings(session)
