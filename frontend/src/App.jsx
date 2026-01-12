@@ -7,7 +7,7 @@ import TelephonyMenu from "./telephony/TelephonyMenu";
 import TelephonyView from "./telephony/TelephonyView";
 
 export default function App() {
-  const [activeView, setActiveView] = useState("report");
+  const [activeView, setActiveView] = useState("time");
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
