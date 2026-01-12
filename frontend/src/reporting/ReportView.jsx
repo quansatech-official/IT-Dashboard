@@ -1174,7 +1174,7 @@ export default function ReportView() {
               <div>
                 <h2 className="text-lg font-display">Anbindungen pflegen</h2>
                 <p className="text-sm text-sand-600">
-                  Zugangsdaten und API-Endpunkte für die RMM-Datenbank.
+                  Zugangsdaten und Links für das RMM/Grafana Dashboard.
                 </p>
               </div>
               <button
@@ -1190,17 +1190,17 @@ export default function ReportView() {
           <div className="grid grid-cols-1 gap-6">
             <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
               <div>
-                <h3 className="text-base font-display">RMM Datenbank</h3>
-                <p className="text-sm text-sand-600">Host/IP, Benutzer und Passwort.</p>
+                <h3 className="text-base font-display">Grafana Login</h3>
+                <p className="text-sm text-sand-600">URL, Benutzer und Passwort.</p>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <label className="text-xs uppercase tracking-wide text-sand-600">
-                  IP / Host
+                  URL
                   <input
                     value={integrationSettings.rmm_host}
                     onChange={(event) => updateIntegration({ rmm_host: event.target.value })}
                     className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    placeholder="192.168.10.12"
+                    placeholder="https://rmm.quansatech.at"
                   />
                 </label>
                 <label className="text-xs uppercase tracking-wide text-sand-600">
@@ -1209,7 +1209,7 @@ export default function ReportView() {
                     value={integrationSettings.rmm_user}
                     onChange={(event) => updateIntegration({ rmm_user: event.target.value })}
                     className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    placeholder="rmm_readonly"
+                    placeholder="grafana_user"
                   />
                 </label>
                 <label className="text-xs uppercase tracking-wide text-sand-600 md:col-span-2">
