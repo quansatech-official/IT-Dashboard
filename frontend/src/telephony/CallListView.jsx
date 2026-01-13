@@ -60,13 +60,14 @@ const durationSeconds = (call) => {
   return 0;
 };
 
-export default function CallListView({ calls, extensions, onCallback }) {
-  const pageSize = 20;
+export default function CallListView({ calls, extensions, onCallback, onResolve }) {
+  const pageSize = 10;
   const [page, setPage] = useState(1);
   const totalPages = Math.min(3, Math.max(1, Math.ceil(calls.length / pageSize)));
   const [callbackTarget, setCallbackTarget] = useState(null);
   const [selectedExtension, setSelectedExtension] = useState("");
   const [callbackStatus, setCallbackStatus] = useState("");
+  const [resolvedNames, setResolvedNames] = useState({});
 
   useEffect(() => {
     if (page > totalPages) setPage(1);
@@ -83,6 +84,11 @@ export default function CallListView({ calls, extensions, onCallback }) {
     return call.from || call.to || "-";
   };
 
+  const resolveNumber = (call) => {
+    if (call.customerName) return "";
+    return displayNumber(call);
+  };
+
   const callbackNumber = (call) => {
     const direction = call.direction?.toLowerCase();
     if (direction?.includes("out")) return call.to || "";
@@ -91,6 +97,24 @@ export default function CallListView({ calls, extensions, onCallback }) {
 
   const extensionOptions = Array.isArray(extensions) ? extensions : [];
 
+  useEffect(() => {
+    let active = true;
+    const lookup = async () => {
+      for (const call of pagedCalls) {
+        const number = resolveNumber(call);
+        if (!number || resolvedNames[number]) continue;
+        const result = await onResolve?.(number);
+        if (!active) return;
+        const name = result?.name || "";
+        setResolvedNames((prev) => (prev[number] ? prev : { ...prev, [number]: name }));
+      }
+    };
+    lookup();
+    return () => {
+      active = false;
+    };
+  }, [pagedCalls, resolvedNames, onResolve]);
+
   return (
     <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
       <div className="flex items-center justify-between mb-4">
@@ -98,7 +122,7 @@ export default function CallListView({ calls, extensions, onCallback }) {
           <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Live Calls</p>
           <h2 className="text-xl font-display">Call Monitoring</h2>
         </div>
-        <span className="text-xs text-sand-500">letzte 50 Events</span>
+        <span className="text-xs text-sand-500">letzte 30 Events</span>
       </div>
 
       <div className="overflow-x-auto">
@@ -152,7 +176,9 @@ export default function CallListView({ calls, extensions, onCallback }) {
                       {call.answered ? "Beantwortet" : "Verpasst"}
                     </span>
                   </td>
-                  <td className="py-3">{call.customerName || "-"}</td>
+                  <td className="py-3">
+                    {call.customerName || resolvedNames[resolveNumber(call)] || "-"}
+                  </td>
                   <td className="py-3 text-right">
                     {!call.answered && callbackNumber(call) ? (
                       <button

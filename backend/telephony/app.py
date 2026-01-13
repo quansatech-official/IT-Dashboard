@@ -1,9 +1,13 @@
 import json
+import os
+import time
 from typing import Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import requests
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
@@ -32,6 +36,28 @@ def _ensure_refresh_token_column() -> None:
 
 
 _ensure_refresh_token_column()
+
+
+def _ensure_numerify_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("telephony_settings"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("telephony_settings")}
+    statements = []
+    if "numerify_reverse_url" not in columns:
+        statements.append("ALTER TABLE telephony_settings ADD COLUMN numerify_reverse_url VARCHAR")
+    if "numerify_api_key" not in columns:
+        statements.append("ALTER TABLE telephony_settings ADD COLUMN numerify_api_key VARCHAR")
+    if "numerify_api_header" not in columns:
+        statements.append("ALTER TABLE telephony_settings ADD COLUMN numerify_api_header VARCHAR")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_numerify_columns()
 
 
 def _ensure_call_raw_payload_column() -> None:
@@ -69,6 +95,50 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_reverse_cache: Dict[str, Dict[str, Optional[str]]] = {}
+_reverse_cache_ttl = 60 * 60 * 24
+
+
+def _reverse_lookup(number: str, settings: Optional[TelephonySettings]) -> Optional[str]:
+    if not number:
+        return None
+    now = time.time()
+    cached = _reverse_cache.get(number)
+    if cached and now - cached["ts"] < _reverse_cache_ttl:
+        return cached.get("name")
+    base_url = ""
+    api_key = ""
+    api_header = ""
+    if settings:
+        base_url = (settings.numerify_reverse_url or "").strip()
+        api_key = (settings.numerify_api_key or "").strip()
+        api_header = (settings.numerify_api_header or "").strip()
+    if not base_url:
+        base_url = os.environ.get("NUMERIFY_REVERSE_URL", "").strip()
+    if not api_key:
+        api_key = os.environ.get("NUMERIFY_API_KEY", "").strip()
+    if not api_header:
+        api_header = os.environ.get("NUMERIFY_API_HEADER", "").strip()
+    if not base_url:
+        return None
+    url = base_url.replace("{number}", quote(number))
+    headers: Dict[str, str] = {"Accept": "application/json"}
+    if api_key:
+        header_name = api_header or "X-API-Key"
+        headers[header_name] = api_key
+    response = requests.get(url, headers=headers, timeout=15)
+    response.raise_for_status()
+    data = response.json() if response.content else {}
+    name = (
+        data.get("name")
+        or data.get("caller_name")
+        or data.get("displayName")
+        or data.get("company")
+    )
+    name = str(name).strip() if name else None
+    _reverse_cache[number] = {"name": name, "ts": now}
+    return name
 
 
 def _extension_from_raw(call: TelephonyCall) -> str:
@@ -121,6 +191,9 @@ def _serialize_settings(settings: TelephonySettings) -> Dict:
         "hasPassword": bool(settings.password),
         "hasRefreshToken": bool(settings.refresh_token),
         "streamEnabled": settings.stream_enabled,
+        "numerifyReverseUrl": settings.numerify_reverse_url,
+        "numerifyApiHeader": settings.numerify_api_header,
+        "hasNumerifyApiKey": bool(settings.numerify_api_key),
     }
 
 
@@ -140,6 +213,9 @@ class SettingsUpdate(BaseModel):
     password: Optional[str] = None
     refreshToken: Optional[str] = None
     streamEnabled: Optional[bool] = None
+    numerifyReverseUrl: Optional[str] = None
+    numerifyApiHeader: Optional[str] = None
+    numerifyApiKey: Optional[str] = None
 
 
 class ClickToDialRequest(BaseModel):
@@ -164,6 +240,15 @@ def list_calls(limit: int = 200, include_raw: bool = False) -> List[Dict]:
             .all()
         )
     return [_serialize_call(call, include_raw=include_raw) for call in calls]
+
+
+@app.get("/telephony/reverse")
+@app.get("/api/telephony/reverse")
+def reverse_lookup(number: str) -> Dict:
+    with SessionLocal() as session:
+        settings = _get_settings(session)
+        name = _reverse_lookup(number, settings)
+    return {"number": number, "name": name}
 
 
 @app.post("/telephony/calls")
@@ -220,6 +305,12 @@ def update_settings(payload: SettingsUpdate) -> Dict:
             settings.refresh_token = payload.refreshToken
         if payload.streamEnabled is not None:
             settings.stream_enabled = payload.streamEnabled
+        if payload.numerifyReverseUrl is not None:
+            settings.numerify_reverse_url = payload.numerifyReverseUrl
+        if payload.numerifyApiHeader is not None:
+            settings.numerify_api_header = payload.numerifyApiHeader
+        if payload.numerifyApiKey is not None and payload.numerifyApiKey != "":
+            settings.numerify_api_key = payload.numerifyApiKey
         session.commit()
         session.refresh(settings)
         return _serialize_settings(settings)

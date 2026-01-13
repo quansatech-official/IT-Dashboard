@@ -8,7 +8,7 @@ const safeJson = async (response) => {
 };
 
 export const telephonyService = {
-  fetchCalls: async (limit = 50) => {
+  fetchCalls: async (limit = 30) => {
     try {
       const response = await fetch(`${API}/calls?limit=${limit}`);
       return await safeJson(response);
@@ -22,6 +22,14 @@ export const telephonyService = {
       return await safeJson(response);
     } catch (error) {
       return [];
+    }
+  },
+  reverseLookup: async (number) => {
+    try {
+      const response = await fetch(`${API}/reverse?number=${encodeURIComponent(number)}`);
+      return await safeJson(response);
+    } catch (error) {
+      return null;
     }
   },
   clickToDial: async ({ extension, number, calleeContext = "global" }) => {
@@ -70,7 +78,10 @@ export const telephonyService = {
         username: "",
         hasPassword: false,
         hasRefreshToken: false,
-        streamEnabled: false
+        streamEnabled: false,
+        numerifyReverseUrl: "",
+        numerifyApiHeader: "",
+        hasNumerifyApiKey: false
       };
     }
   },

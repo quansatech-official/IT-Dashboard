@@ -9,7 +9,11 @@ const defaultSettings = {
   password: "",
   streamEnabled: false,
   hasPassword: false,
-  hasRefreshToken: false
+  hasRefreshToken: false,
+  numerifyReverseUrl: "",
+  numerifyApiHeader: "",
+  numerifyApiKey: "",
+  hasNumerifyApiKey: false
 };
 
 export default function TelephonyView() {
@@ -63,7 +67,10 @@ export default function TelephonyView() {
           username: data?.username ?? "",
           hasPassword: Boolean(data?.hasPassword),
           hasRefreshToken: Boolean(data?.hasRefreshToken),
-          streamEnabled: Boolean(data?.streamEnabled)
+          streamEnabled: Boolean(data?.streamEnabled),
+          numerifyReverseUrl: data?.numerifyReverseUrl ?? "",
+          numerifyApiHeader: data?.numerifyApiHeader ?? "",
+          hasNumerifyApiKey: Boolean(data?.hasNumerifyApiKey)
         }
       }));
     });
@@ -93,7 +100,7 @@ export default function TelephonyView() {
 
     const load = async () => {
       const [nextCalls, nextStats, isHealthy, latestCalls] = await Promise.all([
-        telephonyService.fetchCalls(50),
+        telephonyService.fetchCalls(30),
         telephonyService.fetchStats(),
         telephonyService.fetchHealth(),
         telephonyService.fetchLatestCallDebug()
@@ -221,6 +228,7 @@ export default function TelephonyView() {
             <CallListView
               calls={calls}
               extensions={extensions}
+              onResolve={(number) => telephonyService.reverseLookup(number)}
               onCallback={(extension, number) =>
                 telephonyService.clickToDial({ extension, number })
               }
@@ -265,6 +273,49 @@ export default function TelephonyView() {
                   placeholder={settings.hasPassword ? "Gespeichert" : "••••••••"}
                 />
               </div>
+              <div>
+                <label className="text-xs text-sand-500">Numerify Reverse URL</label>
+                <input
+                  value={settings.numerifyReverseUrl}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      numerifyReverseUrl: event.target.value
+                    }))
+                  }
+                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                  placeholder="https://api.numerify.at/v1/reverse?number={number}"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-sand-500">Numerify API Header</label>
+                <input
+                  value={settings.numerifyApiHeader}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      numerifyApiHeader: event.target.value
+                    }))
+                  }
+                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                  placeholder="X-API-Key"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-sand-500">Numerify API Key</label>
+                <input
+                  type="password"
+                  value={settings.numerifyApiKey}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      numerifyApiKey: event.target.value
+                    }))
+                  }
+                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                  placeholder={settings.hasNumerifyApiKey ? "Gespeichert" : "••••••••"}
+                />
+              </div>
               <div className="flex items-center gap-3 mt-4">
                 <input
                   id="telephony-stream"
@@ -290,11 +341,19 @@ export default function TelephonyView() {
                     baseUrl: settings.baseUrl,
                     username: settings.username,
                     password: settings.password,
-                    streamEnabled: settings.streamEnabled
+                    streamEnabled: settings.streamEnabled,
+                    numerifyReverseUrl: settings.numerifyReverseUrl,
+                    numerifyApiHeader: settings.numerifyApiHeader,
+                    numerifyApiKey: settings.numerifyApiKey
                   };
                   const result = await telephonyService.updateSettings(payload);
                   if (result) {
-                    setSettings({ ...defaultSettings, ...result, password: "" });
+                    setSettings({
+                      ...defaultSettings,
+                      ...result,
+                      password: "",
+                      numerifyApiKey: ""
+                    });
                     setSettingsStatus("saved");
                     setDebugInfo((current) => ({
                       ...current,

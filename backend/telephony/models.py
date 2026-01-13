@@ -36,3 +36,6 @@ class TelephonySettings(Base):
     password = Column(String, default="")
     refresh_token = Column(String, default="")
     stream_enabled = Column(Boolean, default=False)
+    numerify_reverse_url = Column(String, default="")
+    numerify_api_key = Column(String, default="")
+    numerify_api_header = Column(String, default="")
