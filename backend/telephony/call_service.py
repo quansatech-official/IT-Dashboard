@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
@@ -15,6 +16,98 @@ class TelephonyCallStore:
     def __init__(self, session: Session):
         self.session = session
 
+    def _find_value(self, payload: Dict[str, Any], candidates: list[str]) -> Optional[Any]:
+        if not payload:
+            return None
+        for key in candidates:
+            if key in payload and payload[key] not in (None, "", []):
+                return payload[key]
+        normalized = {key.lower(): key for key in payload.keys() if isinstance(key, str)}
+        for key in candidates:
+            lowered = key.lower()
+            if lowered in normalized:
+                value = payload.get(normalized[lowered])
+                if value not in (None, "", []):
+                    return value
+        for value in payload.values():
+            if isinstance(value, dict):
+                found = self._find_value(value, candidates)
+                if found not in (None, "", []):
+                    return found
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        found = self._find_value(item, candidates)
+                        if found not in (None, "", []):
+                            return found
+        return None
+
+    def _parse_timestamp(self, value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            if value > 1_000_000_000_000:
+                return int(value)
+            if value > 1_000_000_000:
+                return int(value * 1000)
+            return int(value)
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            if raw.isdigit():
+                return self._parse_timestamp(int(raw))
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(raw)
+            except ValueError:
+                return None
+            return int(parsed.timestamp() * 1000)
+        return None
+
+    def _parse_duration(self, value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            if value > 10_000:
+                return int(value / 1000)
+            return int(value)
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            if raw.isdigit():
+                return self._parse_duration(int(raw))
+        return None
+
+    def _extract_answered(self, payload: Dict[str, Any]) -> Optional[bool]:
+        value = self._find_value(payload, ["answered", "isAnswered", "isConnected", "connected"])
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.lower()
+            if lowered in {"true", "yes", "y", "1"}:
+                return True
+            if lowered in {"false", "no", "n", "0"}:
+                return False
+        status = self._find_value(payload, ["status", "callStatus", "state", "disposition"])
+        if isinstance(status, str):
+            lowered = status.lower()
+            if any(token in lowered for token in ["missed", "noanswer", "no_answer", "failed", "busy"]):
+                return False
+            if any(token in lowered for token in ["answered", "connected", "completed", "active"]):
+                return True
+        return None
+
+    def _extract_state(self, payload: Dict[str, Any]) -> Optional[str]:
+        state = self._find_value(payload, ["state", "callState", "status"])
+        if state is None:
+            return None
+        return str(state).lower()
+
     def upsert(self, payload: Dict[str, Any]) -> TelephonyCall:
         uuid = payload.get("uuid") or payload.get("id")
         if not uuid:
@@ -24,13 +117,88 @@ class TelephonyCallStore:
             call = TelephonyCall(uuid=uuid)
             self.session.add(call)
 
-        call.from_number = payload.get("from") or payload.get("fromNumber")
-        call.to_number = payload.get("to") or payload.get("toNumber")
-        call.direction = payload.get("direction") or payload.get("callDirection")
-        call.start_time = payload.get("startTime") or payload.get("start") or call.start_time
-        call.end_time = payload.get("endTime") or payload.get("end") or call.end_time
-        call.duration = payload.get("duration") or call.duration
-        call.answered = bool(payload.get("answered", call.answered))
+        from_value = self._find_value(
+            payload,
+            [
+                "from",
+                "fromNumber",
+                "caller",
+                "callerNumber",
+                "callingNumber",
+                "source",
+                "sourceNumber",
+                "ani",
+                "aNumber",
+            ],
+        )
+        to_value = self._find_value(
+            payload,
+            [
+                "to",
+                "toNumber",
+                "callee",
+                "calledNumber",
+                "destination",
+                "destinationNumber",
+                "dnis",
+                "bNumber",
+            ],
+        )
+        direction = self._find_value(payload, ["direction", "callDirection", "directionType", "callType"])
+        extension = self._find_value(payload, ["extension", "extensionNumber"])
+        state = self._extract_state(payload)
+        start_time = self._parse_timestamp(
+            self._find_value(
+                payload,
+                [
+                    "startTime",
+                    "start",
+                    "startTimestamp",
+                    "startDate",
+                    "startedAt",
+                    "timestamp",
+                    "time",
+                    "updated",
+                ],
+            )
+        )
+        end_time = self._parse_timestamp(
+            self._find_value(payload, ["endTime", "end", "endTimestamp", "endDate", "endedAt", "finishedAt"])
+        )
+        duration = self._parse_duration(
+            self._find_value(payload, ["duration", "durationSeconds", "durationSec", "talkTime", "ringDuration", "length"])
+        )
+        answered = self._extract_answered(payload)
+
+        if from_value is not None:
+            call.from_number = str(from_value)
+        if to_value is not None:
+            call.to_number = str(to_value)
+        if direction is not None:
+            call.direction = str(direction)
+        elif extension is not None and call.from_number:
+            call.direction = "outbound"
+        if start_time is not None:
+            call.start_time = start_time
+        elif state in {"start", "ring", "answer", "caller-ring", "caller-answer", "dial"} and call.start_time == 0:
+            call.start_time = int(time.time() * 1000)
+        if end_time is not None:
+            call.end_time = end_time
+        elif state in {"hangup", "end"}:
+            call.end_time = int(time.time() * 1000)
+        if duration is not None:
+            call.duration = duration
+        elif call.start_time and call.end_time and call.end_time >= call.start_time:
+            call.duration = int((call.end_time - call.start_time) / 1000)
+        if answered is None:
+            if state in {"answer", "caller-answer"}:
+                call.answered = True
+            elif state in {"hangup", "end"} and call.answered is False and call.duration == 0:
+                call.answered = False
+            if call.duration and call.duration > 0:
+                call.answered = True
+        else:
+            call.answered = answered
         try:
             call.raw_payload = json.dumps(payload, ensure_ascii=True)
         except (TypeError, ValueError):
