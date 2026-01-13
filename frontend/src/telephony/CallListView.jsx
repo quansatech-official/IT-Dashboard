@@ -40,6 +40,7 @@ export default function CallListView({ calls }) {
             <tr>
               <th className="text-left py-2">Zeit</th>
               <th className="text-left py-2">Rufnummer</th>
+              <th className="text-left py-2">Nebenstelle</th>
               <th className="text-left py-2">Richtung</th>
               <th className="text-left py-2">Dauer</th>
               <th className="text-left py-2">Status</th>
@@ -49,7 +50,7 @@ export default function CallListView({ calls }) {
           <tbody>
             {calls.length === 0 ? (
               <tr>
-                <td colSpan={6} className="py-6 text-center text-sand-500">
+                <td colSpan={7} className="py-6 text-center text-sand-500">
                   Noch keine Telefonie-Events geladen.
                 </td>
               </tr>
@@ -58,6 +59,7 @@ export default function CallListView({ calls }) {
                 <tr key={call.uuid} className="border-b border-sand-100">
                   <td className="py-3">{formatTime(call.startTime)}</td>
                   <td className="py-3">{call.from || call.to || "-"}</td>
+                  <td className="py-3">{call.extension || "-"}</td>
                   <td className="py-3">{directionLabel(call.direction)}</td>
                   <td className="py-3">{formatDuration(call.duration)}</td>
                   <td className="py-3">

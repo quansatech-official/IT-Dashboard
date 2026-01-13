@@ -16,7 +16,6 @@ export default function CallStatsView({ stats }) {
 
   const safeStats = stats || {};
   const extensionStats = safeStats.byExtension || [];
-  const queueStats = safeStats.byQueue || [];
 
   const renderBreakdown = (title, rows) => (
     <div className="border border-sand-200 rounded-2xl p-4">
@@ -104,7 +103,6 @@ export default function CallStatsView({ stats }) {
 
       <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-4">
         {renderBreakdown("Nebenstellen (letzte 7 Tage)", extensionStats)}
-        {renderBreakdown("Warteschlangen (letzte 7 Tage)", queueStats)}
       </div>
     </div>
   );

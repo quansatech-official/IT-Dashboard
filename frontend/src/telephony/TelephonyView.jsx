@@ -108,6 +108,7 @@ export default function TelephonyView() {
             uuid: latestCall.uuid,
             from: latestCall.from,
             to: latestCall.to,
+            extension: latestCall.extension,
             direction: latestCall.direction,
             startTime: latestCall.startTime,
             duration: latestCall.duration,

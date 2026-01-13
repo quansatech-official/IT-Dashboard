@@ -59,6 +59,19 @@ class TelephonyCallStore:
                 return self._parse_timestamp(int(raw))
             if raw.endswith("Z"):
                 raw = raw[:-1] + "+00:00"
+            tz_index = max(raw.rfind("+"), raw.rfind("-"))
+            if tz_index > 10:
+                base = raw[:tz_index]
+                tz = raw[tz_index:]
+            else:
+                base = raw
+                tz = ""
+            if "." in base:
+                head, frac = base.split(".", 1)
+                if len(frac) > 6:
+                    frac = frac[:6]
+                base = f"{head}.{frac}"
+            raw = f"{base}{tz}"
             try:
                 parsed = datetime.fromisoformat(raw)
             except ValueError:
@@ -158,13 +171,13 @@ class TelephonyCallStore:
                     "startedAt",
                     "timestamp",
                     "time",
-                    "updated",
                 ],
             )
         )
         end_time = self._parse_timestamp(
             self._find_value(payload, ["endTime", "end", "endTimestamp", "endDate", "endedAt", "finishedAt"])
         )
+        updated_time = self._parse_timestamp(self._find_value(payload, ["updated"]))
         duration = self._parse_duration(
             self._find_value(payload, ["duration", "durationSeconds", "durationSec", "talkTime", "ringDuration", "length"])
         )
@@ -178,14 +191,27 @@ class TelephonyCallStore:
             call.direction = str(direction)
         elif extension is not None and call.from_number:
             call.direction = "outbound"
-        if start_time is not None:
+        if extension is not None:
+            call.extension = str(extension)
+        if call.start_time == 0 and start_time is not None:
             call.start_time = start_time
-        elif state in {"start", "ring", "answer", "caller-ring", "caller-answer", "dial"} and call.start_time == 0:
-            call.start_time = int(time.time() * 1000)
-        if end_time is not None:
-            call.end_time = end_time
-        elif state in {"hangup", "end"}:
-            call.end_time = int(time.time() * 1000)
+        elif call.start_time == 0 and updated_time is not None and state in {
+            "start",
+            "caller-dial",
+            "caller-ring",
+            "caller-answer",
+            "dial",
+            "ring",
+            "answer",
+        }:
+            call.start_time = updated_time
+        if state in {"hangup", "end"}:
+            if end_time is not None:
+                call.end_time = end_time
+            elif updated_time is not None:
+                call.end_time = updated_time
+            else:
+                call.end_time = int(time.time() * 1000)
         if duration is not None:
             call.duration = duration
         elif call.start_time and call.end_time and call.end_time >= call.start_time:

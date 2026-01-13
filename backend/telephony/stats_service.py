@@ -135,7 +135,6 @@ def calculate_stats(session: Session) -> Dict:
         "last24h": _stats_for_calls(last_24h_calls),
         "last7d": _stats_for_calls(last_7d_calls),
         "byExtension": _grouped_stats(last_7d_calls, _extract_extension),
-        "byQueue": _grouped_stats(last_7d_calls, _extract_queue),
     }
 
 

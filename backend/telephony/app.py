@@ -45,6 +45,20 @@ def _ensure_call_raw_payload_column() -> None:
 
 _ensure_call_raw_payload_column()
 
+
+def _ensure_call_extension_column() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("telephony_calls"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("telephony_calls")}
+    if "extension" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE telephony_calls ADD COLUMN extension VARCHAR"))
+
+
+_ensure_call_extension_column()
+
 app = FastAPI(title="Telephony Module")
 
 app.add_middleware(
@@ -61,6 +75,7 @@ def _serialize_call(call: TelephonyCall, include_raw: bool = False) -> Dict:
         "from": call.from_number,
         "to": call.to_number,
         "direction": call.direction,
+        "extension": call.extension,
         "startTime": call.start_time,
         "endTime": call.end_time,
         "duration": call.duration,
