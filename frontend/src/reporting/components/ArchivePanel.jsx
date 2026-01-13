@@ -52,47 +52,73 @@ export default function ArchivePanel({
                   >
                     {item.status}
                   </span>
-                  <label
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide"
-                    title={item.sentAt ? item.sentInfo || "Gesendet" : "Nicht gesendet"}
-                  >
+                  <div className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide">
                     <input
                       type="checkbox"
                       checked={Boolean(item.sentAt)}
                       onChange={(event) => onToggleSent?.(item, event.target.checked)}
+                      title="Gesendet markieren"
                     />
-                    Gesendet
-                  </label>
-                  <button
-                    onClick={() => onPreview?.(item)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    <Eye size={12} /> Vorschau
-                  </button>
-                  <button
-                    onClick={() => onEdit?.(item)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    <Edit3 size={12} /> Bearbeiten
-                  </button>
-                  <button
-                    onClick={() => onExportEmail?.(item)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    <Mail size={12} /> E-Mail
-                  </button>
-                  <button
-                    onClick={() => onSendSmtp?.(item)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    <Mail size={12} /> SMTP
-                  </button>
-                  <button
-                    onClick={() => onDelete?.(item)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-rose-50 hover:text-rose-600"
-                  >
-                    <Trash2 size={12} /> Löschen
-                  </button>
+                    <span>Gesendet</span>
+                  </div>
+                  {item.sentAt ? (
+                    <span className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600">
+                      <span>Versand</span>
+                      <span className="text-sand-900">{item.sentVia || "manuell"}</span>
+                      {item.sentTo ? <span className="text-sand-500">· {item.sentTo}</span> : null}
+                      {item.sentAtText ? <span className="text-sand-500">· {item.sentAtText}</span> : null}
+                    </span>
+                  ) : null}
+                  {item.openedCount ? (
+                    <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
+                      <span>Gelesen</span>
+                      <span>{item.openedCount}x</span>
+                      {item.openedAtText ? (
+                        <span className="text-emerald-600">· {item.openedAtText}</span>
+                      ) : null}
+                    </span>
+                  ) : item.sentAt ? (
+                    <span className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600">
+                      Gelesen: nein
+                    </span>
+                  ) : null}
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => onPreview?.(item)}
+                      className="inline-flex items-center justify-center rounded-full border border-sand-300 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                      title="Vorschau"
+                    >
+                      <Eye size={12} />
+                    </button>
+                    <button
+                      onClick={() => onEdit?.(item)}
+                      className="inline-flex items-center justify-center rounded-full border border-sand-300 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                      title="Bearbeiten"
+                    >
+                      <Edit3 size={12} />
+                    </button>
+                    <button
+                      onClick={() => onExportEmail?.(item)}
+                      className="inline-flex items-center justify-center rounded-full border border-sand-300 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                      title="E-Mail-Entwurf"
+                    >
+                      <Mail size={12} />
+                    </button>
+                    <button
+                      onClick={() => onSendSmtp?.(item)}
+                      className="inline-flex items-center justify-center rounded-full border border-sand-300 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                      title="SMTP senden"
+                    >
+                      <Mail size={12} />
+                    </button>
+                    <button
+                      onClick={() => onDelete?.(item)}
+                      className="inline-flex items-center justify-center rounded-full border border-sand-300 bg-white p-2 text-sand-600 hover:bg-rose-50 hover:text-rose-600"
+                      title="Löschen"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

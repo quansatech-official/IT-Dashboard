@@ -305,18 +305,20 @@ export default function ReportView() {
     const grouped = data.reduce((acc, reportItem) => {
       const key = reportItem.customer || "Unbekannt";
       const entry = acc[key] || { customer: key, reports: [] };
-      const sentAt = reportItem.sent_at || 0;
-      const sentVia = reportItem.sent_via || "";
-      const sentTo = reportItem.sent_to || "";
-      const openedAt = reportItem.opened_at || 0;
-      const openedCount = reportItem.opened_count || 0;
-      const sentInfo = buildSentInfo({
-        sentAt,
-        sentVia,
-        sentTo,
-        openedAt,
-        openedCount
-      });
+          const sentAt = reportItem.sent_at || 0;
+          const sentVia = reportItem.sent_via || "";
+          const sentTo = reportItem.sent_to || "";
+          const openedAt = reportItem.opened_at || 0;
+          const openedCount = reportItem.opened_count || 0;
+          const sentInfo = buildSentInfo({
+            sentAt,
+            sentVia,
+            sentTo,
+            openedAt,
+            openedCount
+          });
+          const sentAtText = sentAt ? new Date(sentAt).toLocaleString("de-DE") : "";
+          const openedAtText = openedAt ? new Date(openedAt).toLocaleString("de-DE") : "";
           entry.reports.push({
             id: reportItem.id,
             label: reportItem.period || "Bericht",
@@ -327,7 +329,9 @@ export default function ReportView() {
             sentTo,
             openedAt,
             openedCount,
-            sentInfo
+            sentInfo,
+            sentAtText,
+            openedAtText
           });
           acc[key] = entry;
           return acc;
@@ -894,6 +898,12 @@ export default function ReportView() {
     }).then(async (res) => {
       if (!res.ok) return;
       const updated = await res.json();
+      const sentAtText = updated.sent_at
+        ? new Date(updated.sent_at).toLocaleString("de-DE")
+        : "";
+      const openedAtText = updated.opened_at
+        ? new Date(updated.opened_at).toLocaleString("de-DE")
+        : "";
       setArchiveItems((prev) =>
         prev.map((group) => ({
           ...group,
@@ -912,7 +922,9 @@ export default function ReportView() {
                     sentTo: updated.sent_to || "",
                     openedAt: updated.opened_at || 0,
                     openedCount: updated.opened_count || 0
-                  })
+                  }),
+                  sentAtText,
+                  openedAtText
                 }
               : reportItem
           )
@@ -944,6 +956,12 @@ export default function ReportView() {
       });
       if (!res.ok) throw new Error("update_failed");
       const updated = await res.json();
+      const sentAtText = updated.sent_at
+        ? new Date(updated.sent_at).toLocaleString("de-DE")
+        : "";
+      const openedAtText = updated.opened_at
+        ? new Date(updated.opened_at).toLocaleString("de-DE")
+        : "";
       setArchiveItems((prev) =>
         prev.map((group) => ({
           ...group,
@@ -962,7 +980,9 @@ export default function ReportView() {
                     sentTo: updated.sent_to || "",
                     openedAt: updated.opened_at || 0,
                     openedCount: updated.opened_count || 0
-                  })
+                  }),
+                  sentAtText,
+                  openedAtText
                 }
               : reportItem
           )
@@ -1008,6 +1028,12 @@ export default function ReportView() {
       });
       if (!res.ok) throw new Error("send_failed");
       const updated = await res.json();
+      const sentAtText = updated.sent_at
+        ? new Date(updated.sent_at).toLocaleString("de-DE")
+        : "";
+      const openedAtText = updated.opened_at
+        ? new Date(updated.opened_at).toLocaleString("de-DE")
+        : "";
       setArchiveItems((prev) =>
         prev.map((group) => ({
           ...group,
@@ -1026,7 +1052,9 @@ export default function ReportView() {
                     sentTo: updated.sent_to || "",
                     openedAt: updated.opened_at || 0,
                     openedCount: updated.opened_count || 0
-                  })
+                  }),
+                  sentAtText,
+                  openedAtText
                 }
               : reportItem
           )
@@ -1322,7 +1350,7 @@ export default function ReportView() {
                         return groups;
                       }, {})
                     ).map(([group, items]) => (
-                      <optgroup key={group} label={group}>
+                      <optgroup key={group} label={`${group} (intern)`}>
                         {items.map((item) => (
                           <option key={item.id} value={normalizeId(item.id)}>
                             {item.title}
