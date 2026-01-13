@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { Clock, FileText, Monitor, Sparkles, StickyNote } from "lucide-react";
+import { Clock, FileText, Sparkles, StickyNote, Tool } from "lucide-react";
 import ReportView from "./reporting/ReportView";
 import TimeTrackingView from "./timetracking/TimeTrackingView";
-import RmmDashboardView from "./rmm/RmmDashboardView";
 import TelephonyMenu from "./telephony/TelephonyMenu";
 import TelephonyView from "./telephony/TelephonyView";
 import NotesView from "./notes/NotesView";
+import ToolsView from "./tools/ToolsView";
 
 export default function App() {
   const [activeView, setActiveView] = useState("time");
@@ -56,14 +56,14 @@ export default function App() {
               <StickyNote size={18} /> Notizen
             </button>
             <button
-              onClick={() => setActiveView("rmm")}
+              onClick={() => setActiveView("tools")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "rmm"
+                activeView === "tools"
                   ? "bg-sand-900 text-white border-sand-900"
                   : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
               } flex items-center gap-3`}
             >
-              <Monitor size={18} /> RMM Dashboard
+              <Tool size={18} /> Tools
             </button>
             <TelephonyMenu
               active={activeView === "telephony"}
@@ -81,8 +81,8 @@ export default function App() {
             <TimeTrackingView />
           ) : activeView === "notes" ? (
             <NotesView />
-          ) : activeView === "rmm" ? (
-            <RmmDashboardView />
+          ) : activeView === "tools" ? (
+            <ToolsView />
           ) : activeView === "telephony" ? (
             <TelephonyView />
           ) : (

@@ -351,7 +351,8 @@ export default function ReportView() {
               id: reportItem.id,
               label: reportItem.period || "Bericht",
               status: reportItem.status || "",
-              period: reportItem.period || ""
+              period: reportItem.period || "",
+              sentAt: reportItem.sent_at || 0
             });
             acc[key] = entry;
             return acc;
@@ -791,6 +792,32 @@ export default function ReportView() {
     downloadEmailDraft(normalizeReport(data));
   };
 
+  const toggleArchivedSent = async (item, nextValue) => {
+    if (!item?.id) return;
+    try {
+      const res = await fetch(`/api/reports/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sent: nextValue })
+      });
+      if (!res.ok) throw new Error("update_failed");
+      const updated = await res.json();
+      setArchiveItems((prev) =>
+        prev.map((group) => ({
+          ...group,
+          reports: group.reports.map((reportItem) =>
+            reportItem.id === item.id
+              ? { ...reportItem, sentAt: updated.sent_at || 0 }
+              : reportItem
+          )
+        }))
+      );
+      setToast(nextValue ? "Als gesendet markiert." : "Gesendet-Markierung entfernt.");
+    } catch (error) {
+      setToast("Markierung fehlgeschlagen.");
+    }
+  };
+
   const previewArchivedReport = async (item) => {
     const data = await fetchArchivedReport(item);
     if (!data) return;
@@ -1153,6 +1180,7 @@ export default function ReportView() {
               onExportPdf={exportArchivedPdf}
               onExportEmail={exportArchivedEmail}
               onPreview={previewArchivedReport}
+              onToggleSent={toggleArchivedSent}
             />
           </main>
       )}

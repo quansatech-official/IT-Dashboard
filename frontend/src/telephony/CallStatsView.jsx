@@ -95,6 +95,12 @@ export default function CallStatsView({ stats }) {
                     {formatDuration(data.avgDuration)}
                   </p>
                 </div>
+                <div>
+                  <p className="text-xs text-sand-500">Gesamtdauer</p>
+                  <p className="text-2xl font-semibold">
+                    {formatDuration(data.totalDuration)}
+                  </p>
+                </div>
               </div>
             </div>
           );

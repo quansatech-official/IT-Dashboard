@@ -8,7 +8,8 @@ export default function ArchivePanel({
   onExportHtml,
   onExportPdf,
   onExportEmail,
-  onPreview
+  onPreview,
+  onToggleSent
 }) {
   const [query, setQuery] = useState("");
   const filteredArchive = useMemo(() => {
@@ -51,6 +52,14 @@ export default function ArchivePanel({
                   >
                     {item.status}
                   </span>
+                  <label className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(item.sentAt)}
+                      onChange={(event) => onToggleSent?.(item, event.target.checked)}
+                    />
+                    Gesendet
+                  </label>
                   <button
                     onClick={() => onPreview?.(item)}
                     className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"

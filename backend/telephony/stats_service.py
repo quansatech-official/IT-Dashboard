@@ -23,14 +23,16 @@ def _stats_for_calls(calls: List[TelephonyCall]) -> Dict[str, int]:
     total = len(calls)
     answered = sum(1 for c in calls if c.answered)
     missed = total - answered
+    total_duration = int(sum(c.duration or 0 for c in calls))
     avg_duration = 0
     if total:
-        avg_duration = int(sum(c.duration or 0 for c in calls) / total)
+        avg_duration = int(total_duration / total)
     return {
         "total": total,
         "answered": answered,
         "missed": missed,
         "avgDuration": avg_duration,
+        "totalDuration": total_duration,
     }
 
 

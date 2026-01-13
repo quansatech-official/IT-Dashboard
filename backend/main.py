@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from sqlalchemy import (
     create_engine, Column, Integer, String,
-    Boolean, BigInteger, ForeignKey
+    Boolean, BigInteger, ForeignKey, inspect, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
@@ -91,6 +91,7 @@ class Report(Base):
     summary = Column(String, default="")
     customer_action_text = Column(String, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    sent_at = Column(BigInteger, default=0)
 
     items = relationship(
         "ReportItem",
@@ -124,6 +125,20 @@ class IntegrationSettings(Base):
     rmm_password = Column(String, default="")
 
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_report_sent_column() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("reports"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("reports")}
+    if "sent_at" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE reports ADD COLUMN sent_at BIGINT DEFAULT 0"))
+
+
+_ensure_report_sent_column()
 
 # ================= SCHEMAS ==================
 class CustomerCreate(BaseModel):
@@ -194,6 +209,10 @@ class ReportCreate(BaseModel):
     summary: Optional[str] = ""
     customer_action_text: Optional[str] = ""
     items: List[ReportItemSchema] = []
+
+
+class ReportUpdate(BaseModel):
+    sent: Optional[bool] = None
 
 class IntegrationSettingsUpdate(BaseModel):
     rmm_host: Optional[str] = None
@@ -273,6 +292,7 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "summary": report.summary,
         "customer_action_text": report.customer_action_text,
         "created_at": report.created_at,
+        "sent_at": report.sent_at,
         "items": [serialize_report_item(i) for i in report.items],
     }
 
@@ -738,3 +758,16 @@ def delete_report(report_id: int):
         db.delete(report)
         db.commit()
         return {"status": "deleted"}
+
+
+@app.patch("/api/reports/{report_id}")
+def update_report(report_id: int, data: ReportUpdate):
+    with SessionLocal() as db:
+        report = db.query(Report).get(report_id)
+        if not report:
+            raise HTTPException(404, "Report not found")
+        if data.sent is not None:
+            report.sent_at = int(time.time() * 1000) if data.sent else 0
+        db.commit()
+        db.refresh(report)
+        return serialize_report(report)

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
 
 const formatTime = (timestamp) => {
   if (!timestamp) return "-";
@@ -23,6 +24,29 @@ const directionLabel = (direction) => {
   if (value.includes("in")) return "Eingehend";
   if (value.includes("out")) return "Ausgehend";
   return direction;
+};
+
+const directionMeta = (direction) => {
+  const value = direction?.toLowerCase() || "";
+  if (value.includes("in")) {
+    return {
+      label: "Eingehend",
+      icon: ArrowDownLeft,
+      className: "text-emerald-600"
+    };
+  }
+  if (value.includes("out")) {
+    return {
+      label: "Ausgehend",
+      icon: ArrowUpRight,
+      className: "text-rose-600"
+    };
+  }
+  return {
+    label: directionLabel(direction),
+    icon: null,
+    className: "text-sand-600"
+  };
 };
 
 const durationSeconds = (call) => {
@@ -92,7 +116,18 @@ export default function CallListView({ calls }) {
                   <td className="py-3">{formatTime(call.startTime)}</td>
                   <td className="py-3">{displayNumber(call)}</td>
                   <td className="py-3">{call.extension || "-"}</td>
-                  <td className="py-3">{directionLabel(call.direction)}</td>
+                  <td className="py-3">
+                    {(() => {
+                      const meta = directionMeta(call.direction);
+                      const Icon = meta.icon;
+                      return (
+                        <span className={`inline-flex items-center gap-1 ${meta.className}`}>
+                          {Icon ? <Icon size={14} /> : null}
+                          {meta.label}
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td className="py-3">{formatDuration(durationSeconds(call))}</td>
                   <td className="py-3">
                     <span
