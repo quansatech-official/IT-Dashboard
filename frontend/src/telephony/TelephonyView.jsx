@@ -77,7 +77,7 @@ export default function TelephonyView() {
 
     const load = async () => {
       const [nextCalls, nextStats, isHealthy, latestCalls] = await Promise.all([
-        telephonyService.fetchCalls(),
+        telephonyService.fetchCalls(50),
         telephonyService.fetchStats(),
         telephonyService.fetchHealth(),
         telephonyService.fetchLatestCallDebug()

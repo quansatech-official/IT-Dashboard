@@ -1,3 +1,5 @@
+import { useEffect, useMemo, useState } from "react";
+
 const formatTime = (timestamp) => {
   if (!timestamp) return "-";
   return new Date(timestamp).toLocaleTimeString("de-DE", {
@@ -24,6 +26,25 @@ const directionLabel = (direction) => {
 };
 
 export default function CallListView({ calls }) {
+  const pageSize = 20;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.min(3, Math.max(1, Math.ceil(calls.length / pageSize)));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+
+  const pagedCalls = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return calls.slice(start, start + pageSize);
+  }, [calls, page]);
+
+  const displayNumber = (call) => {
+    const direction = call.direction?.toLowerCase();
+    if (direction?.includes("out")) return call.to || call.from || "-";
+    return call.from || call.to || "-";
+  };
+
   return (
     <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
       <div className="flex items-center justify-between mb-4">
@@ -31,7 +52,7 @@ export default function CallListView({ calls }) {
           <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Live Calls</p>
           <h2 className="text-xl font-display">Call Monitoring</h2>
         </div>
-        <span className="text-xs text-sand-500">letzte 200 Events</span>
+        <span className="text-xs text-sand-500">letzte 50 Events</span>
       </div>
 
       <div className="overflow-x-auto">
@@ -55,10 +76,10 @@ export default function CallListView({ calls }) {
                 </td>
               </tr>
             ) : (
-              calls.map((call) => (
+              pagedCalls.map((call) => (
                 <tr key={call.uuid} className="border-b border-sand-100">
                   <td className="py-3">{formatTime(call.startTime)}</td>
-                  <td className="py-3">{call.from || call.to || "-"}</td>
+                  <td className="py-3">{displayNumber(call)}</td>
                   <td className="py-3">{call.extension || "-"}</td>
                   <td className="py-3">{directionLabel(call.direction)}</td>
                   <td className="py-3">{formatDuration(call.duration)}</td>
@@ -80,6 +101,40 @@ export default function CallListView({ calls }) {
           </tbody>
         </table>
       </div>
+      {calls.length > pageSize && (
+        <div className="mt-4 flex items-center justify-between text-xs text-sand-600">
+          <span>
+            Seite {page} von {totalPages}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              className="rounded-full border border-sand-200 px-3 py-1 hover:bg-sand-100"
+            >
+              Zurück
+            </button>
+            {Array.from({ length: totalPages }, (_, idx) => (
+              <button
+                key={idx + 1}
+                onClick={() => setPage(idx + 1)}
+                className={`rounded-full border px-3 py-1 ${
+                  page === idx + 1
+                    ? "border-sand-900 bg-sand-900 text-white"
+                    : "border-sand-200 hover:bg-sand-100"
+                }`}
+              >
+                {idx + 1}
+              </button>
+            ))}
+            <button
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              className="rounded-full border border-sand-200 px-3 py-1 hover:bg-sand-100"
+            >
+              Weiter
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

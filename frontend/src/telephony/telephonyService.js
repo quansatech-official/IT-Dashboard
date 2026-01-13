@@ -8,9 +8,9 @@ const safeJson = async (response) => {
 };
 
 export const telephonyService = {
-  fetchCalls: async () => {
+  fetchCalls: async (limit = 50) => {
     try {
-      const response = await fetch(`${API}/calls`);
+      const response = await fetch(`${API}/calls?limit=${limit}`);
       return await safeJson(response);
     } catch (error) {
       return [];

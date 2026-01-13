@@ -217,6 +217,11 @@ export default function ReportView() {
   const [section, setSection] = useState("builder");
   const [toast, setToast] = useState("");
   const [customerInput, setCustomerInput] = useState(defaultReport.customer);
+  const [previewModal, setPreviewModal] = useState({
+    open: false,
+    title: "",
+    html: ""
+  });
   const [freeText, setFreeText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [integrationSettings, setIntegrationSettings] = useState({
@@ -786,6 +791,17 @@ export default function ReportView() {
     downloadEmailDraft(normalizeReport(data));
   };
 
+  const previewArchivedReport = async (item) => {
+    const data = await fetchArchivedReport(item);
+    if (!data) return;
+    const normalized = normalizeReport(data);
+    setPreviewModal({
+      open: true,
+      title: `${normalized.customer || "Kunde"} – ${normalized.period || "ohne Zeitraum"}`,
+      html: renderReportHTML(normalized)
+    });
+  };
+
   const headerActions = (
     <div className="flex flex-wrap gap-2">
       <button
@@ -861,6 +877,29 @@ export default function ReportView() {
       {toast ? (
         <div className="fixed top-5 right-6 z-50 bg-sand-900 text-white text-xs uppercase tracking-wide px-4 py-2 rounded-full shadow-soft">
           {toast}
+        </div>
+      ) : null}
+      {previewModal.open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-5xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+            <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Schnellvorschau</p>
+                <h3 className="text-lg font-display">{previewModal.title}</h3>
+              </div>
+              <button
+                onClick={() => setPreviewModal({ open: false, title: "", html: "" })}
+                className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+              >
+                Schließen
+              </button>
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto p-6 bg-sand-50">
+              <div className="bg-white border border-sand-200 rounded-2xl p-4">
+                <div dangerouslySetInnerHTML={{ __html: previewModal.html }} />
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -1113,6 +1152,7 @@ export default function ReportView() {
               onExportHtml={exportArchivedHtml}
               onExportPdf={exportArchivedPdf}
               onExportEmail={exportArchivedEmail}
+              onPreview={previewArchivedReport}
             />
           </main>
       )}
