@@ -30,6 +30,7 @@ export default function TelephonyView() {
   const [settingsStatus, setSettingsStatus] = useState("idle");
   const [apiStatus, setApiStatus] = useState("idle");
   const [extensions, setExtensions] = useState([]);
+  const [debugOpen, setDebugOpen] = useState(false);
   const [debugInfo, setDebugInfo] = useState({
     lastSettingsFetchAt: "",
     lastHealthCheckAt: "",
@@ -235,107 +236,109 @@ export default function TelephonyView() {
             />
           </>
         ) : (
-          <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Settings</p>
-            <h2 className="text-xl font-display mb-4">NFON CTI Konfiguration</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs text-sand-500">Base URL</label>
-                <input
-                  value={settings.baseUrl}
-                  onChange={(event) =>
-                    setSettings((current) => ({ ...current, baseUrl: event.target.value }))
-                  }
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                  placeholder="https://providersupportdata.cloud-cfg.com"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-sand-500">Benutzername</label>
-                <input
-                  value={settings.username}
-                  onChange={(event) =>
-                    setSettings((current) => ({ ...current, username: event.target.value }))
-                  }
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                  placeholder="cti-user"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-sand-500">Passwort</label>
-                <input
-                  type="password"
-                  value={settings.password}
-                  onChange={(event) =>
-                    setSettings((current) => ({ ...current, password: event.target.value }))
-                  }
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                  placeholder={settings.hasPassword ? "Gespeichert" : "••••••••"}
-                />
-              </div>
-              <div className="md:col-span-2 rounded-2xl border border-sand-200 bg-sand-50 p-4">
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Numerify</p>
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className="text-xs text-sand-500">Reverse URL</label>
-                    <input
-                      value={settings.numerifyReverseUrl}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          numerifyReverseUrl: event.target.value
-                        }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                      placeholder="https://api.numerify.at/v1/reverse?number={number}"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-sand-500">API Header</label>
-                    <input
-                      value={settings.numerifyApiHeader}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          numerifyApiHeader: event.target.value
-                        }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                      placeholder="X-API-Key"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-sand-500">API Key</label>
-                    <input
-                      type="password"
-                      value={settings.numerifyApiKey}
-                      onChange={(event) =>
-                        setSettings((current) => ({
-                          ...current,
-                          numerifyApiKey: event.target.value
-                        }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                      placeholder={settings.hasNumerifyApiKey ? "Gespeichert" : "••••••••"}
-                    />
+          <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft space-y-6">
+            <div className="rounded-3xl border border-sand-200 bg-white p-5">
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Settings</p>
+              <h2 className="text-xl font-display mb-4">NFON CTI Konfiguration</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs text-sand-500">Base URL</label>
+                  <input
+                    value={settings.baseUrl}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, baseUrl: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="https://providersupportdata.cloud-cfg.com"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Benutzername</label>
+                  <input
+                    value={settings.username}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, username: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="cti-user"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Passwort</label>
+                  <input
+                    type="password"
+                    value={settings.password}
+                    onChange={(event) =>
+                      setSettings((current) => ({ ...current, password: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={settings.hasPassword ? "Gespeichert" : "••••••••"}
+                  />
+                </div>
+                <div className="md:col-span-2 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Numerify</p>
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="text-xs text-sand-500">Reverse URL</label>
+                      <input
+                        value={settings.numerifyReverseUrl}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            numerifyReverseUrl: event.target.value
+                          }))
+                        }
+                        className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                        placeholder="https://api.numerify.at/v1/reverse?number={number}"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-sand-500">API Header</label>
+                      <input
+                        value={settings.numerifyApiHeader}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            numerifyApiHeader: event.target.value
+                          }))
+                        }
+                        className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                        placeholder="X-API-Key"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-sand-500">API Key</label>
+                      <input
+                        type="password"
+                        value={settings.numerifyApiKey}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            numerifyApiKey: event.target.value
+                          }))
+                        }
+                        className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                        placeholder={settings.hasNumerifyApiKey ? "Gespeichert" : "••••••••"}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3 mt-4">
-                <input
-                  id="telephony-stream"
-                  type="checkbox"
-                  checked={settings.streamEnabled}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      streamEnabled: event.target.checked
-                    }))
-                  }
-                />
-                <label htmlFor="telephony-stream" className="text-sm text-sand-700">
-                  Live-Stream aktivieren
-                </label>
+                <div className="flex items-center gap-3 mt-4">
+                  <input
+                    id="telephony-stream"
+                    type="checkbox"
+                    checked={settings.streamEnabled}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        streamEnabled: event.target.checked
+                      }))
+                    }
+                  />
+                  <label htmlFor="telephony-stream" className="text-sm text-sand-700">
+                    Live-Stream aktivieren
+                  </label>
+                </div>
               </div>
             </div>
             <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -395,106 +398,115 @@ export default function TelephonyView() {
               )}
             </div>
             <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
-              <p className="uppercase tracking-[0.3em] text-[10px] text-sand-500">Debug</p>
-              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                <div>
-                  <span className="text-sand-500">Aktiver Tab:</span> {activeTab}
+              <button
+                type="button"
+                onClick={() => setDebugOpen((current) => !current)}
+                className="w-full flex items-center justify-between uppercase tracking-[0.3em] text-[10px] text-sand-500"
+              >
+                <span>Debug</span>
+                <span>{debugOpen ? "–" : "+"}</span>
+              </button>
+              {debugOpen ? (
+                <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <div>
+                    <span className="text-sand-500">Aktiver Tab:</span> {activeTab}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Base URL:</span> {settings.baseUrl || "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Username gesetzt:</span>{" "}
+                    {settings.username?.trim() ? "ja" : "nein"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Passwort eingegeben:</span>{" "}
+                    {settings.password ? "ja" : "nein"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Password-Auth aktiv:</span>{" "}
+                    {settings.hasPassword ? "ja" : "nein"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Refresh Token vorhanden:</span>{" "}
+                    {settings.hasRefreshToken ? "ja" : "nein"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Credentials erkannt:</span>{" "}
+                    {hasCredentials ? "ja" : "nein"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">API Status:</span> {apiStatus}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Health Check:</span>{" "}
+                    {debugInfo.lastHealthCheckOk === null
+                      ? "unbekannt"
+                      : debugInfo.lastHealthCheckOk
+                      ? "ok"
+                      : "fehlgeschlagen"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Letzter Health Check:</span>{" "}
+                    {debugInfo.lastHealthCheckAt || "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Letzte Settings-Abfrage:</span>{" "}
+                    {debugInfo.lastSettingsFetchAt || "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Letztes Settings-Update:</span>{" "}
+                    {debugInfo.lastSettingsSaveAt || "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Letztes Settings-Update OK:</span>{" "}
+                    {debugInfo.lastSettingsSaveOk === null
+                      ? "unbekannt"
+                      : debugInfo.lastSettingsSaveOk
+                      ? "ja"
+                      : "nein"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Letzte Call-Anzahl:</span>{" "}
+                    {debugInfo.lastCallsCount ?? "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Stats Totals:</span>{" "}
+                    {debugInfo.lastStatsTotals
+                      ? `today ${debugInfo.lastStatsTotals.today}, 24h ${debugInfo.lastStatsTotals.last24h}, 7d ${debugInfo.lastStatsTotals.last7d}`
+                      : "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Stream aktiv:</span>{" "}
+                    {settings.streamEnabled ? "ja" : "nein"}
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-sand-500">Settings Response (sanitized):</span>{" "}
+                    {debugInfo.lastSettingsResponse
+                      ? JSON.stringify(debugInfo.lastSettingsResponse)
+                      : "n/a"}
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-sand-500">Letzte Event-Keys:</span>{" "}
+                    {debugInfo.lastCallRawKeys?.length
+                      ? debugInfo.lastCallRawKeys.join(", ")
+                      : "n/a"}
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-sand-500">Letzter Call (DB Snapshot):</span>{" "}
+                    {debugInfo.lastCallSnapshot
+                      ? JSON.stringify(debugInfo.lastCallSnapshot)
+                      : "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Raw Payload Laenge:</span>{" "}
+                    {debugInfo.lastCallRawLength ?? "n/a"}
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-sand-500">Letztes Event (Preview):</span>{" "}
+                    {debugInfo.lastCallRawPreview || "n/a"}
+                  </div>
                 </div>
-                <div>
-                  <span className="text-sand-500">Base URL:</span> {settings.baseUrl || "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Username gesetzt:</span>{" "}
-                  {settings.username?.trim() ? "ja" : "nein"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Passwort eingegeben:</span>{" "}
-                  {settings.password ? "ja" : "nein"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Password-Auth aktiv:</span>{" "}
-                  {settings.hasPassword ? "ja" : "nein"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Refresh Token vorhanden:</span>{" "}
-                  {settings.hasRefreshToken ? "ja" : "nein"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Credentials erkannt:</span>{" "}
-                  {hasCredentials ? "ja" : "nein"}
-                </div>
-                <div>
-                  <span className="text-sand-500">API Status:</span> {apiStatus}
-                </div>
-                <div>
-                  <span className="text-sand-500">Health Check:</span>{" "}
-                  {debugInfo.lastHealthCheckOk === null
-                    ? "unbekannt"
-                    : debugInfo.lastHealthCheckOk
-                    ? "ok"
-                    : "fehlgeschlagen"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Letzter Health Check:</span>{" "}
-                  {debugInfo.lastHealthCheckAt || "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Letzte Settings-Abfrage:</span>{" "}
-                  {debugInfo.lastSettingsFetchAt || "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Letztes Settings-Update:</span>{" "}
-                  {debugInfo.lastSettingsSaveAt || "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Letztes Settings-Update OK:</span>{" "}
-                  {debugInfo.lastSettingsSaveOk === null
-                    ? "unbekannt"
-                    : debugInfo.lastSettingsSaveOk
-                    ? "ja"
-                    : "nein"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Letzte Call-Anzahl:</span>{" "}
-                  {debugInfo.lastCallsCount ?? "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Stats Totals:</span>{" "}
-                  {debugInfo.lastStatsTotals
-                    ? `today ${debugInfo.lastStatsTotals.today}, 24h ${debugInfo.lastStatsTotals.last24h}, 7d ${debugInfo.lastStatsTotals.last7d}`
-                    : "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Stream aktiv:</span>{" "}
-                  {settings.streamEnabled ? "ja" : "nein"}
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-sand-500">Settings Response (sanitized):</span>{" "}
-                  {debugInfo.lastSettingsResponse
-                    ? JSON.stringify(debugInfo.lastSettingsResponse)
-                    : "n/a"}
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-sand-500">Letzte Event-Keys:</span>{" "}
-                  {debugInfo.lastCallRawKeys?.length
-                    ? debugInfo.lastCallRawKeys.join(", ")
-                    : "n/a"}
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-sand-500">Letzter Call (DB Snapshot):</span>{" "}
-                  {debugInfo.lastCallSnapshot
-                    ? JSON.stringify(debugInfo.lastCallSnapshot)
-                    : "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Raw Payload Laenge:</span>{" "}
-                  {debugInfo.lastCallRawLength ?? "n/a"}
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-sand-500">Letztes Event (Preview):</span>{" "}
-                  {debugInfo.lastCallRawPreview || "n/a"}
-                </div>
-              </div>
+              ) : null}
             </div>
           </div>
         )}

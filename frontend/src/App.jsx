@@ -9,11 +9,15 @@ import ToolsView from "./tools/ToolsView";
 
 export default function App() {
   const [activeView, setActiveView] = useState("time");
+  const [sidebarWidth, setSidebarWidth] = useState(200);
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       <div className="flex min-h-screen">
-        <aside className="w-56 bg-white border-r border-sand-200 p-4 flex flex-col gap-6">
+        <aside
+          className="bg-white border-r border-sand-200 p-4 flex flex-col gap-6"
+          style={{ width: `${sidebarWidth}px` }}
+        >
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
               <Sparkles size={16} />
@@ -71,8 +75,21 @@ export default function App() {
             />
           </nav>
 
-          <div className="mt-auto text-xs text-sand-500">
-            Schnellzugriff für Zeiterfassung, Notizen und Kundenberichte.
+          <div className="mt-auto space-y-3">
+            <label className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+              Sidebar Breite
+              <input
+                type="range"
+                min={180}
+                max={260}
+                value={sidebarWidth}
+                onChange={(event) => setSidebarWidth(Number(event.target.value))}
+                className="mt-2 w-full"
+              />
+            </label>
+            <div className="text-xs text-sand-500">
+              Schnellzugriff für Zeiterfassung, Notizen und Kundenberichte.
+            </div>
           </div>
         </aside>
 

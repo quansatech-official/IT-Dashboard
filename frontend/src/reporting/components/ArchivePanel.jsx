@@ -1,15 +1,14 @@
-import { ClipboardCopy, Eye, FileDown, Mail, Search, Trash2 } from "lucide-react";
+import { Edit3, Eye, Mail, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { statusStyles } from "../constants";
 
 export default function ArchivePanel({
   archive,
   onDelete,
-  onExportHtml,
-  onExportPdf,
   onExportEmail,
   onPreview,
-  onToggleSent
+  onToggleSent,
+  onEdit
 }) {
   const [query, setQuery] = useState("");
   const filteredArchive = useMemo(() => {
@@ -67,16 +66,10 @@ export default function ArchivePanel({
                     <Eye size={12} /> Vorschau
                   </button>
                   <button
-                    onClick={() => onExportHtml?.(item)}
+                    onClick={() => onEdit?.(item)}
                     className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
                   >
-                    <ClipboardCopy size={12} /> HTML
-                  </button>
-                  <button
-                    onClick={() => onExportPdf?.(item)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    <FileDown size={12} /> PDF
+                    <Edit3 size={12} /> Bearbeiten
                   </button>
                   <button
                     onClick={() => onExportEmail?.(item)}

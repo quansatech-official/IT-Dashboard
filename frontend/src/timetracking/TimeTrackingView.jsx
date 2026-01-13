@@ -225,7 +225,7 @@ function CustomerCard({ customer, reload }) {
         </span>
       </div>
 
-      <div className="flex-1 space-y-2 overflow-y-auto">
+      <div className="flex-1 space-y-2 overflow-y-auto max-h-[220px]">
         {customer.tasks.map((t) => (
           <TaskItem key={t.id} task={t} reload={reload} />
         ))}

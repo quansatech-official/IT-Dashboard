@@ -3,6 +3,7 @@ export const customers = [];
 export const catalog = [
   {
     title: "Serversystem Update",
+    group: "Update",
     system: "Server",
     why_text: "Sicherheitslücken schließen und Stabilität verbessern.",
     impact: "Wartungsfenster",
@@ -12,6 +13,7 @@ export const catalog = [
   },
   {
     title: "Firewall Regeln prüfen",
+    group: "Firewall",
     system: "Firewall",
     why_text: "Neue Services absichern und ungenutzte Ports entfernen.",
     impact: "Keine Unterbrechung",
@@ -21,6 +23,7 @@ export const catalog = [
   },
   {
     title: "Backup-Strategie testen",
+    group: "Backup",
     system: "Backup",
     why_text: "Wiederherstellbarkeit verifizieren, Audit-Anforderung erfüllen.",
     impact: "Kurzunterbrechung",
@@ -39,6 +42,18 @@ export const customerActionSuggestions = [
   },
   {
     text: "Bitte teilen Sie uns einen Ansprechpartner und ein passendes Zeitfenster mit."
+  }
+];
+
+export const summarySuggestions = [
+  {
+    text: "Die Systeme laufen stabil. Wir empfehlen die genannten Maßnahmen zeitnah einzuplanen."
+  },
+  {
+    text: "Insgesamt stabiler Betrieb, offene Punkte betreffen Sicherheit und Wartung."
+  },
+  {
+    text: "Keine akuten Störungen, aber es gibt Optimierungspotenzial bei Updates und Backup."
   }
 ];
 

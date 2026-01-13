@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -9,6 +9,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
 import time
+import uuid
 import json
 import requests
 
@@ -67,6 +68,7 @@ class ReportCatalogItem(Base):
 
     id = Column(Integer, primary_key=True)
     title = Column(String, nullable=False)
+    group = Column(String, default="")
     system = Column(String, default="")
     why_text = Column(String, default="")
     impact = Column(String, default="")
@@ -81,10 +83,17 @@ class CustomerActionSuggestion(Base):
     text = Column(String, nullable=False)
 
 
+class ReportSummarySuggestion(Base):
+    __tablename__ = "report_summaries"
+
+    id = Column(Integer, primary_key=True)
+    text = Column(String, nullable=False)
+
 class Report(Base):
     __tablename__ = "reports"
 
     id = Column(Integer, primary_key=True)
+    guid = Column(String, default=lambda: str(uuid.uuid4()))
     customer = Column(String, nullable=False)
     period = Column(String, default="")
     status = Column(String, default="")
@@ -92,6 +101,8 @@ class Report(Base):
     customer_action_text = Column(String, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     sent_at = Column(BigInteger, default=0)
+    opened_at = Column(BigInteger, default=0)
+    opened_count = Column(Integer, default=0)
 
     items = relationship(
         "ReportItem",
@@ -140,6 +151,42 @@ def _ensure_report_sent_column() -> None:
 
 _ensure_report_sent_column()
 
+
+def _ensure_report_opened_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("reports"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("reports")}
+    statements = []
+    if "guid" not in columns:
+        statements.append("ALTER TABLE reports ADD COLUMN guid VARCHAR")
+    if "opened_at" not in columns:
+        statements.append("ALTER TABLE reports ADD COLUMN opened_at BIGINT DEFAULT 0")
+    if "opened_count" not in columns:
+        statements.append("ALTER TABLE reports ADD COLUMN opened_count INTEGER DEFAULT 0")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_report_opened_columns()
+
+
+def _ensure_report_catalog_group_column() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("report_catalog"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("report_catalog")}
+    if "group" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE report_catalog ADD COLUMN \"group\" VARCHAR"))
+
+
+_ensure_report_catalog_group_column()
+
 # ================= SCHEMAS ==================
 class CustomerCreate(BaseModel):
     name: str
@@ -165,6 +212,7 @@ class PinNoteUpdate(BaseModel):
 
 class ReportCatalogItemBase(BaseModel):
     title: str
+    group: Optional[str] = ""
     system: Optional[str] = ""
     why_text: Optional[str] = ""
     impact: Optional[str] = ""
@@ -177,6 +225,7 @@ class ReportCatalogItemCreate(ReportCatalogItemBase):
 
 class ReportCatalogItemUpdate(BaseModel):
     title: Optional[str] = None
+    group: Optional[str] = None
     system: Optional[str] = None
     why_text: Optional[str] = None
     impact: Optional[str] = None
@@ -191,6 +240,18 @@ class CustomerActionSuggestionCreate(CustomerActionSuggestionBase):
     pass
 
 class CustomerActionSuggestionUpdate(BaseModel):
+    text: Optional[str] = None
+
+
+class ReportSummarySuggestionBase(BaseModel):
+    text: str
+
+
+class ReportSummarySuggestionCreate(ReportSummarySuggestionBase):
+    pass
+
+
+class ReportSummarySuggestionUpdate(BaseModel):
     text: Optional[str] = None
 
 class ReportItemSchema(BaseModel):
@@ -213,6 +274,15 @@ class ReportCreate(BaseModel):
 
 class ReportUpdate(BaseModel):
     sent: Optional[bool] = None
+
+
+class ReportEdit(BaseModel):
+    customer: Optional[str] = None
+    period: Optional[str] = None
+    status: Optional[str] = None
+    summary: Optional[str] = None
+    customer_action_text: Optional[str] = None
+    items: Optional[List[ReportItemSchema]] = None
 
 class IntegrationSettingsUpdate(BaseModel):
     rmm_host: Optional[str] = None
@@ -257,6 +327,7 @@ def serialize_catalog_item(item: ReportCatalogItem) -> Dict[str, Any]:
     return {
         "id": item.id,
         "title": item.title,
+        "group": item.group,
         "system": item.system,
         "why_text": item.why_text,
         "impact": item.impact,
@@ -266,6 +337,12 @@ def serialize_catalog_item(item: ReportCatalogItem) -> Dict[str, Any]:
     }
 
 def serialize_customer_action(item: CustomerActionSuggestion) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "text": item.text,
+    }
+
+def serialize_report_summary(item: ReportSummarySuggestion) -> Dict[str, Any]:
     return {
         "id": item.id,
         "text": item.text,
@@ -286,6 +363,7 @@ def serialize_report_item(item: ReportItem) -> Dict[str, Any]:
 def serialize_report(report: Report) -> Dict[str, Any]:
     return {
         "id": report.id,
+        "guid": report.guid,
         "customer": report.customer,
         "period": report.period,
         "status": report.status,
@@ -293,6 +371,8 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "customer_action_text": report.customer_action_text,
         "created_at": report.created_at,
         "sent_at": report.sent_at,
+        "opened_at": report.opened_at,
+        "opened_count": report.opened_count,
         "items": [serialize_report_item(i) for i in report.items],
     }
 
@@ -701,6 +781,46 @@ def delete_report_customer_action(item_id: int):
         db.commit()
         return {"status": "deleted"}
 
+
+@app.get("/api/report_summaries")
+def get_report_summaries():
+    with SessionLocal() as db:
+        items = db.query(ReportSummarySuggestion).all()
+        return [serialize_report_summary(item) for item in items]
+
+
+@app.post("/api/report_summaries")
+def create_report_summary(data: ReportSummarySuggestionCreate):
+    with SessionLocal() as db:
+        item = ReportSummarySuggestion(text=data.text)
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+        return serialize_report_summary(item)
+
+
+@app.patch("/api/report_summaries/{item_id}")
+def update_report_summary(item_id: int, data: ReportSummarySuggestionUpdate):
+    with SessionLocal() as db:
+        item = db.query(ReportSummarySuggestion).get(item_id)
+        if not item:
+            raise HTTPException(404, "Summary not found")
+        for field, value in data.dict(exclude_unset=True).items():
+            setattr(item, field, value)
+        db.commit()
+        return serialize_report_summary(item)
+
+
+@app.delete("/api/report_summaries/{item_id}")
+def delete_report_summary(item_id: int):
+    with SessionLocal() as db:
+        item = db.query(ReportSummarySuggestion).get(item_id)
+        if not item:
+            raise HTTPException(404, "Summary not found")
+        db.delete(item)
+        db.commit()
+        return {"status": "deleted"}
+
 # ================== REPORTS =================
 @app.get("/api/reports")
 def get_reports():
@@ -722,6 +842,7 @@ def get_report(report_id: int):
 def create_report(data: ReportCreate):
     with SessionLocal() as db:
         report = Report(
+            guid=str(uuid.uuid4()),
             customer=data.customer,
             period=data.period or "",
             status=data.status or "",
@@ -760,6 +881,22 @@ def delete_report(report_id: int):
         return {"status": "deleted"}
 
 
+@app.get("/api/reports/open")
+def report_open(guid: str):
+    with SessionLocal() as db:
+        report = db.query(Report).filter(Report.guid == guid).first()
+        if report:
+            report.opened_at = int(time.time() * 1000)
+            report.opened_count = (report.opened_count or 0) + 1
+            db.commit()
+    pixel = (
+        b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
+        b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
+        b"\x00\x02\x02D\x01\x00;"
+    )
+    return Response(content=pixel, media_type="image/gif")
+
+
 @app.patch("/api/reports/{report_id}")
 def update_report(report_id: int, data: ReportUpdate):
     with SessionLocal() as db:
@@ -768,6 +905,33 @@ def update_report(report_id: int, data: ReportUpdate):
             raise HTTPException(404, "Report not found")
         if data.sent is not None:
             report.sent_at = int(time.time() * 1000) if data.sent else 0
+        db.commit()
+        db.refresh(report)
+        return serialize_report(report)
+
+
+@app.put("/api/reports/{report_id}")
+def edit_report(report_id: int, data: ReportEdit):
+    with SessionLocal() as db:
+        report = db.query(Report).get(report_id)
+        if not report:
+            raise HTTPException(404, "Report not found")
+        for field, value in data.dict(exclude_unset=True, exclude={"items"}).items():
+            setattr(report, field, value if value is not None else "")
+        if data.items is not None:
+            report.items.clear()
+            for item in data.items:
+                report_item = ReportItem(
+                    report_id=report.id,
+                    priority=item.priority or "Planbar",
+                    title=item.title or "",
+                    system=item.system or "",
+                    why_text=item.why_text or "",
+                    impact=item.impact or "",
+                    duration=item.duration or "",
+                    cost=item.cost or "",
+                )
+                report.items.append(report_item)
         db.commit()
         db.refresh(report)
         return serialize_report(report)

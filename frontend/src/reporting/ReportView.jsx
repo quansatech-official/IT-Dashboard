@@ -19,7 +19,8 @@ import StatusPicker from "./components/StatusPicker";
 import {
   catalog as defaultCatalog,
   customerActionSuggestions as defaultCustomerActions,
-  customers as fallbackCustomers
+  customers as fallbackCustomers,
+  summarySuggestions as defaultSummarySuggestions
 } from "./constants";
 import { renderReportHTML, uid } from "./utils";
 
@@ -103,23 +104,12 @@ const getCurrentPeriod = () => {
 };
 
 const defaultReport = {
-  customer: fallbackCustomers[0],
-  period: getCurrentPeriod(),
-  status: "Gelb",
-  summary: "Die Systeme laufen stabil, wir empfehlen jedoch eine zeitnahe Aktualisierung des Servers.",
+  customer: "",
+  period: "",
+  status: "",
+  summary: "",
   customer_action_text: "",
-  actions: [
-    {
-      id: "a1",
-      priority: "Dringend",
-      title: "Serversystem Update",
-      system: "Server",
-      why_text: "Kritische Patches einspielen, um CVE-Risiken zu schließen.",
-      impact: "Wartungsfenster",
-      duration: "0,5–1,0 h",
-      cost: "€ 120–240"
-    }
-  ]
+  actions: []
 };
 
 const ensureCatalogIds = (items) =>
@@ -129,6 +119,12 @@ const ensureCatalogIds = (items) =>
   }));
 
 const ensureCustomerActionIds = (items) =>
+  items.map((item) => ({
+    id: item.id || uid(),
+    ...item
+  }));
+
+const ensureSummaryIds = (items) =>
   items.map((item) => ({
     id: item.id || uid(),
     ...item
@@ -212,11 +208,16 @@ export default function ReportView() {
     ensureCustomerActionIds(defaultCustomerActions)
   );
   const [customerActionPick, setCustomerActionPick] = useState("");
+  const [summaryItems, setSummaryItems] = useState(
+    ensureSummaryIds(defaultSummarySuggestions)
+  );
+  const [summaryPick, setSummaryPick] = useState("");
   const [archiveItems, setArchiveItems] = useState([]);
   const [customerList, setCustomerList] = useState(fallbackCustomers);
   const [section, setSection] = useState("builder");
   const [toast, setToast] = useState("");
   const [customerInput, setCustomerInput] = useState(defaultReport.customer);
+  const [editReportId, setEditReportId] = useState(null);
   const [previewModal, setPreviewModal] = useState({
     open: false,
     title: "",
@@ -273,6 +274,37 @@ export default function ReportView() {
       setCustomerActionPick(normalizeId(customerActionItems[0]?.id ?? ""));
     }
   }, [customerActionItems, customerActionPick]);
+
+  useEffect(() => {
+    if (!summaryPick && summaryItems.length) {
+      setSummaryPick(normalizeId(summaryItems[0]?.id ?? ""));
+    }
+  }, [summaryItems, summaryPick]);
+
+  const loadReports = useCallback(async () => {
+    try {
+      const res = await fetch("/api/reports");
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        const grouped = data.reduce((acc, reportItem) => {
+          const key = reportItem.customer || "Unbekannt";
+          const entry = acc[key] || { customer: key, reports: [] };
+          entry.reports.push({
+            id: reportItem.id,
+            label: reportItem.period || "Bericht",
+            status: reportItem.status || "",
+            period: reportItem.period || "",
+            sentAt: reportItem.sent_at || 0
+          });
+          acc[key] = entry;
+          return acc;
+        }, {});
+        setArchiveItems(Object.values(grouped));
+      }
+    } catch (error) {
+      // Keep empty list.
+    }
+  }, []);
 
   useEffect(() => {
     const loadCustomers = async () => {
@@ -339,28 +371,29 @@ export default function ReportView() {
       }
     };
 
-    const loadReports = async () => {
+    const loadSummaries = async () => {
       try {
-        const res = await fetch("/api/reports");
+        const res = await fetch("/api/report_summaries");
         const data = await res.json();
-        if (Array.isArray(data)) {
-          const grouped = data.reduce((acc, reportItem) => {
-            const key = reportItem.customer || "Unbekannt";
-            const entry = acc[key] || { customer: key, reports: [] };
-            entry.reports.push({
-              id: reportItem.id,
-              label: reportItem.period || "Bericht",
-              status: reportItem.status || "",
-              period: reportItem.period || "",
-              sentAt: reportItem.sent_at || 0
-            });
-            acc[key] = entry;
-            return acc;
-          }, {});
-          setArchiveItems(Object.values(grouped));
+        if (Array.isArray(data) && data.length) {
+          setSummaryItems(data);
+          setSummaryPick(normalizeId(data[0]?.id ?? ""));
+          return;
         }
+
+        const seeded = await Promise.all(
+          defaultSummarySuggestions.map((item) =>
+            fetch("/api/report_summaries", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(item)
+            }).then((r) => r.json())
+          )
+        );
+        setSummaryItems(seeded);
+        setSummaryPick(normalizeId(seeded[0]?.id ?? ""));
       } catch (error) {
-        // Keep empty list.
+        setSummaryPick((prev) => prev || normalizeId(summaryItems[0]?.id ?? ""));
       }
     };
 
@@ -379,9 +412,10 @@ export default function ReportView() {
     loadCustomers();
     loadCatalog();
     loadCustomerActions();
+    loadSummaries();
     loadReports();
     loadIntegrations();
-  }, []);
+  }, [loadReports]);
 
 
   const copyToClipboard = async (value) => {
@@ -477,6 +511,16 @@ export default function ReportView() {
       return;
     }
     setReport((prev) => ({ ...prev, customer_action_text: item.text || "" }));
+  };
+
+  const applySummarySuggestion = () => {
+    const pick = summaryPick || normalizeId(summaryItems[0]?.id ?? "");
+    const item = summaryItems.find((entry) => normalizeId(entry.id) === pick);
+    if (!item) {
+      setToast("Kein Vorschlag gewählt.");
+      return;
+    }
+    setReport((prev) => ({ ...prev, summary: item.text || "" }));
   };
 
   const addFromFreeText = async () => {
@@ -618,50 +662,67 @@ export default function ReportView() {
       setToast("Bitte Kunde angeben.");
       return;
     }
-    const res = await fetch("/api/reports", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        customer: report.customer.trim(),
-        period: report.period,
-        status: report.status,
-        summary: report.summary,
-        customer_action_text: report.customer_action_text,
-        items: report.actions
-      })
-    });
-    if (!res.ok) {
-      setToast("Speichern fehlgeschlagen.");
-      return;
-    }
-    const created = await res.json();
-    setToast("Archiviert.");
-    setArchiveItems((prev) => {
-      const grouped = [...prev];
-      const idx = grouped.findIndex((item) => item.customer === created.customer);
-      const entry = {
-        id: created.id,
-        label: created.period || "Bericht",
-        status: created.status || "",
-        period: created.period || ""
-      };
-      if (idx >= 0) {
-        grouped[idx] = {
-          ...grouped[idx],
-          reports: [entry, ...grouped[idx].reports]
-        };
-        return grouped;
+    const payload = {
+      customer: report.customer.trim(),
+      period: report.period,
+      status: report.status,
+      summary: report.summary,
+      customer_action_text: report.customer_action_text,
+      items: report.actions
+    };
+    if (editReportId) {
+      const res = await fetch(`/api/reports/${editReportId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        setToast("Archiv-Update fehlgeschlagen.");
+        return;
       }
-      return [{ customer: created.customer, reports: [entry] }, ...grouped];
-    });
-    setReport({ ...defaultReport, period: getCurrentPeriod() });
+      setToast("Archiv aktualisiert.");
+      setEditReportId(null);
+      await loadReports();
+    } else {
+      const res = await fetch("/api/reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        setToast("Speichern fehlgeschlagen.");
+        return;
+      }
+      const created = await res.json();
+      setToast("Archiviert.");
+      setArchiveItems((prev) => {
+        const grouped = [...prev];
+        const idx = grouped.findIndex((item) => item.customer === created.customer);
+        const entry = {
+          id: created.id,
+          label: created.period || "Bericht",
+          status: created.status || "",
+          period: created.period || "",
+          sentAt: created.sent_at || 0
+        };
+        if (idx >= 0) {
+          grouped[idx] = {
+            ...grouped[idx],
+            reports: [entry, ...grouped[idx].reports]
+          };
+          return grouped;
+        }
+        return [{ customer: created.customer, reports: [entry] }, ...grouped];
+      });
+    }
+    setReport(defaultReport);
     setCustomerInput(defaultReport.customer);
     setSection("builder");
   };
 
   const resetReport = () => {
     if (!confirm("Aktuellen Bericht verwerfen?")) return;
-    setReport({ ...defaultReport, period: getCurrentPeriod() });
+    setReport(defaultReport);
     setCustomerInput(defaultReport.customer);
     setSection("builder");
   };
@@ -692,6 +753,7 @@ export default function ReportView() {
   };
 
   const normalizeReport = (data) => ({
+    guid: data.guid,
     customer: data.customer,
     period: data.period,
     status: data.status,
@@ -723,7 +785,10 @@ export default function ReportView() {
     }
     try {
       const subject = `IT-Kundenbericht – ${data.customer} (${data.period || "ohne Zeitraum"})`;
-      const htmlBody = renderReportHTML(data, { mode: "email" }).replace(
+      const beaconUrl = data.guid
+        ? `${window.location.origin}/api/reports/open?guid=${encodeURIComponent(data.guid)}`
+        : "";
+      const htmlBody = renderReportHTML(data, { mode: "email", beaconUrl }).replace(
         /src="\/QTLogo\.jpg"/g,
         'src="cid:qtlogo"'
       );
@@ -772,24 +837,21 @@ export default function ReportView() {
     }
   };
 
-  const exportArchivedHtml = async (item) => {
-    const data = await fetchArchivedReport(item);
-    if (!data) return;
-    const html = renderReportHTML(normalizeReport(data));
-    copyToClipboard(html);
-  };
-
-  const exportArchivedPdf = async (item) => {
-    const data = await fetchArchivedReport(item);
-    if (!data) return;
-    const html = renderReportHTML(normalizeReport(data));
-    printHtml(html);
-  };
-
   const exportArchivedEmail = async (item) => {
     const data = await fetchArchivedReport(item);
     if (!data) return;
-    downloadEmailDraft(normalizeReport(data));
+    const normalized = normalizeReport(data);
+    downloadEmailDraft(normalized);
+  };
+
+  const editArchivedReport = async (item) => {
+    const data = await fetchArchivedReport(item);
+    if (!data) return;
+    const normalized = normalizeReport(data);
+    setEditReportId(data.id);
+    setReport({ ...defaultReport, ...normalized });
+    setCustomerInput(normalized.customer || "");
+    setSection("builder");
   };
 
   const toggleArchivedSent = async (item, nextValue) => {
@@ -1005,6 +1067,30 @@ export default function ReportView() {
                     rows={4}
                     className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                   />
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <select
+                      value={summaryPick}
+                      onChange={(event) => setSummaryPick(event.target.value)}
+                      className="rounded-full border border-sand-200 px-3 py-1 text-xs bg-white uppercase tracking-wide text-sand-600 max-w-[260px] w-auto"
+                    >
+                      {summaryItems.length ? (
+                        summaryItems.map((item) => (
+                          <option key={item.id} value={normalizeId(item.id)}>
+                            {item.text.length > 60 ? `${item.text.slice(0, 57)}...` : item.text}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">Keine Vorschläge</option>
+                      )}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={applySummarySuggestion}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      Vorschlag übernehmen
+                    </button>
+                  </div>
                 </label>
                 <label className="text-xs uppercase tracking-wide text-sand-600 block">
                   Was wir vom Kunden benötigen
@@ -1081,10 +1167,21 @@ export default function ReportView() {
                     onChange={(event) => setCatalogPick(event.target.value)}
                     className="rounded-full border border-sand-200 px-4 py-2 text-sm bg-white"
                   >
-                    {catalogItems.map((item) => (
-                      <option key={item.id} value={normalizeId(item.id)}>
-                        {item.title}
-                      </option>
+                    {Object.entries(
+                      catalogItems.reduce((groups, item) => {
+                        const key = (item.group || item.system || "Allgemein").trim() || "Allgemein";
+                        if (!groups[key]) groups[key] = [];
+                        groups[key].push(item);
+                        return groups;
+                      }, {})
+                    ).map(([group, items]) => (
+                      <optgroup key={group} label={group}>
+                        {items.map((item) => (
+                          <option key={item.id} value={normalizeId(item.id)}>
+                            {item.title}
+                          </option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                   <button
@@ -1176,11 +1273,10 @@ export default function ReportView() {
             <ArchivePanel
               archive={archiveItems}
               onDelete={deleteArchivedReport}
-              onExportHtml={exportArchivedHtml}
-              onExportPdf={exportArchivedPdf}
               onExportEmail={exportArchivedEmail}
               onPreview={previewArchivedReport}
               onToggleSent={toggleArchivedSent}
+              onEdit={editArchivedReport}
             />
           </main>
       )}

@@ -3,6 +3,7 @@ import { Edit3, Plus, Save, Trash2, X } from "lucide-react";
 
 const emptyItem = {
   title: "",
+  group: "",
   system: "",
   why_text: "",
   impact: "Keine Unterbrechung",
@@ -34,7 +35,7 @@ export default function CatalogManager({ items, onAdd, onRemove, onUpdate }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <label className="text-xs uppercase tracking-wide text-sand-600">
           Titel
           <input
@@ -42,6 +43,15 @@ export default function CatalogManager({ items, onAdd, onRemove, onUpdate }) {
             onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
             className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
             placeholder="z. B. Serversystem Update"
+          />
+        </label>
+        <label className="text-xs uppercase tracking-wide text-sand-600">
+          Gruppe
+          <input
+            value={draft.group}
+            onChange={(event) => setDraft((prev) => ({ ...prev, group: event.target.value }))}
+            className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+            placeholder="Backup, Firewall, Update..."
           />
         </label>
         <label className="text-xs uppercase tracking-wide text-sand-600">
@@ -152,7 +162,9 @@ export default function CatalogManager({ items, onAdd, onRemove, onUpdate }) {
           >
             <div>
               <p className="text-sm font-semibold">{item.title}</p>
-              <p className="text-xs text-sand-500">{item.system} · {item.priority}</p>
+              <p className="text-xs text-sand-500">
+                {(item.group || "Allgemein")} · {item.system} · {item.priority}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -160,6 +172,7 @@ export default function CatalogManager({ items, onAdd, onRemove, onUpdate }) {
                   setEditingId(item.id);
                   setDraft({
                     title: item.title || "",
+                    group: item.group || "",
                     system: item.system || "",
                     why_text: item.why_text || "",
                     impact: item.impact || "Keine Unterbrechung",
