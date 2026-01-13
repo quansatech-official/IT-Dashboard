@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Clock, FileText, Sparkles, StickyNote, Wrench } from "lucide-react";
+import { Clock, FileText, Settings, Sparkles, StickyNote, Wrench } from "lucide-react";
 import ReportView from "./reporting/ReportView";
 import TimeTrackingView from "./timetracking/TimeTrackingView";
 import TelephonyMenu from "./telephony/TelephonyMenu";
 import TelephonyView from "./telephony/TelephonyView";
 import NotesView from "./notes/NotesView";
 import ToolsView from "./tools/ToolsView";
+import SettingsView from "./settings/SettingsView";
 
 export default function App() {
   const [activeView, setActiveView] = useState("time");
@@ -76,6 +77,18 @@ export default function App() {
           </nav>
 
           <div className="mt-auto space-y-3">
+            <div className="border-t border-sand-200 pt-3">
+              <button
+                onClick={() => setActiveView("settings")}
+                className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                  activeView === "settings"
+                    ? "bg-sand-900 text-white border-sand-900"
+                    : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+                } flex items-center gap-3`}
+              >
+                <Settings size={18} /> Einstellungen
+              </button>
+            </div>
             <label className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
               Sidebar Breite
               <input
@@ -100,6 +113,8 @@ export default function App() {
             <NotesView />
           ) : activeView === "tools" ? (
             <ToolsView />
+          ) : activeView === "settings" ? (
+            <SettingsView />
           ) : activeView === "telephony" ? (
             <TelephonyView />
           ) : (

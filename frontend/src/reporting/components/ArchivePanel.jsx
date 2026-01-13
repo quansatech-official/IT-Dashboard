@@ -8,7 +8,8 @@ export default function ArchivePanel({
   onExportEmail,
   onPreview,
   onToggleSent,
-  onEdit
+  onEdit,
+  onSendSmtp
 }) {
   const [query, setQuery] = useState("");
   const filteredArchive = useMemo(() => {
@@ -51,7 +52,10 @@ export default function ArchivePanel({
                   >
                     {item.status}
                   </span>
-                  <label className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide">
+                  <label
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide"
+                    title={item.sentAt ? item.sentInfo || "Gesendet" : "Nicht gesendet"}
+                  >
                     <input
                       type="checkbox"
                       checked={Boolean(item.sentAt)}
@@ -76,6 +80,12 @@ export default function ArchivePanel({
                     className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
                   >
                     <Mail size={12} /> E-Mail
+                  </button>
+                  <button
+                    onClick={() => onSendSmtp?.(item)}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <Mail size={12} /> SMTP
                   </button>
                   <button
                     onClick={() => onDelete?.(item)}

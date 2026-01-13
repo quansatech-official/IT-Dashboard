@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ClipboardCopy,
   FileDown,
@@ -22,7 +22,7 @@ import {
   customers as fallbackCustomers,
   summarySuggestions as defaultSummarySuggestions
 } from "./constants";
-import { renderReportHTML, uid } from "./utils";
+import { buildPlainText, renderReportHTML, uid } from "./utils";
 
 function CustomerCombobox({ customers, value, onChange }) {
   const [query, setQuery] = useState(value || "");
@@ -200,6 +200,22 @@ const parseActionFromText = (rawText) => {
   return fields;
 };
 
+const buildSentInfo = ({ sentAt, sentVia, sentTo, openedAt, openedCount }) => {
+  if (!sentAt) return "Nicht gesendet";
+  const sentAtText = sentAt ? new Date(sentAt).toLocaleString("de-DE") : "";
+  const openedAtText = openedAt ? new Date(openedAt).toLocaleString("de-DE") : "";
+  return [
+    `Versand: ${sentVia || "manuell"}`,
+    sentTo ? `An: ${sentTo}` : "",
+    sentAtText ? `Am: ${sentAtText}` : "",
+    openedCount
+      ? `Gelesen: ${openedCount}x${openedAtText ? ` (zuletzt ${openedAtText})` : ""}`
+      : "Gelesen: nein"
+  ]
+    .filter(Boolean)
+    .join(" | ");
+};
+
 export default function ReportView() {
   const [report, setReport] = useState(defaultReport);
   const [catalogItems, setCatalogItems] = useState(ensureCatalogIds(defaultCatalog));
@@ -286,15 +302,32 @@ export default function ReportView() {
       const res = await fetch("/api/reports");
       const data = await res.json();
       if (Array.isArray(data)) {
-        const grouped = data.reduce((acc, reportItem) => {
-          const key = reportItem.customer || "Unbekannt";
-          const entry = acc[key] || { customer: key, reports: [] };
+    const grouped = data.reduce((acc, reportItem) => {
+      const key = reportItem.customer || "Unbekannt";
+      const entry = acc[key] || { customer: key, reports: [] };
+      const sentAt = reportItem.sent_at || 0;
+      const sentVia = reportItem.sent_via || "";
+      const sentTo = reportItem.sent_to || "";
+      const openedAt = reportItem.opened_at || 0;
+      const openedCount = reportItem.opened_count || 0;
+      const sentInfo = buildSentInfo({
+        sentAt,
+        sentVia,
+        sentTo,
+        openedAt,
+        openedCount
+      });
           entry.reports.push({
             id: reportItem.id,
             label: reportItem.period || "Bericht",
             status: reportItem.status || "",
             period: reportItem.period || "",
-            sentAt: reportItem.sent_at || 0
+            sentAt,
+            sentVia,
+            sentTo,
+            openedAt,
+            openedCount,
+            sentInfo
           });
           acc[key] = entry;
           return acc;
@@ -703,7 +736,18 @@ export default function ReportView() {
           label: created.period || "Bericht",
           status: created.status || "",
           period: created.period || "",
-          sentAt: created.sent_at || 0
+          sentAt: created.sent_at || 0,
+          sentVia: created.sent_via || "",
+          sentTo: created.sent_to || "",
+          openedAt: created.opened_at || 0,
+          openedCount: created.opened_count || 0,
+          sentInfo: buildSentInfo({
+            sentAt: created.sent_at || 0,
+            sentVia: created.sent_via || "",
+            sentTo: created.sent_to || "",
+            openedAt: created.opened_at || 0,
+            openedCount: created.opened_count || 0
+          })
         };
         if (idx >= 0) {
           grouped[idx] = {
@@ -761,6 +805,7 @@ export default function ReportView() {
     customer_action_text: data.customer_action_text,
     actions: data.items || []
   });
+
 
   const blobToBase64 = (blob) =>
     new Promise((resolve, reject) => {
@@ -842,6 +887,38 @@ export default function ReportView() {
     if (!data) return;
     const normalized = normalizeReport(data);
     downloadEmailDraft(normalized);
+    await fetch(`/api/reports/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sent: true, sent_via: "eml" })
+    }).then(async (res) => {
+      if (!res.ok) return;
+      const updated = await res.json();
+      setArchiveItems((prev) =>
+        prev.map((group) => ({
+          ...group,
+          reports: group.reports.map((reportItem) =>
+            reportItem.id === item.id
+              ? {
+                  ...reportItem,
+                  sentAt: updated.sent_at || 0,
+                  sentVia: updated.sent_via || "",
+                  sentTo: updated.sent_to || "",
+                  openedAt: updated.opened_at || 0,
+                  openedCount: updated.opened_count || 0,
+                  sentInfo: buildSentInfo({
+                    sentAt: updated.sent_at || 0,
+                    sentVia: updated.sent_via || "",
+                    sentTo: updated.sent_to || "",
+                    openedAt: updated.opened_at || 0,
+                    openedCount: updated.opened_count || 0
+                  })
+                }
+              : reportItem
+          )
+        }))
+      );
+    });
   };
 
   const editArchivedReport = async (item) => {
@@ -860,7 +937,10 @@ export default function ReportView() {
       const res = await fetch(`/api/reports/${item.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sent: nextValue })
+        body: JSON.stringify({
+          sent: nextValue,
+          sent_via: nextValue ? "manuell" : ""
+        })
       });
       if (!res.ok) throw new Error("update_failed");
       const updated = await res.json();
@@ -869,7 +949,21 @@ export default function ReportView() {
           ...group,
           reports: group.reports.map((reportItem) =>
             reportItem.id === item.id
-              ? { ...reportItem, sentAt: updated.sent_at || 0 }
+              ? {
+                  ...reportItem,
+                  sentAt: updated.sent_at || 0,
+                  sentVia: updated.sent_via || "",
+                  sentTo: updated.sent_to || "",
+                  openedAt: updated.opened_at || 0,
+                  openedCount: updated.opened_count || 0,
+                  sentInfo: buildSentInfo({
+                    sentAt: updated.sent_at || 0,
+                    sentVia: updated.sent_via || "",
+                    sentTo: updated.sent_to || "",
+                    openedAt: updated.opened_at || 0,
+                    openedCount: updated.opened_count || 0
+                  })
+                }
               : reportItem
           )
         }))
@@ -889,6 +983,59 @@ export default function ReportView() {
       title: `${normalized.customer || "Kunde"} – ${normalized.period || "ohne Zeitraum"}`,
       html: renderReportHTML(normalized)
     });
+  };
+
+  const sendArchivedReport = async (item) => {
+    const data = await fetchArchivedReport(item);
+    if (!data) return;
+    const recipient = prompt("Empfänger E-Mail-Adresse");
+    if (!recipient) return;
+    const normalized = normalizeReport(data);
+    const beaconUrl = normalized.guid
+      ? `${window.location.origin}/api/reports/open?guid=${encodeURIComponent(normalized.guid)}`
+      : "";
+    const html = renderReportHTML(normalized, { mode: "email", beaconUrl }).replace(
+      /src="\/QTLogo\.jpg"/g,
+      `src="${window.location.origin}/QTLogo.jpg"`
+    );
+    const text = buildPlainText(normalized);
+    const subject = `IT-Kundenbericht – ${normalized.customer} (${normalized.period || "ohne Zeitraum"})`;
+    try {
+      const res = await fetch(`/api/reports/${item.id}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: recipient, subject, html, text })
+      });
+      if (!res.ok) throw new Error("send_failed");
+      const updated = await res.json();
+      setArchiveItems((prev) =>
+        prev.map((group) => ({
+          ...group,
+          reports: group.reports.map((reportItem) =>
+            reportItem.id === item.id
+              ? {
+                  ...reportItem,
+                  sentAt: updated.sent_at || 0,
+                  sentVia: updated.sent_via || "",
+                  sentTo: updated.sent_to || "",
+                  openedAt: updated.opened_at || 0,
+                  openedCount: updated.opened_count || 0,
+                  sentInfo: buildSentInfo({
+                    sentAt: updated.sent_at || 0,
+                    sentVia: updated.sent_via || "",
+                    sentTo: updated.sent_to || "",
+                    openedAt: updated.opened_at || 0,
+                    openedCount: updated.opened_count || 0
+                  })
+                }
+              : reportItem
+          )
+        }))
+      );
+      setToast("E-Mail gesendet.");
+    } catch (error) {
+      setToast("SMTP Versand fehlgeschlagen.");
+    }
   };
 
   const headerActions = (
@@ -1277,6 +1424,7 @@ export default function ReportView() {
               onPreview={previewArchivedReport}
               onToggleSent={toggleArchivedSent}
               onEdit={editArchivedReport}
+              onSendSmtp={sendArchivedReport}
             />
           </main>
       )}

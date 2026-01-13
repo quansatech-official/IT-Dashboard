@@ -101,6 +101,8 @@ class Report(Base):
     customer_action_text = Column(String, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     sent_at = Column(BigInteger, default=0)
+    sent_via = Column(String, default="")
+    sent_to = Column(String, default="")
     opened_at = Column(BigInteger, default=0)
     opened_count = Column(Integer, default=0)
 
@@ -135,6 +137,20 @@ class IntegrationSettings(Base):
     rmm_user = Column(String, default="")
     rmm_password = Column(String, default="")
 
+
+class SmtpSettings(Base):
+    __tablename__ = "smtp_settings"
+
+    id = Column(Integer, primary_key=True)
+    host = Column(String, default="")
+    port = Column(Integer, default=587)
+    username = Column(String, default="")
+    password = Column(String, default="")
+    sender_name = Column(String, default="")
+    sender_email = Column(String, default="")
+    use_tls = Column(Boolean, default=True)
+    use_ssl = Column(Boolean, default=False)
+
 Base.metadata.create_all(bind=engine)
 
 
@@ -164,6 +180,10 @@ def _ensure_report_opened_columns() -> None:
         statements.append("ALTER TABLE reports ADD COLUMN opened_at BIGINT DEFAULT 0")
     if "opened_count" not in columns:
         statements.append("ALTER TABLE reports ADD COLUMN opened_count INTEGER DEFAULT 0")
+    if "sent_via" not in columns:
+        statements.append("ALTER TABLE reports ADD COLUMN sent_via VARCHAR")
+    if "sent_to" not in columns:
+        statements.append("ALTER TABLE reports ADD COLUMN sent_to VARCHAR")
     if not statements:
         return
     with engine.begin() as connection:
@@ -274,6 +294,8 @@ class ReportCreate(BaseModel):
 
 class ReportUpdate(BaseModel):
     sent: Optional[bool] = None
+    sent_via: Optional[str] = None
+    sent_to: Optional[str] = None
 
 
 class ReportEdit(BaseModel):
@@ -288,6 +310,24 @@ class IntegrationSettingsUpdate(BaseModel):
     rmm_host: Optional[str] = None
     rmm_user: Optional[str] = None
     rmm_password: Optional[str] = None
+
+
+class SmtpSettingsUpdate(BaseModel):
+    host: Optional[str] = None
+    port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    sender_name: Optional[str] = None
+    sender_email: Optional[str] = None
+    use_tls: Optional[bool] = None
+    use_ssl: Optional[bool] = None
+
+
+class ReportSendRequest(BaseModel):
+    to: str
+    subject: Optional[str] = None
+    html: str
+    text: Optional[str] = None
 
 class ActionAiRequest(BaseModel):
     text: str
@@ -371,6 +411,8 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "customer_action_text": report.customer_action_text,
         "created_at": report.created_at,
         "sent_at": report.sent_at,
+        "sent_via": report.sent_via,
+        "sent_to": report.sent_to,
         "opened_at": report.opened_at,
         "opened_count": report.opened_count,
         "items": [serialize_report_item(i) for i in report.items],
@@ -383,6 +425,30 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "rmm_user": settings.rmm_user,
         "rmm_password": settings.rmm_password,
     }
+
+
+def serialize_smtp_settings(settings: SmtpSettings) -> Dict[str, Any]:
+    return {
+        "id": settings.id,
+        "host": settings.host,
+        "port": settings.port,
+        "username": settings.username,
+        "sender_name": settings.sender_name,
+        "sender_email": settings.sender_email,
+        "use_tls": settings.use_tls,
+        "use_ssl": settings.use_ssl,
+        "has_password": bool(settings.password),
+    }
+
+
+def _get_smtp_settings(db) -> SmtpSettings:
+    settings = db.query(SmtpSettings).first()
+    if not settings:
+        settings = SmtpSettings()
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
 
 def coerce_action_fields(payload: Dict[str, Any]) -> Dict[str, str]:
     fields = ["title", "system", "why_text", "impact", "duration", "cost", "priority"]
@@ -897,6 +963,74 @@ def report_open(guid: str):
     return Response(content=pixel, media_type="image/gif")
 
 
+@app.get("/api/smtp_settings")
+def get_smtp_settings():
+    with SessionLocal() as db:
+        settings = _get_smtp_settings(db)
+        return serialize_smtp_settings(settings)
+
+
+@app.put("/api/smtp_settings")
+def update_smtp_settings(data: SmtpSettingsUpdate):
+    with SessionLocal() as db:
+        settings = _get_smtp_settings(db)
+        for field, value in data.dict(exclude_unset=True).items():
+            if field == "password" and (value is None or value == ""):
+                continue
+            setattr(settings, field, value)
+        db.commit()
+        db.refresh(settings)
+        return serialize_smtp_settings(settings)
+
+
+@app.post("/api/reports/{report_id}/send")
+def send_report(report_id: int, data: ReportSendRequest):
+    with SessionLocal() as db:
+        report = db.query(Report).get(report_id)
+        if not report:
+            raise HTTPException(404, "Report not found")
+        settings = _get_smtp_settings(db)
+        if not settings.host or not settings.sender_email:
+            raise HTTPException(400, "SMTP settings missing")
+        if not report.guid:
+            report.guid = str(uuid.uuid4())
+        subject = data.subject or f"IT-Kundenbericht – {report.customer} ({report.period or 'ohne Zeitraum'})"
+
+        from_addr = settings.sender_email
+        if settings.sender_name:
+            from_addr = f"{settings.sender_name} <{settings.sender_email}>"
+
+        import smtplib
+        from email.message import EmailMessage
+
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = from_addr
+        msg["To"] = data.to
+        msg.set_content(data.text or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung.")
+        msg.add_alternative(data.html, subtype="html")
+
+        if settings.use_ssl:
+            server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
+        else:
+            server = smtplib.SMTP(settings.host, settings.port or 587, timeout=20)
+        try:
+            if settings.use_tls and not settings.use_ssl:
+                server.starttls()
+            if settings.username:
+                server.login(settings.username, settings.password or "")
+            server.send_message(msg)
+        finally:
+            server.quit()
+
+        report.sent_at = int(time.time() * 1000)
+        report.sent_via = "smtp"
+        report.sent_to = data.to
+        db.commit()
+        db.refresh(report)
+        return serialize_report(report)
+
+
 @app.patch("/api/reports/{report_id}")
 def update_report(report_id: int, data: ReportUpdate):
     with SessionLocal() as db:
@@ -905,6 +1039,13 @@ def update_report(report_id: int, data: ReportUpdate):
             raise HTTPException(404, "Report not found")
         if data.sent is not None:
             report.sent_at = int(time.time() * 1000) if data.sent else 0
+            if not data.sent:
+                report.sent_via = ""
+                report.sent_to = ""
+        if data.sent_via is not None:
+            report.sent_via = data.sent_via
+        if data.sent_to is not None:
+            report.sent_to = data.sent_to
         db.commit()
         db.refresh(report)
         return serialize_report(report)
