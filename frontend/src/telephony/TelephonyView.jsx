@@ -25,12 +25,23 @@ export default function TelephonyView() {
   const [settings, setSettings] = useState(defaultSettings);
   const [settingsStatus, setSettingsStatus] = useState("idle");
   const [apiStatus, setApiStatus] = useState("idle");
+  const [debugInfo, setDebugInfo] = useState({
+    lastSettingsFetchAt: "",
+    lastHealthCheckAt: "",
+    lastHealthCheckOk: null,
+    lastSettingsSaveAt: "",
+    lastSettingsSaveOk: null
+  });
 
   useEffect(() => {
     let active = true;
     telephonyService.fetchSettings().then((data) => {
       if (!active) return;
       setSettings({ ...defaultSettings, ...data, password: "" });
+      setDebugInfo((current) => ({
+        ...current,
+        lastSettingsFetchAt: new Date().toISOString()
+      }));
     });
     return () => {
       active = false;
@@ -53,6 +64,11 @@ export default function TelephonyView() {
       const hasPasswordAuth = settings.hasPassword && settings.username?.trim();
       const hasRefreshAuth = settings.hasRefreshToken;
       const hasCredentials = Boolean(hasPasswordAuth || hasRefreshAuth);
+      setDebugInfo((current) => ({
+        ...current,
+        lastHealthCheckAt: new Date().toISOString(),
+        lastHealthCheckOk: isHealthy
+      }));
       if (!hasCredentials) {
         setApiStatus("missing");
       } else {
@@ -195,8 +211,18 @@ export default function TelephonyView() {
                   if (result) {
                     setSettings({ ...defaultSettings, ...result, password: "" });
                     setSettingsStatus("saved");
+                    setDebugInfo((current) => ({
+                      ...current,
+                      lastSettingsSaveAt: new Date().toISOString(),
+                      lastSettingsSaveOk: true
+                    }));
                   } else {
                     setSettingsStatus("error");
+                    setDebugInfo((current) => ({
+                      ...current,
+                      lastSettingsSaveAt: new Date().toISOString(),
+                      lastSettingsSaveOk: false
+                    }));
                   }
                   setTimeout(() => setSettingsStatus("idle"), 2000);
                 }}
@@ -218,6 +244,58 @@ export default function TelephonyView() {
                   Refresh Token wird automatisch vom API hinterlegt.
                 </span>
               )}
+            </div>
+            <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
+              <p className="uppercase tracking-[0.3em] text-[10px] text-sand-500">Debug</p>
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                <div>
+                  <span className="text-sand-500">Username gesetzt:</span>{" "}
+                  {settings.username?.trim() ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Passwort eingegeben:</span>{" "}
+                  {settings.password ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Password-Auth aktiv:</span>{" "}
+                  {settings.hasPassword ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Refresh Token vorhanden:</span>{" "}
+                  {settings.hasRefreshToken ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">API Status:</span> {apiStatus}
+                </div>
+                <div>
+                  <span className="text-sand-500">Health Check:</span>{" "}
+                  {debugInfo.lastHealthCheckOk === null
+                    ? "unbekannt"
+                    : debugInfo.lastHealthCheckOk
+                    ? "ok"
+                    : "fehlgeschlagen"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letzter Health Check:</span>{" "}
+                  {debugInfo.lastHealthCheckAt || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letzte Settings-Abfrage:</span>{" "}
+                  {debugInfo.lastSettingsFetchAt || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letztes Settings-Update:</span>{" "}
+                  {debugInfo.lastSettingsSaveAt || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letztes Settings-Update OK:</span>{" "}
+                  {debugInfo.lastSettingsSaveOk === null
+                    ? "unbekannt"
+                    : debugInfo.lastSettingsSaveOk
+                    ? "ja"
+                    : "nein"}
+                </div>
+              </div>
             </div>
           </div>
         )}
