@@ -7,7 +7,6 @@ import {
   Play,
   Plus,
   Square,
-  StickyNote,
   Trash2,
   Users
 } from "lucide-react";
@@ -241,39 +240,6 @@ function CustomerCard({ customer, reload }) {
   );
 }
 
-/* ================= Pinboard ================= */
-function Pinboard() {
-  const [note, setNote] = useState({ id: null, content: "" });
-  const saveTimer = useRef(null);
-
-  useEffect(() => {
-    api.pinboard().then(setNote);
-  }, []);
-  useEffect(() => {
-    if (!note.id) return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      api.savePinboard(note.id, note.content);
-    }, 800);
-    return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-    };
-  }, [note.id, note.content]);
-
-  return (
-    <div className="bg-yellow-50 rounded-xl p-4 shadow h-full">
-      <div className="flex gap-2 mb-2 font-semibold text-yellow-800">
-        <StickyNote size={18} /> Notizen
-      </div>
-      <textarea
-        value={note.content}
-        onChange={(e) => setNote({ ...note, content: e.target.value })}
-        className="w-full h-full resize-none bg-transparent border-none focus:ring-0"
-      />
-    </div>
-  );
-}
-
 export default function TimeTrackingView() {
   const [customersState, setCustomersState] = useState([]);
   const [newCustomer, setNewCustomer] = useState("");
@@ -300,8 +266,8 @@ export default function TimeTrackingView() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <div className="lg:col-span-3 space-y-6">
+      <main className="max-w-7xl mx-auto p-6">
+        <div className="space-y-6">
           <div className="bg-white p-4 rounded-xl flex gap-3 shadow">
             <Users />
             <input
@@ -329,10 +295,6 @@ export default function TimeTrackingView() {
               <CustomerCard key={c.id} customer={c} reload={load} />
             ))}
           </div>
-        </div>
-
-        <div className="lg:sticky lg:top-24 h-[600px]">
-          <Pinboard />
         </div>
       </main>
     </div>

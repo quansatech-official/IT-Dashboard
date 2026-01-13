@@ -1,3 +1,4 @@
+import json
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI
@@ -69,13 +70,28 @@ app.add_middleware(
 )
 
 
+def _extension_from_raw(call: TelephonyCall) -> str:
+    if not call.raw_payload:
+        return ""
+    try:
+        payload = json.loads(call.raw_payload)
+    except json.JSONDecodeError:
+        return ""
+    if isinstance(payload, dict):
+        extension = payload.get("extension") or payload.get("extensionNumber")
+        if extension:
+            return str(extension)
+    return ""
+
+
 def _serialize_call(call: TelephonyCall, include_raw: bool = False) -> Dict:
+    extension = call.extension or _extension_from_raw(call)
     payload = {
         "uuid": call.uuid,
         "from": call.from_number,
         "to": call.to_number,
         "direction": call.direction,
-        "extension": call.extension,
+        "extension": extension,
         "startTime": call.start_time,
         "endTime": call.end_time,
         "duration": call.duration,

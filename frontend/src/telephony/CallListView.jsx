@@ -9,7 +9,7 @@ const formatTime = (timestamp) => {
 };
 
 const formatDuration = (seconds) => {
-  if (!seconds) return "-";
+  if (!seconds) return "0:00";
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60)
     .toString()
@@ -23,6 +23,17 @@ const directionLabel = (direction) => {
   if (value.includes("in")) return "Eingehend";
   if (value.includes("out")) return "Ausgehend";
   return direction;
+};
+
+const durationSeconds = (call) => {
+  if (call.duration) return call.duration;
+  if (call.startTime && call.endTime && call.endTime >= call.startTime) {
+    return Math.floor((call.endTime - call.startTime) / 1000);
+  }
+  if (call.answered && call.startTime) {
+    return Math.floor((Date.now() - call.startTime) / 1000);
+  }
+  return 0;
 };
 
 export default function CallListView({ calls }) {
@@ -82,7 +93,7 @@ export default function CallListView({ calls }) {
                   <td className="py-3">{displayNumber(call)}</td>
                   <td className="py-3">{call.extension || "-"}</td>
                   <td className="py-3">{directionLabel(call.direction)}</td>
-                  <td className="py-3">{formatDuration(call.duration)}</td>
+                  <td className="py-3">{formatDuration(durationSeconds(call))}</td>
                   <td className="py-3">
                     <span
                       className={`px-3 py-1 rounded-full text-xs font-semibold ${
