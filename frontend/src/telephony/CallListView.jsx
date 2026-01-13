@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, PhoneOutgoing } from "lucide-react";
 
 const formatTime = (timestamp) => {
   if (!timestamp) return "-";
@@ -60,10 +60,13 @@ const durationSeconds = (call) => {
   return 0;
 };
 
-export default function CallListView({ calls }) {
+export default function CallListView({ calls, extensions, onCallback }) {
   const pageSize = 20;
   const [page, setPage] = useState(1);
   const totalPages = Math.min(3, Math.max(1, Math.ceil(calls.length / pageSize)));
+  const [callbackTarget, setCallbackTarget] = useState(null);
+  const [selectedExtension, setSelectedExtension] = useState("");
+  const [callbackStatus, setCallbackStatus] = useState("");
 
   useEffect(() => {
     if (page > totalPages) setPage(1);
@@ -79,6 +82,14 @@ export default function CallListView({ calls }) {
     if (direction?.includes("out")) return call.to || call.from || "-";
     return call.from || call.to || "-";
   };
+
+  const callbackNumber = (call) => {
+    const direction = call.direction?.toLowerCase();
+    if (direction?.includes("out")) return call.to || "";
+    return call.from || "";
+  };
+
+  const extensionOptions = Array.isArray(extensions) ? extensions : [];
 
   return (
     <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
@@ -101,12 +112,13 @@ export default function CallListView({ calls }) {
               <th className="text-left py-2">Dauer</th>
               <th className="text-left py-2">Status</th>
               <th className="text-left py-2">Kunde</th>
+              <th className="text-right py-2">Aktion</th>
             </tr>
           </thead>
           <tbody>
             {calls.length === 0 ? (
               <tr>
-                <td colSpan={7} className="py-6 text-center text-sand-500">
+                <td colSpan={8} className="py-6 text-center text-sand-500">
                   Noch keine Telefonie-Events geladen.
                 </td>
               </tr>
@@ -141,6 +153,20 @@ export default function CallListView({ calls }) {
                     </span>
                   </td>
                   <td className="py-3">{call.customerName || "-"}</td>
+                  <td className="py-3 text-right">
+                    {!call.answered && callbackNumber(call) ? (
+                      <button
+                        onClick={() => {
+                          setCallbackTarget(call);
+                          setSelectedExtension(extensionOptions[0]?.extension_number || "");
+                          setCallbackStatus("");
+                        }}
+                        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        <PhoneOutgoing size={12} /> Rückruf
+                      </button>
+                    ) : null}
+                  </td>
                 </tr>
               ))
             )}
@@ -181,6 +207,73 @@ export default function CallListView({ calls }) {
           </div>
         </div>
       )}
+      {callbackTarget ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-md rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="border-b border-sand-200 px-5 py-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Rückruf starten</p>
+              <h3 className="text-lg font-display text-sand-900">
+                {callbackNumber(callbackTarget) || "Nummer unbekannt"}
+              </h3>
+            </div>
+            <div className="p-5 space-y-4">
+              <label className="text-xs uppercase tracking-wide text-sand-600">
+                Nebenstelle auswählen
+                <select
+                  value={selectedExtension}
+                  onChange={(event) => setSelectedExtension(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                >
+                  {extensionOptions.length ? (
+                    extensionOptions.map((item) => (
+                      <option key={item.uuid || item.extension_number} value={item.extension_number}>
+                        {item.extension_number} {item.name ? `– ${item.name}` : ""}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">Keine Nebenstellen</option>
+                  )}
+                </select>
+              </label>
+              {callbackStatus ? (
+                <p className="text-xs text-sand-500">{callbackStatus}</p>
+              ) : null}
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => setCallbackTarget(null)}
+                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!selectedExtension) {
+                      setCallbackStatus("Bitte Nebenstelle wählen.");
+                      return;
+                    }
+                    const number = callbackNumber(callbackTarget);
+                    if (!number) {
+                      setCallbackStatus("Keine Rufnummer gefunden.");
+                      return;
+                    }
+                    setCallbackStatus("Rückruf wird gestartet...");
+                    const result = await onCallback?.(selectedExtension, number);
+                    if (result) {
+                      setCallbackStatus("Rückruf gestartet.");
+                      setTimeout(() => setCallbackTarget(null), 900);
+                    } else {
+                      setCallbackStatus("Rückruf fehlgeschlagen.");
+                    }
+                  }}
+                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                >
+                  Jetzt anrufen
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

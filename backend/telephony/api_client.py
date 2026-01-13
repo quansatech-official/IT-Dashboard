@@ -71,6 +71,24 @@ class NfonCtiClient:
             return self.login()
         return self._token
 
+    def _auth_headers(self) -> Dict[str, str]:
+        token = self._get_token()
+        return {"Authorization": f"Bearer {token}"}
+
+    def get_extensions(self) -> Dict:
+        headers = {**self._auth_headers(), "Accept": "application/json"}
+        url = f"{self.base_url}/v1/extensions/phone/data"
+        response = requests.get(url, headers=headers, timeout=20)
+        response.raise_for_status()
+        return response.json()
+
+    def originate_call(self, payload: Dict[str, str]) -> Dict:
+        headers = {**self._auth_headers(), "Accept": "application/json"}
+        url = f"{self.base_url}/v1/extensions/phone/calls"
+        response = requests.post(url, json=payload, headers=headers, timeout=20)
+        response.raise_for_status()
+        return response.json()
+
     def stream_calls(self) -> Generator[Dict, None, None]:
         token = self._get_token()
         headers = {

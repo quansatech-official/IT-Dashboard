@@ -25,6 +25,7 @@ export default function TelephonyView() {
   const [settings, setSettings] = useState(defaultSettings);
   const [settingsStatus, setSettingsStatus] = useState("idle");
   const [apiStatus, setApiStatus] = useState("idle");
+  const [extensions, setExtensions] = useState([]);
   const [debugInfo, setDebugInfo] = useState({
     lastSettingsFetchAt: "",
     lastHealthCheckAt: "",
@@ -65,6 +66,21 @@ export default function TelephonyView() {
           streamEnabled: Boolean(data?.streamEnabled)
         }
       }));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    telephonyService.fetchExtensions().then((data) => {
+      if (!active) return;
+      if (Array.isArray(data)) {
+        setExtensions(data);
+      } else {
+        setExtensions([]);
+      }
     });
     return () => {
       active = false;
@@ -202,7 +218,13 @@ export default function TelephonyView() {
         {activeTab === "monitoring" ? (
           <>
             <CallStatsView stats={stats} />
-            <CallListView calls={calls} />
+            <CallListView
+              calls={calls}
+              extensions={extensions}
+              onCallback={(extension, number) =>
+                telephonyService.clickToDial({ extension, number })
+              }
+            />
           </>
         ) : (
           <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">

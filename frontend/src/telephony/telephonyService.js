@@ -16,6 +16,30 @@ export const telephonyService = {
       return [];
     }
   },
+  fetchExtensions: async () => {
+    try {
+      const response = await fetch(`${API}/extensions`);
+      return await safeJson(response);
+    } catch (error) {
+      return [];
+    }
+  },
+  clickToDial: async ({ extension, number, calleeContext = "global" }) => {
+    try {
+      const response = await fetch(`${API}/calls`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          extension,
+          number,
+          callee_context: calleeContext
+        })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      return null;
+    }
+  },
   fetchLatestCallDebug: async () => {
     try {
       const response = await fetch(`${API}/calls?limit=1&include_raw=1`);

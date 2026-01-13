@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
+from .api_client import NfonCtiClient
 from .call_service import start_stream_listener
 from .models import Base, TelephonyCall, TelephonySettings, DATABASE_URL
 from .stats_service import calculate_stats
@@ -123,12 +124,28 @@ def _serialize_settings(settings: TelephonySettings) -> Dict:
     }
 
 
+def _build_client(session) -> NfonCtiClient:
+    settings = _get_settings(session)
+    return NfonCtiClient(
+        base_url=settings.base_url or None,
+        username=settings.username or None,
+        password=settings.password or None,
+        refresh_token=settings.refresh_token or None,
+    )
+
+
 class SettingsUpdate(BaseModel):
     baseUrl: Optional[str] = None
     username: Optional[str] = None
     password: Optional[str] = None
     refreshToken: Optional[str] = None
     streamEnabled: Optional[bool] = None
+
+
+class ClickToDialRequest(BaseModel):
+    extension: str
+    number: str
+    callee_context: Optional[str] = "global"
 
 
 @app.on_event("startup")
@@ -149,11 +166,35 @@ def list_calls(limit: int = 200, include_raw: bool = False) -> List[Dict]:
     return [_serialize_call(call, include_raw=include_raw) for call in calls]
 
 
+@app.post("/telephony/calls")
+@app.post("/api/telephony/calls")
+def click_to_dial(payload: ClickToDialRequest) -> Dict:
+    with SessionLocal() as session:
+        client = _build_client(session)
+        result = client.originate_call(
+            {
+                "caller": payload.extension,
+                "callee": payload.number,
+                "callee_context": payload.callee_context or "global",
+                "extension": payload.extension,
+            }
+        )
+        return result
+
+
 @app.get("/telephony/stats")
 @app.get("/api/telephony/stats")
 def stats() -> Dict:
     with SessionLocal() as session:
         return calculate_stats(session)
+
+
+@app.get("/telephony/extensions")
+@app.get("/api/telephony/extensions")
+def list_extensions() -> List[Dict]:
+    with SessionLocal() as session:
+        client = _build_client(session)
+        return client.get_extensions()
 
 
 @app.get("/telephony/settings")
