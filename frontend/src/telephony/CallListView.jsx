@@ -68,15 +68,21 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
   const [selectedExtension, setSelectedExtension] = useState("");
   const [callbackStatus, setCallbackStatus] = useState("");
   const [resolvedNames, setResolvedNames] = useState({});
+  const [onlyMissed, setOnlyMissed] = useState(false);
 
   useEffect(() => {
     if (page > totalPages) setPage(1);
   }, [page, totalPages]);
 
+  const filteredCalls = useMemo(() => {
+    if (!onlyMissed) return calls;
+    return calls.filter((call) => !call.answered);
+  }, [calls, onlyMissed]);
+
   const pagedCalls = useMemo(() => {
     const start = (page - 1) * pageSize;
-    return calls.slice(start, start + pageSize);
-  }, [calls, page]);
+    return filteredCalls.slice(start, start + pageSize);
+  }, [filteredCalls, page]);
 
   const displayNumber = (call) => {
     const direction = call.direction?.toLowerCase();
@@ -96,6 +102,14 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
   };
 
   const extensionOptions = Array.isArray(extensions) ? extensions : [];
+  const visibleTotalPages = Math.min(
+    3,
+    Math.max(1, Math.ceil(filteredCalls.length / pageSize))
+  );
+
+  useEffect(() => {
+    if (page > visibleTotalPages) setPage(1);
+  }, [page, visibleTotalPages]);
 
   useEffect(() => {
     let active = true;
@@ -122,7 +136,17 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
           <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Live Calls</p>
           <h2 className="text-xl font-display">Call Monitoring</h2>
         </div>
-        <span className="text-xs text-sand-500">letzte 30 Events</span>
+        <div className="flex items-center gap-3 text-xs text-sand-500">
+          <label className="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={onlyMissed}
+              onChange={(event) => setOnlyMissed(event.target.checked)}
+            />
+            Nur verpasste
+          </label>
+          <span>letzte 30 Events</span>
+        </div>
       </div>
 
       <div className="overflow-x-auto">
@@ -131,19 +155,21 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
             <tr>
               <th className="text-left py-2">Zeit</th>
               <th className="text-left py-2">Rufnummer</th>
-              <th className="text-left py-2">Nebenstelle</th>
+              <th className="text-left py-2">NS</th>
               <th className="text-left py-2">Richtung</th>
               <th className="text-left py-2">Dauer</th>
               <th className="text-left py-2">Status</th>
-              <th className="text-left py-2">Kunde</th>
+              <th className="text-left py-2">Name</th>
               <th className="text-right py-2">Aktion</th>
             </tr>
           </thead>
           <tbody>
-            {calls.length === 0 ? (
+            {filteredCalls.length === 0 ? (
               <tr>
                 <td colSpan={8} className="py-6 text-center text-sand-500">
-                  Noch keine Telefonie-Events geladen.
+                  {onlyMissed
+                    ? "Keine verpassten Anrufe vorhanden."
+                    : "Noch keine Telefonie-Events geladen."}
                 </td>
               </tr>
             ) : (
@@ -199,10 +225,10 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
           </tbody>
         </table>
       </div>
-      {calls.length > pageSize && (
+      {filteredCalls.length > pageSize && (
         <div className="mt-4 flex items-center justify-between text-xs text-sand-600">
           <span>
-            Seite {page} von {totalPages}
+            Seite {page} von {visibleTotalPages}
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -211,7 +237,7 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
             >
               Zurück
             </button>
-            {Array.from({ length: totalPages }, (_, idx) => (
+            {Array.from({ length: visibleTotalPages }, (_, idx) => (
               <button
                 key={idx + 1}
                 onClick={() => setPage(idx + 1)}
@@ -225,7 +251,7 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
               </button>
             ))}
             <button
-              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              onClick={() => setPage((current) => Math.min(visibleTotalPages, current + 1))}
               className="rounded-full border border-sand-200 px-3 py-1 hover:bg-sand-100"
             >
               Weiter

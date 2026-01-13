@@ -273,48 +273,53 @@ export default function TelephonyView() {
                   placeholder={settings.hasPassword ? "Gespeichert" : "••••••••"}
                 />
               </div>
-              <div>
-                <label className="text-xs text-sand-500">Numerify Reverse URL</label>
-                <input
-                  value={settings.numerifyReverseUrl}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      numerifyReverseUrl: event.target.value
-                    }))
-                  }
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                  placeholder="https://api.numerify.at/v1/reverse?number={number}"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-sand-500">Numerify API Header</label>
-                <input
-                  value={settings.numerifyApiHeader}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      numerifyApiHeader: event.target.value
-                    }))
-                  }
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                  placeholder="X-API-Key"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-sand-500">Numerify API Key</label>
-                <input
-                  type="password"
-                  value={settings.numerifyApiKey}
-                  onChange={(event) =>
-                    setSettings((current) => ({
-                      ...current,
-                      numerifyApiKey: event.target.value
-                    }))
-                  }
-                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                  placeholder={settings.hasNumerifyApiKey ? "Gespeichert" : "••••••••"}
-                />
+              <div className="md:col-span-2 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Numerify</p>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-xs text-sand-500">Reverse URL</label>
+                    <input
+                      value={settings.numerifyReverseUrl}
+                      onChange={(event) =>
+                        setSettings((current) => ({
+                          ...current,
+                          numerifyReverseUrl: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="https://api.numerify.at/v1/reverse?number={number}"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">API Header</label>
+                    <input
+                      value={settings.numerifyApiHeader}
+                      onChange={(event) =>
+                        setSettings((current) => ({
+                          ...current,
+                          numerifyApiHeader: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="X-API-Key"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">API Key</label>
+                    <input
+                      type="password"
+                      value={settings.numerifyApiKey}
+                      onChange={(event) =>
+                        setSettings((current) => ({
+                          ...current,
+                          numerifyApiKey: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder={settings.hasNumerifyApiKey ? "Gespeichert" : "••••••••"}
+                    />
+                  </div>
+                </div>
               </div>
               <div className="flex items-center gap-3 mt-4">
                 <input

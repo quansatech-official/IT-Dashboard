@@ -19,6 +19,13 @@ export default function NotesView() {
   const editorRef = useRef(null);
   const lastLoadedId = useRef(null);
   const [isEmpty, setIsEmpty] = useState(true);
+  const contentRef = useRef("");
+  const inputTimer = useRef(null);
+  const lastSavedContent = useRef("");
+  const [saveState, setSaveState] = useState({ status: "idle", at: "" });
+  const textRef = useRef("");
+  const [filterTag, setFilterTag] = useState("");
+  const quickTags = ["todo", "urgent", "kunde", "telefon", "termin"];
 
   useEffect(() => {
     api.pinboard().then(setNote);
@@ -33,14 +40,27 @@ export default function NotesView() {
     } else {
       editorRef.current.innerText = note.content || "";
     }
+    contentRef.current = editorRef.current.innerHTML;
+    textRef.current = editorRef.current.innerText || "";
+    lastSavedContent.current = editorRef.current.innerHTML;
     setIsEmpty(!editorRef.current.textContent?.trim());
   }, [note.id, note.content]);
 
   useEffect(() => {
     if (!note.id) return;
+    if (note.content === lastSavedContent.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    setSaveState((prev) => (prev.status === "saving" ? prev : { ...prev, status: "saving" }));
     saveTimer.current = setTimeout(() => {
-      api.savePinboard(note.id, note.content);
+      api
+        .savePinboard(note.id, note.content)
+        .then(() => {
+          lastSavedContent.current = note.content;
+          setSaveState({ status: "saved", at: new Date().toLocaleTimeString("de-DE") });
+        })
+        .catch(() => {
+          setSaveState((prev) => ({ ...prev, status: "error" }));
+        });
     }, 800);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -51,7 +71,9 @@ export default function NotesView() {
     if (!editorRef.current) return;
     editorRef.current.focus();
     document.execCommand(command, false, value);
-    setNote((prev) => ({ ...prev, content: editorRef.current.innerHTML }));
+    contentRef.current = editorRef.current.innerHTML;
+    textRef.current = editorRef.current.innerText || "";
+    setNote((prev) => ({ ...prev, content: contentRef.current }));
     setIsEmpty(!editorRef.current.textContent?.trim());
   };
 
@@ -63,9 +85,24 @@ export default function NotesView() {
 
   const handleInput = () => {
     if (!editorRef.current) return;
-    setNote((prev) => ({ ...prev, content: editorRef.current.innerHTML }));
+    contentRef.current = editorRef.current.innerHTML;
+    textRef.current = editorRef.current.innerText || "";
     setIsEmpty(!editorRef.current.textContent?.trim());
+    if (inputTimer.current) clearTimeout(inputTimer.current);
+    inputTimer.current = setTimeout(() => {
+      setNote((prev) => ({ ...prev, content: contentRef.current }));
+    }, 300);
   };
+
+  const insertTag = (tag) => exec("insertText", `#${tag} `);
+  const insertChecklistItem = () => exec("insertText", "- [ ] ");
+
+  const filteredLines = filterTag
+    ? textRef.current
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line && line.toLowerCase().includes(filterTag.toLowerCase()))
+    : [];
 
   return (
     <div className="min-h-screen bg-sand-50">
@@ -87,12 +124,49 @@ export default function NotesView() {
             <StickyNote size={18} />
             <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Pinboard</p>
           </div>
+          <div className="mb-3 text-xs text-sand-500">
+            {saveState.status === "saving"
+              ? "Speichert..."
+              : saveState.status === "saved"
+              ? `Gespeichert ${saveState.at}`
+              : saveState.status === "error"
+              ? "Speichern fehlgeschlagen"
+              : ""}
+          </div>
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={insertChecklistItem}
+              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+            >
+              Checkliste
+            </button>
+            {quickTags.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => insertTag(tag)}
+                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+              >
+                #{tag}
+              </button>
+            ))}
+            <label className="ml-auto text-xs uppercase tracking-wide text-sand-500">
+              Filter
+              <input
+                value={filterTag}
+                onChange={(event) => setFilterTag(event.target.value)}
+                placeholder="z. B. #todo"
+                className="ml-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs"
+              />
+            </label>
+          </div>
           <textarea
             className="hidden"
             value={note.content}
             readOnly
           />
-          <div className="flex flex-wrap items-center gap-2 mb-4">
+          <div className="sticky top-0 z-10 -mx-6 px-6 py-3 flex flex-wrap items-center gap-2 bg-white/95 backdrop-blur border-b border-sand-200 mb-4">
             <button
               type="button"
               onClick={() => exec("bold")}
@@ -150,6 +224,24 @@ export default function NotesView() {
               className="w-full min-h-[60vh] rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-sand-300"
             />
           </div>
+          {filterTag ? (
+            <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500 mb-2">
+                Treffer für "{filterTag}"
+              </p>
+              {filteredLines.length ? (
+                <ul className="space-y-2 text-sm text-sand-700">
+                  {filteredLines.map((line, idx) => (
+                    <li key={`${line}-${idx}`} className="border-b border-sand-100 pb-2">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-sand-500">Keine Treffer.</p>
+              )}
+            </div>
+          ) : null}
         </div>
       </main>
     </div>

@@ -119,6 +119,7 @@ function TaskItem({ task, reload }) {
           className={`w-8 h-8 rounded-full flex items-center justify-center ${
             task.running ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
           }`}
+          title={task.running ? "Timer stoppen" : "Timer starten"}
         >
           {task.running ? <Square size={14} /> : <Play size={14} />}
         </button>
@@ -148,6 +149,7 @@ function TaskItem({ task, reload }) {
         <button
           onClick={() => api.updateTask(task.id, { erledigt: !task.erledigt }).then(reload)}
           className={`p-1 rounded ${task.erledigt ? "bg-green-100 text-green-600" : "text-slate-300"}`}
+          title={task.erledigt ? "Als offen markieren" : "Als erledigt markieren"}
         >
           <CheckCircle size={16} />
         </button>
@@ -156,18 +158,21 @@ function TaskItem({ task, reload }) {
           className={`p-1 rounded ${
             task.aberechnet ? "bg-amber-100 text-amber-600" : "text-slate-300"
           }`}
+          title={task.aberechnet ? "Nicht abgerechnet" : "Als abgerechnet markieren"}
         >
           <DollarSign size={16} />
         </button>
         <button
           onClick={() => api.updateTask(task.id, { kulant: !task.kulant }).then(reload)}
           className={`p-1 rounded ${task.kulant ? "bg-rose-100 text-rose-600" : "text-slate-300"}`}
+          title={task.kulant ? "Kulanz entfernen" : "Kulanz markieren"}
         >
           <Heart size={16} />
         </button>
         <button
           onClick={() => confirm("Aufgabe löschen?") && api.deleteTask(task.id).then(reload)}
           className="ml-auto text-red-500"
+          title="Aufgabe löschen"
         >
           <Trash2 size={16} />
         </button>
@@ -208,6 +213,7 @@ function CustomerCard({ customer, reload }) {
       <button
         onClick={() => confirm("Kunde löschen?") && api.deleteCustomer(customer.id).then(reload)}
         className="absolute -top-2 -right-2 bg-white border rounded-full p-1 text-red-500"
+        title="Kunde löschen"
       >
         <Trash2 size={14} />
       </button>
@@ -232,7 +238,11 @@ function CustomerCard({ customer, reload }) {
           className="flex-1 border rounded px-2 text-sm"
           onKeyDown={(e) => e.key === "Enter" && submitTask()}
         />
-        <button className="bg-blue-600 text-white rounded px-3" onClick={submitTask}>
+        <button
+          className="bg-blue-600 text-white rounded px-3"
+          onClick={submitTask}
+          title="Aufgabe hinzufügen"
+        >
           <Plus size={16} />
         </button>
       </div>
@@ -285,6 +295,7 @@ export default function TimeTrackingView() {
                   load();
                 })
               }
+              title="Kunden anlegen"
             >
               Erstellen
             </button>

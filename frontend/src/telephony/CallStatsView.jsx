@@ -18,13 +18,13 @@ export default function CallStatsView({ stats }) {
   const extensionStats = safeStats.byExtension || [];
 
   const renderBreakdown = (title, rows) => (
-    <div className="border border-sand-200 rounded-2xl p-4">
-      <p className="text-xs uppercase tracking-[0.3em] text-sand-500 mb-3">{title}</p>
+    <div className="border border-sand-200 rounded-2xl p-3">
+      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500 mb-2">{title}</p>
       {rows.length === 0 ? (
-        <p className="text-sm text-sand-500">Keine Daten vorhanden.</p>
+        <p className="text-xs text-sand-500">Keine Daten vorhanden.</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className="w-full text-xs">
             <thead className="text-sand-500 border-b border-sand-200">
               <tr>
                 <th className="text-left py-2">Name</th>
@@ -37,11 +37,11 @@ export default function CallStatsView({ stats }) {
             <tbody>
               {rows.map((row) => (
                 <tr key={row.key} className="border-b border-sand-100">
-                  <td className="py-2">{row.key}</td>
-                  <td className="py-2">{row.total}</td>
-                  <td className="py-2 text-emerald-600">{row.answered}</td>
-                  <td className="py-2 text-rose-600">{row.missed}</td>
-                  <td className="py-2">{formatDuration(row.avgDuration)}</td>
+                  <td className="py-1.5">{row.key}</td>
+                  <td className="py-1.5">{row.total}</td>
+                  <td className="py-1.5 text-emerald-600">{row.answered}</td>
+                  <td className="py-1.5 text-rose-600">{row.missed}</td>
+                  <td className="py-1.5">{formatDuration(row.avgDuration)}</td>
                 </tr>
               ))}
             </tbody>
@@ -52,16 +52,16 @@ export default function CallStatsView({ stats }) {
   );
 
   return (
-    <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
-      <div className="flex items-center justify-between mb-6">
+    <div className="bg-white border border-sand-200 rounded-3xl p-4 shadow-soft">
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Analytics</p>
-          <h2 className="text-xl font-display">Call Statistik</h2>
+          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Analytics</p>
+          <h2 className="text-lg font-display">Call Statistik</h2>
         </div>
-        <span className="text-xs text-sand-500">Zeitraeume</span>
+        <span className="text-[10px] text-sand-500">Zeitraeume</span>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         {periods.map((period) => {
           const data = safeStats[period.key] || {
             total: 0,
@@ -70,34 +70,34 @@ export default function CallStatsView({ stats }) {
             avgDuration: 0
           };
           return (
-            <div key={period.key} className="border border-sand-200 rounded-2xl p-4">
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500 mb-4">
+            <div key={period.key} className="border border-sand-200 rounded-2xl p-3">
+              <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500 mb-3">
                 {period.label}
               </p>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <p className="text-xs text-sand-500">Gesamt</p>
-                  <p className="text-2xl font-semibold">{data.total}</p>
+                  <p className="text-[11px] text-sand-500">Gesamt</p>
+                  <p className="text-xl font-semibold">{data.total}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-sand-500">Beantwortet</p>
-                  <p className="text-2xl font-semibold text-emerald-600">
+                  <p className="text-[11px] text-sand-500">Beantwortet</p>
+                  <p className="text-xl font-semibold text-emerald-600">
                     {data.answered}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-sand-500">Verpasst</p>
-                  <p className="text-2xl font-semibold text-rose-600">{data.missed}</p>
+                  <p className="text-[11px] text-sand-500">Verpasst</p>
+                  <p className="text-xl font-semibold text-rose-600">{data.missed}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-sand-500">Ø Dauer</p>
-                  <p className="text-2xl font-semibold">
+                  <p className="text-[11px] text-sand-500">Ø Dauer</p>
+                  <p className="text-xl font-semibold">
                     {formatDuration(data.avgDuration)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-sand-500">Gesamtdauer</p>
-                  <p className="text-2xl font-semibold">
+                  <p className="text-[11px] text-sand-500">Gesamtdauer</p>
+                  <p className="text-xl font-semibold">
                     {formatDuration(data.totalDuration)}
                   </p>
                 </div>
@@ -107,7 +107,7 @@ export default function CallStatsView({ stats }) {
         })}
       </div>
 
-      <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-3">
         {renderBreakdown("Nebenstellen (letzte 7 Tage)", extensionStats)}
       </div>
     </div>
