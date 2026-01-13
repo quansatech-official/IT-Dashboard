@@ -150,6 +150,7 @@ class SmtpSettings(Base):
     sender_email = Column(String, default="")
     use_tls = Column(Boolean, default=True)
     use_ssl = Column(Boolean, default=False)
+    beacon_base_url = Column(String, default="")
 
 Base.metadata.create_all(bind=engine)
 
@@ -321,6 +322,7 @@ class SmtpSettingsUpdate(BaseModel):
     sender_email: Optional[str] = None
     use_tls: Optional[bool] = None
     use_ssl: Optional[bool] = None
+    beacon_base_url: Optional[str] = None
 
 
 class ReportSendRequest(BaseModel):

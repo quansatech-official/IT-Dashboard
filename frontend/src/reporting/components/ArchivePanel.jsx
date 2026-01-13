@@ -7,7 +7,6 @@ export default function ArchivePanel({
   onDelete,
   onExportEmail,
   onPreview,
-  onToggleSent,
   onEdit,
   onSendSmtp
 }) {
@@ -52,19 +51,12 @@ export default function ArchivePanel({
                   >
                     {item.status}
                   </span>
-                  <div className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(item.sentAt)}
-                      onChange={(event) => onToggleSent?.(item, event.target.checked)}
-                      title="Gesendet markieren"
-                    />
-                    <span>Gesendet</span>
-                  </div>
                   {item.sentAt ? (
                     <span className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600">
                       <span>Versand</span>
-                      <span className="text-sand-900">{item.sentVia || "manuell"}</span>
+                      {item.sentVia && item.sentVia !== "manuell" ? (
+                        <span className="text-sand-900">{item.sentVia}</span>
+                      ) : null}
                       {item.sentTo ? <span className="text-sand-500">· {item.sentTo}</span> : null}
                       {item.sentAtText ? <span className="text-sand-500">· {item.sentAtText}</span> : null}
                     </span>

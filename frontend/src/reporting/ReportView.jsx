@@ -204,8 +204,9 @@ const buildSentInfo = ({ sentAt, sentVia, sentTo, openedAt, openedCount }) => {
   if (!sentAt) return "Nicht gesendet";
   const sentAtText = sentAt ? new Date(sentAt).toLocaleString("de-DE") : "";
   const openedAtText = openedAt ? new Date(openedAt).toLocaleString("de-DE") : "";
+  const safeVia = sentVia && sentVia !== "manuell" ? sentVia : "";
   return [
-    `Versand: ${sentVia || "manuell"}`,
+    safeVia ? `Versand: ${safeVia}` : "",
     sentTo ? `An: ${sentTo}` : "",
     sentAtText ? `Am: ${sentAtText}` : "",
     openedCount
@@ -943,57 +944,6 @@ export default function ReportView() {
     setSection("builder");
   };
 
-  const toggleArchivedSent = async (item, nextValue) => {
-    if (!item?.id) return;
-    try {
-      const res = await fetch(`/api/reports/${item.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sent: nextValue,
-          sent_via: nextValue ? "manuell" : ""
-        })
-      });
-      if (!res.ok) throw new Error("update_failed");
-      const updated = await res.json();
-      const sentAtText = updated.sent_at
-        ? new Date(updated.sent_at).toLocaleString("de-DE")
-        : "";
-      const openedAtText = updated.opened_at
-        ? new Date(updated.opened_at).toLocaleString("de-DE")
-        : "";
-      setArchiveItems((prev) =>
-        prev.map((group) => ({
-          ...group,
-          reports: group.reports.map((reportItem) =>
-            reportItem.id === item.id
-              ? {
-                  ...reportItem,
-                  sentAt: updated.sent_at || 0,
-                  sentVia: updated.sent_via || "",
-                  sentTo: updated.sent_to || "",
-                  openedAt: updated.opened_at || 0,
-                  openedCount: updated.opened_count || 0,
-                  sentInfo: buildSentInfo({
-                    sentAt: updated.sent_at || 0,
-                    sentVia: updated.sent_via || "",
-                    sentTo: updated.sent_to || "",
-                    openedAt: updated.opened_at || 0,
-                    openedCount: updated.opened_count || 0
-                  }),
-                  sentAtText,
-                  openedAtText
-                }
-              : reportItem
-          )
-        }))
-      );
-      setToast(nextValue ? "Als gesendet markiert." : "Gesendet-Markierung entfernt.");
-    } catch (error) {
-      setToast("Markierung fehlgeschlagen.");
-    }
-  };
-
   const previewArchivedReport = async (item) => {
     const data = await fetchArchivedReport(item);
     if (!data) return;
@@ -1450,7 +1400,6 @@ export default function ReportView() {
               onDelete={deleteArchivedReport}
               onExportEmail={exportArchivedEmail}
               onPreview={previewArchivedReport}
-              onToggleSent={toggleArchivedSent}
               onEdit={editArchivedReport}
               onSendSmtp={sendArchivedReport}
             />
