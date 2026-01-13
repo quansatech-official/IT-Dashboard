@@ -32,7 +32,10 @@ export default function TelephonyView() {
     lastSettingsSaveAt: "",
     lastSettingsSaveOk: null,
     lastCallsCount: null,
-    lastStatsTotals: null
+    lastStatsTotals: null,
+    lastSettingsResponse: null,
+    lastCallRawKeys: null,
+    lastCallRawPreview: ""
   });
   const hasPasswordAuth = settings.hasPassword && settings.username?.trim();
   const hasRefreshAuth = settings.hasRefreshToken;
@@ -42,10 +45,23 @@ export default function TelephonyView() {
     let active = true;
     telephonyService.fetchSettings().then((data) => {
       if (!active) return;
-      setSettings({ ...defaultSettings, ...data, password: "" });
+      const merged = {
+        ...defaultSettings,
+        ...data,
+        baseUrl: data?.baseUrl?.trim() ? data.baseUrl : defaultSettings.baseUrl,
+        password: ""
+      };
+      setSettings(merged);
       setDebugInfo((current) => ({
         ...current,
-        lastSettingsFetchAt: new Date().toISOString()
+        lastSettingsFetchAt: new Date().toISOString(),
+        lastSettingsResponse: {
+          baseUrl: data?.baseUrl ?? "",
+          username: data?.username ?? "",
+          hasPassword: Boolean(data?.hasPassword),
+          hasRefreshToken: Boolean(data?.hasRefreshToken),
+          streamEnabled: Boolean(data?.streamEnabled)
+        }
       }));
     });
     return () => {
@@ -58,14 +74,27 @@ export default function TelephonyView() {
     let active = true;
 
     const load = async () => {
-      const [nextCalls, nextStats, isHealthy] = await Promise.all([
+      const [nextCalls, nextStats, isHealthy, latestCalls] = await Promise.all([
         telephonyService.fetchCalls(),
         telephonyService.fetchStats(),
-        telephonyService.fetchHealth()
+        telephonyService.fetchHealth(),
+        telephonyService.fetchLatestCallDebug()
       ]);
       if (!active) return;
       setCalls(nextCalls);
       setStats(nextStats);
+      const latestCall = Array.isArray(latestCalls) ? latestCalls[0] : null;
+      let latestRawKeys = null;
+      let latestRawPreview = "";
+      if (latestCall?.rawPayload) {
+        try {
+          const rawObject = JSON.parse(latestCall.rawPayload);
+          latestRawKeys = Object.keys(rawObject).sort();
+          latestRawPreview = JSON.stringify(rawObject).slice(0, 500);
+        } catch (error) {
+          latestRawPreview = String(latestCall.rawPayload).slice(0, 500);
+        }
+      }
       setDebugInfo((current) => ({
         ...current,
         lastHealthCheckAt: new Date().toISOString(),
@@ -77,7 +106,9 @@ export default function TelephonyView() {
               last24h: nextStats.last24h?.total ?? null,
               last7d: nextStats.last7d?.total ?? null
             }
-          : null
+          : null,
+        lastCallRawKeys: latestRawKeys,
+        lastCallRawPreview: latestRawPreview
       }));
       if (!hasCredentials) {
         setApiStatus("missing");
@@ -328,6 +359,22 @@ export default function TelephonyView() {
                 <div>
                   <span className="text-sand-500">Stream aktiv:</span>{" "}
                   {settings.streamEnabled ? "ja" : "nein"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Settings Response (sanitized):</span>{" "}
+                  {debugInfo.lastSettingsResponse
+                    ? JSON.stringify(debugInfo.lastSettingsResponse)
+                    : "n/a"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Letzte Event-Keys:</span>{" "}
+                  {debugInfo.lastCallRawKeys?.length
+                    ? debugInfo.lastCallRawKeys.join(", ")
+                    : "n/a"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Letztes Event (Preview):</span>{" "}
+                  {debugInfo.lastCallRawPreview || "n/a"}
                 </div>
               </div>
             </div>

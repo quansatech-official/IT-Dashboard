@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import Boolean, Column, Integer, String, BigInteger
+from sqlalchemy import BigInteger, Boolean, Column, Integer, String, Text
 from sqlalchemy.orm import declarative_base
 
 DATABASE_URL = os.environ.get("TELEPHONY_DATABASE_URL") or os.environ.get("DATABASE_URL")
@@ -23,6 +23,7 @@ class TelephonyCall(Base):
     duration = Column(Integer, default=0)
     answered = Column(Boolean, default=False)
     customer_name = Column(String, default="")
+    raw_payload = Column(Text, default="")
 
 
 class TelephonySettings(Base):

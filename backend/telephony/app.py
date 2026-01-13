@@ -31,6 +31,20 @@ def _ensure_refresh_token_column() -> None:
 
 _ensure_refresh_token_column()
 
+
+def _ensure_call_raw_payload_column() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("telephony_calls"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("telephony_calls")}
+    if "raw_payload" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE telephony_calls ADD COLUMN raw_payload TEXT"))
+
+
+_ensure_call_raw_payload_column()
+
 app = FastAPI(title="Telephony Module")
 
 app.add_middleware(
@@ -41,8 +55,8 @@ app.add_middleware(
 )
 
 
-def _serialize_call(call: TelephonyCall) -> Dict:
-    return {
+def _serialize_call(call: TelephonyCall, include_raw: bool = False) -> Dict:
+    payload = {
         "uuid": call.uuid,
         "from": call.from_number,
         "to": call.to_number,
@@ -53,6 +67,9 @@ def _serialize_call(call: TelephonyCall) -> Dict:
         "answered": call.answered,
         "customerName": call.customer_name,
     }
+    if include_raw:
+        payload["rawPayload"] = call.raw_payload
+    return payload
 
 
 def _get_settings(session) -> TelephonySettings:
@@ -90,7 +107,7 @@ def _startup() -> None:
 
 @app.get("/telephony/calls")
 @app.get("/api/telephony/calls")
-def list_calls(limit: int = 200) -> List[Dict]:
+def list_calls(limit: int = 200, include_raw: bool = False) -> List[Dict]:
     with SessionLocal() as session:
         calls = (
             session.query(TelephonyCall)
@@ -98,7 +115,7 @@ def list_calls(limit: int = 200) -> List[Dict]:
             .limit(limit)
             .all()
         )
-    return [_serialize_call(call) for call in calls]
+    return [_serialize_call(call, include_raw=include_raw) for call in calls]
 
 
 @app.get("/telephony/stats")

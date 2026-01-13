@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 import time
@@ -30,6 +31,10 @@ class TelephonyCallStore:
         call.end_time = payload.get("endTime") or payload.get("end") or call.end_time
         call.duration = payload.get("duration") or call.duration
         call.answered = bool(payload.get("answered", call.answered))
+        try:
+            call.raw_payload = json.dumps(payload, ensure_ascii=True)
+        except (TypeError, ValueError):
+            call.raw_payload = json.dumps({"raw": str(payload)}, ensure_ascii=True)
         return call
 
 

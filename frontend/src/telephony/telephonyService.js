@@ -16,6 +16,14 @@ export const telephonyService = {
       return [];
     }
   },
+  fetchLatestCallDebug: async () => {
+    try {
+      const response = await fetch(`${API}/calls?limit=1&include_raw=1`);
+      return await safeJson(response);
+    } catch (error) {
+      return [];
+    }
+  },
   fetchStats: async () => {
     try {
       const response = await fetch(`${API}/stats`);
