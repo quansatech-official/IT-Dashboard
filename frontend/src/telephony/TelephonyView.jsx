@@ -35,7 +35,9 @@ export default function TelephonyView() {
     lastStatsTotals: null,
     lastSettingsResponse: null,
     lastCallRawKeys: null,
-    lastCallRawPreview: ""
+    lastCallRawPreview: "",
+    lastCallRawLength: null,
+    lastCallSnapshot: null
   });
   const hasPasswordAuth = settings.hasPassword && settings.username?.trim();
   const hasRefreshAuth = settings.hasRefreshToken;
@@ -86,15 +88,32 @@ export default function TelephonyView() {
       const latestCall = Array.isArray(latestCalls) ? latestCalls[0] : null;
       let latestRawKeys = null;
       let latestRawPreview = "";
+      let latestRawLength = null;
       if (latestCall?.rawPayload) {
         try {
           const rawObject = JSON.parse(latestCall.rawPayload);
           latestRawKeys = Object.keys(rawObject).sort();
           latestRawPreview = JSON.stringify(rawObject).slice(0, 500);
+          latestRawLength = latestCall.rawPayload.length;
         } catch (error) {
           latestRawPreview = String(latestCall.rawPayload).slice(0, 500);
+          latestRawLength = String(latestCall.rawPayload).length;
         }
+      } else if (latestCall?.rawPayload === "") {
+        latestRawPreview = "leer";
+        latestRawLength = 0;
       }
+      const latestCallSnapshot = latestCall
+        ? {
+            uuid: latestCall.uuid,
+            from: latestCall.from,
+            to: latestCall.to,
+            direction: latestCall.direction,
+            startTime: latestCall.startTime,
+            duration: latestCall.duration,
+            answered: latestCall.answered
+          }
+        : null;
       setDebugInfo((current) => ({
         ...current,
         lastHealthCheckAt: new Date().toISOString(),
@@ -108,7 +127,9 @@ export default function TelephonyView() {
             }
           : null,
         lastCallRawKeys: latestRawKeys,
-        lastCallRawPreview: latestRawPreview
+        lastCallRawPreview: latestRawPreview,
+        lastCallRawLength: latestRawLength,
+        lastCallSnapshot: latestCallSnapshot
       }));
       if (!hasCredentials) {
         setApiStatus("missing");
@@ -371,6 +392,16 @@ export default function TelephonyView() {
                   {debugInfo.lastCallRawKeys?.length
                     ? debugInfo.lastCallRawKeys.join(", ")
                     : "n/a"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Letzter Call (DB Snapshot):</span>{" "}
+                  {debugInfo.lastCallSnapshot
+                    ? JSON.stringify(debugInfo.lastCallSnapshot)
+                    : "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Raw Payload Laenge:</span>{" "}
+                  {debugInfo.lastCallRawLength ?? "n/a"}
                 </div>
                 <div className="md:col-span-2">
                   <span className="text-sand-500">Letztes Event (Preview):</span>{" "}
