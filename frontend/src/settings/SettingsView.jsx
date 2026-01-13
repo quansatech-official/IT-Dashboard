@@ -2,25 +2,48 @@ import { useEffect, useState } from "react";
 import { Mail, Settings } from "lucide-react";
 
 const API = "/api";
+const STORAGE_KEY = "qt_smtp_settings_cache";
+
+const defaultSmtp = {
+  host: "",
+  port: 587,
+  username: "",
+  password: "",
+  sender_name: "",
+  sender_email: "",
+  use_tls: true,
+  use_ssl: false,
+  has_password: false
+};
+
+const loadCachedSmtp = () => {
+  if (typeof window === "undefined") return defaultSmtp;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultSmtp;
+    const cached = JSON.parse(raw);
+    return {
+      ...defaultSmtp,
+      ...cached,
+      password: ""
+    };
+  } catch (error) {
+    return defaultSmtp;
+  }
+};
 
 export default function SettingsView() {
-  const [smtp, setSmtp] = useState({
-    host: "",
-    port: 587,
-    username: "",
-    password: "",
-    sender_name: "",
-    sender_email: "",
-    use_tls: true,
-    use_ssl: false,
-    has_password: false
-  });
+  const [smtp, setSmtp] = useState(loadCachedSmtp);
   const [status, setStatus] = useState("idle");
+  const [loadStatus, setLoadStatus] = useState("loading");
 
   useEffect(() => {
     let active = true;
     fetch(`${API}/smtp_settings`)
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error("load_failed");
+        return res.json();
+      })
       .then((data) => {
         if (!active) return;
         setSmtp((prev) => ({
@@ -28,8 +51,12 @@ export default function SettingsView() {
           ...data,
           password: ""
         }));
+        setLoadStatus("ready");
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!active) return;
+        setLoadStatus("error");
+      });
     return () => {
       active = false;
     };
@@ -54,11 +81,18 @@ export default function SettingsView() {
       });
       if (!res.ok) throw new Error("save_failed");
       const data = await res.json();
-      setSmtp((prev) => ({
+      const next = {
         ...prev,
         ...data,
         password: ""
-      }));
+      };
+      setSmtp(next);
+      try {
+        const { password, ...cacheable } = next;
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheable));
+      } catch (error) {
+        // Ignore cache write errors (private mode, etc.)
+      }
       setStatus("saved");
     } catch (error) {
       setStatus("error");
@@ -174,6 +208,9 @@ export default function SettingsView() {
             >
               Speichern
             </button>
+            {loadStatus === "error" && (
+              <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+            )}
             {status === "saved" && <span className="text-sm text-emerald-600">Gespeichert</span>}
             {status === "error" && (
               <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>

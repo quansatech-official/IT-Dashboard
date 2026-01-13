@@ -200,14 +200,13 @@ const parseActionFromText = (rawText) => {
   return fields;
 };
 
-const buildSentInfo = ({ sentAt, sentVia, sentTo, openedAt, openedCount }) => {
+const buildSentInfo = ({ sentAt, sentVia, openedAt, openedCount }) => {
   if (!sentAt) return "Nicht gesendet";
   const sentAtText = sentAt ? new Date(sentAt).toLocaleString("de-DE") : "";
   const openedAtText = openedAt ? new Date(openedAt).toLocaleString("de-DE") : "";
   const safeVia = sentVia && sentVia !== "manuell" ? sentVia : "";
   return [
     safeVia ? `Versand: ${safeVia}` : "",
-    sentTo ? `An: ${sentTo}` : "",
     sentAtText ? `Am: ${sentAtText}` : "",
     openedCount
       ? `Gelesen: ${openedCount}x${openedAtText ? ` (zuletzt ${openedAtText})` : ""}`
@@ -311,13 +310,7 @@ export default function ReportView() {
           const sentTo = reportItem.sent_to || "";
           const openedAt = reportItem.opened_at || 0;
           const openedCount = reportItem.opened_count || 0;
-          const sentInfo = buildSentInfo({
-            sentAt,
-            sentVia,
-            sentTo,
-            openedAt,
-            openedCount
-          });
+          const sentInfo = buildSentInfo({ sentAt, sentVia, openedAt, openedCount });
           const sentAtText = sentAt ? new Date(sentAt).toLocaleString("de-DE") : "";
           const openedAtText = openedAt ? new Date(openedAt).toLocaleString("de-DE") : "";
           entry.reports.push({
@@ -749,7 +742,6 @@ export default function ReportView() {
           sentInfo: buildSentInfo({
             sentAt: created.sent_at || 0,
             sentVia: created.sent_via || "",
-            sentTo: created.sent_to || "",
             openedAt: created.opened_at || 0,
             openedCount: created.opened_count || 0
           })
@@ -920,7 +912,6 @@ export default function ReportView() {
                   sentInfo: buildSentInfo({
                     sentAt: updated.sent_at || 0,
                     sentVia: updated.sent_via || "",
-                    sentTo: updated.sent_to || "",
                     openedAt: updated.opened_at || 0,
                     openedCount: updated.opened_count || 0
                   }),
@@ -999,7 +990,6 @@ export default function ReportView() {
                   sentInfo: buildSentInfo({
                     sentAt: updated.sent_at || 0,
                     sentVia: updated.sent_via || "",
-                    sentTo: updated.sent_to || "",
                     openedAt: updated.opened_at || 0,
                     openedCount: updated.opened_count || 0
                   }),

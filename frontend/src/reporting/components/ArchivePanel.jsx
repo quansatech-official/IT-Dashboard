@@ -57,7 +57,6 @@ export default function ArchivePanel({
                       {item.sentVia && item.sentVia !== "manuell" ? (
                         <span className="text-sand-900">{item.sentVia}</span>
                       ) : null}
-                      {item.sentTo ? <span className="text-sand-500">· {item.sentTo}</span> : null}
                       {item.sentAtText ? <span className="text-sand-500">· {item.sentAtText}</span> : null}
                     </span>
                   ) : null}
