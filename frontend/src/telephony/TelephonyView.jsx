@@ -30,8 +30,13 @@ export default function TelephonyView() {
     lastHealthCheckAt: "",
     lastHealthCheckOk: null,
     lastSettingsSaveAt: "",
-    lastSettingsSaveOk: null
+    lastSettingsSaveOk: null,
+    lastCallsCount: null,
+    lastStatsTotals: null
   });
+  const hasPasswordAuth = settings.hasPassword && settings.username?.trim();
+  const hasRefreshAuth = settings.hasRefreshToken;
+  const hasCredentials = Boolean(hasPasswordAuth || hasRefreshAuth);
 
   useEffect(() => {
     let active = true;
@@ -61,13 +66,18 @@ export default function TelephonyView() {
       if (!active) return;
       setCalls(nextCalls);
       setStats(nextStats);
-      const hasPasswordAuth = settings.hasPassword && settings.username?.trim();
-      const hasRefreshAuth = settings.hasRefreshToken;
-      const hasCredentials = Boolean(hasPasswordAuth || hasRefreshAuth);
       setDebugInfo((current) => ({
         ...current,
         lastHealthCheckAt: new Date().toISOString(),
-        lastHealthCheckOk: isHealthy
+        lastHealthCheckOk: isHealthy,
+        lastCallsCount: Array.isArray(nextCalls) ? nextCalls.length : null,
+        lastStatsTotals: nextStats
+          ? {
+              today: nextStats.today?.total ?? null,
+              last24h: nextStats.last24h?.total ?? null,
+              last7d: nextStats.last7d?.total ?? null
+            }
+          : null
       }));
       if (!hasCredentials) {
         setApiStatus("missing");
@@ -82,7 +92,7 @@ export default function TelephonyView() {
       active = false;
       clearInterval(interval);
     };
-  }, [activeTab]);
+  }, [activeTab, settings]);
 
   return (
     <div className="min-h-screen bg-hero-pattern">
@@ -249,6 +259,12 @@ export default function TelephonyView() {
               <p className="uppercase tracking-[0.3em] text-[10px] text-sand-500">Debug</p>
               <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                 <div>
+                  <span className="text-sand-500">Aktiver Tab:</span> {activeTab}
+                </div>
+                <div>
+                  <span className="text-sand-500">Base URL:</span> {settings.baseUrl || "n/a"}
+                </div>
+                <div>
                   <span className="text-sand-500">Username gesetzt:</span>{" "}
                   {settings.username?.trim() ? "ja" : "nein"}
                 </div>
@@ -263,6 +279,10 @@ export default function TelephonyView() {
                 <div>
                   <span className="text-sand-500">Refresh Token vorhanden:</span>{" "}
                   {settings.hasRefreshToken ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Credentials erkannt:</span>{" "}
+                  {hasCredentials ? "ja" : "nein"}
                 </div>
                 <div>
                   <span className="text-sand-500">API Status:</span> {apiStatus}
@@ -294,6 +314,20 @@ export default function TelephonyView() {
                     : debugInfo.lastSettingsSaveOk
                     ? "ja"
                     : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letzte Call-Anzahl:</span>{" "}
+                  {debugInfo.lastCallsCount ?? "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Stats Totals:</span>{" "}
+                  {debugInfo.lastStatsTotals
+                    ? `today ${debugInfo.lastStatsTotals.today}, 24h ${debugInfo.lastStatsTotals.last24h}, 7d ${debugInfo.lastStatsTotals.last7d}`
+                    : "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Stream aktiv:</span>{" "}
+                  {settings.streamEnabled ? "ja" : "nein"}
                 </div>
               </div>
             </div>
