@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Clock, FileText, Sparkles, StickyNote, Tool } from "lucide-react";
+import { Clock, FileText, Sparkles, StickyNote, Wrench } from "lucide-react";
 import ReportView from "./reporting/ReportView";
 import TimeTrackingView from "./timetracking/TimeTrackingView";
 import TelephonyMenu from "./telephony/TelephonyMenu";
@@ -63,7 +63,7 @@ export default function App() {
                   : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
               } flex items-center gap-3`}
             >
-              <Tool size={18} /> Tools
+              <Wrench size={18} /> Tools
             </button>
             <TelephonyMenu
               active={activeView === "telephony"}

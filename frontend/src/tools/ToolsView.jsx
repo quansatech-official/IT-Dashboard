@@ -1,4 +1,4 @@
-import { ExternalLink, KeyRound, Tool } from "lucide-react";
+import { ExternalLink, KeyRound, Wrench } from "lucide-react";
 
 const YOPASS_URL = "https://share.quansatech.at";
 
@@ -8,7 +8,7 @@ export default function ToolsView() {
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-3">
           <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
-            <Tool size={18} />
+            <Wrench size={18} />
           </div>
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
