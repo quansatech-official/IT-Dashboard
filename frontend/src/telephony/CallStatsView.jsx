@@ -15,6 +15,42 @@ export default function CallStatsView({ stats }) {
   ];
 
   const safeStats = stats || {};
+  const extensionStats = safeStats.byExtension || [];
+  const queueStats = safeStats.byQueue || [];
+
+  const renderBreakdown = (title, rows) => (
+    <div className="border border-sand-200 rounded-2xl p-4">
+      <p className="text-xs uppercase tracking-[0.3em] text-sand-500 mb-3">{title}</p>
+      {rows.length === 0 ? (
+        <p className="text-sm text-sand-500">Keine Daten vorhanden.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-sand-500 border-b border-sand-200">
+              <tr>
+                <th className="text-left py-2">Name</th>
+                <th className="text-left py-2">Gesamt</th>
+                <th className="text-left py-2">Beantwortet</th>
+                <th className="text-left py-2">Verpasst</th>
+                <th className="text-left py-2">Ø Dauer</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.key} className="border-b border-sand-100">
+                  <td className="py-2">{row.key}</td>
+                  <td className="py-2">{row.total}</td>
+                  <td className="py-2 text-emerald-600">{row.answered}</td>
+                  <td className="py-2 text-rose-600">{row.missed}</td>
+                  <td className="py-2">{formatDuration(row.avgDuration)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
@@ -64,6 +100,11 @@ export default function CallStatsView({ stats }) {
             </div>
           );
         })}
+      </div>
+
+      <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {renderBreakdown("Nebenstellen (letzte 7 Tage)", extensionStats)}
+        {renderBreakdown("Warteschlangen (letzte 7 Tage)", queueStats)}
       </div>
     </div>
   );
