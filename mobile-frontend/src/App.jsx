@@ -45,7 +45,6 @@ export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [arrivalTime, setArrivalTime] = useState("");
   const [departureTime, setDepartureTime] = useState("");
-  const [travelMinutes, setTravelMinutes] = useState("");
 
   const load = () => {
     api.customers().then((data) => {
@@ -126,8 +125,7 @@ export default function App() {
     if (diffMinutes < 0) {
       diffMinutes += 24 * 60;
     }
-    const travelOffset = Number.parseInt(travelMinutes || "0", 10);
-    const totalMinutes = diffMinutes + (Number.isFinite(travelOffset) ? travelOffset : 0);
+    const totalMinutes = diffMinutes;
 
     await api.updateTask(selectedTaskId, {
       elapsed: totalMinutes * 60000,
@@ -137,7 +135,6 @@ export default function App() {
     setStatus("Zeit gespeichert.");
     setArrivalTime("");
     setDepartureTime("");
-    setTravelMinutes("");
     load();
   };
 
@@ -229,16 +226,6 @@ export default function App() {
                 type="time"
                 value={departureTime}
                 onChange={(event) => setDepartureTime(event.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label>Fahrt (Minuten, optional)</label>
-              <input
-                type="number"
-                min="0"
-                value={travelMinutes}
-                onChange={(event) => setTravelMinutes(event.target.value)}
-                placeholder="z.B. 25"
               />
             </div>
             <button className="primary-btn" type="button" onClick={saveTimeEntry}>

@@ -5,7 +5,9 @@ import {
   Clock,
   DollarSign,
   Heart,
+  Play,
   Sparkles,
+  Square,
   Star,
   Trash2,
   Undo2,
@@ -36,6 +38,8 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
+  toggleTimeTask: (id) =>
+    fetch(`${API}/tasks/${id}/toggle_timer`, { method: "PATCH" }).then((r) => r.json()),
   getTimeTask: (id) => fetch(`${API}/tasks/${id}`).then((r) => r.json()),
   remove: (id) => fetch(`${API}/day_tasks/${id}`, { method: "DELETE" }),
   promote: (id) => fetch(`${API}/day_tasks/${id}/promote`, { method: "POST" }).then((r) => r.json()),
@@ -71,8 +75,6 @@ export default function DayPlanView() {
   const [editingTitle, setEditingTitle] = useState("");
   const [editingCustomerId, setEditingCustomerId] = useState(null);
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
-  const [timeDrafts, setTimeDrafts] = useState({});
-  const [openTimePanels, setOpenTimePanels] = useState({});
   const [timeTaskCache, setTimeTaskCache] = useState({});
 
   useEffect(() => {
@@ -165,9 +167,9 @@ export default function DayPlanView() {
   };
 
   const grouped = useMemo(() => {
-    const map = { todo: [], doing: [], done: [] };
+    const map = { todo: [], done: [] };
     tasks.forEach((task) => {
-      const bucket = map[task.status] ? task.status : "todo";
+      const bucket = task.status === "done" ? "done" : "todo";
       map[bucket].push(task);
     });
     return map;
@@ -179,9 +181,9 @@ export default function DayPlanView() {
   );
 
   const groupsByColumn = useMemo(() => {
-    const map = { todo: [], doing: [], done: [] };
+    const map = { todo: [], done: [] };
     groups.forEach((group) => {
-      const bucket = map[group.column] ? group.column : "todo";
+      const bucket = group.column === "done" ? "done" : "todo";
       map[bucket].push(group);
     });
     Object.keys(map).forEach((key) => {
@@ -366,21 +368,15 @@ export default function DayPlanView() {
       .replace(/\s+/g, " ")
       .trim();
 
-  const parseTimeToMinutes = (value) => {
-    if (!value) return null;
-    const [hours, minutes] = value.split(":").map((part) => Number(part));
-    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
-    return hours * 60 + minutes;
+  const msToHHMMSS = (ms = 0) => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return `${hours.toString().padStart(2, "0")}:${minutes
+      .toString()
+      .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
   };
-
-  const minutesToClock = (minutes) => {
-    const safeMinutes = Math.max(0, Math.round(minutes));
-    const hours = Math.floor(safeMinutes / 60);
-    const remainder = safeMinutes % 60;
-    return `${hours}:${remainder.toString().padStart(2, "0")}`;
-  };
-
-  const msToClock = (ms = 0) => minutesToClock(Math.floor(ms / 60000));
 
   const knownCustomerNames = useMemo(
     () =>
@@ -400,46 +396,19 @@ export default function DayPlanView() {
     return map;
   }, [customers, timeTaskCache]);
 
-  const updateTimeDraft = (taskId, patch) => {
-    setTimeDrafts((prev) => ({
-      ...prev,
-      [taskId]: { ...prev[taskId], ...patch }
-    }));
-  };
-
   const persistTimeTask = async (timeTask, patch) => {
     const taskId = timeTask?.id || timeTask;
     if (!taskId) return;
     await api.updateTimeTask(taskId, patch);
     refreshCustomers();
   };
-
-  const applyManualTimeEntry = async (dayTask, timeTask) => {
-    const draft = timeDrafts[dayTask.id] || {};
-    const arrivalMinutes = parseTimeToMinutes(draft.arrival);
-    const departureMinutes = parseTimeToMinutes(draft.departure);
-    if (arrivalMinutes === null || departureMinutes === null) {
-      setError("Bitte Ankunft und Abfahrt angeben.");
-      return;
+  const toggleTimeTask = async (timeTask) => {
+    if (!timeTask?.id) return;
+    const updated = await api.toggleTimeTask(timeTask.id);
+    if (updated?.id) {
+      setTimeTaskCache((prev) => ({ ...prev, [updated.id]: updated }));
     }
-    const travelMinutes = Number.parseInt(draft.travel || "0", 10);
-    const travelOffset = Number.isFinite(travelMinutes) ? Math.max(0, travelMinutes) : 0;
-    let diffMinutes = departureMinutes - arrivalMinutes;
-    if (diffMinutes < 0) {
-      diffMinutes += 24 * 60;
-    }
-    const totalMinutes = diffMinutes + travelOffset;
-    await persistTimeTask(timeTask || dayTask.task_id, {
-      elapsed: totalMinutes * 60000,
-      running: false,
-      startTime: 0
-    });
-    setError("");
-    updateTimeDraft(dayTask.id, { arrival: "", departure: "", travel: "" });
-  };
-
-  const toggleTimePanel = (taskId) => {
-    setOpenTimePanels((prev) => ({ ...prev, [taskId]: !prev[taskId] }));
+    refreshCustomers();
   };
 
   const isKnownCustomer = (value) => {
@@ -621,12 +590,24 @@ export default function DayPlanView() {
                     <Clock size={12} />
                   </button>
                 ) : (
-                  <span
-                    className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700"
-                    title="Zeit aktiv"
-                  >
-                    <Clock size={12} />
-                  </span>
+                  <div className="flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1">
+                    <button
+                      type="button"
+                      onClick={() => toggleTimeTask(timeTask)}
+                      className={`rounded-full border p-1 ${
+                        timeTask?.running
+                          ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                          : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                      }`}
+                      title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
+                      disabled={!timeTask}
+                    >
+                      {timeTask?.running ? <Square size={10} /> : <Play size={10} />}
+                    </button>
+                    <span className="text-[10px] font-mono text-sand-600">
+                      {msToHHMMSS(elapsedMs)}
+                    </span>
+                  </div>
                 )}
                 <button
                   type="button"
@@ -766,7 +747,7 @@ export default function DayPlanView() {
               ) : task.task_id ? (
                 timeTask ? (
                   <>
-                    <div className="mt-2 grid grid-cols-3 gap-2">
+                    <div className="mt-2 grid grid-cols-2 gap-2">
                       <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-sand-400">
                         Ankunft
                         <input
@@ -785,18 +766,6 @@ export default function DayPlanView() {
                           value={timeDraft.departure || ""}
                           onChange={(event) =>
                             updateTimeDraft(task.id, { departure: event.target.value })
-                          }
-                          className="rounded-md border border-sand-200 bg-white px-2 py-1 text-xs text-sand-700"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-sand-400">
-                        Fahrt (Min)
-                        <input
-                          type="number"
-                          min="0"
-                          value={timeDraft.travel || ""}
-                          onChange={(event) =>
-                            updateTimeDraft(task.id, { travel: event.target.value })
                           }
                           className="rounded-md border border-sand-200 bg-white px-2 py-1 text-xs text-sand-700"
                         />
@@ -900,7 +869,32 @@ export default function DayPlanView() {
               <h1 className="text-2xl font-display text-sand-900">Tagesplan</h1>
             </div>
           </div>
-          <div className="text-sm text-sand-500">{tasks.length} Aufgaben</div>
+          <div className="flex flex-col items-end gap-2 md:flex-row md:items-center">
+            <div className="text-sm text-sand-500">{tasks.length} Aufgaben</div>
+            <div className="flex items-center gap-2">
+              <input
+                value={groupDrafts.todo || ""}
+                onChange={(event) =>
+                  setGroupDrafts((prev) => ({ ...prev, todo: event.target.value }))
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    createGroup("todo");
+                  }
+                }}
+                placeholder="Neue Gruppe…"
+                className="w-40 rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+              />
+              <button
+                type="button"
+                onClick={() => createGroup("todo")}
+                className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-amber-100"
+              >
+                Gruppe
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -932,32 +926,8 @@ export default function DayPlanView() {
                   <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">
                     {column.label}
                   </h2>
-                  <p className="text-xs text-sand-400 mt-1">Gruppe per Drag & Drop</p>
                 </div>
                 <span className="text-xs text-sand-500">{grouped[column.id].length}</span>
-              </div>
-              <div className="flex items-center gap-2 mb-3">
-                <input
-                  value={groupDrafts[column.id] || ""}
-                  onChange={(event) =>
-                    setGroupDrafts((prev) => ({ ...prev, [column.id]: event.target.value }))
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      createGroup(column.id);
-                    }
-                  }}
-                  placeholder="Neue Gruppe…"
-                  className="flex-1 rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
-                />
-                <button
-                  type="button"
-                  onClick={() => createGroup(column.id)}
-                  className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-amber-100"
-                >
-                  Gruppe
-                </button>
               </div>
               <div className="space-y-2 max-h-[65vh] overflow-auto pr-1">
                 <div
