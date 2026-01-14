@@ -154,12 +154,12 @@ export default function App() {
         <p>Unterwegs Module</p>
       </header>
 
-      <main className="stack" style={{ padding: "20px" }}>
-        {status ? <div className="card hint">{status}</div> : null}
+      <main className="main">
+        {status ? <div className="status-pill">{status}</div> : null}
 
         {activeTab === "quick" && (
           <div className="card stack">
-            <div>
+            <div className="card-header">
               <div className="section-title">Schnellerfassung</div>
               <p className="hint">Eintrag pro Zeile, optional Kunde.</p>
             </div>
@@ -189,7 +189,7 @@ export default function App() {
 
         {activeTab === "delivery" && (
           <div className="card stack">
-            <div>
+            <div className="card-header">
               <div className="section-title">Lieferschein</div>
               <p className="hint">Schneller Lieferschein als Aufgabe.</p>
             </div>
@@ -227,9 +227,9 @@ export default function App() {
 
         {activeTab === "timer" && (
           <div className="card stack">
-            <div>
+            <div className="card-header">
               <div className="section-title">Stoppuhr</div>
-              <p className="hint">Einmal stoppen und in Zeiterfassung ubergeben.</p>
+              <p className="hint">Einmal stoppen und in Zeiterfassung uebergeben.</p>
             </div>
             <div className="field">
               <label>Kunde</label>
@@ -237,7 +237,7 @@ export default function App() {
                 list="customer-list"
                 value={timerCustomer}
                 onChange={(event) => setTimerCustomer(event.target.value)}
-                placeholder="Kunde auswahlen"
+                placeholder="Kunde auswaehlen"
               />
             </div>
             <div className="field">

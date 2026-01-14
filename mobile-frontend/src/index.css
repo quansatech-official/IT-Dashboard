@@ -33,10 +33,14 @@ button, input, textarea, select {
 }
 
 .header {
-  padding: 20px 20px 12px;
+  padding: 22px 20px 14px;
   border-bottom: 1px solid #e6dccb;
-  background: rgba(255, 255, 255, 0.7);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(255, 247, 229, 0.85));
   backdrop-filter: blur(10px);
+}
+
+.header h1 {
+  font-size: 22px;
 }
 
 .header p {
@@ -47,12 +51,27 @@ button, input, textarea, select {
   color: #94897a;
 }
 
+.main {
+  flex: 1;
+  padding: 18px 18px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
 .card {
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.95);
   border: 1px solid #eadfcd;
-  border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 10px 30px rgba(150, 120, 60, 0.08);
+  border-radius: 20px;
+  padding: 18px;
+  box-shadow: 0 12px 32px rgba(150, 120, 60, 0.08);
+}
+
+.card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
 }
 
 .section-title {
@@ -60,7 +79,6 @@ button, input, textarea, select {
   letter-spacing: 0.3em;
   text-transform: uppercase;
   color: #8c806f;
-  margin-bottom: 8px;
 }
 
 .field {
@@ -82,9 +100,17 @@ button, input, textarea, select {
 .field select {
   border: 1px solid #e8ddc9;
   border-radius: 14px;
-  padding: 10px 12px;
+  padding: 11px 12px;
   font-size: 14px;
   background: #fffaf0;
+  box-shadow: inset 0 0 0 rgba(0, 0, 0, 0);
+}
+
+.field input:focus,
+.field textarea:focus,
+.field select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(214, 184, 133, 0.4);
 }
 
 .primary-btn {
@@ -122,6 +148,20 @@ button, input, textarea, select {
   background: #fff;
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  border: 1px solid #f0d8a4;
+  background: #fff6df;
+  color: #8a6b2f;
+}
+
 .nav {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -136,15 +176,15 @@ button, input, textarea, select {
 .nav button {
   border: 1px solid #e8ddc9;
   background: #fff;
-  border-radius: 14px;
-  padding: 10px;
-  font-size: 11px;
+  border-radius: 16px;
+  padding: 10px 6px;
+  font-size: 10px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   color: #4b4338;
 }
 

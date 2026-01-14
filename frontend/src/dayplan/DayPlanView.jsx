@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle, ClipboardList, Clock, DollarSign, Sparkles, Star, Trash2 } from "lucide-react";
+import {
+  CheckCircle,
+  ClipboardList,
+  Clock,
+  DollarSign,
+  Sparkles,
+  Star,
+  Trash2,
+  Undo2
+} from "lucide-react";
 
 const API = "/api";
 
@@ -51,6 +60,8 @@ export default function DayPlanView() {
   const [suggestionOpenId, setSuggestionOpenId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [editingCustomerId, setEditingCustomerId] = useState(null);
+  const [editingCustomerValue, setEditingCustomerValue] = useState("");
 
   useEffect(() => {
     api.list().then((data) => {
@@ -278,6 +289,26 @@ export default function DayPlanView() {
     setEditingTitle("");
   };
 
+  const startCustomerEdit = (task) => {
+    setEditingCustomerId(task.id);
+    setEditingCustomerValue(task.customer || "");
+  };
+
+  const cancelCustomerEdit = () => {
+    setEditingCustomerId(null);
+    setEditingCustomerValue("");
+  };
+
+  const commitCustomerEdit = async (task) => {
+    const trimmed = editingCustomerValue.trim();
+    if (trimmed === task.customer) {
+      cancelCustomerEdit();
+      return;
+    }
+    await updateTask(task, { customer: trimmed });
+    cancelCustomerEdit();
+  };
+
   const commitEdit = async (task) => {
     const trimmed = editingTitle.trim();
     if (!trimmed) {
@@ -302,8 +333,21 @@ export default function DayPlanView() {
       .replace(/\s+/g, " ")
       .trim();
 
-  const getCustomerSuggestions = (taskTitle) => {
-    const titleText = normalizeText(taskTitle);
+  const knownCustomerNames = useMemo(
+    () =>
+      customers
+        .map((item) => String(item?.name || "").trim().toLowerCase())
+        .filter(Boolean),
+    [customers]
+  );
+
+  const isKnownCustomer = (value) => {
+    const name = String(value || "").trim().toLowerCase();
+    return name ? knownCustomerNames.includes(name) : false;
+  };
+
+  const getCustomerSuggestions = (task) => {
+    const titleText = normalizeText(`${task?.title || ""} ${task?.customer || ""}`);
     if (!titleText) return [];
     const tokens = titleText.split(" ").filter((token) => token.length > 2);
     const scored = customers
@@ -331,11 +375,12 @@ export default function DayPlanView() {
   };
 
   const renderTaskCard = (task) => {
-    const suggestions = getCustomerSuggestions(task.title);
+    const suggestions = getCustomerSuggestions(task);
     const hasCustomer = Boolean(task.customer || task.customer_number);
     const canPromote = hasCustomer;
     const isDone = task.status === "done";
     const canInvoice = hasCustomer;
+    const knownCustomer = isKnownCustomer(task.customer);
     return (
       <div
         key={task.id}
@@ -391,7 +436,7 @@ export default function DayPlanView() {
                 )}
               </div>
               <div className="flex items-center gap-1">
-                {!task.customer ? (
+                {!knownCustomer ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -450,6 +495,16 @@ export default function DayPlanView() {
                 >
                   <CheckCircle size={12} />
                 </button>
+                {isDone ? (
+                  <button
+                    type="button"
+                    onClick={() => updateTask(task, { status: "todo" })}
+                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                    title="Unerledigt"
+                  >
+                    <Undo2 size={12} />
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => setError("Faktura (Dummy) ist noch nicht angebunden.")}
@@ -477,10 +532,41 @@ export default function DayPlanView() {
                 </button>
               </div>
             </div>
-            {task.customer ? (
-              <div className="text-[11px] text-sand-500 mt-1">{task.customer}</div>
+            {editingCustomerId === task.id && !task.task_id ? (
+              <input
+                value={editingCustomerValue}
+                onChange={(event) => setEditingCustomerValue(event.target.value)}
+                onBlur={() => commitCustomerEdit(task)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitCustomerEdit(task);
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelCustomerEdit();
+                  }
+                }}
+                list="dayplan-customers"
+                placeholder="Kunde zuordnen…"
+                className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                autoFocus
+              />
+            ) : task.customer ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!task.task_id) startCustomerEdit(task);
+                }}
+                className={`mt-1 text-[11px] text-sand-500 hover:text-sand-700 ${
+                  task.task_id ? "cursor-default" : ""
+                }`}
+                title={task.task_id ? "Kunde ist fixiert (Zeiterfassung)" : "Kunde ändern"}
+              >
+                {task.customer}
+              </button>
             ) : null}
-            {!task.customer && suggestions.length > 1 && suggestionOpenId === task.id ? (
+            {!knownCustomer && suggestions.length > 1 && suggestionOpenId === task.id ? (
               <div className="absolute right-3 top-full mt-2 w-56 rounded-xl border border-amber-200 bg-white shadow-soft z-20">
                 <div className="px-3 py-2 text-[10px] uppercase tracking-wide text-sand-400">
                   Kundenvorschlage
@@ -747,6 +833,11 @@ export default function DayPlanView() {
           </div>
         </section>
       </main>
+      <datalist id="dayplan-customers">
+        {customers.map((customer) => (
+          <option key={customer.id} value={customer.name} />
+        ))}
+      </datalist>
     </div>
   );
 }
