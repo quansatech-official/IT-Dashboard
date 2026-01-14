@@ -58,7 +58,7 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(Integer, primary_key=True)
-    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"))
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=True)
 
     title = Column(String, nullable=False)
 
@@ -407,6 +407,22 @@ def _ensure_day_tasks_columns() -> None:
 _ensure_day_tasks_columns()
 
 
+def _ensure_tasks_customer_nullable() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("tasks"):
+        return
+    columns = {column["name"]: column for column in inspector.get_columns("tasks")}
+    customer_col = columns.get("customer_id")
+    if not customer_col:
+        return
+    if customer_col.get("nullable") is False:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE tasks ALTER COLUMN customer_id DROP NOT NULL"))
+
+
+_ensure_tasks_customer_nullable()
+
+
 def _ensure_day_task_groups_columns() -> None:
     inspector = inspect(engine)
     if not inspector.has_table("day_task_groups"):
@@ -456,7 +472,7 @@ class CustomerUpdate(BaseModel):
 
 
 class TaskCreate(BaseModel):
-    customer_id: int
+    customer_id: Optional[int] = None
     title: str
 
 
@@ -638,6 +654,7 @@ app.add_middleware(
 def serialize_task(t: Task) -> Dict[str, Any]:
     return {
         "id": t.id,
+        "customer_id": t.customer_id,
         "title": t.title,
         "erledigt": t.erledigt,
         "aberechnet": t.aberechnet,
@@ -1279,6 +1296,22 @@ def create_task(data: TaskCreate):
         return serialize_task(task)
 
 
+@app.get("/api/tasks")
+def get_tasks():
+    with SessionLocal() as db:
+        tasks = db.query(Task).order_by(Task.id.desc()).all()
+        return [serialize_task(task) for task in tasks]
+
+
+@app.get("/api/tasks/{task_id}")
+def get_task(task_id: int):
+    with SessionLocal() as db:
+        task = db.query(Task).get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        return serialize_task(task)
+
+
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: int, data: TaskUpdate):
     with SessionLocal() as db:
@@ -1475,9 +1508,7 @@ def promote_day_task(task_id: int):
                 .filter(func.lower(Customer.name) == day_task.customer.strip().lower())
                 .first()
             )
-        if not customer:
-            raise HTTPException(400, "Customer not found")
-        task = Task(customer_id=customer.id, title=day_task.title)
+        task = Task(customer_id=customer.id if customer else None, title=day_task.title)
         db.add(task)
         db.flush()
         day_task.task_id = task.id

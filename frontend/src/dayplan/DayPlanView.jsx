@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle,
   ClipboardList,
@@ -36,6 +36,7 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
+  getTimeTask: (id) => fetch(`${API}/tasks/${id}`).then((r) => r.json()),
   remove: (id) => fetch(`${API}/day_tasks/${id}`, { method: "DELETE" }),
   promote: (id) => fetch(`${API}/day_tasks/${id}/promote`, { method: "POST" }).then((r) => r.json()),
   createGroup: (payload) =>
@@ -71,6 +72,8 @@ export default function DayPlanView() {
   const [editingCustomerId, setEditingCustomerId] = useState(null);
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
   const [timeDrafts, setTimeDrafts] = useState({});
+  const [openTimePanels, setOpenTimePanels] = useState({});
+  const [timeTaskCache, setTimeTaskCache] = useState({});
 
   useEffect(() => {
     api.list().then((data) => {
@@ -82,6 +85,8 @@ export default function DayPlanView() {
     api.customers().then((data) => {
       setCustomers(Array.isArray(data) ? data : []);
     });
+
+  const timeTaskRequests = useRef(new Set());
 
   useEffect(() => {
     refreshCustomers();
@@ -109,6 +114,25 @@ export default function DayPlanView() {
   const updateTask = async (task, patch) => {
     const updated = await api.update(task.id, patch);
     setTasks((prev) => prev.map((item) => (item.id === task.id ? updated : item)));
+    if (updated?.task_id && (patch.customer !== undefined || patch.customer_number !== undefined)) {
+      const normalizedName = String(updated.customer || "").trim().toLowerCase();
+      const normalizedNumber = String(updated.customer_number || "").trim();
+      const match = customers.find((customer) => {
+        if (normalizedNumber && String(customer.creditor_number || "").trim() === normalizedNumber) {
+          return true;
+        }
+        if (normalizedName) {
+          return String(customer.name || "").trim().toLowerCase() === normalizedName;
+        }
+        return false;
+      });
+      if (match) {
+        await api.updateTimeTask(updated.task_id, { customer_id: match.id });
+      } else if (!normalizedName && !normalizedNumber) {
+        await api.updateTimeTask(updated.task_id, { customer_id: null });
+      }
+      refreshCustomers();
+    }
   };
 
   const updateGroup = async (group, patch) => {
@@ -140,7 +164,7 @@ export default function DayPlanView() {
       setTasks((prev) => prev.map((item) => (item.id === task.id ? updated : item)));
       refreshCustomers();
     } else {
-      setError("Kunde nicht gefunden. Bitte Kundennummer oder Namen prüfen.");
+      setError("Zeit konnte nicht aktiviert werden.");
     }
   };
 
@@ -371,14 +395,14 @@ export default function DayPlanView() {
   );
 
   const timeTasksById = useMemo(() => {
-    const map = {};
+    const map = { ...timeTaskCache };
     customers.forEach((customer) => {
       (customer?.tasks || []).forEach((task) => {
         map[task.id] = { ...task, customer };
       });
     });
     return map;
-  }, [customers]);
+  }, [customers, timeTaskCache]);
 
   const updateTimeDraft = (taskId, patch) => {
     setTimeDrafts((prev) => ({
@@ -388,8 +412,9 @@ export default function DayPlanView() {
   };
 
   const persistTimeTask = async (timeTask, patch) => {
-    if (!timeTask?.id) return;
-    await api.updateTimeTask(timeTask.id, patch);
+    const taskId = timeTask?.id || timeTask;
+    if (!taskId) return;
+    await api.updateTimeTask(taskId, patch);
     refreshCustomers();
   };
 
@@ -408,15 +433,44 @@ export default function DayPlanView() {
       diffMinutes += 24 * 60;
     }
     const totalMinutes = diffMinutes + travelOffset;
-    await persistTimeTask(timeTask, { elapsed: totalMinutes * 60000, running: false, startTime: 0 });
+    await persistTimeTask(timeTask || dayTask.task_id, {
+      elapsed: totalMinutes * 60000,
+      running: false,
+      startTime: 0
+    });
     setError("");
     updateTimeDraft(dayTask.id, { arrival: "", departure: "", travel: "" });
+  };
+
+  const toggleTimePanel = (taskId) => {
+    setOpenTimePanels((prev) => ({ ...prev, [taskId]: !prev[taskId] }));
   };
 
   const isKnownCustomer = (value) => {
     const name = String(value || "").trim().toLowerCase();
     return name ? knownCustomerNames.includes(name) : false;
   };
+
+  useEffect(() => {
+    const missingIds = tasks
+      .map((task) => task.task_id)
+      .filter(Boolean)
+      .filter((id) => !timeTasksById[id]);
+    missingIds.forEach((id) => {
+      if (timeTaskRequests.current.has(id)) return;
+      timeTaskRequests.current.add(id);
+      api
+        .getTimeTask(id)
+        .then((task) => {
+          if (!task?.id) return;
+          setTimeTaskCache((prev) => ({ ...prev, [task.id]: task }));
+        })
+        .catch(() => {})
+        .finally(() => {
+          timeTaskRequests.current.delete(id);
+        });
+    });
+  }, [tasks, timeTasksById]);
 
   const getCustomerSuggestions = (task) => {
     const titleText = normalizeText(`${task?.title || ""} ${task?.customer || ""}`);
@@ -458,7 +512,7 @@ export default function DayPlanView() {
   const renderTaskCard = (task) => {
     const suggestions = getCustomerSuggestions(task);
     const hasCustomer = Boolean(task.customer || task.customer_number);
-    const canPromote = hasCustomer && !task.task_id;
+    const canPromote = !task.task_id;
     const isDone = task.status === "done";
     const canInvoice = hasCustomer;
     const knownCustomer = isKnownCustomer(task.customer);
@@ -536,7 +590,6 @@ export default function DayPlanView() {
                       }}
                       className="rounded-full border border-amber-200 bg-white p-1 text-sand-600 hover:bg-amber-100"
                       title={`Kundenvorschlag${suggestions.length > 1 ? "e" : ""}`}
-                      disabled={task.task_id}
                     >
                       <Sparkles size={12} />
                     </button>
@@ -544,11 +597,10 @@ export default function DayPlanView() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (!task.task_id) startCustomerEdit(task);
+                        startCustomerEdit(task);
                       }}
                       className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                      title={task.task_id ? "Kunde ist fixiert (Zeitdaten)" : "Kunde suchen"}
-                      disabled={task.task_id}
+                      title="Kunde suchen"
                     >
                       <UserPlus size={12} />
                     </button>
@@ -567,7 +619,7 @@ export default function DayPlanView() {
                     title={
                       canPromote
                         ? "Zeit in Aufgabe aktivieren"
-                        : "Kunde zuordnen, um Zeit zu erfassen"
+                        : "Zeit in Aufgabe aktivieren"
                     }
                   >
                     <Clock size={12} />
@@ -625,7 +677,7 @@ export default function DayPlanView() {
                 </button>
               </div>
             </div>
-            {editingCustomerId === task.id && !task.task_id ? (
+            {editingCustomerId === task.id ? (
               <input
                 value={editingCustomerValue}
                 onChange={(event) => setEditingCustomerValue(event.target.value)}
@@ -649,12 +701,10 @@ export default function DayPlanView() {
               <button
                 type="button"
                 onClick={() => {
-                  if (!task.task_id) startCustomerEdit(task);
+                  startCustomerEdit(task);
                 }}
-                className={`mt-1 text-[11px] text-sand-500 hover:text-sand-700 ${
-                  task.task_id ? "cursor-default" : ""
-                }`}
-                title={task.task_id ? "Kunde ist fixiert (Zeitdaten)" : "Kunde ändern"}
+                className="mt-1 text-[11px] text-sand-500 hover:text-sand-700"
+                title="Kunde ändern"
               >
                 {task.customer}
               </button>
@@ -684,13 +734,41 @@ export default function DayPlanView() {
             {task.customer_number ? (
               <div className="text-[10px] text-sand-400">Nr. {task.customer_number}</div>
             ) : null}
-            {task.task_id ? (
-              <div className="mt-3 rounded-lg border border-sand-200 bg-white/80 px-3 py-2 text-xs text-sand-600">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Zeit</span>
-                  <span className="text-sm font-semibold text-sand-700">{msToClock(elapsedMs)}</span>
+            <div className="mt-2 rounded-md border border-sand-200 bg-white/80 px-2 py-1.5 text-xs text-sand-600">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Zeit</span>
+                <button
+                  type="button"
+                  onClick={() => toggleTimePanel(task.id)}
+                  className="text-[10px] uppercase tracking-wide text-sand-500 hover:text-sand-700"
+                >
+                  {openTimePanels[task.id] ? "Einklappen" : "Ausklappen"}
+                </button>
+              </div>
+              {!openTimePanels[task.id] ? (
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-[11px] text-sand-400">
+                    {task.task_id ? "Gesamtzeit" : "Zeit aktivieren"}
+                  </span>
+                  {task.task_id ? (
+                    <span className="text-xs font-semibold text-sand-700">{msToClock(elapsedMs)}</span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => promoteTask(task)}
+                      disabled={!canPromote}
+                      className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${
+                        canPromote
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                          : "border-sand-100 text-sand-300 cursor-not-allowed"
+                      }`}
+                    >
+                      Zeit aktivieren
+                    </button>
+                  )}
                 </div>
-                {timeTask ? (
+              ) : task.task_id ? (
+                timeTask ? (
                   <>
                     <div className="mt-2 grid grid-cols-3 gap-2">
                       <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-sand-400">
@@ -747,7 +825,9 @@ export default function DayPlanView() {
                               ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                               : "border-sand-200 bg-white text-sand-400 hover:bg-sand-100"
                           }`}
-                          title={timeTask.erledigt ? "Als offen markieren" : "Als erledigt markieren"}
+                          title={
+                            timeTask.erledigt ? "Als offen markieren" : "Als erledigt markieren"
+                          }
                         >
                           <CheckCircle size={12} />
                         </button>
@@ -762,7 +842,9 @@ export default function DayPlanView() {
                               : "border-sand-200 bg-white text-sand-400 hover:bg-sand-100"
                           }`}
                           title={
-                            timeTask.aberechnet ? "Nicht abgerechnet" : "Als abgerechnet markieren"
+                            timeTask.aberechnet
+                              ? "Nicht abgerechnet"
+                              : "Als abgerechnet markieren"
                           }
                         >
                           <DollarSign size={12} />
@@ -784,9 +866,25 @@ export default function DayPlanView() {
                   </>
                 ) : (
                   <div className="mt-2 text-[11px] text-sand-400">Zeitdaten werden geladen…</div>
-                )}
-              </div>
-            ) : null}
+                )
+              ) : (
+                <div className="mt-2 flex items-center justify-between">
+                  <div className="text-[11px] text-sand-400">Zeit in Aufgabe aktivieren.</div>
+                  <button
+                    type="button"
+                    onClick={() => promoteTask(task)}
+                    disabled={!canPromote}
+                    className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${
+                      canPromote
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                        : "border-sand-100 text-sand-300 cursor-not-allowed"
+                    }`}
+                  >
+                    Zeit aktivieren
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
