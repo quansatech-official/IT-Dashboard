@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from sqlalchemy import (
     create_engine, Column, Integer, String,
-    Boolean, BigInteger, ForeignKey, inspect, text, func
+    Boolean, BigInteger, ForeignKey, inspect, text, func, or_
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
@@ -235,8 +235,25 @@ class CustomerMetricsSettings(Base):
     km_rate_eur = Column(String, default="0.8")
     min_distance_km = Column(String, default="15")
     min_fee_eur = Column(String, default="15")
+    hourly_rate_eur = Column(String, default="0")
 
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_customer_metrics_settings_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("customer_metrics_settings"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("customer_metrics_settings")}
+    if "hourly_rate_eur" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE customer_metrics_settings ADD COLUMN hourly_rate_eur VARCHAR DEFAULT '0'")
+        )
+
+
+_ensure_customer_metrics_settings_columns()
 
 
 def _ensure_report_sent_column() -> None:
@@ -565,6 +582,7 @@ class CustomerMetricsSettingsUpdate(BaseModel):
     km_rate_eur: Optional[str] = None
     min_distance_km: Optional[str] = None
     min_fee_eur: Optional[str] = None
+    hourly_rate_eur: Optional[str] = None
 
 
 class ReportSendRequest(BaseModel):
@@ -871,6 +889,7 @@ def serialize_customer_metrics_settings(settings: CustomerMetricsSettings) -> Di
         "km_rate_eur": settings.km_rate_eur,
         "min_distance_km": settings.min_distance_km,
         "min_fee_eur": settings.min_fee_eur,
+        "hourly_rate_eur": settings.hourly_rate_eur,
     }
 
 
@@ -1102,7 +1121,35 @@ def get_customer_metrics(customer_id: int):
         customer = db.query(Customer).get(customer_id)
         if not customer:
             raise HTTPException(404, "Customer not found")
-        open_tasks = db.query(Task).filter(Task.customer_id == customer_id, Task.erledigt == False).count()  # noqa: E712
+        now_ms = int(time.time() * 1000)
+        open_time_tasks = 0
+        open_time_ms = 0
+        for task in db.query(Task).filter(Task.customer_id == customer_id).all():
+            if task.erledigt:
+                continue
+            open_time_tasks += 1
+            elapsed = task.elapsed or 0
+            if task.running and task.startTime:
+                elapsed += max(0, now_ms - task.startTime)
+            open_time_ms += elapsed
+        customer_name = (customer.name or "").strip().lower()
+        customer_number = (customer.creditor_number or "").strip()
+        day_task_filters = []
+        if customer_name:
+            day_task_filters.append(
+                func.lower(func.trim(DayTask.customer)) == customer_name
+            )
+        if customer_number:
+            day_task_filters.append(func.trim(DayTask.customer_number) == customer_number)
+        open_day_tasks = 0
+        if day_task_filters:
+            open_day_tasks = (
+                db.query(DayTask)
+                .filter(DayTask.status != "done")
+                .filter(or_(*day_task_filters))
+                .count()
+            )
+        open_tasks = open_time_tasks + open_day_tasks
         address_parts = [customer.street, customer.postal_code, customer.city, customer.country]
         address = ", ".join([part for part in address_parts if part])
         phone_numbers = [phone.number for phone in customer.phones]
@@ -1155,10 +1202,12 @@ def get_customer_metrics(customer_id: int):
         km_rate = float(metrics_settings.km_rate_eur or 0)
         min_distance_km = float(metrics_settings.min_distance_km or 0)
         min_fee_eur = float(metrics_settings.min_fee_eur or 0)
+        hourly_rate = float(metrics_settings.hourly_rate_eur or 0)
     except ValueError:
         km_rate = 0.0
         min_distance_km = 0.0
         min_fee_eur = 0.0
+        hourly_rate = 0.0
     mileage_eur = None
     if distance_km is not None:
         round_trip_km = distance_km * 2
@@ -1166,9 +1215,16 @@ def get_customer_metrics(customer_id: int):
             mileage_eur = round(min_fee_eur, 2)
         else:
             mileage_eur = round(round_trip_km * km_rate, 2)
+    open_time_minutes = round(open_time_ms / 60000, 1) if open_time_ms else 0
+    open_time_hours = round(open_time_ms / 3600000, 2) if open_time_ms else 0
+    estimated_revenue = round(open_time_hours * hourly_rate, 2) if hourly_rate else 0
 
     return {
         "openTasks": open_tasks,
+        "openTimeTasks": open_time_tasks,
+        "openDayTasks": open_day_tasks,
+        "openTimeMinutes": open_time_minutes,
+        "estimatedRevenueEur": estimated_revenue,
         "distanceKm": distance_km,
         "mileageEur": mileage_eur,
         "missedCalls": missed_calls,

@@ -16,6 +16,7 @@ const API = "/api";
 
 const api = {
   customers: () => fetch(`${API}/customers`).then((r) => r.json()),
+  metricsSettings: () => fetch(`${API}/customer_metrics_settings`).then((r) => r.json()),
   addCustomer: (name) =>
     fetch(`${API}/customers`, {
       method: "POST",
@@ -194,6 +195,7 @@ function TaskItem({ task, reload }) {
 
 /* ================= Customer ================= */
 function CustomerCard({ customer, reload }) {
+  const hourlyRate = customer.hourlyRate ?? 0;
   const inputRef = useRef();
 
   useEffect(() => {
@@ -218,6 +220,8 @@ function CustomerCard({ customer, reload }) {
     if (t.running && t.startTime) e += Date.now() - t.startTime;
     return s + e;
   }, 0);
+  const totalHours = total / 3600000;
+  const revenue = hourlyRate ? totalHours * hourlyRate : 0;
 
   return (
     <div className="bg-white rounded-xl p-3 shadow flex flex-col min-h-[240px] relative">
@@ -231,9 +235,14 @@ function CustomerCard({ customer, reload }) {
 
       <div className="flex justify-between mb-2">
         <h2 className="font-semibold text-sm">{customer.name}</h2>
-        <span className="text-xs flex items-center gap-1 text-slate-500">
-          <Clock size={14} /> {msToHHMMSS(total)}
-        </span>
+        <div className="text-xs text-slate-500 text-right">
+          <div className="flex items-center gap-1 justify-end">
+            <Clock size={14} /> {msToHHMMSS(total)}
+          </div>
+          <div className="text-[10px] text-slate-400">
+            {hourlyRate ? `€ ${revenue.toFixed(2)}` : "€ 0,00"}
+          </div>
+        </div>
       </div>
 
       <div className="flex-1 space-y-2 overflow-y-auto max-h-[170px]">
@@ -265,6 +274,7 @@ export default function TimeTrackingView() {
   const [customersState, setCustomersState] = useState([]);
   const [newCustomer, setNewCustomer] = useState("");
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [hourlyRate, setHourlyRate] = useState(0);
 
   const load = useCallback(() => api.customers().then(setCustomersState), []);
   const customerSuggestions = useMemo(() => {
@@ -295,6 +305,15 @@ export default function TimeTrackingView() {
     const i = setInterval(load, 2000);
     return () => clearInterval(i);
   }, [load]);
+
+  useEffect(() => {
+    api.metricsSettings()
+      .then((data) => {
+        const rate = parseFloat(data?.hourly_rate_eur || "0");
+        setHourlyRate(Number.isFinite(rate) ? rate : 0);
+      })
+      .catch(() => setHourlyRate(0));
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -378,7 +397,7 @@ export default function TimeTrackingView() {
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             {visibleCustomers.map((c) => (
-              <CustomerCard key={c.id} customer={c} reload={load} />
+              <CustomerCard key={c.id} customer={{ ...c, hourlyRate }} reload={load} />
             ))}
           </div>
         </div>

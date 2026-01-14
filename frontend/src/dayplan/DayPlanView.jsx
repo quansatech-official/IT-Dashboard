@@ -36,15 +36,10 @@ const api = {
   removeGroup: (id) => fetch(`${API}/day_task_groups/${id}`, { method: "DELETE" })
 };
 
-const columns = [
-  { id: "todo", label: "Unzugeordnet" },
-  { id: "doing", label: "In Arbeit" },
-  { id: "done", label: "Erledigt" }
-];
+const columns = [{ id: "todo", label: "Aufgaben" }];
 
 export default function DayPlanView() {
   const [tasks, setTasks] = useState([]);
-  const [title, setTitle] = useState("");
   const [error, setError] = useState("");
   const [customers, setCustomers] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -74,23 +69,17 @@ export default function DayPlanView() {
     });
   }, []);
 
-  const addTask = async () => {
-    const lines = title
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (!lines.length) return;
-    const createdItems = [];
-    for (const line of lines) {
-      const created = await api.create({ title: line });
-      if (created?.id) {
-        createdItems.push(created);
-      }
+  const addTaskToGroup = async (groupId, text) => {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) return;
+    const created = await api.create({
+      title: trimmed,
+      group_id: groupId ?? null,
+      status: "todo"
+    });
+    if (created?.id) {
+      setTasks((prev) => [created, ...prev]);
     }
-    if (createdItems.length) {
-      setTasks((prev) => [...createdItems, ...prev]);
-    }
-    setTitle("");
   };
 
   const updateTask = async (task, patch) => {
@@ -138,6 +127,11 @@ export default function DayPlanView() {
     });
     return map;
   }, [tasks]);
+
+  const doneTasks = useMemo(
+    () => grouped.done.sort((a, b) => (b.created_at || 0) - (a.created_at || 0)),
+    [grouped.done]
+  );
 
   const groupsByColumn = useMemo(() => {
     const map = { todo: [], doing: [], done: [] };
@@ -218,6 +212,16 @@ export default function DayPlanView() {
     const task = tasks.find((item) => item.id === id);
     if (!task) return;
     updateTask(task, { group_id: null, status: columnId });
+  };
+
+  const handleDoneDrop = (event) => {
+    event.preventDefault();
+    const payload = event.dataTransfer.getData("text/plain");
+    if (!payload || !payload.startsWith("task:")) return;
+    const id = Number(payload.replace("task:", ""));
+    const task = tasks.find((item) => item.id === id);
+    if (!task) return;
+    updateTask(task, { status: "done" });
   };
 
   const createGroup = async (columnId) => {
@@ -313,6 +317,7 @@ export default function DayPlanView() {
     const hasCustomer = Boolean(task.customer || task.customer_number);
     const canPromote = hasCustomer;
     const isDone = task.status === "done";
+    const canInvoice = hasCustomer;
     return (
       <div
         key={task.id}
@@ -386,7 +391,7 @@ export default function DayPlanView() {
             {task.customer_number ? (
               <div className="text-xs text-sand-400">Nr. {task.customer_number}</div>
             ) : null}
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               {!task.task_id ? (
                 <button
                   type="button"
@@ -394,49 +399,35 @@ export default function DayPlanView() {
                   disabled={!canPromote}
                   className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
                     canPromote
-                      ? "border-sand-200 text-sand-600 hover:bg-sand-100"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                       : "border-sand-100 text-sand-300 cursor-not-allowed"
                   }`}
                   title={canPromote ? "In Zeiterfassung übernehmen" : "Kunde zuordnen, um zu übernehmen"}
                 >
-                  In Zeiterfassung
+                  Zeiterfassung
                 </button>
               ) : (
                 <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                  In Zeiterfassung
+                  Zeiterfassung
                 </span>
               )}
-              {task.status !== "todo" ? (
-                <button
-                  type="button"
-                  onClick={() => updateTask(task, { status: "todo" })}
-                  className="rounded-full border border-sand-200 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                >
-                  Unzugeordnet
-                </button>
-              ) : null}
-              {task.status !== "doing" ? (
-                <button
-                  type="button"
-                  onClick={() => updateTask(task, { status: "doing" })}
-                  className="rounded-full border border-sand-200 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                >
-                  In Arbeit
-                </button>
-              ) : null}
-              {task.status !== "done" ? (
-                <button
-                  type="button"
-                  onClick={() => updateTask(task, { status: "done" })}
-                  className="rounded-full border border-sand-200 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                >
-                  Erledigt
-                </button>
-              ) : null}
+              <button
+                type="button"
+                onClick={() => setError("Faktura (Dummy) ist noch nicht angebunden.")}
+                disabled={!canInvoice}
+                className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                  canInvoice
+                    ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                    : "border-sand-100 text-sand-300 cursor-not-allowed"
+                }`}
+                title={canInvoice ? "In Faktura übernehmen (Dummy)" : "Kunde zuordnen, um zu übernehmen"}
+              >
+                Faktura
+              </button>
               <button
                 type="button"
                 onClick={() => removeTask(task)}
-                className="ml-auto inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs text-rose-700 hover:bg-rose-100"
+                className="ml-auto inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
                 title="Löschen"
               >
                 <Trash2 size={12} />
@@ -465,28 +456,14 @@ export default function DayPlanView() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
-        <div className="rounded-3xl border border-amber-100 bg-white shadow-[0_8px_30px_rgba(150,120,60,0.12)] p-5">
-          <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-            <textarea
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Freitext erfassen… jede Zeile wird zu einer Aufgabe"
-              rows={3}
-              className="rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 resize-none"
-            />
-            <button
-              type="button"
-              onClick={addTask}
-              className="rounded-2xl bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide h-fit shadow-soft"
-            >
-              Speichern
-            </button>
+      <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+        {error ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
+            {error}
           </div>
-          {error ? <p className="mt-3 text-sm text-rose-600">{error}</p> : null}
-        </div>
+        ) : null}
 
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid gap-6 lg:grid-cols-1">
           {columns.map((column) => (
             <div
               key={column.id}
@@ -556,6 +533,18 @@ export default function DayPlanView() {
                     ) : (
                       <div className="text-xs text-sand-400">Keine Aufgaben.</div>
                     )}
+                    <input
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          const value = event.currentTarget.value;
+                          addTaskToGroup(null, value);
+                          event.currentTarget.value = "";
+                        }
+                      }}
+                      placeholder="Neue Aufgabe…"
+                      className="w-full rounded-full border border-amber-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    />
                   </div>
                 </div>
                 {groupsByColumn[column.id].map((group) => (
@@ -621,6 +610,18 @@ export default function DayPlanView() {
                       ) : (
                         <div className="text-xs text-sand-400">Ziehe Aufgaben hierher.</div>
                       )}
+                      <input
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            const value = event.currentTarget.value;
+                            addTaskToGroup(group.id, value);
+                            event.currentTarget.value = "";
+                          }
+                        }}
+                        placeholder="Neue Aufgabe…"
+                        className="w-full rounded-full border border-amber-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                      />
                     </div>
                   </div>
                 ))}
@@ -628,6 +629,27 @@ export default function DayPlanView() {
             </div>
           ))}
         </div>
+
+        <section className="rounded-3xl border border-amber-100 bg-white/80 p-5 shadow-[0_8px_30px_rgba(150,120,60,0.08)]">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">Erledigt</h2>
+              <p className="text-xs text-sand-400 mt-1">Ziehe Aufgaben hierher</p>
+            </div>
+            <span className="text-xs text-sand-500">{doneTasks.length}</span>
+          </div>
+          <div
+            className="space-y-3 max-h-[50vh] overflow-auto pr-1"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={handleDoneDrop}
+          >
+            {doneTasks.length ? (
+              doneTasks.map((task) => renderTaskCard(task))
+            ) : (
+              <div className="text-xs text-sand-400">Noch keine erledigten Aufgaben.</div>
+            )}
+          </div>
+        </section>
       </main>
     </div>
   );

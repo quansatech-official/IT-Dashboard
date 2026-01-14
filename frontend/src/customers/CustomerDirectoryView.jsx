@@ -88,7 +88,8 @@ export default function CustomerDirectoryView() {
     office_address: "",
     km_rate_eur: "",
     min_distance_km: "",
-    min_fee_eur: ""
+    min_fee_eur: "",
+    hourly_rate_eur: ""
   });
   const [metricsSettingsStatus, setMetricsSettingsStatus] = useState("idle");
   const saveTimers = useRef({});
@@ -853,6 +854,22 @@ export default function CustomerDirectoryView() {
                         }))
                       }
                       placeholder="0.80"
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">
+                      Stundensatz (€)
+                    </span>
+                    <input
+                      value={metricsSettings.hourly_rate_eur}
+                      onChange={(event) =>
+                        setMetricsSettings((prev) => ({
+                          ...prev,
+                          hourly_rate_eur: event.target.value
+                        }))
+                      }
+                      placeholder="90"
                       className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>

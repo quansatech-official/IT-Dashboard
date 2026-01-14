@@ -389,6 +389,7 @@ export default function ReportView() {
           const openedAtText = openedAt ? new Date(openedAt).toLocaleString("de-DE") : "";
           entry.reports.push({
             id: reportItem.id,
+            customer: reportItem.customer || key,
             label: reportItem.period || "Bericht",
             status: reportItem.status || "",
             period: reportItem.period || "",
@@ -827,8 +828,9 @@ export default function ReportView() {
       setArchiveItems((prev) => {
         const grouped = [...prev];
         const idx = grouped.findIndex((item) => item.customer === created.customer);
-          const entry = {
+        const entry = {
           id: created.id,
+          customer: created.customer,
           label: created.period || "Bericht",
           status: created.status || "",
           period: created.period || "",
@@ -905,6 +907,7 @@ export default function ReportView() {
 
   const updateArchiveStatus = async (item, status) => {
     if (!item?.id) return;
+    const shouldCreateTask = status === "Bestätigt" && item.customerStatus !== "Bestätigt";
     try {
       const res = await fetch(`/api/reports/${item.id}`, {
         method: "PUT",
@@ -926,6 +929,33 @@ export default function ReportView() {
           )
         }))
       );
+      if (shouldCreateTask) {
+        try {
+          const reportRes = await fetch(`/api/reports/${item.id}`);
+          const reportData = reportRes.ok ? await reportRes.json() : null;
+          const reportCustomer = reportData?.customer || item.customer || "";
+          const period = reportData?.period || item.period || "";
+          const actionText = String(reportData?.customer_action_text || "").trim();
+          const firstAction = Array.isArray(reportData?.items)
+            ? reportData.items.find((entry) => String(entry?.title || "").trim())
+            : null;
+          const actionTitle = firstAction ? String(firstAction.title || "").trim() : "";
+          const baseTitle =
+            actionText || actionTitle || `Bericht bestätigt${period ? ` (${period})` : ""}`;
+          const taskTitle = reportCustomer ? `${reportCustomer}: ${baseTitle}` : baseTitle;
+          await fetch("/api/day_tasks", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: taskTitle,
+              customer: reportCustomer,
+              status: "todo"
+            })
+          });
+        } catch (error) {
+          setToast("Aufgabe konnte nicht erstellt werden.");
+        }
+      }
       setToast("Status aktualisiert.");
     } catch (error) {
       setToast("Status speichern fehlgeschlagen.");
