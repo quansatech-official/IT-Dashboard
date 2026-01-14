@@ -14,15 +14,13 @@ import {
 /* ================= API ================= */
 const API = "/api";
 
-const TIME_TRACKING_STORAGE_KEY = "qt_time_tracking_customers";
-
 const api = {
   customers: () => fetch(`${API}/customers`).then((r) => r.json()),
   addCustomer: (name) =>
     fetch(`${API}/customers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name })
+      body: JSON.stringify({ name, time_tracking_enabled: true })
     }).then((r) => r.json()),
   deleteCustomer: (id) => fetch(`${API}/customers/${id}`, { method: "DELETE" }),
 
@@ -260,16 +258,6 @@ function CustomerCard({ customer, reload }) {
 export default function TimeTrackingView() {
   const [customersState, setCustomersState] = useState([]);
   const [newCustomer, setNewCustomer] = useState("");
-  const [timeTrackingIds, setTimeTrackingIds] = useState(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = window.localStorage.getItem(TIME_TRACKING_STORAGE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (error) {
-      return [];
-    }
-  });
 
   const load = useCallback(() => api.customers().then(setCustomersState), []);
   const customerSuggestions = useMemo(() => {
@@ -283,24 +271,10 @@ export default function TimeTrackingView() {
     () =>
       customersState.filter(
         (customer) =>
-          (customer.tasks && customer.tasks.length > 0) || timeTrackingIds.includes(customer.id)
+          (customer.tasks && customer.tasks.length > 0) || customer.time_tracking_enabled
       ),
-    [customersState, timeTrackingIds]
+    [customersState]
   );
-
-  const rememberTimeTrackingCustomer = (id) => {
-    if (!id) return;
-    setTimeTrackingIds((prev) => {
-      if (prev.includes(id)) return prev;
-      const next = [...prev, id];
-      try {
-        window.localStorage.setItem(TIME_TRACKING_STORAGE_KEY, JSON.stringify(next));
-      } catch (error) {
-        // Ignore storage errors.
-      }
-      return next;
-    });
-  };
 
   useEffect(() => {
     load();
@@ -343,7 +317,6 @@ export default function TimeTrackingView() {
               onClick={() =>
                 newCustomer.trim() &&
                 api.addCustomer(newCustomer.trim()).then((created) => {
-                  rememberTimeTrackingCustomer(created?.id);
                   setNewCustomer("");
                   load();
                 })

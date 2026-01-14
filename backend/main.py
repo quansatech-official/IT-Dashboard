@@ -32,6 +32,7 @@ class Customer(Base):
     name = Column(String, nullable=False)
     creditor_number = Column(String, default="")
     email = Column(String, default="")
+    time_tracking_enabled = Column(Boolean, default=False)
 
     tasks = relationship(
         "Task",
@@ -240,6 +241,8 @@ def _ensure_customer_columns() -> None:
         statements.append("ALTER TABLE customers ADD COLUMN creditor_number VARCHAR DEFAULT ''")
     if "email" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN email VARCHAR DEFAULT ''")
+    if "time_tracking_enabled" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN time_tracking_enabled BOOLEAN DEFAULT FALSE")
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
@@ -257,6 +260,7 @@ class CustomerCreate(BaseModel):
     name: str
     creditor_number: Optional[str] = ""
     email: Optional[str] = ""
+    time_tracking_enabled: Optional[bool] = None
     phones: Optional[List[CustomerPhoneSchema]] = None
 
 
@@ -264,6 +268,7 @@ class CustomerUpdate(BaseModel):
     name: Optional[str] = None
     creditor_number: Optional[str] = None
     email: Optional[str] = None
+    time_tracking_enabled: Optional[bool] = None
     phones: Optional[List[CustomerPhoneSchema]] = None
 
 
@@ -420,6 +425,7 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
         "name": c.name,
         "creditor_number": c.creditor_number,
         "email": c.email,
+        "time_tracking_enabled": c.time_tracking_enabled,
         "phones": [serialize_customer_phone(p) for p in c.phones],
         "tasks": [serialize_task(t) for t in c.tasks],
     }
@@ -655,6 +661,7 @@ def create_customer(data: CustomerCreate):
             name=data.name,
             creditor_number=data.creditor_number or "",
             email=data.email or "",
+            time_tracking_enabled=bool(data.time_tracking_enabled),
         )
         db.add(customer)
         db.flush()
