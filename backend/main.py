@@ -1512,8 +1512,6 @@ def promote_day_task(task_id: int):
         db.add(task)
         db.flush()
         day_task.task_id = task.id
-        if day_task.status == "todo":
-            day_task.status = "doing"
         db.commit()
         db.refresh(day_task)
         return serialize_day_task(day_task)

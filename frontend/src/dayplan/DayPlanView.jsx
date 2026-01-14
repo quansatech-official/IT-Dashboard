@@ -156,10 +156,6 @@ export default function DayPlanView() {
   const promoteTask = async (task) => {
     setError("");
     const updated = await api.promote(task.id);
-    if (updated?.status === "todo" && updated?.task_id) {
-      // keep local state consistent if backend didn't adjust status
-      updated.status = "doing";
-    }
     if (updated?.id) {
       setTasks((prev) => prev.map((item) => (item.id === task.id ? updated : item)));
       refreshCustomers();
