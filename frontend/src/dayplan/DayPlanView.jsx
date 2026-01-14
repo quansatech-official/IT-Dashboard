@@ -71,11 +71,14 @@ export default function DayPlanView() {
   const [dragOver, setDragOver] = useState("");
   const [dragOverGroupId, setDragOverGroupId] = useState(null);
   const [suggestionOpenId, setSuggestionOpenId] = useState(null);
+  const [suggestionQuery, setSuggestionQuery] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [editingCustomerId, setEditingCustomerId] = useState(null);
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
   const [timeTaskCache, setTimeTaskCache] = useState({});
+  const [timeEdits, setTimeEdits] = useState({});
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     api.list().then((data) => {
@@ -359,6 +362,7 @@ export default function DayPlanView() {
   const toggleSuggestionMenu = (taskId, hasMultiple) => {
     if (!hasMultiple) return;
     setSuggestionOpenId((prev) => (prev === taskId ? null : taskId));
+    setSuggestionQuery("");
   };
 
   const normalizeText = (value) =>
@@ -376,6 +380,25 @@ export default function DayPlanView() {
     return `${hours.toString().padStart(2, "0")}:${minutes
       .toString()
       .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const parseDurationInput = (value) => {
+    const parts = String(value || "")
+      .trim()
+      .split(":")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (parts.length < 2 || parts.length > 3) return null;
+    const numbers = parts.map((part) => Number(part));
+    if (numbers.some((num) => !Number.isFinite(num) || num < 0)) return null;
+    if (parts.length === 2) {
+      const [minutes, seconds] = numbers;
+      if (seconds >= 60) return null;
+      return (minutes * 60 + seconds) * 1000;
+    }
+    const [hours, minutes, seconds] = numbers;
+    if (minutes >= 60 || seconds >= 60) return null;
+    return (hours * 3600 + minutes * 60 + seconds) * 1000;
   };
 
   const knownCustomerNames = useMemo(
@@ -396,12 +419,31 @@ export default function DayPlanView() {
     return map;
   }, [customers, timeTaskCache]);
 
+  useEffect(() => {
+    const hasRunning = Object.values(timeTasksById).some((task) => task?.running);
+    if (!hasRunning) return;
+    const interval = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [timeTasksById]);
+
   const toggleTimeTask = async (timeTask) => {
     if (!timeTask?.id) return;
     const updated = await api.toggleTimeTask(timeTask.id);
     if (updated?.id) {
       setTimeTaskCache((prev) => ({ ...prev, [updated.id]: updated }));
     }
+    refreshCustomers();
+  };
+
+  const commitManualTime = async (taskId, timeTask, value) => {
+    const parsedMs = parseDurationInput(value);
+    if (parsedMs === null) {
+      setError("Zeitformat ungültig. Beispiel: 96:00 oder 01:30:00");
+      return;
+    }
+    await api.updateTimeTask(timeTask.id, { elapsed: parsedMs, running: false, startTime: 0 });
+    setTimeEdits((prev) => ({ ...prev, [taskId]: msToHHMMSS(parsedMs) }));
+    setError("");
     refreshCustomers();
   };
 
@@ -468,6 +510,13 @@ export default function DayPlanView() {
     return scored.map((item) => item.name);
   };
 
+  const filteredCustomerNames = useMemo(() => {
+    const needle = suggestionQuery.trim().toLowerCase();
+    const names = customers.map((item) => String(item?.name || "").trim()).filter(Boolean);
+    if (!needle) return names;
+    return names.filter((name) => name.toLowerCase().includes(needle));
+  }, [customers, suggestionQuery]);
+
   const renderTaskCard = (task) => {
     const suggestions = getCustomerSuggestions(task);
     const hasCustomer = Boolean(task.customer || task.customer_number);
@@ -478,8 +527,9 @@ export default function DayPlanView() {
     const timeTask = task.task_id ? timeTasksById[task.task_id] : null;
     const elapsedMs = timeTask
       ? (timeTask.elapsed || 0) +
-        (timeTask.running && timeTask.startTime ? Date.now() - timeTask.startTime : 0)
+        (timeTask.running && timeTask.startTime ? nowMs - timeTask.startTime : 0)
       : 0;
+    const timeInputValue = timeEdits[task.id] ?? msToHHMMSS(elapsedMs);
     return (
       <div
         key={task.id}
@@ -540,10 +590,6 @@ export default function DayPlanView() {
                     <button
                       type="button"
                       onClick={() => {
-                        if (suggestions.length === 1) {
-                          updateTask(task, { customer: suggestions[0] });
-                          return;
-                        }
                         toggleSuggestionMenu(task.id, true);
                       }}
                       className="rounded-full border border-amber-200 bg-white p-1 text-sand-600 hover:bg-amber-100"
@@ -597,9 +643,22 @@ export default function DayPlanView() {
                     >
                       {timeTask?.running ? <Square size={10} /> : <Play size={10} />}
                     </button>
-                    <span className="text-[10px] font-mono text-sand-600">
-                      {msToHHMMSS(elapsedMs)}
-                    </span>
+                    <input
+                      value={timeInputValue}
+                      onChange={(event) =>
+                        setTimeEdits((prev) => ({ ...prev, [task.id]: event.target.value }))
+                      }
+                      onBlur={() => commitManualTime(task.id, timeTask, timeInputValue)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitManualTime(task.id, timeTask, timeInputValue);
+                        }
+                      }}
+                      className="w-[78px] bg-transparent text-[10px] font-mono text-sand-600 focus:outline-none"
+                      title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
+                      disabled={!timeTask}
+                    />
                   </div>
                 )}
                 <button
@@ -680,24 +739,39 @@ export default function DayPlanView() {
               </button>
             ) : null}
             {!knownCustomer && suggestions.length > 1 && suggestionOpenId === task.id ? (
-              <div className="absolute right-3 top-full mt-2 w-56 rounded-xl border border-amber-200 bg-white shadow-soft z-20">
+              <div className="absolute right-3 top-full mt-2 w-64 rounded-xl border border-amber-200 bg-white shadow-soft z-20">
                 <div className="px-3 py-2 text-[10px] uppercase tracking-wide text-sand-400">
-                  Kundenvorschlage
+                  Kundenvorschlaege
                 </div>
-                <div className="max-h-40 overflow-auto">
-                  {suggestions.map((name) => (
+                <div className="px-3 pb-2">
+                  <input
+                    value={suggestionQuery}
+                    onChange={(event) => setSuggestionQuery(event.target.value)}
+                    placeholder="Kunde suchen..."
+                    className="w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  />
+                </div>
+                <div className="max-h-48 overflow-auto border-t border-amber-100">
+                  {(suggestionQuery.trim() ? filteredCustomerNames : suggestions).map((name) => (
                     <button
                       key={name}
                       type="button"
                       onClick={() => {
                         updateTask(task, { customer: name });
                         setSuggestionOpenId(null);
+                        setSuggestionQuery("");
                       }}
                       className="w-full text-left px-3 py-2 text-xs text-sand-700 hover:bg-amber-50"
                     >
                       {name}
                     </button>
                   ))}
+                  {!suggestions.length && !suggestionQuery.trim() ? (
+                    <div className="px-3 py-2 text-xs text-sand-400">Keine Vorschlaege.</div>
+                  ) : null}
+                  {suggestionQuery.trim() && !filteredCustomerNames.length ? (
+                    <div className="px-3 py-2 text-xs text-sand-400">Kein Kunde gefunden.</div>
+                  ) : null}
                 </div>
               </div>
             ) : null}

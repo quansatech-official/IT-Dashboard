@@ -2,7 +2,10 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.main import Task, DayTask, Customer
+try:
+    from backend.main import Task, DayTask, Customer
+except ModuleNotFoundError:
+    from main import Task, DayTask, Customer
 
 DATABASE_URL = os.environ.get("DATABASE_URL") or (
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
