@@ -9,6 +9,11 @@ const formatTime = (timestamp) => {
   });
 };
 
+const formatDate = (timestamp) => {
+  if (!timestamp) return "-";
+  return new Date(timestamp).toLocaleDateString("de-DE");
+};
+
 const formatDuration = (seconds) => {
   if (!seconds) return "0:00";
   const mins = Math.floor(seconds / 60);
@@ -153,6 +158,7 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
         <table className="w-full text-sm">
           <thead className="text-sand-500 border-b border-sand-200">
             <tr>
+              <th className="text-left py-2">Datum</th>
               <th className="text-left py-2">Zeit</th>
               <th className="text-left py-2">Rufnummer</th>
               <th className="text-left py-2">NS</th>
@@ -166,7 +172,7 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
           <tbody>
             {filteredCalls.length === 0 ? (
               <tr>
-                <td colSpan={8} className="py-6 text-center text-sand-500">
+                <td colSpan={9} className="py-6 text-center text-sand-500">
                   {onlyMissed
                     ? "Keine verpassten Anrufe vorhanden."
                     : "Noch keine Telefonie-Events geladen."}
@@ -175,6 +181,7 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
             ) : (
               pagedCalls.map((call) => (
                 <tr key={call.uuid} className="border-b border-sand-100">
+                  <td className="py-3">{formatDate(call.startTime)}</td>
                   <td className="py-3">{formatTime(call.startTime)}</td>
                   <td className="py-3">{displayNumber(call)}</td>
                   <td className="py-3">{call.extension || "-"}</td>

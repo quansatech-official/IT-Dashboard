@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from .api_client import NfonCtiClient
 from .call_service import start_stream_listener
+from .crm_mapping import normalize_phone, resolve_customer_name
 from .models import Base, TelephonyCall, TelephonySettings, DATABASE_URL
 from .stats_service import calculate_stats
 
@@ -98,6 +99,36 @@ app.add_middleware(
 
 _reverse_cache: Dict[str, Dict[str, Optional[str]]] = {}
 _reverse_cache_ttl = 60 * 60 * 24
+_customer_mapping_cache: Dict[str, Dict[str, str] | float] = {"ts": 0.0, "mapping": {}}
+_customer_mapping_ttl = 60 * 5
+
+
+def _load_customer_mapping() -> Dict[str, str]:
+    now = time.time()
+    cached_ts = float(_customer_mapping_cache.get("ts", 0.0))
+    cached_mapping = _customer_mapping_cache.get("mapping")
+    if isinstance(cached_mapping, dict) and cached_mapping and now - cached_ts < _customer_mapping_ttl:
+        return cached_mapping
+    mapping: Dict[str, str] = {}
+    try:
+        with engine.begin() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT c.name, p.number "
+                    "FROM customers c "
+                    "JOIN customer_phones p ON p.customer_id = c.id "
+                    "WHERE p.number IS NOT NULL AND p.number <> ''"
+                )
+            ).fetchall()
+        for name, number in rows:
+            normalized = normalize_phone(number)
+            if normalized and name:
+                mapping[normalized] = name
+    except Exception:
+        mapping = {}
+    _customer_mapping_cache["ts"] = now
+    _customer_mapping_cache["mapping"] = mapping
+    return mapping
 
 
 def _reverse_lookup(number: str, settings: Optional[TelephonySettings]) -> Optional[str]:
@@ -107,6 +138,11 @@ def _reverse_lookup(number: str, settings: Optional[TelephonySettings]) -> Optio
     cached = _reverse_cache.get(number)
     if cached and now - cached["ts"] < _reverse_cache_ttl:
         return cached.get("name")
+    customer_mapping = _load_customer_mapping()
+    customer_name = resolve_customer_name(number, customer_mapping)
+    if customer_name:
+        _reverse_cache[number] = {"name": customer_name, "ts": now}
+        return customer_name
     base_url = ""
     api_key = ""
     api_header = ""
