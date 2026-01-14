@@ -396,12 +396,6 @@ export default function DayPlanView() {
     return map;
   }, [customers, timeTaskCache]);
 
-  const persistTimeTask = async (timeTask, patch) => {
-    const taskId = timeTask?.id || timeTask;
-    if (!taskId) return;
-    await api.updateTimeTask(taskId, patch);
-    refreshCustomers();
-  };
   const toggleTimeTask = async (timeTask) => {
     if (!timeTask?.id) return;
     const updated = await api.toggleTimeTask(timeTask.id);
@@ -482,7 +476,6 @@ export default function DayPlanView() {
     const canInvoice = hasCustomer;
     const knownCustomer = isKnownCustomer(task.customer);
     const timeTask = task.task_id ? timeTasksById[task.task_id] : null;
-    const timeDraft = timeDrafts[task.id] || {};
     const elapsedMs = timeTask
       ? (timeTask.elapsed || 0) +
         (timeTask.running && timeTask.startTime ? Date.now() - timeTask.startTime : 0)
@@ -711,145 +704,6 @@ export default function DayPlanView() {
             {task.customer_number ? (
               <div className="text-[10px] text-sand-400">Nr. {task.customer_number}</div>
             ) : null}
-            <div className="mt-2 rounded-md border border-sand-200 bg-white/80 px-2 py-1.5 text-xs text-sand-600">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Zeit</span>
-                <button
-                  type="button"
-                  onClick={() => toggleTimePanel(task.id)}
-                  className="text-[10px] uppercase tracking-wide text-sand-500 hover:text-sand-700"
-                >
-                  {openTimePanels[task.id] ? "Einklappen" : "Ausklappen"}
-                </button>
-              </div>
-              {!openTimePanels[task.id] ? (
-                <div className="mt-1 flex items-center justify-between">
-                  <span className="text-[11px] text-sand-400">
-                    {task.task_id ? "Gesamtzeit" : "Zeit aktivieren"}
-                  </span>
-                  {task.task_id ? (
-                    <span className="text-xs font-semibold text-sand-700">{msToClock(elapsedMs)}</span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => promoteTask(task)}
-                      disabled={!canPromote}
-                      className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${
-                        canPromote
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                          : "border-sand-100 text-sand-300 cursor-not-allowed"
-                      }`}
-                    >
-                      Zeit aktivieren
-                    </button>
-                  )}
-                </div>
-              ) : task.task_id ? (
-                timeTask ? (
-                  <>
-                    <div className="mt-2 grid grid-cols-2 gap-2">
-                      <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-sand-400">
-                        Ankunft
-                        <input
-                          type="time"
-                          value={timeDraft.arrival || ""}
-                          onChange={(event) =>
-                            updateTimeDraft(task.id, { arrival: event.target.value })
-                          }
-                          className="rounded-md border border-sand-200 bg-white px-2 py-1 text-xs text-sand-700"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-sand-400">
-                        Abfahrt
-                        <input
-                          type="time"
-                          value={timeDraft.departure || ""}
-                          onChange={(event) =>
-                            updateTimeDraft(task.id, { departure: event.target.value })
-                          }
-                          className="rounded-md border border-sand-200 bg-white px-2 py-1 text-xs text-sand-700"
-                        />
-                      </label>
-                    </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => applyManualTimeEntry(task, timeTask)}
-                        className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
-                      >
-                        Zeit übernehmen
-                      </button>
-                      <div className="ml-auto flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            persistTimeTask(timeTask, { erledigt: !timeTask.erledigt })
-                          }
-                          className={`rounded-full border p-1 ${
-                            timeTask.erledigt
-                              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                              : "border-sand-200 bg-white text-sand-400 hover:bg-sand-100"
-                          }`}
-                          title={
-                            timeTask.erledigt ? "Als offen markieren" : "Als erledigt markieren"
-                          }
-                        >
-                          <CheckCircle size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            persistTimeTask(timeTask, { aberechnet: !timeTask.aberechnet })
-                          }
-                          className={`rounded-full border p-1 ${
-                            timeTask.aberechnet
-                              ? "border-amber-200 bg-amber-50 text-amber-700"
-                              : "border-sand-200 bg-white text-sand-400 hover:bg-sand-100"
-                          }`}
-                          title={
-                            timeTask.aberechnet
-                              ? "Nicht abgerechnet"
-                              : "Als abgerechnet markieren"
-                          }
-                        >
-                          <DollarSign size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => persistTimeTask(timeTask, { kulant: !timeTask.kulant })}
-                          className={`rounded-full border p-1 ${
-                            timeTask.kulant
-                              ? "border-rose-200 bg-rose-50 text-rose-600"
-                              : "border-sand-200 bg-white text-sand-400 hover:bg-sand-100"
-                          }`}
-                          title={timeTask.kulant ? "Kulanz entfernen" : "Kulanz markieren"}
-                        >
-                          <Heart size={12} />
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="mt-2 text-[11px] text-sand-400">Zeitdaten werden geladen…</div>
-                )
-              ) : (
-                <div className="mt-2 flex items-center justify-between">
-                  <div className="text-[11px] text-sand-400">Zeit in Aufgabe aktivieren.</div>
-                  <button
-                    type="button"
-                    onClick={() => promoteTask(task)}
-                    disabled={!canPromote}
-                    className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${
-                      canPromote
-                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                        : "border-sand-100 text-sand-300 cursor-not-allowed"
-                    }`}
-                  >
-                    Zeit aktivieren
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         </div>
       </div>
