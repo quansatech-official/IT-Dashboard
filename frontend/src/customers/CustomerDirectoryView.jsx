@@ -65,7 +65,7 @@ const customerPayload = (customer) => ({
   phones: (customer.phones || [])
     .filter((phone) => (phone.label || "").trim() || (phone.number || "").trim())
     .map((phone) => ({
-      id: phone.id,
+      id: Number.isInteger(phone.id) ? phone.id : undefined,
       label: phone.label || "",
       number: phone.number || ""
     }))
@@ -763,12 +763,9 @@ export default function CustomerDirectoryView() {
                 className="w-full rounded-2xl border border-sand-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
               />
             </label>
-            <div className="mt-4 space-y-2 max-h-[420px] overflow-auto pr-1">
+            <div className="mt-4 space-y-2 max-h-[520px] overflow-auto pr-1">
               {filteredCustomers.length ? (
                 sortedCustomers.map((customer) => {
-                  const phoneCount = (customer.phones || []).filter(
-                    (phone) => (phone.label || "").trim() || (phone.number || "").trim()
-                  ).length;
                   return (
                     <button
                       key={customer.id}
@@ -787,9 +784,6 @@ export default function CustomerDirectoryView() {
                         {customer.creditorNumber
                           ? `Kunden-Nr. ${customer.creditorNumber}`
                           : "Ohne Nummer"}
-                      </div>
-                      <div className="mt-1 text-xs">
-                        {customer.email || "Keine E-Mail"} · {phoneCount} Rufnummern
                       </div>
                     </button>
                   );

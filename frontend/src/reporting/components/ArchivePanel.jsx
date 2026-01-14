@@ -1,5 +1,5 @@
 import { Edit3, Eye, Mail, Search, Trash2, Info } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { archiveStatusStyles } from "../constants";
 
 export default function ArchivePanel({
@@ -16,6 +16,17 @@ export default function ArchivePanel({
   const [readFilter, setReadFilter] = useState("all");
   const [periodFilter, setPeriodFilter] = useState("");
   const [openInfoId, setOpenInfoId] = useState(null);
+  useEffect(() => {
+    if (!openInfoId) return;
+    const handleClick = (event) => {
+      if (event.target.closest?.("[data-info-dropdown]")) return;
+      setOpenInfoId(null);
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [openInfoId]);
   const beaconStatus = useMemo(() => {
     if (typeof window === "undefined") return { ok: false, label: "Beacon: unbekannt" };
     try {
@@ -121,7 +132,11 @@ export default function ArchivePanel({
                       {item.customerStatus}
                     </span>
                   ) : null}
-                  <details className="relative z-40" open={openInfoId === item.id}>
+                  <details
+                    className="relative z-40"
+                    open={openInfoId === item.id}
+                    data-info-dropdown
+                  >
                     <summary
                       onClick={(event) => {
                         event.preventDefault();

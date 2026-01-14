@@ -72,6 +72,18 @@ class Task(Base):
     customer = relationship("Customer", back_populates="tasks")
 
 
+class DayTask(Base):
+    __tablename__ = "day_tasks"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String, nullable=False)
+    customer = Column(String, default="")
+    customer_number = Column(String, default="")
+    status = Column(String, default="todo")
+    task_id = Column(Integer, nullable=True)
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
 class CustomerPhone(Base):
     __tablename__ = "customer_phones"
 
@@ -334,6 +346,26 @@ def _ensure_customer_columns() -> None:
 
 _ensure_customer_columns()
 
+
+def _ensure_day_tasks_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("day_tasks"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("day_tasks")}
+    statements = []
+    if "customer_number" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN customer_number VARCHAR DEFAULT ''")
+    if "task_id" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN task_id INTEGER")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_day_tasks_columns()
+
 # ================= SCHEMAS ==================
 class CustomerPhoneSchema(BaseModel):
     id: Optional[int] = None
@@ -378,6 +410,21 @@ class TaskUpdate(BaseModel):
     elapsed: Optional[int] = None
     running: Optional[bool] = None
     startTime: Optional[int] = None
+
+
+class DayTaskCreate(BaseModel):
+    title: str
+    customer: Optional[str] = ""
+    customer_number: Optional[str] = ""
+    status: Optional[str] = "todo"
+
+
+class DayTaskUpdate(BaseModel):
+    title: Optional[str] = None
+    customer: Optional[str] = None
+    customer_number: Optional[str] = None
+    status: Optional[str] = None
+    task_id: Optional[int] = None
 
 
 class PinNoteUpdate(BaseModel):
@@ -518,6 +565,18 @@ def serialize_task(t: Task) -> Dict[str, Any]:
         "elapsed": t.elapsed,
         "running": t.running,
         "startTime": t.startTime,
+    }
+
+
+def serialize_day_task(t: DayTask) -> Dict[str, Any]:
+    return {
+        "id": t.id,
+        "title": t.title,
+        "customer": t.customer,
+        "customer_number": t.customer_number,
+        "status": t.status,
+        "task_id": t.task_id,
+        "created_at": t.created_at,
     }
 
 
@@ -1095,6 +1154,11 @@ def update_task(task_id: int, data: TaskUpdate):
 
         for field, value in data.dict(exclude_unset=True).items():
             setattr(task, field, value)
+        if data.erledigt is not None:
+            status = "done" if data.erledigt else "doing"
+            db.query(DayTask).filter(DayTask.task_id == task.id).update(
+                {"status": status}, synchronize_session=False
+            )
 
         db.commit()
         return serialize_task(task)
@@ -1131,6 +1195,87 @@ def toggle_timer(task_id: int):
 
         db.commit()
         return serialize_task(task)
+
+
+# ================= DAY PLAN TASKS =================
+@app.get("/api/day_tasks")
+def get_day_tasks():
+    with SessionLocal() as db:
+        tasks = db.query(DayTask).order_by(DayTask.created_at.desc()).all()
+        return [serialize_day_task(t) for t in tasks]
+
+
+@app.post("/api/day_tasks")
+def create_day_task(data: DayTaskCreate):
+    with SessionLocal() as db:
+        task = DayTask(
+            title=data.title,
+            customer=data.customer or "",
+            customer_number=data.customer_number or "",
+            status=data.status or "todo",
+        )
+        db.add(task)
+        db.commit()
+        db.refresh(task)
+        return serialize_day_task(task)
+
+
+@app.patch("/api/day_tasks/{task_id}")
+def update_day_task(task_id: int, data: DayTaskUpdate):
+    with SessionLocal() as db:
+        task = db.query(DayTask).get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        for field, value in data.dict(exclude_unset=True).items():
+            setattr(task, field, value if value is not None else "")
+        db.commit()
+        db.refresh(task)
+        return serialize_day_task(task)
+
+
+@app.delete("/api/day_tasks/{task_id}")
+def delete_day_task(task_id: int):
+    with SessionLocal() as db:
+        task = db.query(DayTask).get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        db.delete(task)
+        db.commit()
+        return {"status": "deleted"}
+
+
+@app.post("/api/day_tasks/{task_id}/promote")
+def promote_day_task(task_id: int):
+    with SessionLocal() as db:
+        day_task = db.query(DayTask).get(task_id)
+        if not day_task:
+            raise HTTPException(404, "Task not found")
+        if day_task.task_id:
+            return serialize_day_task(day_task)
+        customer = None
+        if day_task.customer_number:
+            customer = (
+                db.query(Customer)
+                .filter(Customer.creditor_number == day_task.customer_number)
+                .first()
+            )
+        if not customer and day_task.customer:
+            customer = (
+                db.query(Customer)
+                .filter(func.lower(Customer.name) == day_task.customer.strip().lower())
+                .first()
+            )
+        if not customer:
+            raise HTTPException(400, "Customer not found")
+        task = Task(customer_id=customer.id, title=day_task.title)
+        db.add(task)
+        db.flush()
+        day_task.task_id = task.id
+        if day_task.status == "todo":
+            day_task.status = "doing"
+        db.commit()
+        db.refresh(day_task)
+        return serialize_day_task(day_task)
 
 # ================= PINBOARD =================
 @app.get("/api/pinboard")

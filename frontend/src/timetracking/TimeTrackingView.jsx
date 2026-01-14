@@ -22,6 +22,12 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, time_tracking_enabled: true })
     }).then((r) => r.json()),
+  updateCustomer: (id, payload) =>
+    fetch(`${API}/customers/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then((r) => r.json()),
   deleteCustomer: (id) => fetch(`${API}/customers/${id}`, { method: "DELETE" }),
 
   addTask: (customer_id, title) =>
@@ -345,10 +351,24 @@ export default function TimeTrackingView() {
               className="bg-slate-900 text-white rounded px-4"
               onClick={() =>
                 newCustomer.trim() &&
-                api.addCustomer(newCustomer.trim()).then((created) => {
-                  setNewCustomer("");
-                  load();
-                })
+                (() => {
+                  const normalized = newCustomer.trim().toLowerCase();
+                  const existing = customersState.find(
+                    (customer) => (customer.name || "").trim().toLowerCase() === normalized
+                  );
+                  if (existing) {
+                    return api
+                      .updateCustomer(existing.id, { time_tracking_enabled: true })
+                      .then(() => {
+                        setNewCustomer("");
+                        load();
+                      });
+                  }
+                  return api.addCustomer(newCustomer.trim()).then(() => {
+                    setNewCustomer("");
+                    load();
+                  });
+                })()
               }
               title="Kunden anlegen"
             >

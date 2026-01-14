@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { Clock, FileText, Settings, Sparkles, StickyNote, Users, Wrench } from "lucide-react";
+import {
+  Clock,
+  ClipboardList,
+  FileText,
+  Settings,
+  Sparkles,
+  StickyNote,
+  Users,
+  Wrench
+} from "lucide-react";
 import ReportView from "./reporting/ReportView";
 import TimeTrackingView from "./timetracking/TimeTrackingView";
 import TelephonyMenu from "./telephony/TelephonyMenu";
@@ -8,9 +17,10 @@ import NotesView from "./notes/NotesView";
 import ToolsView from "./tools/ToolsView";
 import SettingsView from "./settings/SettingsView";
 import CustomerDirectoryView from "./customers/CustomerDirectoryView";
+import DayPlanView from "./dayplan/DayPlanView";
 
 export default function App() {
-  const [activeView, setActiveView] = useState("time");
+  const [activeView, setActiveView] = useState("dayplan");
   const [sidebarWidth, setSidebarWidth] = useState(200);
 
   return (
@@ -26,6 +36,19 @@ export default function App() {
           </div>
 
           <nav className="space-y-2">
+            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400 px-2">
+              Tagesgeschäft
+            </p>
+            <button
+              onClick={() => setActiveView("dayplan")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "dayplan"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <ClipboardList size={18} /> Aufgaben
+            </button>
             <button
               onClick={() => setActiveView("time")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
@@ -36,6 +59,20 @@ export default function App() {
             >
               <Clock size={18} /> Zeiterfassung
             </button>
+            <button
+              onClick={() => setActiveView("notes")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "notes"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <StickyNote size={18} /> Notizen
+            </button>
+            <div className="border-t border-sand-200 my-2" />
+            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400 px-2">
+              Kundenorientierung
+            </p>
             <button
               onClick={() => setActiveView("report")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
@@ -56,16 +93,14 @@ export default function App() {
             >
               <Users size={18} /> Kundenstamm
             </button>
-            <button
-              onClick={() => setActiveView("notes")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "notes"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <StickyNote size={18} /> Notizen
-            </button>
+            <TelephonyMenu
+              active={activeView === "telephony"}
+              onClick={() => setActiveView("telephony")}
+            />
+            <div className="border-t border-sand-200 my-2" />
+            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400 px-2">
+              Betriebsintern
+            </p>
             <button
               onClick={() => setActiveView("tools")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
@@ -76,10 +111,6 @@ export default function App() {
             >
               <Wrench size={18} /> Tools
             </button>
-            <TelephonyMenu
-              active={activeView === "telephony"}
-              onClick={() => setActiveView("telephony")}
-            />
           </nav>
 
           <div className="mt-auto space-y-3">
@@ -115,6 +146,8 @@ export default function App() {
         <div className="flex-1">
           {activeView === "time" ? (
             <TimeTrackingView />
+          ) : activeView === "dayplan" ? (
+            <DayPlanView />
           ) : activeView === "notes" ? (
             <NotesView />
           ) : activeView === "customers" ? (
