@@ -471,17 +471,17 @@ export default function DayPlanView() {
     return (
       <div
         key={task.id}
-        className="relative rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 shadow-[0_4px_10px_rgba(150,120,60,0.08)]"
+        className="relative rounded-lg border border-amber-100 bg-amber-50/70 px-2 py-1.5 shadow-[0_2px_6px_rgba(150,120,60,0.08)]"
         draggable
         onDragStart={(event) => {
           event.dataTransfer.setData("text/plain", `task:${task.id}`);
         }}
       >
-        <div className="flex items-start gap-2">
+        <div className="flex items-start gap-1.5">
           <button
             type="button"
             onClick={() => updateTask(task, { status: isDone ? "todo" : "done" })}
-            className={`mt-1 h-4 w-4 rounded-full border flex items-center justify-center ${
+            className={`mt-0.5 h-3.5 w-3.5 rounded-full border flex items-center justify-center ${
               isDone ? "border-emerald-400 bg-emerald-400" : "border-amber-300 bg-white"
             }`}
             title={isDone ? "Als unzugeordnet markieren" : "Als erledigt markieren"}
@@ -489,7 +489,7 @@ export default function DayPlanView() {
             {isDone ? <span className="text-[10px] text-white">✓</span> : null}
           </button>
           <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start justify-between gap-1.5">
               <div className="flex-1 min-w-0">
                 {editingId === task.id ? (
                   <input
@@ -506,14 +506,14 @@ export default function DayPlanView() {
                         cancelEdit();
                       }
                     }}
-                    className="w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-sm font-medium text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    className="w-full rounded-md border border-amber-200 bg-white px-2 py-1 text-xs font-medium text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
                     autoFocus
                   />
                 ) : (
                   <button
                     type="button"
                     onClick={() => startEdit(task)}
-                    className={`text-left text-sm font-medium hover:text-sand-700 ${
+                    className={`text-left text-xs font-medium hover:text-sand-700 ${
                       isDone ? "line-through text-sand-400" : "text-sand-900"
                     }`}
                     title="Aufgabe bearbeiten"
@@ -522,7 +522,7 @@ export default function DayPlanView() {
                   </button>
                 )}
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-0.5">
                 {!knownCustomer ? (
                   suggestions.length ? (
                     <button
@@ -865,7 +865,7 @@ export default function DayPlanView() {
                   Gruppe
                 </button>
               </div>
-              <div className="space-y-3 max-h-[65vh] overflow-auto pr-1">
+              <div className="space-y-2 max-h-[65vh] overflow-auto pr-1">
                 <div
                   className="rounded-xl border border-dashed border-amber-200 bg-white/70 px-3 py-2"
                   onDragOver={(event) => event.preventDefault()}
@@ -879,7 +879,7 @@ export default function DayPlanView() {
                       {grouped[column.id].filter((task) => !task.group_id).length}
                     </span>
                   </div>
-                  <div className="mt-3 space-y-3">
+                  <div className="mt-2 space-y-2">
                     {grouped[column.id].filter((task) => !task.group_id).length ? (
                       grouped[column.id]
                         .filter((task) => !task.group_id)
@@ -904,7 +904,7 @@ export default function DayPlanView() {
                 {groupsByColumn[column.id].map((group) => (
                   <div
                     key={group.id}
-                    className={`rounded-xl border border-amber-200 bg-white/80 px-3 py-2 ${
+                    className={`rounded-lg border border-amber-200 bg-white/80 px-2 py-1.5 ${
                       dragOverGroupId === group.id ? "ring-2 ring-amber-300" : ""
                     }`}
                     onDragOver={(event) => handleGroupDragOver(event, group.id)}
@@ -977,7 +977,7 @@ export default function DayPlanView() {
                       </button>
                     </div>
                     <div
-                      className="mt-2 space-y-3"
+                      className="mt-2 space-y-2"
                       onDragOver={(event) => handleGroupDragOver(event, group.id)}
                       onDrop={(event) => handleGroupDrop(event, group, column.id)}
                     >
@@ -1017,7 +1017,7 @@ export default function DayPlanView() {
             <span className="text-xs text-sand-500">{doneTasks.length}</span>
           </div>
           <div
-            className="space-y-3 max-h-[45vh] overflow-auto pr-1"
+            className="space-y-2 max-h-[45vh] overflow-auto pr-1"
             onDragOver={(event) => event.preventDefault()}
             onDrop={handleDoneDrop}
           >
