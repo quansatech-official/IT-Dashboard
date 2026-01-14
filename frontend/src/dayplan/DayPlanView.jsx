@@ -342,7 +342,11 @@ export default function DayPlanView() {
       cancelCustomerEdit();
       return;
     }
-    await updateTask(task, { customer: trimmed });
+    if (!trimmed) {
+      await updateTask(task, { customer: "", customer_number: "" });
+    } else {
+      await updateTask(task, { customer: trimmed });
+    }
     cancelCustomerEdit();
   };
 
@@ -749,7 +753,7 @@ export default function DayPlanView() {
               </button>
             ) : null}
             {suggestionOpenId === task.id ? (
-              <div className="absolute right-3 top-full mt-2 w-64 rounded-xl border border-amber-200 bg-white shadow-soft z-20">
+              <div className="absolute right-0 top-full mt-1 w-64 rounded-xl border border-amber-200 bg-white shadow-soft z-20">
                 <div className="px-3 py-2 text-[10px] uppercase tracking-wide text-sand-400">
                   Kundenvorschlaege
                 </div>
@@ -789,9 +793,6 @@ export default function DayPlanView() {
                   ) : null}
                 </div>
               </div>
-            ) : null}
-            {task.customer_number ? (
-              <div className="text-[10px] text-sand-400">Nr. {task.customer_number}</div>
             ) : null}
           </div>
         </div>
