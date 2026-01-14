@@ -318,6 +318,7 @@ export default function ReportView() {
             label: reportItem.period || "Bericht",
             status: reportItem.status || "",
             period: reportItem.period || "",
+            customerStatus: reportItem.customer_status || "",
             sentAt,
             sentVia,
             sentTo,
@@ -729,11 +730,12 @@ export default function ReportView() {
       setArchiveItems((prev) => {
         const grouped = [...prev];
         const idx = grouped.findIndex((item) => item.customer === created.customer);
-        const entry = {
+          const entry = {
           id: created.id,
           label: created.period || "Bericht",
           status: created.status || "",
           period: created.period || "",
+          customerStatus: created.customer_status || "",
           sentAt: created.sent_at || 0,
           sentVia: created.sent_via || "",
           sentTo: created.sent_to || "",
@@ -802,6 +804,35 @@ export default function ReportView() {
     customer_action_text: data.customer_action_text,
     actions: data.items || []
   });
+
+  const updateArchiveStatus = async (item, status) => {
+    if (!item?.id) return;
+    try {
+      const res = await fetch(`/api/reports/${item.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customer_status: status })
+      });
+      if (!res.ok) {
+        setToast("Status speichern fehlgeschlagen.");
+        return;
+      }
+      const updated = await res.json();
+      setArchiveItems((prev) =>
+        prev.map((group) => ({
+          ...group,
+          reports: group.reports.map((reportItem) =>
+            reportItem.id === item.id
+              ? { ...reportItem, customerStatus: updated.customer_status || "" }
+              : reportItem
+          )
+        }))
+      );
+      setToast("Status aktualisiert.");
+    } catch (error) {
+      setToast("Status speichern fehlgeschlagen.");
+    }
+  };
 
 
   const blobToBase64 = (blob) =>
@@ -1385,15 +1416,16 @@ export default function ReportView() {
 
       {section === "archive" && (
         <main className="w-full px-6 py-8">
-            <ArchivePanel
-              archive={archiveItems}
-              onDelete={deleteArchivedReport}
-              onExportEmail={exportArchivedEmail}
-              onPreview={previewArchivedReport}
-              onEdit={editArchivedReport}
-              onSendSmtp={sendArchivedReport}
-            />
-          </main>
+          <ArchivePanel
+            archive={archiveItems}
+            onDelete={deleteArchivedReport}
+            onExportEmail={exportArchivedEmail}
+            onPreview={previewArchivedReport}
+            onEdit={editArchivedReport}
+            onSendSmtp={sendArchivedReport}
+            onUpdateStatus={updateArchiveStatus}
+          />
+        </main>
       )}
 
       {section === "templates" && (

@@ -30,9 +30,17 @@ class Customer(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
+    internal_number = Column(String, default="")
+    creditor_number = Column(String, default="")
+    email = Column(String, default="")
 
     tasks = relationship(
         "Task",
+        back_populates="customer",
+        cascade="all, delete-orphan"
+    )
+    phones = relationship(
+        "CustomerPhone",
         back_populates="customer",
         cascade="all, delete-orphan"
     )
@@ -55,6 +63,17 @@ class Task(Base):
     startTime = Column(BigInteger, default=0)    # ms timestamp
 
     customer = relationship("Customer", back_populates="tasks")
+
+
+class CustomerPhone(Base):
+    __tablename__ = "customer_phones"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"))
+    label = Column(String, default="")
+    number = Column(String, default="")
+
+    customer = relationship("Customer", back_populates="phones")
 
 
 class PinNote(Base):
@@ -105,6 +124,7 @@ class Report(Base):
     sent_to = Column(String, default="")
     opened_at = Column(BigInteger, default=0)
     opened_count = Column(Integer, default=0)
+    customer_status = Column(String, default="")
 
     items = relationship(
         "ReportItem",
@@ -185,6 +205,8 @@ def _ensure_report_opened_columns() -> None:
         statements.append("ALTER TABLE reports ADD COLUMN sent_via VARCHAR")
     if "sent_to" not in columns:
         statements.append("ALTER TABLE reports ADD COLUMN sent_to VARCHAR")
+    if "customer_status" not in columns:
+        statements.append("ALTER TABLE reports ADD COLUMN customer_status VARCHAR DEFAULT ''")
     if not statements:
         return
     with engine.begin() as connection:
@@ -208,9 +230,48 @@ def _ensure_report_catalog_group_column() -> None:
 
 _ensure_report_catalog_group_column()
 
+
+def _ensure_customer_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("customers"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("customers")}
+    statements = []
+    if "internal_number" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN internal_number VARCHAR DEFAULT ''")
+    if "creditor_number" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN creditor_number VARCHAR DEFAULT ''")
+    if "email" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN email VARCHAR DEFAULT ''")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_customer_columns()
+
 # ================= SCHEMAS ==================
+class CustomerPhoneSchema(BaseModel):
+    label: Optional[str] = ""
+    number: Optional[str] = ""
+
+
 class CustomerCreate(BaseModel):
     name: str
+    internal_number: Optional[str] = ""
+    creditor_number: Optional[str] = ""
+    email: Optional[str] = ""
+    phones: Optional[List[CustomerPhoneSchema]] = None
+
+
+class CustomerUpdate(BaseModel):
+    name: Optional[str] = None
+    internal_number: Optional[str] = None
+    creditor_number: Optional[str] = None
+    email: Optional[str] = None
+    phones: Optional[List[CustomerPhoneSchema]] = None
 
 
 class TaskCreate(BaseModel):
@@ -290,6 +351,7 @@ class ReportCreate(BaseModel):
     status: Optional[str] = ""
     summary: Optional[str] = ""
     customer_action_text: Optional[str] = ""
+    customer_status: Optional[str] = ""
     items: List[ReportItemSchema] = []
 
 
@@ -305,6 +367,7 @@ class ReportEdit(BaseModel):
     status: Optional[str] = None
     summary: Optional[str] = None
     customer_action_text: Optional[str] = None
+    customer_status: Optional[str] = None
     items: Optional[List[ReportItemSchema]] = None
 
 class IntegrationSettingsUpdate(BaseModel):
@@ -362,7 +425,19 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
     return {
         "id": c.id,
         "name": c.name,
+        "internal_number": c.internal_number,
+        "creditor_number": c.creditor_number,
+        "email": c.email,
+        "phones": [serialize_customer_phone(p) for p in c.phones],
         "tasks": [serialize_task(t) for t in c.tasks],
+    }
+
+
+def serialize_customer_phone(p: CustomerPhone) -> Dict[str, Any]:
+    return {
+        "id": p.id,
+        "label": p.label,
+        "number": p.number,
     }
 
 def serialize_catalog_item(item: ReportCatalogItem) -> Dict[str, Any]:
@@ -411,6 +486,7 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "status": report.status,
         "summary": report.summary,
         "customer_action_text": report.customer_action_text,
+        "customer_status": report.customer_status,
         "created_at": report.created_at,
         "sent_at": report.sent_at,
         "sent_via": report.sent_via,
@@ -582,9 +658,48 @@ def get_report_customers():
 @app.post("/api/customers")
 def create_customer(data: CustomerCreate):
     with SessionLocal() as db:
-        customer = Customer(name=data.name)
+        customer = Customer(
+            name=data.name,
+            internal_number=data.internal_number or "",
+            creditor_number=data.creditor_number or "",
+            email=data.email or "",
+        )
         db.add(customer)
+        db.flush()
+        if data.phones:
+            for phone in data.phones:
+                customer.phones.append(
+                    CustomerPhone(
+                        label=phone.label or "",
+                        number=phone.number or ""
+                    )
+                )
         db.commit()
+        return serialize_customer(customer)
+
+
+@app.patch("/api/customers/{customer_id}")
+def update_customer(customer_id: int, data: CustomerUpdate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+
+        for field, value in data.dict(exclude_unset=True, exclude={"phones"}).items():
+            setattr(customer, field, value)
+
+        if data.phones is not None:
+            customer.phones.clear()
+            for phone in data.phones:
+                customer.phones.append(
+                    CustomerPhone(
+                        label=phone.label or "",
+                        number=phone.number or ""
+                    )
+                )
+
+        db.commit()
+        db.refresh(customer)
         return serialize_customer(customer)
 
 
@@ -916,6 +1031,7 @@ def create_report(data: ReportCreate):
             status=data.status or "",
             summary=data.summary or "",
             customer_action_text=data.customer_action_text or "",
+            customer_status=data.customer_status or "",
         )
         db.add(report)
         db.flush()

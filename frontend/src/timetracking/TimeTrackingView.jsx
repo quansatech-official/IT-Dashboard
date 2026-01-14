@@ -52,22 +52,27 @@ const api = {
 };
 
 /* ================= Helpers ================= */
-const msToMMSS = (ms = 0) => {
+const msToHHMMSS = (ms = 0) => {
   const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  return `${m}:${(s % 60).toString().padStart(2, "0")}`;
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const seconds = s % 60;
+  return `${hours}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
 };
 
 /* ================= Time Editor ================= */
 function TimeEditor({ task, elapsed, onSave }) {
-  const [value, setValue] = useState(msToMMSS(elapsed));
+  const [value, setValue] = useState(msToHHMMSS(elapsed));
 
-  useEffect(() => setValue(msToMMSS(elapsed)), [elapsed]);
+  useEffect(() => setValue(msToHHMMSS(elapsed)), [elapsed]);
 
   const commit = () => {
-    const m = value.match(/^(\d+):(\d{2})$/);
-    if (!m) return;
-    const ms = (parseInt(m[1]) * 60 + parseInt(m[2])) * 1000;
+    const match = value.match(/^(\d+):(\d{2}):(\d{2})$/);
+    if (!match) return;
+    const hours = parseInt(match[1]);
+    const minutes = parseInt(match[2]);
+    const seconds = parseInt(match[3]);
+    const ms = (hours * 3600 + minutes * 60 + seconds) * 1000;
     onSave(task.id, { elapsed: ms, running: false, startTime: 0 });
   };
 
@@ -77,8 +82,8 @@ function TimeEditor({ task, elapsed, onSave }) {
       onChange={(e) => setValue(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => e.key === "Enter" && commit()}
-      className="w-16 text-xs font-mono text-right border rounded px-1 bg-slate-50"
-      title="MM:SS"
+      className="w-24 text-xs font-mono text-right border rounded px-1 bg-slate-50"
+      title="HH:MM:SS"
     />
   );
 }

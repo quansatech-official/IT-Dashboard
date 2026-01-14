@@ -1,6 +1,6 @@
 import { Edit3, Eye, Mail, Search, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { statusStyles } from "../constants";
+import { archiveStatusStyles, statusStyles } from "../constants";
 
 export default function ArchivePanel({
   archive,
@@ -8,7 +8,8 @@ export default function ArchivePanel({
   onExportEmail,
   onPreview,
   onEdit,
-  onSendSmtp
+  onSendSmtp,
+  onUpdateStatus
 }) {
   const [query, setQuery] = useState("");
   const filteredArchive = useMemo(() => {
@@ -51,6 +52,28 @@ export default function ArchivePanel({
                   >
                     {item.status}
                   </span>
+                  <label className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600">
+                    <span>Status</span>
+                    <select
+                      value={item.customerStatus || ""}
+                      onChange={(event) => onUpdateStatus?.(item, event.target.value)}
+                      className="bg-transparent text-[10px] uppercase tracking-wide text-sand-700 focus:outline-none"
+                    >
+                      <option value="">Offen</option>
+                      <option value="Gelesen">Gelesen</option>
+                      <option value="Bestätigt">Bestätigt</option>
+                      <option value="Abgelehnt">Abgelehnt</option>
+                    </select>
+                  </label>
+                  {item.customerStatus ? (
+                    <span
+                      className={`text-[10px] font-semibold uppercase tracking-wide border px-3 py-1 rounded-full ${
+                        archiveStatusStyles[item.customerStatus]
+                      }`}
+                    >
+                      {item.customerStatus}
+                    </span>
+                  ) : null}
                   {item.sentAt ? (
                     <span className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600">
                       <span>Versand</span>

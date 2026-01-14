@@ -77,6 +77,12 @@ export const statusStyles = {
   Rot: "bg-rose-100 text-rose-800 border-rose-200"
 };
 
+export const archiveStatusStyles = {
+  Gelesen: "bg-sky-100 text-sky-700 border-sky-200",
+  Bestätigt: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  Abgelehnt: "bg-rose-100 text-rose-700 border-rose-200"
+};
+
 export const priorityStyles = {
   Dringend: "bg-rose-100 text-rose-700 border-rose-200",
   Planbar: "bg-sky-100 text-sky-700 border-sky-200",
