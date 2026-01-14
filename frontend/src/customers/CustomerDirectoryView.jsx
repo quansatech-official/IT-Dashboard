@@ -27,8 +27,7 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
-  remove: (id) => fetch(`${API}/customers/${id}`, { method: "DELETE" }),
-  removeAll: () => fetch(`${API}/customers`, { method: "DELETE" })
+  remove: (id) => fetch(`${API}/customers/${id}`, { method: "DELETE" })
 };
 
 const blankPhone = () => ({
@@ -88,7 +87,7 @@ export default function CustomerDirectoryView() {
   const filteredCustomers = useMemo(() => {
     const trimmed = query.trim().toLowerCase();
     if (!trimmed) return customers;
-    return customers.filter((customer) => {
+    const filtered = customers.filter((customer) => {
       const phoneMatch = customer.phones?.some((phone) =>
         `${phone.label} ${phone.number}`.toLowerCase().includes(trimmed)
       );
@@ -99,7 +98,21 @@ export default function CustomerDirectoryView() {
         phoneMatch
       );
     });
+    return filtered;
   }, [customers, query]);
+
+  const sortedCustomers = useMemo(() => {
+    const list = filteredCustomers.slice();
+    list.sort((a, b) => {
+      const nameA = (a.name || "").toLowerCase();
+      const nameB = (b.name || "").toLowerCase();
+      if (nameA && nameB) return nameA.localeCompare(nameB, "de");
+      if (nameA) return -1;
+      if (nameB) return 1;
+      return String(a.id).localeCompare(String(b.id));
+    });
+    return list;
+  }, [filteredCustomers]);
 
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
 
@@ -144,14 +157,6 @@ export default function CustomerDirectoryView() {
   const handleRemove = (id) => {
     api.remove(id).then(() => {
       setCustomers((prev) => prev.filter((customer) => customer.id !== id));
-    });
-  };
-
-  const handleRemoveAll = () => {
-    if (!confirm("Alle Kunden wirklich löschen?")) return;
-    api.removeAll().then(() => {
-      setCustomers([]);
-      setActiveId(null);
     });
   };
 
@@ -507,9 +512,13 @@ export default function CustomerDirectoryView() {
 
   const addPhone = () => {
     if (!activeCustomer) return;
-    updateCustomer(activeCustomer.id, {
-      phones: [...(activeCustomer.phones || []), blankPhone()]
-    });
+    setCustomers((prev) =>
+      prev.map((customer) =>
+        customer.id === activeCustomer.id
+          ? { ...customer, phones: [...(customer.phones || []), blankPhone()] }
+          : customer
+      )
+    );
   };
 
   const removePhone = (phoneId) => {
@@ -521,13 +530,46 @@ export default function CustomerDirectoryView() {
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
-            <Users size={18} />
+        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
+              <Users size={18} />
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
+              <h1 className="text-2xl font-display text-sand-900">Kundenstamm</h1>
+            </div>
           </div>
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-            <h1 className="text-2xl font-display text-sand-900">Kundenstamm</h1>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleCreate}
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide hover:opacity-90"
+            >
+              <Plus size={14} /> Neuer Kunde
+            </button>
+            <button
+              type="button"
+              onClick={downloadCsv}
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+            >
+              CSV exportieren
+            </button>
+            <button
+              type="button"
+              onClick={() => importInputRef.current?.click()}
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+            >
+              CSV importieren
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(event) => importCsv(event.target.files?.[0])}
+            />
+            {importStatus ? <div className="text-xs text-sand-500">{importStatus}</div> : null}
           </div>
         </div>
       </header>
@@ -556,7 +598,7 @@ export default function CustomerDirectoryView() {
             </label>
             <div className="mt-4 space-y-2 max-h-[420px] overflow-auto pr-1">
               {filteredCustomers.length ? (
-                filteredCustomers.map((customer) => {
+                sortedCustomers.map((customer) => {
                   const phoneCount = (customer.phones || []).filter(
                     (phone) => (phone.label || "").trim() || (phone.number || "").trim()
                   ).length;
@@ -594,52 +636,6 @@ export default function CustomerDirectoryView() {
           </section>
 
           <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Aktionen</p>
-                <h2 className="text-lg font-display text-sand-900">Kundenstamm</h2>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleCreate}
-                  className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide hover:opacity-90"
-                >
-                  <Plus size={14} /> Neuer Kunde
-                </button>
-                <button
-                  type="button"
-                  onClick={downloadCsv}
-                  className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                >
-                  CSV exportieren
-                </button>
-                <button
-                  type="button"
-                  onClick={() => importInputRef.current?.click()}
-                  className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                >
-                  CSV importieren
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRemoveAll}
-                  className="inline-flex items-center justify-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                >
-                  Alle Kunden entfernen
-                </button>
-              </div>
-              <input
-                ref={importInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={(event) => importCsv(event.target.files?.[0])}
-              />
-              {importStatus ? (
-                <div className="text-xs text-sand-500">{importStatus}</div>
-              ) : null}
-            </div>
             {activeCustomer ? (
               <div className="space-y-6">
                 <div className="flex flex-wrap items-start justify-between gap-4">

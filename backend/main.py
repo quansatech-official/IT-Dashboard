@@ -736,13 +736,6 @@ def delete_customer(customer_id: int):
         return {"status": "deleted"}
 
 
-@app.delete("/api/customers")
-def delete_all_customers():
-    with SessionLocal() as db:
-        db.query(Customer).delete(synchronize_session=False)
-        db.commit()
-        return {"status": "deleted"}
-
 # ================= TASKS ====================
 @app.post("/api/tasks")
 def create_task(data: TaskCreate):
