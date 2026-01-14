@@ -1,0 +1,199 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:wght@500;700&family=Manrope:wght@400;500;600&display=swap");
+
+:root {
+  color-scheme: light;
+  font-family: "Manrope", "Segoe UI", sans-serif;
+  background: #f7f2e8;
+  color: #2f2a24;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #fff6e2, #f5efe4 55%, #efe6d7 100%);
+}
+
+h1, h2, h3 {
+  font-family: "Fraunces", "Times New Roman", serif;
+  margin: 0;
+}
+
+button, input, textarea, select {
+  font-family: inherit;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  padding: 20px 20px 12px;
+  border-bottom: 1px solid #e6dccb;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+}
+
+.header p {
+  margin: 6px 0 0;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #94897a;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #eadfcd;
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: 0 10px 30px rgba(150, 120, 60, 0.08);
+}
+
+.section-title {
+  font-size: 12px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #8c806f;
+  margin-bottom: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.field label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: #8c806f;
+}
+
+.field input,
+.field textarea,
+.field select {
+  border: 1px solid #e8ddc9;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-size: 14px;
+  background: #fffaf0;
+}
+
+.primary-btn {
+  width: 100%;
+  border: none;
+  border-radius: 14px;
+  background: #2f2a24;
+  color: #fff;
+  padding: 12px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.secondary-btn {
+  border: 1px solid #e8ddc9;
+  border-radius: 14px;
+  padding: 10px 14px;
+  font-size: 12px;
+  background: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  border: 1px solid #e8ddc9;
+  background: #fff;
+}
+
+.nav {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  padding: 12px 16px 20px;
+  border-top: 1px solid #e6dccb;
+  background: rgba(255, 255, 255, 0.85);
+  position: sticky;
+  bottom: 0;
+}
+
+.nav button {
+  border: 1px solid #e8ddc9;
+  background: #fff;
+  border-radius: 14px;
+  padding: 10px;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: #4b4338;
+}
+
+.nav button.active {
+  background: #2f2a24;
+  color: #fff;
+  border-color: #2f2a24;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.inline {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.hint {
+  font-size: 12px;
+  color: #8f8576;
+}
+
+.timer {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.list-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #eadfcd;
+  background: #fff;
+  font-size: 13px;
+}
+
+@media (min-width: 720px) {
+  .app-shell {
+    max-width: 480px;
+    margin: 0 auto;
+  }
+}

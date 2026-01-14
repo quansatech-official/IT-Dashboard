@@ -59,6 +59,14 @@ services:
     depends_on:
       - oauth2-proxy
 
+  mobile-frontend:
+    build:
+      context: ./mobile-frontend
+    container_name: it-dashboard-mobile-frontend
+    restart: unless-stopped
+    ports:
+      - "${MOBILE_FRONTEND_PORT:-7001}:80"
+
   beacon:
     build:
       context: ./beacon
