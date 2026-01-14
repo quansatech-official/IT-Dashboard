@@ -30,7 +30,6 @@ class Customer(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-    internal_number = Column(String, default="")
     creditor_number = Column(String, default="")
     email = Column(String, default="")
 
@@ -237,14 +236,10 @@ def _ensure_customer_columns() -> None:
         return
     columns = {column["name"] for column in inspector.get_columns("customers")}
     statements = []
-    if "internal_number" not in columns:
-        statements.append("ALTER TABLE customers ADD COLUMN internal_number VARCHAR DEFAULT ''")
     if "creditor_number" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN creditor_number VARCHAR DEFAULT ''")
     if "email" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN email VARCHAR DEFAULT ''")
-    if not statements:
-        return
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
@@ -260,7 +255,6 @@ class CustomerPhoneSchema(BaseModel):
 
 class CustomerCreate(BaseModel):
     name: str
-    internal_number: Optional[str] = ""
     creditor_number: Optional[str] = ""
     email: Optional[str] = ""
     phones: Optional[List[CustomerPhoneSchema]] = None
@@ -268,7 +262,6 @@ class CustomerCreate(BaseModel):
 
 class CustomerUpdate(BaseModel):
     name: Optional[str] = None
-    internal_number: Optional[str] = None
     creditor_number: Optional[str] = None
     email: Optional[str] = None
     phones: Optional[List[CustomerPhoneSchema]] = None
@@ -425,7 +418,6 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
     return {
         "id": c.id,
         "name": c.name,
-        "internal_number": c.internal_number,
         "creditor_number": c.creditor_number,
         "email": c.email,
         "phones": [serialize_customer_phone(p) for p in c.phones],
@@ -661,7 +653,6 @@ def create_customer(data: CustomerCreate):
     with SessionLocal() as db:
         customer = Customer(
             name=data.name,
-            internal_number=data.internal_number or "",
             creditor_number=data.creditor_number or "",
             email=data.email or "",
         )

@@ -38,14 +38,13 @@ const blankPhone = () => ({
 
 const normalizeCustomer = (customer) => ({
   ...customer,
-  internalNumber: customer.internal_number ?? customer.internalNumber ?? "",
-  creditorNumber: customer.creditor_number ?? customer.creditorNumber ?? "",
+  creditorNumber:
+    customer.creditor_number ?? customer.creditorNumber ?? customer.internal_number ?? "",
   phones: customer.phones?.length ? customer.phones : [blankPhone()]
 });
 
 const customerPayload = (customer) => ({
   name: customer.name || "Neuer Kunde",
-  internal_number: customer.internalNumber || "",
   creditor_number: customer.creditorNumber || "",
   email: customer.email || "",
   phones: (customer.phones || [])
@@ -94,7 +93,6 @@ export default function CustomerDirectoryView() {
       );
       return (
         customer.name?.toLowerCase().includes(trimmed) ||
-        customer.internalNumber?.toLowerCase().includes(trimmed) ||
         customer.creditorNumber?.toLowerCase().includes(trimmed) ||
         customer.email?.toLowerCase().includes(trimmed) ||
         phoneMatch
@@ -220,7 +218,7 @@ export default function CustomerDirectoryView() {
     const rows = customers.map((customer) => {
       const phones = pickPhones(customer.phones || []);
       const values = {
-        "Kunden-Nr.": customer.internalNumber || "",
+        "Kunden-Nr.": customer.creditorNumber || "",
         Organisation: customer.name || "",
         Telefon: phones.phoneNumber,
         "Telefon-Kategorie": phones.phoneLabel || (phones.phoneNumber ? "Arbeit" : ""),
@@ -376,12 +374,14 @@ export default function CustomerDirectoryView() {
       firstName: findIndex(["vorname", "firstname", "givenname"]),
       title: findIndex(["titel", "title"]),
       nameSuffix: findIndex(["namenszusatz", "suffix"]),
-      internal: findIndex([
+      customerNumber: findIndex([
         "internal_number",
         "internal",
         "interne_nummer",
         "kundennummer",
         "kundennr",
+        "kunden_nr",
+        "kunden_nr_",
         "kunden_nr",
         "kunden_nr_"
       ]),
@@ -397,8 +397,8 @@ export default function CustomerDirectoryView() {
 
     const byInternal = new Map(
       customers
-        .filter((customer) => customer.internalNumber)
-        .map((customer) => [String(customer.internalNumber).trim(), customer])
+        .filter((customer) => customer.creditorNumber)
+        .map((customer) => [String(customer.creditorNumber).trim(), customer])
     );
     const byName = new Map(
       customers
@@ -421,8 +421,8 @@ export default function CustomerDirectoryView() {
         indexes.lastName >= 0 ? row[indexes.lastName] : "",
         indexes.nameSuffix >= 0 ? row[indexes.nameSuffix] : ""
       ]);
-      const internalNumber =
-        indexes.internal >= 0 ? String(row[indexes.internal] || "").trim() : "";
+      const customerNumber =
+        indexes.customerNumber >= 0 ? String(row[indexes.customerNumber] || "").trim() : "";
       const creditorNumberRaw =
         indexes.creditor >= 0 ? String(row[indexes.creditor] || "").trim() : "";
       const creditorNumber =
@@ -439,20 +439,21 @@ export default function CustomerDirectoryView() {
       });
       const finalName = name || fallbackName;
 
-      if (!finalName && !internalNumber) {
+      const resolvedCreditorNumber = creditorNumber || customerNumber;
+
+      if (!finalName && !resolvedCreditorNumber) {
         skipped += 1;
         continue;
       }
 
       const existing =
-        (internalNumber && byInternal.get(internalNumber)) ||
+        (resolvedCreditorNumber && byInternal.get(resolvedCreditorNumber)) ||
         (finalName && byName.get(finalName.toLowerCase()));
 
       if (existing) {
         const payload = {};
         if (finalName) payload.name = finalName;
-        if (internalNumber) payload.internal_number = internalNumber;
-        if (creditorNumber) payload.creditor_number = creditorNumber;
+        if (resolvedCreditorNumber) payload.creditor_number = resolvedCreditorNumber;
         if (email) payload.email = email;
         if (phones.length) payload.phones = phones;
         if (!Object.keys(payload).length) {
@@ -471,8 +472,7 @@ export default function CustomerDirectoryView() {
 
       await api.create({
         name: finalName,
-        internal_number: internalNumber,
-        creditor_number: creditorNumber,
+        creditor_number: resolvedCreditorNumber,
         email,
         phones
       });
@@ -599,8 +599,8 @@ export default function CustomerDirectoryView() {
                         {customer.name?.trim() || "Unbenannter Kunde"}
                       </div>
                       <div className="mt-1 text-xs text-sand-500">
-                        {customer.internalNumber
-                          ? `Interne Nr. ${customer.internalNumber}`
+                        {customer.creditorNumber
+                          ? `Kunden-Nr. ${customer.creditorNumber}`
                           : "Ohne Nummer"}
                       </div>
                       <div className="mt-1 text-xs">
@@ -650,14 +650,14 @@ export default function CustomerDirectoryView() {
                   </label>
                   <label className="block">
                     <span className="text-xs uppercase tracking-wide text-sand-500">
-                      Interne Kundennummer
+                      Kundennummer (Faktura)
                     </span>
                     <input
-                      value={activeCustomer.internalNumber}
+                      value={activeCustomer.creditorNumber}
                       onChange={(event) =>
-                        updateCustomer(activeCustomer.id, { internalNumber: event.target.value })
+                        updateCustomer(activeCustomer.id, { creditorNumber: event.target.value })
                       }
-                      placeholder="z. B. K-1042"
+                      placeholder="z. B. 1042"
                       className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>
