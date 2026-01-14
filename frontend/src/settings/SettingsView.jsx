@@ -11,6 +11,7 @@ const defaultSmtp = {
   password: "",
   sender_name: "",
   sender_email: "",
+  beacon_base_url: "",
   use_tls: true,
   use_ssl: false,
   has_password: false
@@ -75,6 +76,7 @@ export default function SettingsView() {
           password: smtp.password,
           sender_name: smtp.sender_name,
           sender_email: smtp.sender_email,
+          beacon_base_url: smtp.beacon_base_url,
           use_tls: smtp.use_tls,
           use_ssl: smtp.use_ssl
         })
@@ -82,7 +84,7 @@ export default function SettingsView() {
       if (!res.ok) throw new Error("save_failed");
       const data = await res.json();
       const next = {
-        ...prev,
+        ...smtp,
         ...data,
         password: ""
       };
@@ -179,6 +181,20 @@ export default function SettingsView() {
                 className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
                 placeholder="reports@example.com"
               />
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-xs text-sand-500">Beacon Base URL</label>
+              <input
+                value={smtp.beacon_base_url}
+                onChange={(event) =>
+                  setSmtp((prev) => ({ ...prev, beacon_base_url: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder="https://beacon.example.com"
+              />
+              <p className="mt-2 text-xs text-sand-400">
+                Optional: externe Basis-URL oder Template mit {"{guid}"}.
+              </p>
             </div>
             <label className="flex items-center gap-2 text-sm text-sand-700">
               <input

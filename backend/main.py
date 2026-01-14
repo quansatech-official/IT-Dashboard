@@ -515,6 +515,7 @@ def serialize_smtp_settings(settings: SmtpSettings) -> Dict[str, Any]:
         "sender_email": settings.sender_email,
         "use_tls": settings.use_tls,
         "use_ssl": settings.use_ssl,
+        "beacon_base_url": settings.beacon_base_url,
         "has_password": bool(settings.password),
     }
 

@@ -24,6 +24,39 @@ import {
 } from "./constants";
 import { buildPlainText, renderReportHTML, uid } from "./utils";
 
+const SMTP_STORAGE_KEY = "qt_smtp_settings_cache";
+const ENABLE_OPEN_BEACON = true;
+
+const loadBeaconBaseUrl = () => {
+  if (typeof window === "undefined") return "";
+  try {
+    const raw = window.localStorage.getItem(SMTP_STORAGE_KEY);
+    if (!raw) return "";
+    const cached = JSON.parse(raw);
+    return cached?.beacon_base_url || "";
+  } catch (error) {
+    return "";
+  }
+};
+
+const normalizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "");
+
+const buildBeaconUrl = (guid) => {
+  if (!ENABLE_OPEN_BEACON || !guid) return "";
+  const baseUrl = normalizeBaseUrl(loadBeaconBaseUrl());
+  if (baseUrl.includes("{guid}")) {
+    return baseUrl.replace("{guid}", encodeURIComponent(guid));
+  }
+  if (baseUrl) {
+    const separator = baseUrl.includes("?") ? "&" : "?";
+    if (baseUrl.endsWith("/api/reports/open")) {
+      return `${baseUrl}${separator}guid=${encodeURIComponent(guid)}`;
+    }
+    return `${baseUrl}/api/reports/open?guid=${encodeURIComponent(guid)}`;
+  }
+  return `${window.location.origin}/api/reports/open?guid=${encodeURIComponent(guid)}`;
+};
+
 function CustomerCombobox({ customers, value, onChange }) {
   const [query, setQuery] = useState(value || "");
   const [open, setOpen] = useState(false);
@@ -858,9 +891,7 @@ export default function ReportView() {
     }
     try {
       const subject = `IT-Kundenbericht – ${data.customer} (${data.period || "ohne Zeitraum"})`;
-      const beaconUrl = data.guid
-        ? `${window.location.origin}/api/reports/open?guid=${encodeURIComponent(data.guid)}`
-        : "";
+      const beaconUrl = buildBeaconUrl(data.guid);
       const htmlBody = renderReportHTML(data, { mode: "email", beaconUrl }).replace(
         /src="\/QTLogo\.jpg"/g,
         'src="cid:qtlogo"'
@@ -983,9 +1014,7 @@ export default function ReportView() {
     const recipient = prompt("Empfänger E-Mail-Adresse");
     if (!recipient) return;
     const normalized = normalizeReport(data);
-    const beaconUrl = normalized.guid
-      ? `${window.location.origin}/api/reports/open?guid=${encodeURIComponent(normalized.guid)}`
-      : "";
+    const beaconUrl = buildBeaconUrl(normalized.guid);
     const html = renderReportHTML(normalized, { mode: "email", beaconUrl }).replace(
       /src="\/QTLogo\.jpg"/g,
       `src="${window.location.origin}/QTLogo.jpg"`
