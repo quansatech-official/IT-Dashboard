@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   BarChart3,
-  Clock,
   ClipboardList,
   FileText,
   Settings,
@@ -10,7 +9,6 @@ import {
   Wrench
 } from "lucide-react";
 import ReportView from "./reporting/ReportView";
-import TimeTrackingView from "./timetracking/TimeTrackingView";
 import TelephonyMenu from "./telephony/TelephonyMenu";
 import TelephonyView from "./telephony/TelephonyView";
 import NotesView from "./notes/NotesView";
@@ -49,16 +47,6 @@ export default function App() {
               } flex items-center gap-3`}
             >
               <ClipboardList size={18} /> Aufgaben
-            </button>
-            <button
-              onClick={() => setActiveView("time")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "time"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <Clock size={18} /> Zeiterfassung
             </button>
             <button
               onClick={() => setActiveView("notes")}
@@ -149,15 +137,13 @@ export default function App() {
               />
             </label>
             <div className="text-xs text-sand-500">
-              Schnellzugriff für Zeiterfassung, Notizen und Kundenberichte.
+              Schnellzugriff für Aufgaben, Notizen und Kundenberichte.
             </div>
           </div>
         </aside>
 
         <div className="flex-1">
-          {activeView === "time" ? (
-            <TimeTrackingView />
-          ) : activeView === "dayplan" ? (
+          {activeView === "dayplan" ? (
             <DayPlanView />
           ) : activeView === "notes" ? (
             <NotesView />

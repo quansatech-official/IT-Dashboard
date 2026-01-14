@@ -4,6 +4,7 @@ import {
   ClipboardList,
   Clock,
   DollarSign,
+  Heart,
   Sparkles,
   Star,
   Trash2,
@@ -25,6 +26,12 @@ const api = {
     }).then((r) => r.json()),
   update: (id, payload) =>
     fetch(`${API}/day_tasks/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then((r) => r.json()),
+  updateTimeTask: (id, payload) =>
+    fetch(`${API}/tasks/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -63,6 +70,7 @@ export default function DayPlanView() {
   const [editingTitle, setEditingTitle] = useState("");
   const [editingCustomerId, setEditingCustomerId] = useState(null);
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
+  const [timeDrafts, setTimeDrafts] = useState({});
 
   useEffect(() => {
     api.list().then((data) => {
@@ -70,10 +78,13 @@ export default function DayPlanView() {
     });
   }, []);
 
-  useEffect(() => {
+  const refreshCustomers = () =>
     api.customers().then((data) => {
       setCustomers(Array.isArray(data) ? data : []);
     });
+
+  useEffect(() => {
+    refreshCustomers();
   }, []);
 
   useEffect(() => {
@@ -127,6 +138,7 @@ export default function DayPlanView() {
     }
     if (updated?.id) {
       setTasks((prev) => prev.map((item) => (item.id === task.id ? updated : item)));
+      refreshCustomers();
     } else {
       setError("Kunde nicht gefunden. Bitte Kundennummer oder Namen prüfen.");
     }
@@ -334,6 +346,22 @@ export default function DayPlanView() {
       .replace(/\s+/g, " ")
       .trim();
 
+  const parseTimeToMinutes = (value) => {
+    if (!value) return null;
+    const [hours, minutes] = value.split(":").map((part) => Number(part));
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+    return hours * 60 + minutes;
+  };
+
+  const minutesToClock = (minutes) => {
+    const safeMinutes = Math.max(0, Math.round(minutes));
+    const hours = Math.floor(safeMinutes / 60);
+    const remainder = safeMinutes % 60;
+    return `${hours}:${remainder.toString().padStart(2, "0")}`;
+  };
+
+  const msToClock = (ms = 0) => minutesToClock(Math.floor(ms / 60000));
+
   const knownCustomerNames = useMemo(
     () =>
       customers
@@ -341,6 +369,49 @@ export default function DayPlanView() {
         .filter(Boolean),
     [customers]
   );
+
+  const timeTasksById = useMemo(() => {
+    const map = {};
+    customers.forEach((customer) => {
+      (customer?.tasks || []).forEach((task) => {
+        map[task.id] = { ...task, customer };
+      });
+    });
+    return map;
+  }, [customers]);
+
+  const updateTimeDraft = (taskId, patch) => {
+    setTimeDrafts((prev) => ({
+      ...prev,
+      [taskId]: { ...prev[taskId], ...patch }
+    }));
+  };
+
+  const persistTimeTask = async (timeTask, patch) => {
+    if (!timeTask?.id) return;
+    await api.updateTimeTask(timeTask.id, patch);
+    refreshCustomers();
+  };
+
+  const applyManualTimeEntry = async (dayTask, timeTask) => {
+    const draft = timeDrafts[dayTask.id] || {};
+    const arrivalMinutes = parseTimeToMinutes(draft.arrival);
+    const departureMinutes = parseTimeToMinutes(draft.departure);
+    if (arrivalMinutes === null || departureMinutes === null) {
+      setError("Bitte Ankunft und Abfahrt angeben.");
+      return;
+    }
+    const travelMinutes = Number.parseInt(draft.travel || "0", 10);
+    const travelOffset = Number.isFinite(travelMinutes) ? Math.max(0, travelMinutes) : 0;
+    let diffMinutes = departureMinutes - arrivalMinutes;
+    if (diffMinutes < 0) {
+      diffMinutes += 24 * 60;
+    }
+    const totalMinutes = diffMinutes + travelOffset;
+    await persistTimeTask(timeTask, { elapsed: totalMinutes * 60000, running: false, startTime: 0 });
+    setError("");
+    updateTimeDraft(dayTask.id, { arrival: "", departure: "", travel: "" });
+  };
 
   const isKnownCustomer = (value) => {
     const name = String(value || "").trim().toLowerCase();
@@ -387,10 +458,16 @@ export default function DayPlanView() {
   const renderTaskCard = (task) => {
     const suggestions = getCustomerSuggestions(task);
     const hasCustomer = Boolean(task.customer || task.customer_number);
-    const canPromote = hasCustomer;
+    const canPromote = hasCustomer && !task.task_id;
     const isDone = task.status === "done";
     const canInvoice = hasCustomer;
     const knownCustomer = isKnownCustomer(task.customer);
+    const timeTask = task.task_id ? timeTasksById[task.task_id] : null;
+    const timeDraft = timeDrafts[task.id] || {};
+    const elapsedMs = timeTask
+      ? (timeTask.elapsed || 0) +
+        (timeTask.running && timeTask.startTime ? Date.now() - timeTask.startTime : 0)
+      : 0;
     return (
       <div
         key={task.id}
@@ -470,7 +547,7 @@ export default function DayPlanView() {
                         if (!task.task_id) startCustomerEdit(task);
                       }}
                       className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                      title={task.task_id ? "Kunde ist fixiert (Zeiterfassung)" : "Kunde suchen"}
+                      title={task.task_id ? "Kunde ist fixiert (Zeitdaten)" : "Kunde suchen"}
                       disabled={task.task_id}
                     >
                       <UserPlus size={12} />
@@ -489,8 +566,8 @@ export default function DayPlanView() {
                     }`}
                     title={
                       canPromote
-                        ? "In Zeiterfassung übernehmen"
-                        : "Kunde zuordnen, um zu übernehmen"
+                        ? "Zeit in Aufgabe aktivieren"
+                        : "Kunde zuordnen, um Zeit zu erfassen"
                     }
                   >
                     <Clock size={12} />
@@ -498,7 +575,7 @@ export default function DayPlanView() {
                 ) : (
                   <span
                     className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700"
-                    title="In Zeiterfassung"
+                    title="Zeit aktiv"
                   >
                     <Clock size={12} />
                   </span>
@@ -577,7 +654,7 @@ export default function DayPlanView() {
                 className={`mt-1 text-[11px] text-sand-500 hover:text-sand-700 ${
                   task.task_id ? "cursor-default" : ""
                 }`}
-                title={task.task_id ? "Kunde ist fixiert (Zeiterfassung)" : "Kunde ändern"}
+                title={task.task_id ? "Kunde ist fixiert (Zeitdaten)" : "Kunde ändern"}
               >
                 {task.customer}
               </button>
@@ -606,6 +683,109 @@ export default function DayPlanView() {
             ) : null}
             {task.customer_number ? (
               <div className="text-[10px] text-sand-400">Nr. {task.customer_number}</div>
+            ) : null}
+            {task.task_id ? (
+              <div className="mt-3 rounded-lg border border-sand-200 bg-white/80 px-3 py-2 text-xs text-sand-600">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Zeit</span>
+                  <span className="text-sm font-semibold text-sand-700">{msToClock(elapsedMs)}</span>
+                </div>
+                {timeTask ? (
+                  <>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-sand-400">
+                        Ankunft
+                        <input
+                          type="time"
+                          value={timeDraft.arrival || ""}
+                          onChange={(event) =>
+                            updateTimeDraft(task.id, { arrival: event.target.value })
+                          }
+                          className="rounded-md border border-sand-200 bg-white px-2 py-1 text-xs text-sand-700"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-sand-400">
+                        Abfahrt
+                        <input
+                          type="time"
+                          value={timeDraft.departure || ""}
+                          onChange={(event) =>
+                            updateTimeDraft(task.id, { departure: event.target.value })
+                          }
+                          className="rounded-md border border-sand-200 bg-white px-2 py-1 text-xs text-sand-700"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-sand-400">
+                        Fahrt (Min)
+                        <input
+                          type="number"
+                          min="0"
+                          value={timeDraft.travel || ""}
+                          onChange={(event) =>
+                            updateTimeDraft(task.id, { travel: event.target.value })
+                          }
+                          className="rounded-md border border-sand-200 bg-white px-2 py-1 text-xs text-sand-700"
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => applyManualTimeEntry(task, timeTask)}
+                        className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
+                      >
+                        Zeit übernehmen
+                      </button>
+                      <div className="ml-auto flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            persistTimeTask(timeTask, { erledigt: !timeTask.erledigt })
+                          }
+                          className={`rounded-full border p-1 ${
+                            timeTask.erledigt
+                              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                              : "border-sand-200 bg-white text-sand-400 hover:bg-sand-100"
+                          }`}
+                          title={timeTask.erledigt ? "Als offen markieren" : "Als erledigt markieren"}
+                        >
+                          <CheckCircle size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            persistTimeTask(timeTask, { aberechnet: !timeTask.aberechnet })
+                          }
+                          className={`rounded-full border p-1 ${
+                            timeTask.aberechnet
+                              ? "border-amber-200 bg-amber-50 text-amber-700"
+                              : "border-sand-200 bg-white text-sand-400 hover:bg-sand-100"
+                          }`}
+                          title={
+                            timeTask.aberechnet ? "Nicht abgerechnet" : "Als abgerechnet markieren"
+                          }
+                        >
+                          <DollarSign size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => persistTimeTask(timeTask, { kulant: !timeTask.kulant })}
+                          className={`rounded-full border p-1 ${
+                            timeTask.kulant
+                              ? "border-rose-200 bg-rose-50 text-rose-600"
+                              : "border-sand-200 bg-white text-sand-400 hover:bg-sand-100"
+                          }`}
+                          title={timeTask.kulant ? "Kulanz entfernen" : "Kulanz markieren"}
+                        >
+                          <Heart size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="mt-2 text-[11px] text-sand-400">Zeitdaten werden geladen…</div>
+                )}
+              </div>
             ) : null}
           </div>
         </div>
