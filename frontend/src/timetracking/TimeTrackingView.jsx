@@ -14,6 +14,8 @@ import {
 /* ================= API ================= */
 const API = "/api";
 
+const TIME_TRACKING_STORAGE_KEY = "qt_time_tracking_customers";
+
 const api = {
   customers: () => fetch(`${API}/customers`).then((r) => r.json()),
   addCustomer: (name) =>
@@ -258,6 +260,16 @@ function CustomerCard({ customer, reload }) {
 export default function TimeTrackingView() {
   const [customersState, setCustomersState] = useState([]);
   const [newCustomer, setNewCustomer] = useState("");
+  const [timeTrackingIds, setTimeTrackingIds] = useState(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem(TIME_TRACKING_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      return [];
+    }
+  });
 
   const load = useCallback(() => api.customers().then(setCustomersState), []);
   const customerSuggestions = useMemo(() => {
@@ -267,6 +279,28 @@ export default function TimeTrackingView() {
       .filter((name) => name && !seen.has(name) && seen.add(name))
       .sort((a, b) => a.localeCompare(b, "de"));
   }, [customersState]);
+  const visibleCustomers = useMemo(
+    () =>
+      customersState.filter(
+        (customer) =>
+          (customer.tasks && customer.tasks.length > 0) || timeTrackingIds.includes(customer.id)
+      ),
+    [customersState, timeTrackingIds]
+  );
+
+  const rememberTimeTrackingCustomer = (id) => {
+    if (!id) return;
+    setTimeTrackingIds((prev) => {
+      if (prev.includes(id)) return prev;
+      const next = [...prev, id];
+      try {
+        window.localStorage.setItem(TIME_TRACKING_STORAGE_KEY, JSON.stringify(next));
+      } catch (error) {
+        // Ignore storage errors.
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     load();
@@ -284,7 +318,7 @@ export default function TimeTrackingView() {
             </div>
             <h1 className="font-bold text-xl">QT-Workbench · Zeiterfassung</h1>
           </div>
-          <span className="text-sm text-slate-500">{customersState.length} Kunden</span>
+          <span className="text-sm text-slate-500">{visibleCustomers.length} Kunden</span>
         </div>
       </header>
 
@@ -308,7 +342,8 @@ export default function TimeTrackingView() {
               className="bg-slate-900 text-white rounded px-4"
               onClick={() =>
                 newCustomer.trim() &&
-                api.addCustomer(newCustomer.trim()).then(() => {
+                api.addCustomer(newCustomer.trim()).then((created) => {
+                  rememberTimeTrackingCustomer(created?.id);
                   setNewCustomer("");
                   load();
                 })
@@ -320,7 +355,7 @@ export default function TimeTrackingView() {
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            {customersState.map((c) => (
+            {visibleCustomers.map((c) => (
               <CustomerCard key={c.id} customer={c} reload={load} />
             ))}
           </div>
