@@ -4,6 +4,7 @@ import {
   Clock,
   DollarSign,
   Heart,
+  Pencil,
   Play,
   Plus,
   Sparkles,
@@ -201,6 +202,8 @@ function CustomerCard({ customer, reload }) {
   const onMerge = customer.onMerge;
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeQuery, setMergeQuery] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(customer.name || "");
   const hasMapping = Boolean(
     (customer.creditorNumber || "").trim() || (customer.shortCode || "").trim()
   );
@@ -213,6 +216,12 @@ function CustomerCard({ customer, reload }) {
     }
     return undefined;
   }, [customer.tasks, reload]);
+
+  useEffect(() => {
+    if (!editingName) {
+      setNameDraft(customer.name || "");
+    }
+  }, [customer.name, editingName]);
 
   const submitTask = () => {
     const value = inputRef.current?.value.trim();
@@ -234,6 +243,18 @@ function CustomerCard({ customer, reload }) {
   const filteredMergeOptions = mergeOptions.filter((option) =>
     option.name.toLowerCase().includes(trimmedMergeQuery.toLowerCase())
   );
+  const commitName = () => {
+    const nextName = nameDraft.trim();
+    if (!nextName) {
+      setNameDraft(customer.name || "");
+      setEditingName(false);
+      return;
+    }
+    if (nextName !== customer.name) {
+      api.updateCustomer(customer.id, { name: nextName }).then(reload);
+    }
+    setEditingName(false);
+  };
 
   return (
     <div className="bg-white rounded-xl p-3 shadow flex flex-col min-h-[240px] relative">
@@ -247,7 +268,45 @@ function CustomerCard({ customer, reload }) {
 
       <div className="flex justify-between mb-2">
         <div className="flex items-center gap-2">
-          <h2 className="font-semibold text-sm">{customer.name}</h2>
+          {editingName ? (
+            <input
+              value={nameDraft}
+              onChange={(event) => setNameDraft(event.target.value)}
+              onBlur={commitName}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitName();
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setEditingName(false);
+                  setNameDraft(customer.name || "");
+                }
+              }}
+              className="rounded-md border border-slate-200 px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-slate-300"
+              autoFocus
+            />
+          ) : (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setEditingName(true)}
+                className="text-left font-semibold text-sm text-slate-900 hover:text-slate-600"
+                title="Kundenname bearbeiten"
+              >
+                {customer.name}
+              </button>
+              <button
+                type="button"
+                onClick={() => setEditingName(true)}
+                className="rounded-full border border-slate-200 bg-white p-1 text-slate-500 hover:bg-slate-100"
+                title="Kundenname bearbeiten"
+              >
+                <Pencil size={12} />
+              </button>
+            </div>
+          )}
           <button
             type="button"
             onClick={() => alert("Faktura-Export ist noch nicht angebunden.")}
@@ -270,7 +329,7 @@ function CustomerCard({ customer, reload }) {
               <button
                 type="button"
                 onClick={() => {
-                  setMergeQuery("");
+                  setMergeQuery(customer.name || "");
                   setMergeOpen((prev) => !prev);
                 }}
                 className={`rounded-full border p-1 ${
