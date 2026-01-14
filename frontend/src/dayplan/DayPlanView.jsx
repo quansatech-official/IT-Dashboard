@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardList, Clock, DollarSign, Sparkles, Star, Trash2 } from "lucide-react";
+import { CheckCircle, ClipboardList, Clock, DollarSign, Sparkles, Star, Trash2 } from "lucide-react";
 
 const API = "/api";
 
@@ -48,6 +48,7 @@ export default function DayPlanView() {
   const [editingGroupTitle, setEditingGroupTitle] = useState("");
   const [dragOver, setDragOver] = useState("");
   const [dragOverGroupId, setDragOverGroupId] = useState(null);
+  const [suggestionOpenId, setSuggestionOpenId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editingTitle, setEditingTitle] = useState("");
 
@@ -289,6 +290,11 @@ export default function DayPlanView() {
     cancelEdit();
   };
 
+  const toggleSuggestionMenu = (taskId, hasMultiple) => {
+    if (!hasMultiple) return;
+    setSuggestionOpenId((prev) => (prev === taskId ? null : taskId));
+  };
+
   const normalizeText = (value) =>
     String(value || "")
       .toLowerCase()
@@ -333,7 +339,7 @@ export default function DayPlanView() {
     return (
       <div
         key={task.id}
-        className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 shadow-[0_4px_10px_rgba(150,120,60,0.08)]"
+        className="relative rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 shadow-[0_4px_10px_rgba(150,120,60,0.08)]"
         draggable
         onDragStart={(event) => {
           event.dataTransfer.setData("text/plain", `task:${task.id}`);
@@ -389,16 +395,20 @@ export default function DayPlanView() {
                   <button
                     type="button"
                     onClick={() => {
-                      if (suggestions.length) {
-                        updateTask(task, { customer: suggestions[0] });
-                      } else {
+                      if (!suggestions.length) {
                         setError("Kein Kundenvorschlag gefunden.");
+                        return;
                       }
+                      if (suggestions.length === 1) {
+                        updateTask(task, { customer: suggestions[0] });
+                        return;
+                      }
+                      toggleSuggestionMenu(task.id, true);
                     }}
                     className="rounded-full border border-amber-200 bg-white p-1 text-sand-600 hover:bg-amber-100"
                     title={
                       suggestions.length
-                        ? `Kundenvorschlag: ${suggestions[0]}`
+                        ? `Kundenvorschlag${suggestions.length > 1 ? "e" : ""}`
                         : "Kein Kundenvorschlag"
                     }
                     disabled={!suggestions.length}
@@ -434,6 +444,14 @@ export default function DayPlanView() {
                 )}
                 <button
                   type="button"
+                  onClick={() => updateTask(task, { status: "done" })}
+                  className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700 hover:bg-emerald-100"
+                  title="Erledigt"
+                >
+                  <CheckCircle size={12} />
+                </button>
+                <button
+                  type="button"
                   onClick={() => setError("Faktura (Dummy) ist noch nicht angebunden.")}
                   disabled={!canInvoice}
                   className={`rounded-full border p-1 ${
@@ -461,6 +479,28 @@ export default function DayPlanView() {
             </div>
             {task.customer ? (
               <div className="text-[11px] text-sand-500 mt-1">{task.customer}</div>
+            ) : null}
+            {!task.customer && suggestions.length > 1 && suggestionOpenId === task.id ? (
+              <div className="absolute right-3 top-full mt-2 w-56 rounded-xl border border-amber-200 bg-white shadow-soft z-20">
+                <div className="px-3 py-2 text-[10px] uppercase tracking-wide text-sand-400">
+                  Kundenvorschlage
+                </div>
+                <div className="max-h-40 overflow-auto">
+                  {suggestions.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => {
+                        updateTask(task, { customer: name });
+                        setSuggestionOpenId(null);
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs text-sand-700 hover:bg-amber-50"
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              </div>
             ) : null}
             {task.customer_number ? (
               <div className="text-[10px] text-sand-400">Nr. {task.customer_number}</div>
@@ -585,10 +625,6 @@ export default function DayPlanView() {
                     className={`rounded-xl border border-amber-200 bg-white/80 px-3 py-2 ${
                       dragOverGroupId === group.id ? "ring-2 ring-amber-300" : ""
                     }`}
-                    draggable
-                    onDragStart={(event) => {
-                      event.dataTransfer.setData("text/plain", `group:${group.id}`);
-                    }}
                     onDragOver={(event) => handleGroupDragOver(event, group.id)}
                     onDragLeave={() => setDragOverGroupId(null)}
                     onDrop={(event) => handleGroupDrop(event, group, column.id)}
@@ -598,6 +634,17 @@ export default function DayPlanView() {
                       onDragOver={(event) => handleGroupDragOver(event, group.id)}
                       onDrop={(event) => handleGroupDrop(event, group, column.id)}
                     >
+                      <button
+                        type="button"
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.setData("text/plain", `group:${group.id}`);
+                        }}
+                        className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-400 hover:bg-sand-100"
+                        title="Gruppe verschieben"
+                      >
+                        ::
+                      </button>
                       {editingGroupId === group.id ? (
                         <input
                           value={editingGroupTitle}
