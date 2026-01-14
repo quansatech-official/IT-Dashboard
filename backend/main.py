@@ -81,6 +81,18 @@ class DayTask(Base):
     customer_number = Column(String, default="")
     status = Column(String, default="todo")
     task_id = Column(Integer, nullable=True)
+    group_id = Column(Integer, nullable=True)
+    locked = Column(Boolean, default=False)
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
+class DayTaskGroup(Base):
+    __tablename__ = "day_task_groups"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String, nullable=False)
+    column = Column(String, default="todo")
+    position = Column(Integer, default=0)
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
@@ -357,6 +369,10 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN customer_number VARCHAR DEFAULT ''")
     if "task_id" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN task_id INTEGER")
+    if "group_id" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN group_id INTEGER")
+    if "locked" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN locked BOOLEAN DEFAULT FALSE")
     if not statements:
         return
     with engine.begin() as connection:
@@ -417,6 +433,8 @@ class DayTaskCreate(BaseModel):
     customer: Optional[str] = ""
     customer_number: Optional[str] = ""
     status: Optional[str] = "todo"
+    group_id: Optional[int] = None
+    locked: Optional[bool] = False
 
 
 class DayTaskUpdate(BaseModel):
@@ -425,6 +443,20 @@ class DayTaskUpdate(BaseModel):
     customer_number: Optional[str] = None
     status: Optional[str] = None
     task_id: Optional[int] = None
+    group_id: Optional[int] = None
+    locked: Optional[bool] = None
+
+
+class DayTaskGroupCreate(BaseModel):
+    title: str
+    column: Optional[str] = "todo"
+    position: Optional[int] = None
+
+
+class DayTaskGroupUpdate(BaseModel):
+    title: Optional[str] = None
+    column: Optional[str] = None
+    position: Optional[int] = None
 
 
 class PinNoteUpdate(BaseModel):
@@ -576,7 +608,19 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "customer_number": t.customer_number,
         "status": t.status,
         "task_id": t.task_id,
+        "group_id": t.group_id,
+        "locked": t.locked,
         "created_at": t.created_at,
+    }
+
+
+def serialize_day_task_group(g: DayTaskGroup) -> Dict[str, Any]:
+    return {
+        "id": g.id,
+        "title": g.title,
+        "column": g.column,
+        "position": g.position,
+        "created_at": g.created_at,
     }
 
 
@@ -1205,6 +1249,68 @@ def get_day_tasks():
         return [serialize_day_task(t) for t in tasks]
 
 
+@app.get("/api/day_task_groups")
+def get_day_task_groups():
+    with SessionLocal() as db:
+        groups = (
+            db.query(DayTaskGroup)
+            .order_by(DayTaskGroup.column.asc(), DayTaskGroup.position.asc(), DayTaskGroup.created_at.asc())
+            .all()
+        )
+        return [serialize_day_task_group(g) for g in groups]
+
+
+@app.post("/api/day_task_groups")
+def create_day_task_group(data: DayTaskGroupCreate):
+    with SessionLocal() as db:
+        column = data.column or "todo"
+        if data.position is None:
+            max_position = (
+                db.query(func.max(DayTaskGroup.position))
+                .filter(DayTaskGroup.column == column)
+                .scalar()
+            )
+            position = int(max_position or 0)
+            if max_position is not None:
+                position += 1
+        else:
+            position = int(data.position)
+        group = DayTaskGroup(title=data.title, column=column, position=position)
+        db.add(group)
+        db.commit()
+        db.refresh(group)
+        return serialize_day_task_group(group)
+
+
+@app.patch("/api/day_task_groups/{group_id}")
+def update_day_task_group(group_id: int, data: DayTaskGroupUpdate):
+    with SessionLocal() as db:
+        group = db.query(DayTaskGroup).get(group_id)
+        if not group:
+            raise HTTPException(404, "Group not found")
+        if data.title is not None:
+            group.title = data.title
+        if data.column is not None:
+            group.column = data.column
+        if data.position is not None:
+            group.position = int(data.position)
+        db.commit()
+        db.refresh(group)
+        return serialize_day_task_group(group)
+
+
+@app.delete("/api/day_task_groups/{group_id}")
+def delete_day_task_group(group_id: int):
+    with SessionLocal() as db:
+        group = db.query(DayTaskGroup).get(group_id)
+        if not group:
+            raise HTTPException(404, "Group not found")
+        db.query(DayTask).filter(DayTask.group_id == group_id).update({DayTask.group_id: None})
+        db.delete(group)
+        db.commit()
+        return {"status": "deleted"}
+
+
 @app.post("/api/day_tasks")
 def create_day_task(data: DayTaskCreate):
     with SessionLocal() as db:
@@ -1213,6 +1319,8 @@ def create_day_task(data: DayTaskCreate):
             customer=data.customer or "",
             customer_number=data.customer_number or "",
             status=data.status or "todo",
+            group_id=data.group_id,
+            locked=bool(data.locked),
         )
         db.add(task)
         db.commit()
@@ -1226,8 +1334,12 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
         task = db.query(DayTask).get(task_id)
         if not task:
             raise HTTPException(404, "Task not found")
+        string_fields = {"title", "customer", "customer_number", "status"}
         for field, value in data.dict(exclude_unset=True).items():
-            setattr(task, field, value if value is not None else "")
+            if value is None and field in string_fields:
+                setattr(task, field, "")
+            else:
+                setattr(task, field, value)
         db.commit()
         db.refresh(task)
         return serialize_day_task(task)

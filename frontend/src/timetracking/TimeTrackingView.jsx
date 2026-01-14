@@ -123,11 +123,11 @@ function TaskItem({ task, reload }) {
   }, [title, task.title, saveTitle]);
 
   return (
-    <div className="border rounded-lg p-3 bg-white space-y-2">
-      <div className="flex gap-3 items-start">
+    <div className="border rounded-lg p-2 bg-white space-y-2">
+      <div className="flex gap-2 items-start">
         <button
           onClick={() => api.toggleTimer(task.id).then(reload)}
-          className={`w-8 h-8 rounded-full flex items-center justify-center ${
+          className={`w-7 h-7 rounded-full flex items-center justify-center ${
             task.running ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
           }`}
           title={task.running ? "Timer stoppen" : "Timer starten"}
@@ -143,8 +143,8 @@ function TaskItem({ task, reload }) {
             saveTimer.current = null;
             if (title !== task.title) saveTitle(title);
           }}
-          rows={2}
-          className={`flex-1 resize-none text-sm border-none focus:ring-0 ${
+          rows={1}
+          className={`flex-1 resize-none text-sm border-none focus:ring-0 leading-tight ${
             task.erledigt ? "line-through text-slate-400" : ""
           }`}
         />
@@ -220,7 +220,7 @@ function CustomerCard({ customer, reload }) {
   }, 0);
 
   return (
-    <div className="bg-white rounded-xl p-4 shadow flex flex-col min-h-[320px] relative">
+    <div className="bg-white rounded-xl p-3 shadow flex flex-col min-h-[240px] relative">
       <button
         onClick={() => confirm("Kunde löschen?") && api.deleteCustomer(customer.id).then(reload)}
         className="absolute -top-2 -right-2 bg-white border rounded-full p-1 text-red-500"
@@ -229,28 +229,28 @@ function CustomerCard({ customer, reload }) {
         <Trash2 size={14} />
       </button>
 
-      <div className="flex justify-between mb-3">
-        <h2 className="font-bold">{customer.name}</h2>
-        <span className="text-sm flex items-center gap-1 text-slate-500">
+      <div className="flex justify-between mb-2">
+        <h2 className="font-semibold text-sm">{customer.name}</h2>
+        <span className="text-xs flex items-center gap-1 text-slate-500">
           <Clock size={14} /> {msToHHMMSS(total)}
         </span>
       </div>
 
-      <div className="flex-1 space-y-2 overflow-y-auto max-h-[220px]">
+      <div className="flex-1 space-y-2 overflow-y-auto max-h-[170px]">
         {customer.tasks.map((t) => (
           <TaskItem key={t.id} task={t} reload={reload} />
         ))}
       </div>
 
-      <div className="mt-3 flex gap-2">
+      <div className="mt-2 flex gap-2">
         <input
           ref={inputRef}
           placeholder="Neue Aufgabe…"
-          className="flex-1 border rounded px-2 text-sm"
+          className="flex-1 border rounded px-2 py-1 text-sm"
           onKeyDown={(e) => e.key === "Enter" && submitTask()}
         />
         <button
-          className="bg-blue-600 text-white rounded px-3"
+          className="bg-blue-600 text-white rounded px-3 py-1"
           onClick={submitTask}
           title="Aufgabe hinzufügen"
         >
