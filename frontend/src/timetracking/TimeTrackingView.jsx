@@ -258,6 +258,7 @@ function CustomerCard({ customer, reload }) {
 export default function TimeTrackingView() {
   const [customersState, setCustomersState] = useState([]);
   const [newCustomer, setNewCustomer] = useState("");
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
 
   const load = useCallback(() => api.customers().then(setCustomersState), []);
   const customerSuggestions = useMemo(() => {
@@ -267,6 +268,13 @@ export default function TimeTrackingView() {
       .filter((name) => name && !seen.has(name) && seen.add(name))
       .sort((a, b) => a.localeCompare(b, "de"));
   }, [customersState]);
+  const filteredSuggestions = useMemo(() => {
+    const needle = newCustomer.trim().toLowerCase();
+    if (!needle) return customerSuggestions.slice(0, 12);
+    return customerSuggestions
+      .filter((name) => name.toLowerCase().includes(needle))
+      .slice(0, 12);
+  }, [customerSuggestions, newCustomer]);
   const visibleCustomers = useMemo(
     () =>
       customersState.filter(
@@ -300,18 +308,36 @@ export default function TimeTrackingView() {
         <div className="space-y-6">
           <div className="bg-white p-4 rounded-xl flex gap-3 shadow">
             <Users />
-            <input
-              value={newCustomer}
-              onChange={(e) => setNewCustomer(e.target.value)}
-              placeholder="Neuen Kunden anlegen…"
-              list="customer-suggestions"
-              className="flex-1 border-none focus:ring-0"
-            />
-            <datalist id="customer-suggestions">
-              {customerSuggestions.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
+            <div className="relative flex-1">
+              <input
+                value={newCustomer}
+                onChange={(e) => {
+                  setNewCustomer(e.target.value);
+                  setSuggestionsOpen(true);
+                }}
+                onFocus={() => setSuggestionsOpen(true)}
+                onBlur={() => setTimeout(() => setSuggestionsOpen(false), 120)}
+                placeholder="Neuen Kunden anlegen…"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300"
+              />
+              {suggestionsOpen && filteredSuggestions.length ? (
+                <div className="absolute z-20 mt-2 w-full rounded-xl border border-slate-200 bg-white shadow-lg max-h-48 overflow-auto">
+                  {filteredSuggestions.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onMouseDown={() => {
+                        setNewCustomer(name);
+                        setSuggestionsOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <button
               className="bg-slate-900 text-white rounded px-4"
               onClick={() =>

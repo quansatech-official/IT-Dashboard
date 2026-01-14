@@ -20,14 +20,9 @@ export default function App() {
           className="bg-white border-r border-sand-200 p-4 flex flex-col gap-6"
           style={{ width: `${sidebarWidth}px` }}
         >
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
-              <Sparkles size={16} />
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-              <p className="text-base font-display">Dashboard</p>
-            </div>
+          <div className="flex flex-col items-start gap-2">
+            <img src="/QTLogo.jpg" alt="Quansatech" className="h-12 w-auto object-contain" />
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
           </div>
 
           <nav className="space-y-2">

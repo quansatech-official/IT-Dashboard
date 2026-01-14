@@ -12,6 +12,7 @@ export default function ArchivePanel({
   onUpdateStatus
 }) {
   const [query, setQuery] = useState("");
+  const [openInfoId, setOpenInfoId] = useState(null);
   const beaconStatus = useMemo(() => {
     if (typeof window === "undefined") return { ok: false, label: "Beacon: unbekannt" };
     try {
@@ -54,7 +55,9 @@ export default function ArchivePanel({
             {group.reports.map((item) => (
               <div
                 key={item.id}
-                className="relative z-10 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3"
+                className={`relative flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 ${
+                  openInfoId === item.id ? "z-30" : "z-0"
+                }`}
               >
                 <div>
                   <p className="text-sm font-semibold">{item.label}</p>
@@ -70,11 +73,17 @@ export default function ArchivePanel({
                       {item.customerStatus}
                     </span>
                   ) : null}
-                  <details className="relative z-20">
-                    <summary className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 cursor-pointer list-none hover:bg-sand-100">
+                  <details className="relative z-40" open={openInfoId === item.id}>
+                    <summary
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setOpenInfoId((prev) => (prev === item.id ? null : item.id));
+                      }}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 cursor-pointer list-none hover:bg-sand-100"
+                    >
                       <Info size={12} /> Info
                     </summary>
-                    <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-sand-200 bg-white p-4 shadow-soft text-xs text-sand-600 z-30">
+                    <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-sand-200 bg-white p-4 shadow-soft text-xs text-sand-600 z-50">
                       <div className="text-[10px] uppercase tracking-[0.3em] text-sand-400 mb-2">
                         Bericht
                       </div>

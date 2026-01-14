@@ -20,6 +20,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or (
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL") or "http://ollama:11434"
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "llama3.1"
 
+OFFICE_ADDRESS = "Steyrtalstraße 88, 4523 Neuzeug"
+KM_RATE_EUR = 0.8
+_geo_cache: Dict[str, Optional[tuple[float, float]]] = {}
+
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
@@ -33,6 +37,10 @@ class Customer(Base):
     creditor_number = Column(String, default="")
     email = Column(String, default="")
     time_tracking_enabled = Column(Boolean, default=False)
+    street = Column(String, default="")
+    postal_code = Column(String, default="")
+    city = Column(String, default="")
+    country = Column(String, default="")
 
     tasks = relationship(
         "Task",
@@ -257,6 +265,14 @@ def _ensure_customer_columns() -> None:
         statements.append("ALTER TABLE customers ADD COLUMN email VARCHAR DEFAULT ''")
     if "time_tracking_enabled" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN time_tracking_enabled BOOLEAN DEFAULT FALSE")
+    if "street" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN street VARCHAR DEFAULT ''")
+    if "postal_code" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN postal_code VARCHAR DEFAULT ''")
+    if "city" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN city VARCHAR DEFAULT ''")
+    if "country" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN country VARCHAR DEFAULT ''")
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
@@ -283,6 +299,10 @@ class CustomerCreate(BaseModel):
     creditor_number: Optional[str] = ""
     email: Optional[str] = ""
     time_tracking_enabled: Optional[bool] = None
+    street: Optional[str] = ""
+    postal_code: Optional[str] = ""
+    city: Optional[str] = ""
+    country: Optional[str] = ""
     phones: Optional[List[CustomerPhoneSchema]] = None
 
 
@@ -291,6 +311,10 @@ class CustomerUpdate(BaseModel):
     creditor_number: Optional[str] = None
     email: Optional[str] = None
     time_tracking_enabled: Optional[bool] = None
+    street: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
     phones: Optional[List[CustomerPhoneSchema]] = None
 
 
@@ -448,6 +472,10 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
         "creditor_number": c.creditor_number,
         "email": c.email,
         "time_tracking_enabled": c.time_tracking_enabled,
+        "street": c.street,
+        "postal_code": c.postal_code,
+        "city": c.city,
+        "country": c.country,
         "phones": [serialize_customer_phone(p) for p in c.phones],
         "tasks": [serialize_task(t) for t in c.tasks],
     }
@@ -459,6 +487,64 @@ def serialize_customer_phone(p: CustomerPhone) -> Dict[str, Any]:
         "label": p.label,
         "number": p.number,
     }
+
+
+def _normalize_phone(phone: Optional[str]) -> str:
+    if not phone:
+        return ""
+    digits = "".join(ch for ch in str(phone) if ch.isdigit())
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if digits.startswith("0"):
+        digits = "43" + digits[1:]
+    return digits
+
+
+def _geocode(address: str) -> Optional[tuple[float, float]]:
+    key = address.strip()
+    if not key:
+        return None
+    if key in _geo_cache:
+        return _geo_cache[key]
+    try:
+        res = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": key, "format": "json", "limit": 1},
+            headers={"User-Agent": "QT-Workbench/1.0"},
+            timeout=10,
+        )
+        res.raise_for_status()
+        data = res.json()
+        if not data:
+            _geo_cache[key] = None
+            return None
+        lat = float(data[0]["lat"])
+        lon = float(data[0]["lon"])
+        _geo_cache[key] = (lat, lon)
+        return lat, lon
+    except requests.RequestException:
+        _geo_cache[key] = None
+        return None
+
+
+def _route_distance_km(origin: tuple[float, float], dest: tuple[float, float]) -> Optional[float]:
+    try:
+        url = (
+            "https://router.project-osrm.org/route/v1/driving/"
+            f"{origin[1]},{origin[0]};{dest[1]},{dest[0]}"
+        )
+        res = requests.get(url, params={"overview": "false"}, timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        routes = data.get("routes") or []
+        if not routes:
+            return None
+        distance_m = routes[0].get("distance")
+        if distance_m is None:
+            return None
+        return round(float(distance_m) / 1000, 1)
+    except requests.RequestException:
+        return None
 
 def serialize_catalog_item(item: ReportCatalogItem) -> Dict[str, Any]:
     return {
@@ -684,6 +770,10 @@ def create_customer(data: CustomerCreate):
             creditor_number=data.creditor_number or "",
             email=data.email or "",
             time_tracking_enabled=bool(data.time_tracking_enabled),
+            street=data.street or "",
+            postal_code=data.postal_code or "",
+            city=data.city or "",
+            country=data.country or "",
         )
         db.add(customer)
         db.flush()
@@ -734,6 +824,66 @@ def delete_customer(customer_id: int):
         db.delete(customer)
         db.commit()
         return {"status": "deleted"}
+
+
+@app.get("/api/customers/{customer_id}/metrics")
+def get_customer_metrics(customer_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        open_tasks = db.query(Task).filter(Task.customer_id == customer_id, Task.erledigt == False).count()  # noqa: E712
+        address_parts = [customer.street, customer.postal_code, customer.city, customer.country]
+        address = ", ".join([part for part in address_parts if part])
+        phone_numbers = [phone.number for phone in customer.phones]
+
+    office_coords = _geocode(OFFICE_ADDRESS)
+    customer_coords = _geocode(address) if address else None
+    distance_km = None
+    if office_coords and customer_coords:
+        distance_km = _route_distance_km(office_coords, customer_coords)
+
+    phone_digits = []
+    for phone in phone_numbers:
+        normalized = _normalize_phone(phone)
+        if normalized and normalized not in phone_digits:
+            phone_digits.append(normalized)
+
+    start_ms = int(time.time() * 1000) - 30 * 24 * 60 * 60 * 1000
+    missed_calls = 0
+    total_seconds = 0
+    if phone_digits:
+        conditions = []
+        params = {"since": start_ms}
+        for idx, digits in enumerate(phone_digits):
+            params[f"p{idx}"] = f"%{digits}"
+            conditions.append(
+                "(regexp_replace(from_number, '\\D', '', 'g') LIKE :p{idx} "
+                "OR regexp_replace(to_number, '\\D', '', 'g') LIKE :p{idx})"
+            )
+        where_clause = " OR ".join(conditions)
+        sql = (
+            "SELECT COALESCE(SUM(duration), 0) AS total_seconds, "
+            "COALESCE(SUM(CASE WHEN answered = false THEN 1 ELSE 0 END), 0) AS missed_calls "
+            "FROM telephony_calls "
+            "WHERE start_time >= :since AND (" + where_clause + ")"
+        )
+        with engine.begin() as connection:
+            row = connection.execute(text(sql), params).mappings().first()
+            if row:
+                total_seconds = int(row.get("total_seconds") or 0)
+                missed_calls = int(row.get("missed_calls") or 0)
+
+    total_minutes = round(total_seconds / 60, 1) if total_seconds else 0
+    mileage_eur = round(distance_km * KM_RATE_EUR, 2) if distance_km is not None else None
+
+    return {
+        "openTasks": open_tasks,
+        "distanceKm": distance_km,
+        "mileageEur": mileage_eur,
+        "missedCalls": missed_calls,
+        "totalMinutes": total_minutes
+    }
 
 
 # ================= TASKS ====================

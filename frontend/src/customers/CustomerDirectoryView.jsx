@@ -40,6 +40,10 @@ const normalizeCustomer = (customer) => ({
   ...customer,
   creditorNumber:
     customer.creditor_number ?? customer.creditorNumber ?? customer.internal_number ?? "",
+  street: customer.street ?? "",
+  postalCode: customer.postal_code ?? customer.postalCode ?? "",
+  city: customer.city ?? "",
+  country: customer.country ?? "",
   phones: customer.phones?.length ? customer.phones : [blankPhone()]
 });
 
@@ -47,6 +51,10 @@ const customerPayload = (customer) => ({
   name: customer.name || "Neuer Kunde",
   creditor_number: customer.creditorNumber || "",
   email: customer.email || "",
+  street: customer.street || "",
+  postal_code: customer.postalCode || "",
+  city: customer.city || "",
+  country: customer.country || "",
   phones: (customer.phones || [])
     .filter((phone) => (phone.label || "").trim() || (phone.number || "").trim())
     .map((phone) => ({
@@ -60,6 +68,8 @@ export default function CustomerDirectoryView() {
   const [activeId, setActiveId] = useState(null);
   const [query, setQuery] = useState("");
   const [importStatus, setImportStatus] = useState("");
+  const [metrics, setMetrics] = useState(null);
+  const [metricsStatus, setMetricsStatus] = useState("idle");
   const saveTimers = useRef({});
   const importInputRef = useRef(null);
 
@@ -115,6 +125,32 @@ export default function CustomerDirectoryView() {
   }, [filteredCustomers]);
 
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
+
+  useEffect(() => {
+    if (!activeCustomer?.id) {
+      setMetrics(null);
+      return;
+    }
+    let active = true;
+    setMetricsStatus("loading");
+    fetch(`${API}/customers/${activeCustomer.id}/metrics`)
+      .then((res) => {
+        if (!res.ok) throw new Error("metrics_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        setMetrics(data);
+        setMetricsStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setMetricsStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeCustomer?.id]);
 
   const scheduleSave = (customer) => {
     if (!customer) return;
@@ -234,6 +270,10 @@ export default function CustomerDirectoryView() {
       const values = {
         "Kunden-Nr.": customer.creditorNumber || "",
         Organisation: customer.name || "",
+        Strasse: customer.street || "",
+        PLZ: customer.postalCode || "",
+        Ort: customer.city || "",
+        Land: customer.country || "",
         Telefon: phones.phoneNumber,
         "Telefon-Kategorie": phones.phoneLabel || (phones.phoneNumber ? "Arbeit" : ""),
         Mobil: phones.mobileNumber,
@@ -401,6 +441,10 @@ export default function CustomerDirectoryView() {
       ]),
       creditor: findIndex(["creditor_number", "creditor", "kreditor", "kreditorennummer"]),
       email: findIndex(["email", "e_mail", "mail"]),
+      street: findIndex(["strasse", "straße", "street"]),
+      postalCode: findIndex(["plz", "postal_code", "zip"]),
+      city: findIndex(["ort", "city"]),
+      country: findIndex(["land", "country"]),
       phones: findIndex(["phones", "phone", "telefonnummern", "rufnummern"]),
       phone: findIndex(["telefon"]),
       phoneCategory: findIndex(["telefon_kategorie"]),
@@ -443,6 +487,11 @@ export default function CustomerDirectoryView() {
         creditorNumberRaw ||
         (indexes.creditorAlt >= 0 ? String(row[indexes.creditorAlt] || "").trim() : "");
       const email = indexes.email >= 0 ? String(row[indexes.email] || "").trim() : "";
+      const street = indexes.street >= 0 ? String(row[indexes.street] || "").trim() : "";
+      const postalCode =
+        indexes.postalCode >= 0 ? String(row[indexes.postalCode] || "").trim() : "";
+      const city = indexes.city >= 0 ? String(row[indexes.city] || "").trim() : "";
+      const country = indexes.country >= 0 ? String(row[indexes.country] || "").trim() : "";
       const phones = parsePhonesFromColumns({
         phone: indexes.phone >= 0 ? String(row[indexes.phone] || "").trim() : "",
         phoneCategory:
@@ -469,6 +518,10 @@ export default function CustomerDirectoryView() {
         if (finalName) payload.name = finalName;
         if (resolvedCreditorNumber) payload.creditor_number = resolvedCreditorNumber;
         if (email) payload.email = email;
+        if (street) payload.street = street;
+        if (postalCode) payload.postal_code = postalCode;
+        if (city) payload.city = city;
+        if (country) payload.country = country;
         if (phones.length) payload.phones = phones;
         if (!Object.keys(payload).length) {
           skipped += 1;
@@ -488,6 +541,10 @@ export default function CustomerDirectoryView() {
         name: finalName,
         creditor_number: resolvedCreditorNumber,
         email,
+        street,
+        postal_code: postalCode,
+        city,
+        country,
         phones
       });
       created += 1;
@@ -696,6 +753,53 @@ export default function CustomerDirectoryView() {
                   </label>
                 </div>
 
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block md:col-span-2">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
+                    <input
+                      value={activeCustomer.street}
+                      onChange={(event) =>
+                        updateCustomer(activeCustomer.id, { street: event.target.value })
+                      }
+                      placeholder="z. B. Steyrtalstraße 88"
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">PLZ</span>
+                    <input
+                      value={activeCustomer.postalCode}
+                      onChange={(event) =>
+                        updateCustomer(activeCustomer.id, { postalCode: event.target.value })
+                      }
+                      placeholder="z. B. 4523"
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">Ort</span>
+                    <input
+                      value={activeCustomer.city}
+                      onChange={(event) =>
+                        updateCustomer(activeCustomer.id, { city: event.target.value })
+                      }
+                      placeholder="z. B. Neuzeug"
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">Land</span>
+                    <input
+                      value={activeCustomer.country}
+                      onChange={(event) =>
+                        updateCustomer(activeCustomer.id, { country: event.target.value })
+                      }
+                      placeholder="z. B. Österreich"
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                </div>
+
                 <div className="rounded-2xl border border-sand-200 bg-sand-50 p-4">
                   <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="flex items-center gap-2 text-sand-700">
@@ -740,6 +844,47 @@ export default function CustomerDirectoryView() {
                       </div>
                     ))}
                   </div>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                  <div className="flex items-center gap-2 text-sand-700 mb-3">
+                    <Building2 size={16} />
+                    <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Kennzahlen</p>
+                  </div>
+                  {metricsStatus === "loading" ? (
+                    <p className="text-sm text-sand-500">Lädt Kennzahlen…</p>
+                  ) : metricsStatus === "error" ? (
+                    <p className="text-sm text-rose-600">Kennzahlen konnten nicht geladen werden.</p>
+                  ) : metrics ? (
+                    <div className="grid gap-3 sm:grid-cols-3 text-sm text-sand-700">
+                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Entfernung</p>
+                        <p className="text-base font-semibold">
+                          {metrics.distanceKm != null ? `${metrics.distanceKm} km` : "Adresse fehlt"}
+                        </p>
+                        <p className="text-xs text-sand-500">
+                          {metrics.mileageEur != null ? `Vorschlag: € ${metrics.mileageEur}` : ""}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">
+                          Offene Tasks
+                        </p>
+                        <p className="text-base font-semibold">{metrics.openTasks}</p>
+                      </div>
+                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">
+                          Telefonie (30 Tage)
+                        </p>
+                        <p className="text-base font-semibold">
+                          {metrics.totalMinutes} Min
+                        </p>
+                        <p className="text-xs text-sand-500">Verpasst: {metrics.missedCalls}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-sand-500">Noch keine Kennzahlen.</p>
+                  )}
                 </div>
 
                 <div className="rounded-2xl border border-sand-200 bg-white p-4">
