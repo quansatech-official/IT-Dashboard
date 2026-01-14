@@ -58,6 +58,7 @@ export default function App() {
   const [timerCustomer, setTimerCustomer] = useState("");
   const [timerTitle, setTimerTitle] = useState("");
   const [timerRunning, setTimerRunning] = useState(false);
+  const [timerPaused, setTimerPaused] = useState(false);
   const [timerStart, setTimerStart] = useState(null);
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef(null);
@@ -195,19 +196,27 @@ export default function App() {
   };
 
   const startTimer = () => {
-    setTimerStart(Date.now());
-    setElapsed(0);
+    setTimerStart(Date.now() - (timerPaused ? elapsed : 0));
     setTimerRunning(true);
+    setTimerPaused(false);
+  };
+
+  const pauseTimer = () => {
+    if (timerRunning && timerStart) {
+      setElapsed(Date.now() - timerStart);
+    }
+    setTimerRunning(false);
+    setTimerPaused(true);
   };
 
   const stopTimer = async () => {
-    if (!timerStart) return;
+    if (!timerStart && !elapsed) return;
     const customer = findCustomer(timerCustomer);
     if (!customer) {
       setStatus("Bitte Kunde aus der Liste wählen.");
       return;
     }
-    const totalElapsed = Date.now() - timerStart;
+    const totalElapsed = timerRunning ? Date.now() - timerStart : elapsed;
     const taskTitle = timerTitle.trim() || "Vor-Ort Einsatz";
     const created = await api.createTimeTask({
       customer_id: customer.id,
@@ -222,6 +231,7 @@ export default function App() {
       setStatus("Stoppuhr an Zeiterfassung übertragen.");
     }
     setTimerRunning(false);
+    setTimerPaused(false);
     setTimerStart(null);
     setElapsed(0);
   };
@@ -386,15 +396,29 @@ export default function App() {
               <span className="timer">{formatElapsed(elapsed)}</span>
             </div>
             <div className="inline">
-              {!timerRunning ? (
+              {!timerRunning && !timerPaused ? (
                 <button className="secondary-btn" type="button" onClick={startTimer}>
                   Start
                 </button>
+              ) : timerRunning ? (
+                <>
+                  <button className="secondary-btn" type="button" onClick={pauseTimer}>
+                    Pause
+                  </button>
+                  <button className="primary-btn" type="button" onClick={stopTimer}>
+                    Stop & uebertragen
+                  </button>
+                </>
               ) : (
                 <button className="primary-btn" type="button" onClick={stopTimer}>
-                  Stop & ubertragen
+                  Stop & uebertragen
                 </button>
               )}
+              {timerPaused ? (
+                <button className="secondary-btn" type="button" onClick={startTimer}>
+                  Weiter
+                </button>
+              ) : null}
             </div>
           </div>
         )}

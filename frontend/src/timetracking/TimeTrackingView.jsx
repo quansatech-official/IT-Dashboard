@@ -17,13 +17,6 @@ const API = "/api";
 
 const api = {
   customers: () => fetch(`${API}/customers`).then((r) => r.json()),
-  dayTasks: () => fetch(`${API}/day_tasks`).then((r) => r.json()),
-  updateDayTask: (id, payload) =>
-    fetch(`${API}/day_tasks/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }),
   metricsSettings: () => fetch(`${API}/customer_metrics_settings`).then((r) => r.json()),
   addCustomer: (name) =>
     fetch(`${API}/customers`, {
@@ -282,23 +275,11 @@ export default function TimeTrackingView() {
   const [customersState, setCustomersState] = useState([]);
   const [newCustomer, setNewCustomer] = useState("");
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [showAllSuggestions, setShowAllSuggestions] = useState(false);
   const [hourlyRate, setHourlyRate] = useState(0);
-  const [unassignedTasks, setUnassignedTasks] = useState([]);
-  const [suggestionOpenId, setSuggestionOpenId] = useState(null);
+  const newCustomerRef = useRef(null);
 
-  const load = useCallback(
-    () =>
-      Promise.all([api.customers(), api.dayTasks()]).then(([customers, dayTasks]) => {
-        setCustomersState(Array.isArray(customers) ? customers : []);
-        const unassigned = Array.isArray(dayTasks)
-          ? dayTasks.filter(
-              (task) => !String(task.customer || "").trim() && task.status !== "done"
-            )
-          : [];
-        setUnassignedTasks(unassigned);
-      }),
-    []
-  );
+  const load = useCallback(() => api.customers().then(setCustomersState), []);
   const customerSuggestions = useMemo(() => {
     const seen = new Set();
     return customersState
@@ -308,11 +289,11 @@ export default function TimeTrackingView() {
   }, [customersState]);
   const filteredSuggestions = useMemo(() => {
     const needle = newCustomer.trim().toLowerCase();
-    if (!needle) return customerSuggestions.slice(0, 12);
+    if (showAllSuggestions || !needle) return customerSuggestions.slice(0, 12);
     return customerSuggestions
       .filter((name) => name.toLowerCase().includes(needle))
       .slice(0, 12);
-  }, [customerSuggestions, newCustomer]);
+  }, [customerSuggestions, newCustomer, showAllSuggestions]);
   const visibleCustomers = useMemo(
     () =>
       customersState.filter(
@@ -337,40 +318,6 @@ export default function TimeTrackingView() {
       .catch(() => setHourlyRate(0));
   }, []);
 
-  const normalizeText = (value) =>
-    String(value || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9äöüß\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  const getCustomerSuggestions = (text) => {
-    const titleText = normalizeText(text);
-    if (!titleText) return [];
-    const tokens = titleText.split(" ").filter((token) => token.length > 2);
-    const scored = customersState
-      .map((customer) => {
-        const name = String(customer?.name || "").trim();
-        if (!name) return null;
-        const nameText = normalizeText(name);
-        if (!nameText) return null;
-        let score = 0;
-        if (titleText.includes(nameText)) {
-          score += 100 + nameText.length;
-        } else {
-          tokens.forEach((token) => {
-            if (nameText.includes(token)) {
-              score += 5;
-            }
-          });
-        }
-        return score > 0 ? { name, score } : null;
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3);
-    return scored.map((item) => item.name);
-  };
 
   return (
     <div className="min-h-screen bg-slate-100">
@@ -391,75 +338,15 @@ export default function TimeTrackingView() {
 
       <main className="max-w-7xl mx-auto p-6">
         <div className="space-y-6">
-          {unassignedTasks.length ? (
-            <div className="bg-white p-4 rounded-xl shadow border border-sand-200">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">
-                  Unzugeordnet (Tagesplan)
-                </h2>
-                <span className="text-xs text-sand-500">{unassignedTasks.length} Aufgaben</span>
-              </div>
-              <div className="space-y-2">
-                {unassignedTasks.map((task) => {
-                  const suggestions = getCustomerSuggestions(task.title);
-                  return (
-                    <div
-                      key={task.id}
-                      className="flex items-center justify-between gap-2 rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-700"
-                    >
-                      <span className="truncate">{task.title}</span>
-                      <div className="relative">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!suggestions.length) return;
-                            if (suggestions.length === 1) {
-                              api.updateDayTask(task.id, { customer: suggestions[0] }).then(load);
-                              return;
-                            }
-                            setSuggestionOpenId((prev) => (prev === task.id ? null : task.id));
-                          }}
-                          className="rounded-full border border-amber-200 bg-white p-2 text-sand-600 hover:bg-amber-100"
-                          title={
-                            suggestions.length
-                              ? `Kundenvorschlag${suggestions.length > 1 ? "e" : ""}`
-                              : "Kein Kundenvorschlag"
-                          }
-                          disabled={!suggestions.length}
-                        >
-                          <Sparkles size={12} />
-                        </button>
-                        {suggestionOpenId === task.id && suggestions.length > 1 ? (
-                          <div className="absolute right-0 mt-2 w-48 rounded-xl border border-sand-200 bg-white shadow-lg z-20">
-                            {suggestions.map((name) => (
-                              <button
-                                key={name}
-                                type="button"
-                                onClick={() => {
-                                  api.updateDayTask(task.id, { customer: name }).then(load);
-                                  setSuggestionOpenId(null);
-                                }}
-                                className="w-full text-left px-3 py-2 text-xs hover:bg-sand-100"
-                              >
-                                {name}
-                              </button>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
           <div className="bg-white p-4 rounded-xl flex gap-3 shadow">
             <Users />
             <div className="relative flex-1">
               <input
+                ref={newCustomerRef}
                 value={newCustomer}
                 onChange={(e) => {
                   setNewCustomer(e.target.value);
+                  setShowAllSuggestions(false);
                   setSuggestionsOpen(true);
                 }}
                 onFocus={() => setSuggestionsOpen(true)}
@@ -476,6 +363,7 @@ export default function TimeTrackingView() {
                       onMouseDown={() => {
                         setNewCustomer(name);
                         setSuggestionsOpen(false);
+                        setShowAllSuggestions(false);
                       }}
                       className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100"
                     >
@@ -485,6 +373,18 @@ export default function TimeTrackingView() {
                 </div>
               ) : null}
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                setShowAllSuggestions(true);
+                setSuggestionsOpen(true);
+                newCustomerRef.current?.focus();
+              }}
+              className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-3"
+              title="Kundenliste"
+            >
+              <Sparkles size={14} />
+            </button>
             <button
               className="bg-slate-900 text-white rounded px-4"
               onClick={() =>

@@ -441,7 +441,7 @@ export default function DayPlanView() {
                     type="button"
                     onClick={() => {
                       if (!suggestions.length) {
-                        setError("Kein Kundenvorschlag gefunden.");
+                        if (!task.task_id) startCustomerEdit(task);
                         return;
                       }
                       if (suggestions.length === 1) {
@@ -454,9 +454,11 @@ export default function DayPlanView() {
                     title={
                       suggestions.length
                         ? `Kundenvorschlag${suggestions.length > 1 ? "e" : ""}`
+                        : task.task_id
+                        ? "Kunde ist fixiert (Zeiterfassung)"
                         : "Kein Kundenvorschlag"
                     }
-                    disabled={!suggestions.length}
+                    disabled={!suggestions.length || task.task_id}
                   >
                     <Sparkles size={12} />
                   </button>

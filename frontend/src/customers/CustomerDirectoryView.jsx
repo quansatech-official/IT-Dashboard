@@ -3,6 +3,7 @@ import {
   BadgeCheck,
   Building2,
   Eye,
+  FileDown,
   Mail,
   Phone,
   Plus,
@@ -86,6 +87,8 @@ export default function CustomerDirectoryView() {
   const [importApplyUpdate, setImportApplyUpdate] = useState(true);
   const [reportOverview, setReportOverview] = useState([]);
   const [reportStatus, setReportStatus] = useState("idle");
+  const [deliveryNotes, setDeliveryNotes] = useState([]);
+  const [deliveryStatus, setDeliveryStatus] = useState("idle");
   const [settingsTab, setSettingsTab] = useState("details");
   const [previewModal, setPreviewModal] = useState({
     open: false,
@@ -225,6 +228,45 @@ export default function CustomerDirectoryView() {
     };
   }, [activeCustomer?.name]);
 
+  useEffect(() => {
+    if (!activeCustomer?.name) {
+      setDeliveryNotes([]);
+      return;
+    }
+    let active = true;
+    setDeliveryStatus("loading");
+    fetch("/api/day_tasks")
+      .then((res) => {
+        if (!res.ok) throw new Error("tasks_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        const list = Array.isArray(data) ? data : [];
+        const name = String(activeCustomer.name || "").trim().toLowerCase();
+        const number = String(activeCustomer.creditorNumber || "").trim();
+        const filtered = list.filter((task) => {
+          const taskCustomer = String(task.customer || "").trim().toLowerCase();
+          const taskNumber = String(task.customer_number || "").trim();
+          const matchesName = name && taskCustomer === name;
+          const matchesNumber = number && taskNumber === number;
+          const hasSignature = String(task.signature_base64 || "").trim() !== "";
+          const looksLikeDelivery = String(task.title || "").toLowerCase().includes("lieferschein");
+          return (matchesName || matchesNumber) && (hasSignature || looksLikeDelivery);
+        });
+        filtered.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+        setDeliveryNotes(filtered);
+        setDeliveryStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setDeliveryStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeCustomer?.name, activeCustomer?.creditorNumber]);
+
   const scheduleSave = (customer) => {
     if (!customer) return;
     if (saveTimers.current[customer.id]) {
@@ -279,6 +321,48 @@ export default function CustomerDirectoryView() {
         html: "<p>Vorschau konnte nicht geladen werden.</p>"
       });
     }
+  };
+
+  const renderDeliveryHtml = (task) => {
+    const signature = task.signature_base64
+      ? `<img src="${task.signature_base64}" alt="Unterschrift" style="max-width: 260px; border: 1px solid #e2e8f0; border-radius: 12px;" />`
+      : "<p>Keine Unterschrift gespeichert.</p>";
+    return `
+      <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; color: #2f2a24;">
+        <h2 style="margin: 0 0 8px;">Lieferschein</h2>
+        <p><strong>Kunde:</strong> ${activeCustomer?.name || ""}</p>
+        <p><strong>Text:</strong> ${String(task.title || "").replaceAll("\n", "<br/>")}</p>
+        <div style="margin-top: 12px;">
+          <strong>Unterschrift:</strong><br/>
+          ${signature}
+        </div>
+      </div>
+    `;
+  };
+
+  const openDeliveryPreview = (task) => {
+    setPreviewModal({
+      open: true,
+      title: "Lieferschein",
+      html: renderDeliveryHtml(task)
+    });
+  };
+
+  const exportDeliveryPdf = (task) => {
+    const html = renderDeliveryHtml(task);
+    const win = window.open("", "_blank", "width=900,height=700");
+    if (!win) return;
+    win.document.write(`<html><head><title>Lieferschein</title></head><body>${html}</body></html>`);
+    win.document.close();
+    win.focus();
+    win.print();
+  };
+
+  const removeDeliveryNote = async (taskId) => {
+    if (!taskId) return;
+    if (!confirm("Lieferschein löschen?")) return;
+    await fetch(`/api/day_tasks/${taskId}`, { method: "DELETE" });
+    setDeliveryNotes((prev) => prev.filter((item) => item.id !== taskId));
   };
 
   const handleCreate = () => {
@@ -1268,6 +1352,71 @@ export default function CustomerDirectoryView() {
                     </div>
                   ) : (
                     <p className="text-sm text-sand-500">Keine Berichte vorhanden.</p>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                  <div className="flex items-center gap-2 text-sand-700 mb-3">
+                    <FileDown size={16} />
+                    <p className="text-sm uppercase tracking-[0.3em] text-sand-500">
+                      Lieferscheine
+                    </p>
+                  </div>
+                  {deliveryStatus === "loading" ? (
+                    <p className="text-sm text-sand-500">Lieferscheine laden…</p>
+                  ) : deliveryStatus === "error" ? (
+                    <p className="text-sm text-rose-600">Lieferscheine konnten nicht geladen werden.</p>
+                  ) : deliveryNotes.length ? (
+                    <div className="space-y-2">
+                      {deliveryNotes.slice(0, 5).map((note) => (
+                        <div
+                          key={note.id}
+                          className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-700"
+                        >
+                          <div>
+                            <div className="font-semibold">Lieferschein</div>
+                            <div className="text-xs text-sand-500">
+                              {note.created_at
+                                ? new Date(note.created_at).toLocaleDateString("de-DE")
+                                : ""}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openDeliveryPreview(note)}
+                              className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                              title="Vorschau"
+                            >
+                              <Eye size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => exportDeliveryPdf(note)}
+                              className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                              title="PDF exportieren"
+                            >
+                              <FileDown size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeDeliveryNote(note.id)}
+                              className="inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 p-2 text-rose-600 hover:bg-rose-100"
+                              title="Löschen"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {deliveryNotes.length > 5 ? (
+                        <p className="text-xs text-sand-500">
+                          +{deliveryNotes.length - 5} weitere Lieferscheine
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-sand-500">Keine Lieferscheine vorhanden.</p>
                   )}
                 </div>
 
