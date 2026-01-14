@@ -7,7 +7,8 @@ import {
   Sparkles,
   Star,
   Trash2,
-  Undo2
+  Undo2,
+  UserPlus
 } from "lucide-react";
 
 const API = "/api";
@@ -437,31 +438,35 @@ export default function DayPlanView() {
               </div>
               <div className="flex items-center gap-1">
                 {!knownCustomer ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!suggestions.length) {
+                  suggestions.length ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (suggestions.length === 1) {
+                          updateTask(task, { customer: suggestions[0] });
+                          return;
+                        }
+                        toggleSuggestionMenu(task.id, true);
+                      }}
+                      className="rounded-full border border-amber-200 bg-white p-1 text-sand-600 hover:bg-amber-100"
+                      title={`Kundenvorschlag${suggestions.length > 1 ? "e" : ""}`}
+                      disabled={task.task_id}
+                    >
+                      <Sparkles size={12} />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
                         if (!task.task_id) startCustomerEdit(task);
-                        return;
-                      }
-                      if (suggestions.length === 1) {
-                        updateTask(task, { customer: suggestions[0] });
-                        return;
-                      }
-                      toggleSuggestionMenu(task.id, true);
-                    }}
-                    className="rounded-full border border-amber-200 bg-white p-1 text-sand-600 hover:bg-amber-100"
-                    title={
-                      suggestions.length
-                        ? `Kundenvorschlag${suggestions.length > 1 ? "e" : ""}`
-                        : task.task_id
-                        ? "Kunde ist fixiert (Zeiterfassung)"
-                        : "Kein Kundenvorschlag"
-                    }
-                    disabled={!suggestions.length || task.task_id}
-                  >
-                    <Sparkles size={12} />
-                  </button>
+                      }}
+                      className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                      title={task.task_id ? "Kunde ist fixiert (Zeiterfassung)" : "Kunde suchen"}
+                      disabled={task.task_id}
+                    >
+                      <UserPlus size={12} />
+                    </button>
+                  )
                 ) : null}
                 {!task.task_id ? (
                   <button

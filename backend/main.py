@@ -468,6 +468,7 @@ class TaskUpdate(BaseModel):
     elapsed: Optional[int] = None
     running: Optional[bool] = None
     startTime: Optional[int] = None
+    customer_id: Optional[int] = None
 
 
 class DayTaskCreate(BaseModel):

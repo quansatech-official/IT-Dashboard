@@ -197,6 +197,12 @@ function TaskItem({ task, reload }) {
 /* ================= Customer ================= */
 function CustomerCard({ customer, reload }) {
   const hourlyRate = customer.hourlyRate ?? 0;
+  const mergeOptions = customer.mergeOptions || [];
+  const onMerge = customer.onMerge;
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const hasMapping = Boolean(
+    (customer.creditorNumber || "").trim() || (customer.shortCode || "").trim()
+  );
   const inputRef = useRef();
 
   useEffect(() => {
@@ -235,7 +241,46 @@ function CustomerCard({ customer, reload }) {
       </button>
 
       <div className="flex justify-between mb-2">
-        <h2 className="font-semibold text-sm">{customer.name}</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="font-semibold text-sm">{customer.name}</h2>
+          <button
+            type="button"
+            onClick={() => alert("Faktura-Export ist noch nicht angebunden.")}
+            className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
+            title="Export zu Faktura (Dummy)"
+          >
+            Faktura
+          </button>
+          {!hasMapping && mergeOptions.length ? (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setMergeOpen((prev) => !prev)}
+                className="rounded-full border border-amber-200 bg-white p-1 text-amber-700 hover:bg-amber-100"
+                title="Kunde zuordnen"
+              >
+                <Sparkles size={12} />
+              </button>
+              {mergeOpen ? (
+                <div className="absolute left-0 mt-2 w-48 rounded-xl border border-slate-200 bg-white shadow-lg z-20">
+                  {mergeOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => {
+                        setMergeOpen(false);
+                        onMerge?.(option.id);
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs hover:bg-slate-100"
+                    >
+                      {option.name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
         <div className="text-xs text-slate-500 text-right">
           <div className="flex items-center gap-1 justify-end">
             <Clock size={14} /> {msToHHMMSS(total)}
@@ -317,6 +362,20 @@ export default function TimeTrackingView() {
       })
       .catch(() => setHourlyRate(0));
   }, []);
+
+  const mergeCustomer = async (sourceCustomer, targetId) => {
+    if (!sourceCustomer?.tasks?.length) {
+      await api.deleteCustomer(sourceCustomer.id);
+      load();
+      return;
+    }
+    for (const task of sourceCustomer.tasks) {
+      await api.updateTask(task.id, { customer_id: targetId });
+    }
+    await api.updateCustomer(targetId, { time_tracking_enabled: true });
+    await api.deleteCustomer(sourceCustomer.id);
+    load();
+  };
 
 
   return (
@@ -416,7 +475,16 @@ export default function TimeTrackingView() {
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             {visibleCustomers.map((c) => (
-              <CustomerCard key={c.id} customer={{ ...c, hourlyRate }} reload={load} />
+              <CustomerCard
+                key={c.id}
+                customer={{
+                  ...c,
+                  hourlyRate,
+                  mergeOptions: customersState.filter((opt) => opt.id !== c.id),
+                  onMerge: (targetId) => mergeCustomer(c, targetId)
+                }}
+                reload={load}
+              />
             ))}
           </div>
         </div>
