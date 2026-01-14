@@ -309,7 +309,11 @@ function CustomerCard({ customer, reload }) {
                         </button>
                       )
                     )}
-                    {!filteredMergeOptions.length && trimmedMergeQuery ? (
+                    {trimmedMergeQuery &&
+                    !mergeOptions.some(
+                      (option) =>
+                        option.name.trim().toLowerCase() === trimmedMergeQuery.toLowerCase()
+                    ) ? (
                       <button
                         type="button"
                         onClick={() => {
