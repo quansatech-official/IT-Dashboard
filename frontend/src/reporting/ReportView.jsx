@@ -935,13 +935,18 @@ export default function ReportView() {
           const reportData = reportRes.ok ? await reportRes.json() : null;
           const reportCustomer = reportData?.customer || item.customer || "";
           const period = reportData?.period || item.period || "";
-          const actionText = String(reportData?.customer_action_text || "").trim();
-          const firstAction = Array.isArray(reportData?.items)
-            ? reportData.items.find((entry) => String(entry?.title || "").trim())
-            : null;
-          const actionTitle = firstAction ? String(firstAction.title || "").trim() : "";
+          const actionItems = Array.isArray(reportData?.items) ? reportData.items : [];
+          const actionSummary = actionItems
+            .map((entry) => {
+              const title = String(entry?.title || "").trim();
+              const system = String(entry?.system || "").trim();
+              if (!title) return "";
+              return system ? `${title} (${system})` : title;
+            })
+            .filter(Boolean)
+            .join("; ");
           const baseTitle =
-            actionText || actionTitle || `Bericht bestätigt${period ? ` (${period})` : ""}`;
+            actionSummary || `Bericht bestätigt${period ? ` (${period})` : ""}`;
           const taskTitle = reportCustomer ? `${reportCustomer}: ${baseTitle}` : baseTitle;
           await fetch("/api/day_tasks", {
             method: "POST",

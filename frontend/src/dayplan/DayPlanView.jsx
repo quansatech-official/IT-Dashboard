@@ -173,6 +173,7 @@ export default function DayPlanView() {
 
   const handleGroupDrop = (event, group, columnId) => {
     event.preventDefault();
+    event.stopPropagation();
     setDragOverGroupId(null);
     const payload = event.dataTransfer.getData("text/plain");
     if (!payload) return;
@@ -207,6 +208,12 @@ export default function DayPlanView() {
         updateGroup(item, { column: columnId, position: index });
       });
     }
+  };
+
+  const handleGroupDragOver = (event, groupId) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOverGroupId(groupId);
   };
 
   const handleUngroupedDrop = (event, columnId) => {
@@ -582,14 +589,15 @@ export default function DayPlanView() {
                     onDragStart={(event) => {
                       event.dataTransfer.setData("text/plain", `group:${group.id}`);
                     }}
-                    onDragOver={(event) => {
-                      event.preventDefault();
-                      setDragOverGroupId(group.id);
-                    }}
+                    onDragOver={(event) => handleGroupDragOver(event, group.id)}
                     onDragLeave={() => setDragOverGroupId(null)}
                     onDrop={(event) => handleGroupDrop(event, group, column.id)}
                   >
-                    <div className="flex items-center gap-2">
+                    <div
+                      className="flex items-center gap-2"
+                      onDragOver={(event) => handleGroupDragOver(event, group.id)}
+                      onDrop={(event) => handleGroupDrop(event, group, column.id)}
+                    >
                       {editingGroupId === group.id ? (
                         <input
                           value={editingGroupTitle}
@@ -639,7 +647,11 @@ export default function DayPlanView() {
                         Entfernen
                       </button>
                     </div>
-                    <div className="mt-2 space-y-3">
+                    <div
+                      className="mt-2 space-y-3"
+                      onDragOver={(event) => handleGroupDragOver(event, group.id)}
+                      onDrop={(event) => handleGroupDrop(event, group, column.id)}
+                    >
                       {grouped[column.id].filter((task) => task.group_id === group.id).length ? (
                         grouped[column.id]
                           .filter((task) => task.group_id === group.id)
