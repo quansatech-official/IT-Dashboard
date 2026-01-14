@@ -34,6 +34,7 @@ class Customer(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     creditor_number = Column(String, default="")
+    short_code = Column(String, default="")
     email = Column(String, default="")
     time_tracking_enabled = Column(Boolean, default=False)
     street = Column(String, default="")
@@ -83,6 +84,7 @@ class DayTask(Base):
     task_id = Column(Integer, nullable=True)
     group_id = Column(Integer, nullable=True)
     locked = Column(Boolean, default=False)
+    signature_base64 = Column(String, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
@@ -349,6 +351,8 @@ def _ensure_customer_columns() -> None:
     statements = []
     if "creditor_number" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN creditor_number VARCHAR DEFAULT ''")
+    if "short_code" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN short_code VARCHAR DEFAULT ''")
     if "email" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN email VARCHAR DEFAULT ''")
     if "time_tracking_enabled" not in columns:
@@ -391,6 +395,8 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN group_id INTEGER")
     if "locked" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN locked BOOLEAN DEFAULT FALSE")
+    if "signature_base64" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN signature_base64 VARCHAR DEFAULT ''")
     if not statements:
         return
     with engine.begin() as connection:
@@ -426,6 +432,7 @@ class CustomerPhoneSchema(BaseModel):
 class CustomerCreate(BaseModel):
     name: str
     creditor_number: Optional[str] = ""
+    short_code: Optional[str] = ""
     email: Optional[str] = ""
     time_tracking_enabled: Optional[bool] = None
     street: Optional[str] = ""
@@ -438,6 +445,7 @@ class CustomerCreate(BaseModel):
 class CustomerUpdate(BaseModel):
     name: Optional[str] = None
     creditor_number: Optional[str] = None
+    short_code: Optional[str] = None
     email: Optional[str] = None
     time_tracking_enabled: Optional[bool] = None
     street: Optional[str] = None
@@ -469,6 +477,7 @@ class DayTaskCreate(BaseModel):
     status: Optional[str] = "todo"
     group_id: Optional[int] = None
     locked: Optional[bool] = False
+    signature_base64: Optional[str] = ""
 
 
 class DayTaskUpdate(BaseModel):
@@ -479,6 +488,7 @@ class DayTaskUpdate(BaseModel):
     task_id: Optional[int] = None
     group_id: Optional[int] = None
     locked: Optional[bool] = None
+    signature_base64: Optional[str] = None
 
 
 class DayTaskGroupCreate(BaseModel):
@@ -647,6 +657,7 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "task_id": t.task_id,
         "group_id": t.group_id,
         "locked": t.locked,
+        "signature_base64": t.signature_base64,
         "created_at": t.created_at,
     }
 
@@ -667,6 +678,7 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
         "id": c.id,
         "name": c.name,
         "creditor_number": c.creditor_number,
+        "short_code": c.short_code,
         "email": c.email,
         "time_tracking_enabled": c.time_tracking_enabled,
         "street": c.street,
@@ -1065,6 +1077,7 @@ def create_customer(data: CustomerCreate):
         customer = Customer(
             name=data.name,
             creditor_number=data.creditor_number or "",
+            short_code=data.short_code or "",
             email=data.email or "",
             time_tracking_enabled=bool(data.time_tracking_enabled),
             street=data.street or "",
@@ -1404,6 +1417,7 @@ def create_day_task(data: DayTaskCreate):
             status=data.status or "todo",
             group_id=data.group_id,
             locked=bool(data.locked),
+            signature_base64=data.signature_base64 or "",
         )
         db.add(task)
         db.commit()
@@ -1417,7 +1431,7 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
         task = db.query(DayTask).get(task_id)
         if not task:
             raise HTTPException(404, "Task not found")
-        string_fields = {"title", "customer", "customer_number", "status"}
+        string_fields = {"title", "customer", "customer_number", "status", "signature_base64"}
         for field, value in data.dict(exclude_unset=True).items():
             if value is None and field in string_fields:
                 setattr(task, field, "")

@@ -51,12 +51,29 @@ export default function App() {
   const [deliveryCustomer, setDeliveryCustomer] = useState("");
   const [deliveryTitle, setDeliveryTitle] = useState("");
   const [deliveryItems, setDeliveryItems] = useState("");
+  const [deliveryTemplate, setDeliveryTemplate] = useState("");
+  const [deliveryWorkTime, setDeliveryWorkTime] = useState("");
+  const [signatureData, setSignatureData] = useState("");
+  const [isDrawing, setIsDrawing] = useState(false);
   const [timerCustomer, setTimerCustomer] = useState("");
   const [timerTitle, setTimerTitle] = useState("");
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerStart, setTimerStart] = useState(null);
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef(null);
+  const signatureRef = useRef(null);
+
+  const deliveryTemplates = [
+    "Backup pruefen",
+    "Update/ Patch einspielen",
+    "Monitoring kontrollieren",
+    "Sicherheitstest",
+    "Stoerung behoben",
+    "Netzwerk optimiert",
+    "Benutzer anlegen",
+    "Hardware getauscht",
+    "Dokumentation aktualisiert"
+  ];
 
   useEffect(() => {
     api.customers().then((data) => {
@@ -104,15 +121,77 @@ export default function App() {
       .map((line) => line.trim())
       .filter(Boolean)
       .join(", ");
-    const summary = items ? `${title}: ${items}` : title;
+    const timeText = deliveryWorkTime.trim();
+    if (timeText && !timeText.match(/^\d{1,2}:\d{2}$/)) {
+      setStatus("Arbeitszeit bitte als HH:MM eingeben.");
+      return;
+    }
+    const summary = [
+      items ? `${title}: ${items}` : title,
+      timeText ? `Arbeitszeit ${timeText} h` : "",
+      signatureData ? "Unterschrift erfasst" : "Unterschrift fehlt"
+    ]
+      .filter(Boolean)
+      .join(" | ");
     await api.dayTask({
       title: summary,
       customer: deliveryCustomer.trim(),
-      status: "todo"
+      status: "todo",
+      signature_base64: signatureData || ""
     });
     setDeliveryTitle("");
     setDeliveryItems("");
+    setDeliveryTemplate("");
+    setDeliveryWorkTime("");
+    setSignatureData("");
     setStatus("Lieferschein gespeichert.");
+  };
+
+  const handleTemplateSelect = (template) => {
+    setDeliveryTemplate(template);
+    setDeliveryItems((prev) => {
+      const next = prev ? `${prev}\n${template}` : template;
+      return next;
+    });
+  };
+
+  const startSignature = (event) => {
+    const canvas = signatureRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext("2d");
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#2f2a24";
+    ctx.beginPath();
+    ctx.moveTo(event.clientX - rect.left, event.clientY - rect.top);
+    setIsDrawing(true);
+  };
+
+  const drawSignature = (event) => {
+    if (!isDrawing) return;
+    const canvas = signatureRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext("2d");
+    ctx.lineTo(event.clientX - rect.left, event.clientY - rect.top);
+    ctx.stroke();
+  };
+
+  const endSignature = () => {
+    if (!isDrawing) return;
+    setIsDrawing(false);
+    const canvas = signatureRef.current;
+    if (!canvas) return;
+    setSignatureData(canvas.toDataURL("image/png"));
+  };
+
+  const clearSignature = () => {
+    const canvas = signatureRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setSignatureData("");
   };
 
   const startTimer = () => {
@@ -194,6 +273,21 @@ export default function App() {
               <p className="hint">Schneller Lieferschein als Aufgabe.</p>
             </div>
             <div className="field">
+              <label>Bausteine (Tippen um einzufuegen)</label>
+              <div className="chip-row">
+                {deliveryTemplates.map((template) => (
+                  <button
+                    key={template}
+                    type="button"
+                    className={`chip ${deliveryTemplate === template ? "chip-active" : ""}`}
+                    onClick={() => handleTemplateSelect(template)}
+                  >
+                    {template}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="field">
               <label>Kunde</label>
               <input
                 list="customer-list"
@@ -218,6 +312,45 @@ export default function App() {
                 onChange={(event) => setDeliveryItems(event.target.value)}
                 placeholder="1x Router\n2x Patchkabel"
               />
+            </div>
+            <div className="field">
+              <label>Freitext</label>
+              <textarea
+                rows={3}
+                value={deliveryTitle}
+                onChange={(event) => setDeliveryTitle(event.target.value)}
+                placeholder="Zusatzinfo (optional)"
+              />
+            </div>
+            <div className="field">
+              <label>Arbeitszeit (HH:MM)</label>
+              <input
+                value={deliveryWorkTime}
+                onChange={(event) => setDeliveryWorkTime(event.target.value)}
+                placeholder="01:30"
+              />
+            </div>
+            <div className="field">
+              <label>Unterschrift</label>
+              <div className="signature-box">
+                <canvas
+                  ref={signatureRef}
+                  width={320}
+                  height={140}
+                  onPointerDown={startSignature}
+                  onPointerMove={drawSignature}
+                  onPointerUp={endSignature}
+                  onPointerLeave={endSignature}
+                />
+              </div>
+              <div className="inline">
+                <button className="secondary-btn" type="button" onClick={clearSignature}>
+                  Leeren
+                </button>
+                <span className="hint">
+                  {signatureData ? "Unterschrift erfasst" : "Noch nicht unterschrieben"}
+                </span>
+              </div>
             </div>
             <button className="primary-btn" type="button" onClick={addDeliveryNote}>
               Lieferschein speichern

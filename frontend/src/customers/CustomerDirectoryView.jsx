@@ -48,6 +48,7 @@ const normalizeCustomer = (customer) => ({
   ...customer,
   creditorNumber:
     customer.creditor_number ?? customer.creditorNumber ?? customer.internal_number ?? "",
+  shortCode: customer.short_code ?? customer.shortCode ?? "",
   street: customer.street ?? "",
   postalCode: customer.postal_code ?? customer.postalCode ?? "",
   city: customer.city ?? "",
@@ -58,6 +59,7 @@ const normalizeCustomer = (customer) => ({
 const customerPayload = (customer) => ({
   name: customer.name || "Neuer Kunde",
   creditor_number: customer.creditorNumber || "",
+  short_code: customer.shortCode || "",
   email: customer.email || "",
   street: customer.street || "",
   postal_code: customer.postalCode || "",
@@ -146,6 +148,7 @@ export default function CustomerDirectoryView() {
       return (
         customer.name?.toLowerCase().includes(trimmed) ||
         customer.creditorNumber?.toLowerCase().includes(trimmed) ||
+        customer.shortCode?.toLowerCase().includes(trimmed) ||
         customer.email?.toLowerCase().includes(trimmed) ||
         phoneMatch
       );
@@ -839,9 +842,16 @@ export default function CustomerDirectoryView() {
                         {customer.name?.trim() || "Unbenannter Kunde"}
                       </div>
                       <div className="mt-1 text-xs text-sand-500">
-                        {customer.creditorNumber
-                          ? `Kunden-Nr. ${customer.creditorNumber}`
-                          : "Ohne Nummer"}
+                        {customer.creditorNumber || customer.shortCode ? (
+                          <>
+                            {customer.creditorNumber
+                              ? `Kunden-Nr. ${customer.creditorNumber}`
+                              : "Ohne Nummer"}
+                            {customer.shortCode ? ` · ${customer.shortCode}` : ""}
+                          </>
+                        ) : (
+                          "Ohne Nummer"
+                        )}
                       </div>
                     </button>
                   );
@@ -1004,7 +1014,7 @@ export default function CustomerDirectoryView() {
                   </button>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-3 md:grid-cols-3">
                   <label className="block">
                     <span className="text-xs uppercase tracking-wide text-sand-500">Name</span>
                     <input
@@ -1026,6 +1036,19 @@ export default function CustomerDirectoryView() {
                         updateCustomer(activeCustomer.id, { creditorNumber: event.target.value })
                       }
                       placeholder="z. B. 1042"
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">
+                      Kundenkürzel
+                    </span>
+                    <input
+                      value={activeCustomer.shortCode}
+                      onChange={(event) =>
+                        updateCustomer(activeCustomer.id, { shortCode: event.target.value })
+                      }
+                      placeholder="z. B. QT"
                       className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>
