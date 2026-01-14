@@ -54,7 +54,7 @@ export default function ArchivePanel({
             {group.reports.map((item) => (
               <div
                 key={item.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3"
+                className="relative z-10 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3"
               >
                 <div>
                   <p className="text-sm font-semibold">{item.label}</p>
@@ -74,7 +74,7 @@ export default function ArchivePanel({
                     <summary className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 cursor-pointer list-none hover:bg-sand-100">
                       <Info size={12} /> Info
                     </summary>
-                    <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-sand-200 bg-white p-4 shadow-soft text-xs text-sand-600">
+                    <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-sand-200 bg-white p-4 shadow-soft text-xs text-sand-600 z-30">
                       <div className="text-[10px] uppercase tracking-[0.3em] text-sand-400 mb-2">
                         Bericht
                       </div>

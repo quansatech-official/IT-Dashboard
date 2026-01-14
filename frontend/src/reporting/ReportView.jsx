@@ -15,6 +15,7 @@ import { buildPlainText, renderReportHTML, uid } from "./utils";
 
 const SMTP_STORAGE_KEY = "qt_smtp_settings_cache";
 const ENABLE_OPEN_BEACON = true;
+const DEFAULT_BEACON_BASE_URL = "https://work.quansatech.at/beacon";
 
 const loadBeaconBaseUrl = () => {
   if (typeof window === "undefined") return "";
@@ -32,7 +33,7 @@ const normalizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "
 
 const buildBeaconUrl = (guid) => {
   if (!ENABLE_OPEN_BEACON || !guid) return "";
-  const baseUrl = normalizeBaseUrl(loadBeaconBaseUrl());
+  const baseUrl = normalizeBaseUrl(loadBeaconBaseUrl() || DEFAULT_BEACON_BASE_URL);
   if (baseUrl.includes("{guid}")) {
     return baseUrl.replace("{guid}", encodeURIComponent(guid));
   }

@@ -231,6 +231,20 @@ def _ensure_report_catalog_group_column() -> None:
 _ensure_report_catalog_group_column()
 
 
+def _ensure_smtp_settings_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("smtp_settings"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("smtp_settings")}
+    if "beacon_base_url" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE smtp_settings ADD COLUMN beacon_base_url VARCHAR"))
+
+
+_ensure_smtp_settings_columns()
+
+
 def _ensure_customer_columns() -> None:
     inspector = inspect(engine)
     if not inspector.has_table("customers"):
@@ -246,6 +260,14 @@ def _ensure_customer_columns() -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+        if "time_tracking_enabled" in columns:
+            connection.execute(
+                text(
+                    "UPDATE customers SET time_tracking_enabled = TRUE "
+                    "WHERE time_tracking_enabled = FALSE "
+                    "AND id IN (SELECT DISTINCT customer_id FROM tasks)"
+                )
+            )
 
 
 _ensure_customer_columns()
@@ -710,6 +732,14 @@ def delete_customer(customer_id: int):
             raise HTTPException(404, "Customer not found")
 
         db.delete(customer)
+        db.commit()
+        return {"status": "deleted"}
+
+
+@app.delete("/api/customers")
+def delete_all_customers():
+    with SessionLocal() as db:
+        db.query(Customer).delete(synchronize_session=False)
         db.commit()
         return {"status": "deleted"}
 

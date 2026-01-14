@@ -27,7 +27,8 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
-  remove: (id) => fetch(`${API}/customers/${id}`, { method: "DELETE" })
+  remove: (id) => fetch(`${API}/customers/${id}`, { method: "DELETE" }),
+  removeAll: () => fetch(`${API}/customers`, { method: "DELETE" })
 };
 
 const blankPhone = () => ({
@@ -143,6 +144,14 @@ export default function CustomerDirectoryView() {
   const handleRemove = (id) => {
     api.remove(id).then(() => {
       setCustomers((prev) => prev.filter((customer) => customer.id !== id));
+    });
+  };
+
+  const handleRemoveAll = () => {
+    if (!confirm("Alle Kunden wirklich löschen?")) return;
+    api.removeAll().then(() => {
+      setCustomers([]);
+      setActiveId(null);
     });
   };
 
@@ -545,39 +554,6 @@ export default function CustomerDirectoryView() {
                 className="w-full rounded-2xl border border-sand-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
               />
             </label>
-            <button
-              type="button"
-              onClick={handleCreate}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-2xl border border-sand-200 bg-sand-900 text-white px-4 py-2 text-sm hover:opacity-90"
-            >
-              <Plus size={16} /> Neuer Kunde
-            </button>
-            <div className="mt-3 grid grid-cols-1 gap-2">
-              <button
-                type="button"
-                onClick={downloadCsv}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-              >
-                CSV exportieren
-              </button>
-              <button
-                type="button"
-                onClick={() => importInputRef.current?.click()}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-              >
-                CSV importieren
-              </button>
-              <input
-                ref={importInputRef}
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={(event) => importCsv(event.target.files?.[0])}
-              />
-              {importStatus ? (
-                <div className="text-xs text-sand-500">{importStatus}</div>
-              ) : null}
-            </div>
             <div className="mt-4 space-y-2 max-h-[420px] overflow-auto pr-1">
               {filteredCustomers.length ? (
                 filteredCustomers.map((customer) => {
@@ -618,6 +594,52 @@ export default function CustomerDirectoryView() {
           </section>
 
           <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Aktionen</p>
+                <h2 className="text-lg font-display text-sand-900">Kundenstamm</h2>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCreate}
+                  className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide hover:opacity-90"
+                >
+                  <Plus size={14} /> Neuer Kunde
+                </button>
+                <button
+                  type="button"
+                  onClick={downloadCsv}
+                  className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                >
+                  CSV exportieren
+                </button>
+                <button
+                  type="button"
+                  onClick={() => importInputRef.current?.click()}
+                  className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                >
+                  CSV importieren
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRemoveAll}
+                  className="inline-flex items-center justify-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                >
+                  Alle Kunden entfernen
+                </button>
+              </div>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(event) => importCsv(event.target.files?.[0])}
+              />
+              {importStatus ? (
+                <div className="text-xs text-sand-500">{importStatus}</div>
+              ) : null}
+            </div>
             {activeCustomer ? (
               <div className="space-y-6">
                 <div className="flex flex-wrap items-start justify-between gap-4">
@@ -658,19 +680,6 @@ export default function CustomerDirectoryView() {
                         updateCustomer(activeCustomer.id, { creditorNumber: event.target.value })
                       }
                       placeholder="z. B. 1042"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">
-                      Kreditorennummer (Faktura)
-                    </span>
-                    <input
-                      value={activeCustomer.creditorNumber}
-                      onChange={(event) =>
-                        updateCustomer(activeCustomer.id, { creditorNumber: event.target.value })
-                      }
-                      placeholder="z. B. KR-777"
                       className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>
