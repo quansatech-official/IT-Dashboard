@@ -354,16 +354,25 @@ export default function DayPlanView() {
     const scored = customers
       .map((customerItem) => {
         const name = String(customerItem?.name || "").trim();
+        const shortCode = String(customerItem?.short_code || customerItem?.shortCode || "").trim();
         if (!name) return null;
         const nameText = normalizeText(name);
+        const shortCodeText = shortCode ? normalizeText(shortCode) : "";
         if (!nameText) return null;
         let score = 0;
         if (titleText.includes(nameText)) {
           score += 100 + nameText.length;
-        } else {
+        }
+        if (shortCodeText && titleText.includes(shortCodeText)) {
+          score += 80 + shortCodeText.length;
+        }
+        if (!score) {
           tokens.forEach((token) => {
             if (nameText.includes(token)) {
               score += 5;
+            }
+            if (shortCodeText && shortCodeText.includes(token)) {
+              score += 8;
             }
           });
         }

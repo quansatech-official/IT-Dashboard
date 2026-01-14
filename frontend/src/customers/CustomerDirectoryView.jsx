@@ -324,15 +324,30 @@ export default function CustomerDirectoryView() {
   };
 
   const renderDeliveryHtml = (task) => {
-    const signature = task.signature_base64
-      ? `<img src="${task.signature_base64}" alt="Unterschrift" style="max-width: 260px; border: 1px solid #e2e8f0; border-radius: 12px;" />`
+    const rawSignature = String(task.signature_base64 || "").trim();
+    const signatureSrc = rawSignature
+      ? rawSignature.startsWith("data:")
+        ? rawSignature
+        : `data:image/png;base64,${rawSignature}`
+      : "";
+    const signature = signatureSrc
+      ? `<img src="${signatureSrc}" alt="Unterschrift" style="max-width: 260px; border: 1px solid #e2e8f0; border-radius: 12px;" />`
       : "<p>Keine Unterschrift gespeichert.</p>";
     return `
       <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; color: #2f2a24;">
-        <h2 style="margin: 0 0 8px;">Lieferschein</h2>
+        <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:16px;">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <img src="/QTLogo.jpg" alt="Quansatech" width="44" height="44" style="height:44px; width:44px; object-fit:contain;" />
+            <div>
+              <div style="font-size:16px; font-weight:700;">Lieferschein</div>
+              <div style="font-size:12px; color:#6b6358;">QT Workbench</div>
+            </div>
+          </div>
+          <div style="font-size:12px; color:#6b6358;">${new Date(task.created_at || Date.now()).toLocaleDateString("de-DE")}</div>
+        </div>
         <p><strong>Kunde:</strong> ${activeCustomer?.name || ""}</p>
-        <p><strong>Text:</strong> ${String(task.title || "").replaceAll("\n", "<br/>")}</p>
-        <div style="margin-top: 12px;">
+        <p><strong>Leistung:</strong><br/>${String(task.title || "").replaceAll("\n", "<br/>")}</p>
+        <div style="margin-top: 16px;">
           <strong>Unterschrift:</strong><br/>
           ${signature}
         </div>

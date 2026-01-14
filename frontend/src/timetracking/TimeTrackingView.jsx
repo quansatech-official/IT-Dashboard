@@ -230,8 +230,9 @@ function CustomerCard({ customer, reload }) {
   }, 0);
   const totalHours = total / 3600000;
   const revenue = hourlyRate ? totalHours * hourlyRate : 0;
+  const trimmedMergeQuery = mergeQuery.trim();
   const filteredMergeOptions = mergeOptions.filter((option) =>
-    option.name.toLowerCase().includes(mergeQuery.trim().toLowerCase())
+    option.name.toLowerCase().includes(trimmedMergeQuery.toLowerCase())
   );
 
   return (
@@ -250,8 +251,17 @@ function CustomerCard({ customer, reload }) {
           <button
             type="button"
             onClick={() => alert("Faktura-Export ist noch nicht angebunden.")}
-            className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
-            title="Export zu Faktura (Dummy)"
+            className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${
+              hasMapping
+                ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                : "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+            }`}
+            title={
+              hasMapping
+                ? "Export zu Faktura (Dummy)"
+                : "Faktura nur mit zugeordnetem Kunden"
+            }
+            disabled={!hasMapping}
           >
             Faktura
           </button>
@@ -299,6 +309,19 @@ function CustomerCard({ customer, reload }) {
                         </button>
                       )
                     )}
+                    {!filteredMergeOptions.length && trimmedMergeQuery ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextName = trimmedMergeQuery;
+                          setMergeOpen(false);
+                          api.updateCustomer(customer.id, { name: nextName }).then(reload);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs text-slate-500 hover:bg-slate-100"
+                      >
+                        Freier Kunde: "{trimmedMergeQuery}"
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               ) : null}
