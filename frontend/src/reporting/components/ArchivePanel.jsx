@@ -1,6 +1,6 @@
-import { Edit3, Eye, Mail, Search, Trash2 } from "lucide-react";
+import { Edit3, Eye, Mail, Search, Trash2, Info } from "lucide-react";
 import { useMemo, useState } from "react";
-import { archiveStatusStyles, statusStyles } from "../constants";
+import { archiveStatusStyles } from "../constants";
 
 export default function ArchivePanel({
   archive,
@@ -40,62 +40,77 @@ export default function ArchivePanel({
             {group.reports.map((item) => (
               <div
                 key={item.id}
-                className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3"
               >
                 <div>
                   <p className="text-sm font-semibold">{item.label}</p>
                   <p className="text-xs text-sand-500">{item.period}</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`text-xs font-semibold uppercase tracking-wide border px-3 py-1 rounded-full ${statusStyles[item.status]}`}
-                  >
-                    {item.status}
-                  </span>
-                  <label className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600">
-                    <span>Status</span>
-                    <select
-                      value={item.customerStatus || ""}
-                      onChange={(event) => onUpdateStatus?.(item, event.target.value)}
-                      className="bg-transparent text-[10px] uppercase tracking-wide text-sand-700 focus:outline-none"
-                    >
-                      <option value="">Offen</option>
-                      <option value="Gelesen">Gelesen</option>
-                      <option value="Bestätigt">Bestätigt</option>
-                      <option value="Abgelehnt">Abgelehnt</option>
-                    </select>
-                  </label>
-                  {item.customerStatus ? (
-                    <span
-                      className={`text-[10px] font-semibold uppercase tracking-wide border px-3 py-1 rounded-full ${
-                        archiveStatusStyles[item.customerStatus]
-                      }`}
-                    >
-                      {item.customerStatus}
-                    </span>
-                  ) : null}
-                  {item.sentAt ? (
-                    <span className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600">
-                      <span>Versand</span>
-                      {item.sentVia && item.sentVia !== "manuell" ? (
-                        <span className="text-sand-900">{item.sentVia}</span>
-                      ) : null}
-                      {item.sentAtText ? <span className="text-sand-500">· {item.sentAtText}</span> : null}
-                    </span>
-                  ) : null}
-                  {item.openedCount ? (
-                    <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                      <span>Gelesen</span>
-                      <span>{item.openedCount}x</span>
-                      {item.openedAtText ? (
-                        <span className="text-emerald-600">· {item.openedAtText}</span>
-                      ) : null}
-                    </span>
-                  ) : item.sentAt ? (
-                    <span className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600">
-                      Gelesen: nein
-                    </span>
-                  ) : null}
+                <div className="flex flex-wrap items-center gap-2">
+                  <details className="relative">
+                    <summary className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 cursor-pointer list-none hover:bg-sand-100">
+                      <Info size={12} /> Info
+                    </summary>
+                    <div className="absolute right-0 mt-2 w-72 rounded-2xl border border-sand-200 bg-white p-4 shadow-soft text-xs text-sand-600">
+                      <div className="text-[10px] uppercase tracking-[0.3em] text-sand-400 mb-2">
+                        Bericht
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sand-500">Kundenstatus</span>
+                          <select
+                            value={item.customerStatus || ""}
+                            onChange={(event) => onUpdateStatus?.(item, event.target.value)}
+                            className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-700 focus:outline-none"
+                          >
+                            <option value="">Offen</option>
+                            <option value="Gelesen">Gelesen</option>
+                            <option value="Bestätigt">Bestätigt</option>
+                            <option value="Abgelehnt">Abgelehnt</option>
+                          </select>
+                        </div>
+                        {item.customerStatus ? (
+                          <div
+                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                              archiveStatusStyles[item.customerStatus]
+                            }`}
+                          >
+                            {item.customerStatus}
+                          </div>
+                        ) : null}
+                        <div className="border-t border-sand-100 pt-2">
+                          <div className="text-[10px] uppercase tracking-[0.3em] text-sand-400 mb-2">
+                            Versand
+                          </div>
+                          {item.sentAt ? (
+                            <div className="space-y-1">
+                              <div>
+                                {item.sentVia && item.sentVia !== "manuell" ? item.sentVia : "Manuell"}
+                              </div>
+                              {item.sentAtText ? <div>{item.sentAtText}</div> : null}
+                            </div>
+                          ) : (
+                            <div className="text-sand-400">Noch nicht gesendet</div>
+                          )}
+                        </div>
+                        <div className="border-t border-sand-100 pt-2">
+                          <div className="text-[10px] uppercase tracking-[0.3em] text-sand-400 mb-2">
+                            Gelesen
+                          </div>
+                          {item.openedCount ? (
+                            <div className="space-y-1">
+                              <div>{item.openedCount}x</div>
+                              {item.openedAtText ? <div>Zuletzt: {item.openedAtText}</div> : null}
+                            </div>
+                          ) : item.sentAt ? (
+                            <div className="text-sand-400">Noch nicht geöffnet</div>
+                          ) : (
+                            <div className="text-sand-400">Nicht gesendet</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </details>
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => onPreview?.(item)}
