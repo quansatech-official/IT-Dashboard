@@ -640,6 +640,10 @@ class ReportSendRequest(BaseModel):
 class ActionAiRequest(BaseModel):
     text: str
 
+
+class DebugClearRequest(BaseModel):
+    table: str
+
 # ================= APP ======================
 app = FastAPI(title="QT-Workbench Backend")
 
@@ -1173,16 +1177,6 @@ def get_customer_metrics(customer_id: int):
         if not customer:
             raise HTTPException(404, "Customer not found")
         now_ms = int(time.time() * 1000)
-        open_time_tasks = 0
-        open_time_ms = 0
-        for task in db.query(Task).filter(Task.customer_id == customer_id).all():
-            if task.erledigt:
-                continue
-            open_time_tasks += 1
-            elapsed = task.elapsed or 0
-            if task.running and task.startTime:
-                elapsed += max(0, now_ms - task.startTime)
-            open_time_ms += elapsed
         customer_name = (customer.name or "").strip().lower()
         customer_number = (customer.creditor_number or "").strip()
         day_task_filters = []
@@ -1192,6 +1186,22 @@ def get_customer_metrics(customer_id: int):
             )
         if customer_number:
             day_task_filters.append(func.trim(DayTask.customer_number) == customer_number)
+        open_time_tasks = 0
+        open_time_ms = 0
+        if day_task_filters:
+            task_query = (
+                db.query(Task)
+                .join(DayTask, DayTask.task_id == Task.id)
+                .filter(or_(*day_task_filters))
+            )
+            for task in task_query.all():
+                if task.erledigt:
+                    continue
+                open_time_tasks += 1
+                elapsed = task.elapsed or 0
+                if task.running and task.startTime:
+                    elapsed += max(0, now_ms - task.startTime)
+                open_time_ms += elapsed
         open_day_tasks = 0
         if day_task_filters:
             open_day_tasks = (
@@ -2073,3 +2083,30 @@ def edit_report(report_id: int, data: ReportEdit):
         db.commit()
         db.refresh(report)
         return serialize_report(report)
+
+
+# ================= DEBUG ====================
+@app.get("/api/debug/tables")
+def list_debug_tables():
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+    return {"tables": sorted(tables)}
+
+
+@app.post("/api/debug/clear_table")
+def clear_debug_table(data: DebugClearRequest):
+    allowed_tables = {"tasks", "day_tasks", "day_task_groups"}
+    table = (data.table or "").strip()
+    if not table or table not in allowed_tables:
+        raise HTTPException(400, "Table not allowed")
+    inspector = inspect(engine)
+    if table not in inspector.get_table_names():
+        raise HTTPException(404, "Table not found")
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(
+                text(f'TRUNCATE TABLE "{table}" RESTART IDENTITY CASCADE')
+            )
+        else:
+            connection.execute(text(f'DELETE FROM "{table}"'))
+    return {"status": "cleared", "table": table}

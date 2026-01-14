@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BarChart3, Clock, FileText, PhoneCall, ClipboardList } from "lucide-react";
+import { BarChart3, FileText, PhoneCall, ClipboardList } from "lucide-react";
 
 const API = "/api";
 
@@ -101,30 +101,6 @@ export default function StatsView() {
                   title="Umsatzschatzung"
                   value={`€ ${Number(stats.revenueEstimateEur ?? 0).toFixed(2)}`}
                   subtitle={`Stundensatz: € ${Number(stats.hourlyRateEur ?? 0).toFixed(2)}`}
-                />
-              </div>
-            </section>
-
-            <section className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-              <div className="flex items-center gap-2 mb-4 text-sand-700">
-                <Clock size={16} />
-                <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Zeiterfassung</p>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-3">
-                <StatCard
-                  title="Offene Aufgaben"
-                  value={stats.timeTracking?.openTasks ?? 0}
-                  subtitle={`Gesamt: ${stats.timeTracking?.totalTasks ?? 0}`}
-                />
-                <StatCard
-                  title="Offene Zeit"
-                  value={`${stats.timeTracking?.openMinutes ?? 0} Min`}
-                  subtitle={`${stats.timeTracking?.openHours ?? 0} h offen`}
-                />
-                <StatCard
-                  title="Gesamtstunden"
-                  value={`${stats.timeTracking?.totalHours ?? 0} h`}
-                  subtitle="Summe aller Zeiten"
                 />
               </div>
             </section>

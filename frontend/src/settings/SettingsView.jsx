@@ -3,6 +3,12 @@ import { Mail, Settings } from "lucide-react";
 
 const API = "/api";
 const STORAGE_KEY = "qt_smtp_settings_cache";
+const DEBUG_TABLE_LABELS = {
+  tasks: "Aufgaben (Zeit)",
+  day_tasks: "Aufgaben (Tagesplan)",
+  day_task_groups: "Aufgabengruppen"
+};
+const DEBUG_CLEARABLE_TABLES = new Set(Object.keys(DEBUG_TABLE_LABELS));
 
 const defaultSmtp = {
   host: "",
@@ -37,6 +43,13 @@ export default function SettingsView() {
   const [smtp, setSmtp] = useState(loadCachedSmtp);
   const [status, setStatus] = useState("idle");
   const [loadStatus, setLoadStatus] = useState("loading");
+  const [tables, setTables] = useState([]);
+  const [debugStatus, setDebugStatus] = useState("idle");
+  const [clearingTable, setClearingTable] = useState("");
+  const beaconDisplay =
+    smtp.beacon_base_url && smtp.beacon_base_url.trim()
+      ? smtp.beacon_base_url.trim()
+      : "Nicht gesetzt";
 
   useEffect(() => {
     let active = true;
@@ -62,6 +75,45 @@ export default function SettingsView() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${API}/debug/tables`)
+      .then((res) => {
+        if (!res.ok) throw new Error("tables_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        setTables(Array.isArray(data?.tables) ? data.tables : []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setTables([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const clearTable = async (table) => {
+    if (!window.confirm(`Tabelle "${table}" wirklich leeren?`)) return;
+    setClearingTable(table);
+    setDebugStatus("clearing");
+    try {
+      const res = await fetch(`${API}/debug/clear_table`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ table })
+      });
+      if (!res.ok) throw new Error("clear_failed");
+      setDebugStatus("cleared");
+    } catch (error) {
+      setDebugStatus("error");
+    }
+    setClearingTable("");
+    setTimeout(() => setDebugStatus("idle"), 2000);
+  };
 
   const save = async () => {
     setStatus("saving");
@@ -192,6 +244,9 @@ export default function SettingsView() {
                 className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
                 placeholder="https://beacon.example.com"
               />
+              <div className="mt-2 text-xs text-sand-500">
+                Aktuell: <span className="text-sand-700">{beaconDisplay}</span>
+              </div>
               <p className="mt-2 text-xs text-sand-400">
                 Optional: externe Basis-URL oder Template mit {"{guid}"}.
               </p>
@@ -231,6 +286,51 @@ export default function SettingsView() {
             {status === "error" && (
               <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
             )}
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <div className="flex items-center gap-2 text-sand-700 mb-4">
+            <Settings size={18} />
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Debug</p>
+          </div>
+          <div className="text-xs text-sand-500 mb-3">
+            Datenbanktabellen (nur freigegebene Tabellen koennen geleert werden).
+          </div>
+          <div className="space-y-2">
+            {tables.length ? (
+              tables.map((table) => (
+                <div
+                  key={table}
+                  className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-700"
+                >
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-sand-500">{table}</div>
+                    {DEBUG_TABLE_LABELS[table] ? (
+                      <div className="text-sm">{DEBUG_TABLE_LABELS[table]}</div>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => clearTable(table)}
+                    disabled={!DEBUG_CLEARABLE_TABLES.has(table) || clearingTable === table}
+                    className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                      DEBUG_CLEARABLE_TABLES.has(table)
+                        ? "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                        : "border-sand-200 bg-white text-sand-300 cursor-not-allowed"
+                    }`}
+                  >
+                    {clearingTable === table ? "Leert..." : "Leeren"}
+                  </button>
+                </div>
+              ))
+            ) : (
+              <div className="text-xs text-sand-500">Keine Tabellen gefunden.</div>
+            )}
+          </div>
+          <div className="mt-3 text-xs text-sand-500">
+            {debugStatus === "cleared" && "Tabelle geleert."}
+            {debugStatus === "error" && "Leeren fehlgeschlagen."}
           </div>
         </div>
       </main>

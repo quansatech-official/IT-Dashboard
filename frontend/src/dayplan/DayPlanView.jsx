@@ -10,8 +10,7 @@ import {
   Square,
   Star,
   Trash2,
-  Undo2,
-  UserPlus
+  Undo2
 } from "lucide-react";
 
 const API = "/api";
@@ -365,12 +364,17 @@ export default function DayPlanView() {
     setSuggestionQuery("");
   };
 
-  const normalizeText = (value) =>
-    String(value || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9äöüß\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+  const normalizeText = (value) => {
+    let text = String(value || "").toLowerCase();
+    text = text
+      .replace(/ä/g, "ae")
+      .replace(/ö/g, "oe")
+      .replace(/ü/g, "ue")
+      .replace(/ß/g, "ss");
+    text = text.replace(/ae/g, "a").replace(/oe/g, "o").replace(/ue/g, "u");
+    text = text.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    return text;
+  };
 
   const msToHHMMSS = (ms = 0) => {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -431,6 +435,12 @@ export default function DayPlanView() {
     const updated = await api.toggleTimeTask(timeTask.id);
     if (updated?.id) {
       setTimeTaskCache((prev) => ({ ...prev, [updated.id]: updated }));
+      setTimeEdits((prev) => {
+        if (!prev[updated.id]) return prev;
+        const next = { ...prev };
+        delete next[updated.id];
+        return next;
+      });
     }
     refreshCustomers();
   };
@@ -442,7 +452,16 @@ export default function DayPlanView() {
       return;
     }
     await api.updateTimeTask(timeTask.id, { elapsed: parsedMs, running: false, startTime: 0 });
-    setTimeEdits((prev) => ({ ...prev, [taskId]: msToHHMMSS(parsedMs) }));
+    setTimeTaskCache((prev) => ({
+      ...prev,
+      [timeTask.id]: { ...timeTask, elapsed: parsedMs, running: false, startTime: 0 }
+    }));
+    setTimeEdits((prev) => {
+      if (!prev[taskId]) return prev;
+      const next = { ...prev };
+      delete next[taskId];
+      return next;
+    });
     setError("");
     refreshCustomers();
   };
@@ -492,6 +511,9 @@ export default function DayPlanView() {
         if (shortCodeText && titleText.includes(shortCodeText)) {
           score += 80 + shortCodeText.length;
         }
+        if (!score && nameText.includes(titleText) && titleText.length > 2) {
+          score += 40 + titleText.length;
+        }
         if (!score) {
           tokens.forEach((token) => {
             if (nameText.includes(token)) {
@@ -499,6 +521,9 @@ export default function DayPlanView() {
             }
             if (shortCodeText && shortCodeText.includes(token)) {
               score += 8;
+            }
+            if (token.length > 2 && token.includes(nameText)) {
+              score += 3;
             }
           });
         }
@@ -585,31 +610,16 @@ export default function DayPlanView() {
                 )}
               </div>
               <div className="flex items-center gap-0.5">
-                {!knownCustomer ? (
-                  suggestions.length ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        toggleSuggestionMenu(task.id, true);
-                      }}
-                      className="rounded-full border border-amber-200 bg-white p-1 text-sand-600 hover:bg-amber-100"
-                      title={`Kundenvorschlag${suggestions.length > 1 ? "e" : ""}`}
-                    >
-                      <Sparkles size={12} />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        startCustomerEdit(task);
-                      }}
-                      className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                      title="Kunde suchen"
-                    >
-                      <UserPlus size={12} />
-                    </button>
-                  )
-                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    toggleSuggestionMenu(task.id, true);
+                  }}
+                  className="rounded-full border border-amber-200 bg-white p-1 text-sand-600 hover:bg-amber-100"
+                  title="Kundenvorschlag"
+                >
+                  <Sparkles size={12} />
+                </button>
                 {!task.task_id ? (
                   <button
                     type="button"
@@ -738,7 +748,7 @@ export default function DayPlanView() {
                 {task.customer}
               </button>
             ) : null}
-            {!knownCustomer && suggestions.length > 1 && suggestionOpenId === task.id ? (
+            {suggestionOpenId === task.id ? (
               <div className="absolute right-3 top-full mt-2 w-64 rounded-xl border border-amber-200 bg-white shadow-soft z-20">
                 <div className="px-3 py-2 text-[10px] uppercase tracking-wide text-sand-400">
                   Kundenvorschlaege
@@ -752,7 +762,12 @@ export default function DayPlanView() {
                   />
                 </div>
                 <div className="max-h-48 overflow-auto border-t border-amber-100">
-                  {(suggestionQuery.trim() ? filteredCustomerNames : suggestions).map((name) => (
+                  {(suggestionQuery.trim()
+                    ? filteredCustomerNames
+                    : suggestions.length
+                      ? suggestions
+                      : filteredCustomerNames.slice(0, 12)
+                  ).map((name) => (
                     <button
                       key={name}
                       type="button"
