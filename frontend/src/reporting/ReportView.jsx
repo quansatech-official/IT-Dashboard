@@ -303,6 +303,12 @@ export default function ReportView() {
   }, [report.customer]);
 
   useEffect(() => {
+    if (editReportId) return;
+    if (report.period) return;
+    setReport((prev) => ({ ...prev, period: getCurrentPeriod() }));
+  }, [editReportId, report.period]);
+
+  useEffect(() => {
     if (!catalogPick && catalogItems.length) {
       setCatalogPick(normalizeId(catalogItems[0]?.id ?? ""));
     }
@@ -363,14 +369,35 @@ export default function ReportView() {
 
   useEffect(() => {
     const loadCustomers = async () => {
+      const names = new Set(fallbackCustomers);
       try {
-        const res = await fetch("/api/report_customers");
+        const res = await fetch("/api/customers");
         const data = await res.json();
-        if (Array.isArray(data) && data.length) {
-          setCustomerList(data.map((item) => item.name).filter(Boolean));
+        if (Array.isArray(data)) {
+          data.forEach((item) => {
+            const name = String(item?.name || "").trim();
+            if (name) names.add(name);
+          });
         }
       } catch (error) {
         // Keep fallback list.
+      }
+
+      try {
+        const res = await fetch("/api/report_customers");
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          data.forEach((item) => {
+            const name = String(item?.name || "").trim();
+            if (name) names.add(name);
+          });
+        }
+      } catch (error) {
+        // Keep fallback list.
+      }
+
+      if (names.size) {
+        setCustomerList(Array.from(names));
       }
     };
 
