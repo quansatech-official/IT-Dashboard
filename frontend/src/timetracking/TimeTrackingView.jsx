@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle,
   Clock,
@@ -260,6 +260,13 @@ export default function TimeTrackingView() {
   const [newCustomer, setNewCustomer] = useState("");
 
   const load = useCallback(() => api.customers().then(setCustomersState), []);
+  const customerSuggestions = useMemo(() => {
+    const seen = new Set();
+    return customersState
+      .map((item) => (item?.name || "").trim())
+      .filter((name) => name && !seen.has(name) && seen.add(name))
+      .sort((a, b) => a.localeCompare(b, "de"));
+  }, [customersState]);
 
   useEffect(() => {
     load();
@@ -289,8 +296,14 @@ export default function TimeTrackingView() {
               value={newCustomer}
               onChange={(e) => setNewCustomer(e.target.value)}
               placeholder="Neuen Kunden anlegen…"
+              list="customer-suggestions"
               className="flex-1 border-none focus:ring-0"
             />
+            <datalist id="customer-suggestions">
+              {customerSuggestions.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
             <button
               className="bg-slate-900 text-white rounded px-4"
               onClick={() =>

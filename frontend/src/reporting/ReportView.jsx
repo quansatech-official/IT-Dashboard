@@ -1,16 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ClipboardCopy,
-  FileDown,
-  FileText,
-  Flag,
-  Mail,
-  Plus,
-  Save,
-  Sparkles,
-  Users2,
-  PenLine
-} from "lucide-react";
+import { FileDown, FileText, Flag, Plus, Save, Sparkles, Users2, PenLine } from "lucide-react";
 import ActionCard from "./components/ActionCard";
 import ArchivePanel from "./components/ArchivePanel";
 import CatalogManager from "./components/CatalogManager";
@@ -139,7 +128,7 @@ const getCurrentPeriod = () => {
 const defaultReport = {
   customer: "",
   period: "",
-  status: "",
+  status: "Gelb",
   summary: "",
   customer_action_text: "",
   actions: []
@@ -832,7 +821,7 @@ export default function ReportView() {
     guid: data.guid,
     customer: data.customer,
     period: data.period,
-    status: data.status,
+    status: data.status || "Gelb",
     summary: data.summary,
     customer_action_text: data.customer_action_text,
     actions: data.items || []
@@ -1068,18 +1057,6 @@ export default function ReportView() {
 
   const headerActions = (
     <div className="flex flex-wrap gap-2">
-      <button
-        onClick={() => copyToClipboard(previewHtml)}
-        className="inline-flex items-center gap-2 rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-      >
-        <ClipboardCopy size={14} /> HTML kopieren
-      </button>
-      <button
-        onClick={() => downloadEmailDraft(report)}
-        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-      >
-        <Mail size={14} /> E-Mail Entwurf
-      </button>
       <button
         onClick={downloadPdf}
         className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"

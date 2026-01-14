@@ -60,7 +60,9 @@ export default function CustomerDirectoryView() {
   const [customers, setCustomers] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [query, setQuery] = useState("");
+  const [importStatus, setImportStatus] = useState("");
   const saveTimers = useRef({});
+  const importInputRef = useRef(null);
 
   useEffect(() => {
     api.list().then((data) => {
@@ -146,6 +148,346 @@ export default function CustomerDirectoryView() {
     });
   };
 
+  const csvEscape = (value = "") => {
+    const text = String(value);
+    if (/[",\n\r]/.test(text)) {
+      return `"${text.replace(/"/g, '""')}"`;
+    }
+    return text;
+  };
+
+  const exportHeader = [
+    "Kunden-Nr.",
+    "Anrede",
+    "Titel",
+    "Nachname",
+    "Vorname",
+    "Organisation",
+    "Namenszusatz",
+    "Position",
+    "Kategorie",
+    "IBAN",
+    "BIC",
+    "Umsatzsteuer-ID",
+    "Strasse",
+    "PLZ",
+    "Ort",
+    "Land",
+    "Adresse-Kategorie",
+    "Telefon",
+    "Telefon-Kategorie",
+    "Mobil",
+    "Fax",
+    "E-Mail",
+    "E-Mail-Kategorie",
+    "Webseite",
+    "Webseite-Kategorie",
+    "Beschreibung",
+    "Geburtstag",
+    "Tags",
+    "Debitoren-Nr.",
+    "Kreditoren-Nr.",
+    "Leitweg-ID / Leitwegsnummer",
+    "Steuernummer",
+    "Skonto Tage",
+    "Skonto Prozent",
+    "Zahlungsziel Tage",
+    "Kundenrabatt",
+    "Ist Kundenrabatt prozentual"
+  ];
+
+  const buildPhonesField = (phones = []) =>
+    phones
+      .filter((phone) => (phone.label || "").trim() || (phone.number || "").trim())
+      .map((phone) => `${phone.label || ""}:${phone.number || ""}`.trim())
+      .join("; ");
+
+  const pickPhones = (phones = []) => {
+    const list = phones.filter((phone) => (phone.number || "").trim());
+    const mobile = list.find((phone) =>
+      (phone.label || "").toLowerCase().includes("mobil")
+    );
+    const phone = list.find((entry) => entry !== mobile) || mobile || null;
+    return {
+      phoneNumber: phone?.number || "",
+      phoneLabel: phone?.label || "",
+      mobileNumber: mobile?.number || "",
+      mobileLabel: mobile?.label || ""
+    };
+  };
+
+  const downloadCsv = () => {
+    const rows = customers.map((customer) => {
+      const phones = pickPhones(customer.phones || []);
+      const values = {
+        "Kunden-Nr.": customer.internalNumber || "",
+        Organisation: customer.name || "",
+        Telefon: phones.phoneNumber,
+        "Telefon-Kategorie": phones.phoneLabel || (phones.phoneNumber ? "Arbeit" : ""),
+        Mobil: phones.mobileNumber,
+        "E-Mail": customer.email || "",
+        "E-Mail-Kategorie": customer.email ? "Arbeit" : "",
+        "Kreditoren-Nr.": customer.creditorNumber || "",
+        Beschreibung: buildPhonesField(customer.phones || [])
+      };
+      return exportHeader.map((key) => values[key] ?? "");
+    });
+    const csv = [exportHeader, ...rows]
+      .map((row) => row.map(csvEscape).join(","))
+      .join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "kundenstamm_export.csv";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const detectDelimiter = (line) => {
+    const counts = {
+      ",": (line.match(/,/g) || []).length,
+      "\t": (line.match(/\t/g) || []).length,
+      ";": (line.match(/;/g) || []).length
+    };
+    const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    return best && best[1] > 0 ? best[0] : ",";
+  };
+
+  const parseCsv = (text) => {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+    const value = text.replace(/^\ufeff/, "");
+    const firstLine = value.split(/\r?\n/).find((line) => line.trim()) || "";
+    const delimiter = detectDelimiter(firstLine);
+    for (let i = 0; i < value.length; i += 1) {
+      const char = value[i];
+      if (inQuotes) {
+        if (char === '"') {
+          if (value[i + 1] === '"') {
+            field += '"';
+            i += 1;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field += char;
+        }
+      } else if (char === '"') {
+        inQuotes = true;
+      } else if (char === delimiter) {
+        row.push(field);
+        field = "";
+      } else if (char === "\n") {
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+      } else if (char === "\r") {
+        // ignore
+      } else {
+        field += char;
+      }
+    }
+    if (field || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+    return rows;
+  };
+
+  const normalizeHeader = (value) =>
+    String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_");
+
+  const parsePhones = (raw) => {
+    const value = String(raw || "").trim();
+    if (!value) return [];
+    return value
+      .split(/[;|]/)
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const parts = entry.split(":");
+        if (parts.length >= 2) {
+          const label = parts.shift().trim();
+          const number = parts.join(":").trim();
+          return { label, number };
+        }
+        return { label: "", number: entry.trim() };
+      })
+      .filter((phone) => phone.label || phone.number);
+  };
+
+  const buildNameFromParts = (parts) =>
+    parts
+      .map((part) => String(part || "").trim())
+      .filter(Boolean)
+      .join(" ");
+
+  const parsePhonesFromColumns = ({ phone, phoneCategory, mobile, fax, extraPhones }) => {
+    const phones = [];
+    if (phone) {
+      phones.push({
+        label: phoneCategory || "Telefon",
+        number: phone
+      });
+    }
+    if (mobile) {
+      phones.push({
+        label: "Mobil",
+        number: mobile
+      });
+    }
+    if (fax) {
+      phones.push({
+        label: "Fax",
+        number: fax
+      });
+    }
+    if (extraPhones?.length) {
+      phones.push(...extraPhones);
+    }
+    return phones.filter((entry) => entry.label || entry.number);
+  };
+
+  const importCsv = async (file) => {
+    if (!file) return;
+    setImportStatus("Import läuft...");
+    const text = await file.text();
+    const rows = parseCsv(text);
+    if (!rows.length) {
+      setImportStatus("CSV ist leer.");
+      return;
+    }
+    const header = rows.shift().map(normalizeHeader);
+    const findIndex = (aliases) =>
+      aliases.map((alias) => header.indexOf(alias)).find((idx) => idx >= 0) ?? -1;
+    const indexes = {
+      name: findIndex(["name", "kunde", "kundenname"]),
+      organisation: findIndex(["organisation", "organization", "firma"]),
+      lastName: findIndex(["nachname", "lastname", "surname"]),
+      firstName: findIndex(["vorname", "firstname", "givenname"]),
+      title: findIndex(["titel", "title"]),
+      nameSuffix: findIndex(["namenszusatz", "suffix"]),
+      internal: findIndex([
+        "internal_number",
+        "internal",
+        "interne_nummer",
+        "kundennummer",
+        "kundennr",
+        "kunden_nr",
+        "kunden_nr_"
+      ]),
+      creditor: findIndex(["creditor_number", "creditor", "kreditor", "kreditorennummer"]),
+      email: findIndex(["email", "e_mail", "mail"]),
+      phones: findIndex(["phones", "phone", "telefonnummern", "rufnummern"]),
+      phone: findIndex(["telefon"]),
+      phoneCategory: findIndex(["telefon_kategorie"]),
+      mobile: findIndex(["mobil", "handy"]),
+      fax: findIndex(["fax"]),
+      creditorAlt: findIndex(["kreditoren_nr", "kreditoren_nr_"])
+    };
+
+    const byInternal = new Map(
+      customers
+        .filter((customer) => customer.internalNumber)
+        .map((customer) => [String(customer.internalNumber).trim(), customer])
+    );
+    const byName = new Map(
+      customers
+        .filter((customer) => customer.name)
+        .map((customer) => [String(customer.name).trim().toLowerCase(), customer])
+    );
+
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const row of rows) {
+      const nameValue = indexes.name >= 0 ? String(row[indexes.name] || "").trim() : "";
+      const organisation =
+        indexes.organisation >= 0 ? String(row[indexes.organisation] || "").trim() : "";
+      const name = organisation || nameValue;
+      const fallbackName = buildNameFromParts([
+        indexes.title >= 0 ? row[indexes.title] : "",
+        indexes.firstName >= 0 ? row[indexes.firstName] : "",
+        indexes.lastName >= 0 ? row[indexes.lastName] : "",
+        indexes.nameSuffix >= 0 ? row[indexes.nameSuffix] : ""
+      ]);
+      const internalNumber =
+        indexes.internal >= 0 ? String(row[indexes.internal] || "").trim() : "";
+      const creditorNumberRaw =
+        indexes.creditor >= 0 ? String(row[indexes.creditor] || "").trim() : "";
+      const creditorNumber =
+        creditorNumberRaw ||
+        (indexes.creditorAlt >= 0 ? String(row[indexes.creditorAlt] || "").trim() : "");
+      const email = indexes.email >= 0 ? String(row[indexes.email] || "").trim() : "";
+      const phones = parsePhonesFromColumns({
+        phone: indexes.phone >= 0 ? String(row[indexes.phone] || "").trim() : "",
+        phoneCategory:
+          indexes.phoneCategory >= 0 ? String(row[indexes.phoneCategory] || "").trim() : "",
+        mobile: indexes.mobile >= 0 ? String(row[indexes.mobile] || "").trim() : "",
+        fax: indexes.fax >= 0 ? String(row[indexes.fax] || "").trim() : "",
+        extraPhones: indexes.phones >= 0 ? parsePhones(row[indexes.phones]) : []
+      });
+      const finalName = name || fallbackName;
+
+      if (!finalName && !internalNumber) {
+        skipped += 1;
+        continue;
+      }
+
+      const existing =
+        (internalNumber && byInternal.get(internalNumber)) ||
+        (finalName && byName.get(finalName.toLowerCase()));
+
+      if (existing) {
+        const payload = {};
+        if (finalName) payload.name = finalName;
+        if (internalNumber) payload.internal_number = internalNumber;
+        if (creditorNumber) payload.creditor_number = creditorNumber;
+        if (email) payload.email = email;
+        if (phones.length) payload.phones = phones;
+        if (!Object.keys(payload).length) {
+          skipped += 1;
+          continue;
+        }
+        await api.update(existing.id, payload);
+        updated += 1;
+        continue;
+      }
+
+      if (!finalName) {
+        skipped += 1;
+        continue;
+      }
+
+      await api.create({
+        name: finalName,
+        internal_number: internalNumber,
+        creditor_number: creditorNumber,
+        email,
+        phones
+      });
+      created += 1;
+    }
+
+    const refreshed = await api.list();
+    setCustomers((refreshed || []).map(normalizeCustomer));
+    setImportStatus(`Import fertig: ${created} neu, ${updated} aktualisiert, ${skipped} übersprungen.`);
+    if (importInputRef.current) {
+      importInputRef.current.value = "";
+    }
+    setTimeout(() => setImportStatus(""), 4000);
+  };
+
   const updatePhone = (phoneId, patch) => {
     if (!activeCustomer) return;
     const nextPhones = activeCustomer.phones.map((phone) =>
@@ -210,6 +552,32 @@ export default function CustomerDirectoryView() {
             >
               <Plus size={16} /> Neuer Kunde
             </button>
+            <div className="mt-3 grid grid-cols-1 gap-2">
+              <button
+                type="button"
+                onClick={downloadCsv}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              >
+                CSV exportieren
+              </button>
+              <button
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              >
+                CSV importieren
+              </button>
+              <input
+                ref={importInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(event) => importCsv(event.target.files?.[0])}
+              />
+              {importStatus ? (
+                <div className="text-xs text-sand-500">{importStatus}</div>
+              ) : null}
+            </div>
             <div className="mt-4 space-y-2 max-h-[420px] overflow-auto pr-1">
               {filteredCustomers.length ? (
                 filteredCustomers.map((customer) => {
