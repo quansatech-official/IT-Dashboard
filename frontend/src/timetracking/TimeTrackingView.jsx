@@ -200,6 +200,7 @@ function CustomerCard({ customer, reload }) {
   const mergeOptions = customer.mergeOptions || [];
   const onMerge = customer.onMerge;
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeQuery, setMergeQuery] = useState("");
   const hasMapping = Boolean(
     (customer.creditorNumber || "").trim() || (customer.shortCode || "").trim()
   );
@@ -229,6 +230,9 @@ function CustomerCard({ customer, reload }) {
   }, 0);
   const totalHours = total / 3600000;
   const revenue = hourlyRate ? totalHours * hourlyRate : 0;
+  const filteredMergeOptions = mergeOptions.filter((option) =>
+    option.name.toLowerCase().includes(mergeQuery.trim().toLowerCase())
+  );
 
   return (
     <div className="bg-white rounded-xl p-3 shadow flex flex-col min-h-[240px] relative">
@@ -251,31 +255,51 @@ function CustomerCard({ customer, reload }) {
           >
             Faktura
           </button>
-          {!hasMapping && mergeOptions.length ? (
+          {mergeOptions.length ? (
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setMergeOpen((prev) => !prev)}
-                className="rounded-full border border-amber-200 bg-white p-1 text-amber-700 hover:bg-amber-100"
+                onClick={() => {
+                  setMergeQuery("");
+                  setMergeOpen((prev) => !prev);
+                }}
+                className={`rounded-full border p-1 ${
+                  hasMapping
+                    ? "border-slate-200 bg-white text-slate-500 hover:bg-slate-100"
+                    : "border-amber-200 bg-white text-amber-700 hover:bg-amber-100"
+                }`}
                 title="Kunde zuordnen"
               >
                 <Sparkles size={12} />
               </button>
               {mergeOpen ? (
-                <div className="absolute left-0 mt-2 w-48 rounded-xl border border-slate-200 bg-white shadow-lg z-20">
-                  {mergeOptions.map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => {
-                        setMergeOpen(false);
-                        onMerge?.(option.id);
-                      }}
-                      className="w-full text-left px-3 py-2 text-xs hover:bg-slate-100"
-                    >
-                      {option.name}
-                    </button>
-                  ))}
+                <div className="absolute left-0 mt-2 w-52 rounded-xl border border-slate-200 bg-white shadow-lg z-20">
+                  <div className="p-2">
+                    <input
+                      value={mergeQuery}
+                      onChange={(event) => setMergeQuery(event.target.value)}
+                      placeholder="Kunde suchen..."
+                      className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-slate-300"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="max-h-48 overflow-auto">
+                    {(filteredMergeOptions.length ? filteredMergeOptions : mergeOptions).map(
+                      (option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => {
+                            setMergeOpen(false);
+                            onMerge?.(option.id);
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-slate-100"
+                        >
+                          {option.name}
+                        </button>
+                      )
+                    )}
+                  </div>
                 </div>
               ) : null}
             </div>
