@@ -93,6 +93,7 @@ class DayTaskGroup(Base):
     title = Column(String, nullable=False)
     column = Column(String, default="todo")
     position = Column(Integer, default=0)
+    pinned = Column(Boolean, default=False)
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
@@ -399,6 +400,22 @@ def _ensure_day_tasks_columns() -> None:
 
 _ensure_day_tasks_columns()
 
+
+def _ensure_day_task_groups_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("day_task_groups"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("day_task_groups")}
+    if "pinned" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE day_task_groups ADD COLUMN pinned BOOLEAN DEFAULT FALSE")
+        )
+
+
+_ensure_day_task_groups_columns()
+
 # ================= SCHEMAS ==================
 class CustomerPhoneSchema(BaseModel):
     id: Optional[int] = None
@@ -468,12 +485,14 @@ class DayTaskGroupCreate(BaseModel):
     title: str
     column: Optional[str] = "todo"
     position: Optional[int] = None
+    pinned: Optional[bool] = None
 
 
 class DayTaskGroupUpdate(BaseModel):
     title: Optional[str] = None
     column: Optional[str] = None
     position: Optional[int] = None
+    pinned: Optional[bool] = None
 
 
 class PinNoteUpdate(BaseModel):
@@ -638,6 +657,7 @@ def serialize_day_task_group(g: DayTaskGroup) -> Dict[str, Any]:
         "title": g.title,
         "column": g.column,
         "position": g.position,
+        "pinned": g.pinned,
         "created_at": g.created_at,
     }
 
@@ -1331,7 +1351,12 @@ def create_day_task_group(data: DayTaskGroupCreate):
                 position += 1
         else:
             position = int(data.position)
-        group = DayTaskGroup(title=data.title, column=column, position=position)
+        group = DayTaskGroup(
+            title=data.title,
+            column=column,
+            position=position,
+            pinned=bool(data.pinned),
+        )
         db.add(group)
         db.commit()
         db.refresh(group)
@@ -1350,6 +1375,8 @@ def update_day_task_group(group_id: int, data: DayTaskGroupUpdate):
             group.column = data.column
         if data.position is not None:
             group.position = int(data.position)
+        if data.pinned is not None:
+            group.pinned = bool(data.pinned)
         db.commit()
         db.refresh(group)
         return serialize_day_task_group(group)
@@ -1805,6 +1832,97 @@ def update_customer_metrics_settings(data: CustomerMetricsSettingsUpdate):
         db.commit()
         db.refresh(settings)
         return serialize_customer_metrics_settings(settings)
+
+
+@app.get("/api/company_stats")
+def get_company_stats(days: int = 30):
+    safe_days = max(1, min(int(days or 30), 365))
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - safe_days * 24 * 60 * 60 * 1000
+    with SessionLocal() as db:
+        day_tasks_total = db.query(DayTask).count()
+        day_tasks_open = db.query(DayTask).filter(DayTask.status != "done").count()
+        day_tasks_done = db.query(DayTask).filter(DayTask.status == "done").count()
+
+        total_time_ms = 0
+        open_time_ms = 0
+        total_time_tasks = 0
+        open_time_tasks = 0
+        for task in db.query(Task).all():
+            total_time_tasks += 1
+            elapsed = task.elapsed or 0
+            if task.running and task.startTime:
+                elapsed += max(0, now_ms - task.startTime)
+            total_time_ms += elapsed
+            if not task.erledigt:
+                open_time_tasks += 1
+                open_time_ms += elapsed
+
+        reports_total = db.query(Report).count()
+        reports_confirmed = (
+            db.query(Report).filter(Report.customer_status == "Bestätigt").count()
+        )
+        reports_opened = db.query(Report).filter(Report.opened_count > 0).count()
+        reports_unread = db.query(Report).filter(Report.opened_count == 0).count()
+        reports_sent = db.query(Report).filter(Report.sent_at > 0).count()
+
+        settings = _get_customer_metrics_settings(db)
+        try:
+            hourly_rate = float(settings.hourly_rate_eur or 0)
+        except ValueError:
+            hourly_rate = 0.0
+
+    telephony_minutes = 0
+    telephony_missed = 0
+    try:
+        sql = (
+            "SELECT COALESCE(SUM(duration), 0) AS total_seconds, "
+            "COALESCE(SUM(CASE WHEN answered = false THEN 1 ELSE 0 END), 0) AS missed_calls "
+            "FROM telephony_calls "
+            "WHERE start_time >= :since"
+        )
+        with engine.begin() as connection:
+            row = connection.execute(text(sql), {"since": start_ms}).mappings().first()
+            if row:
+                total_seconds = int(row.get("total_seconds") or 0)
+                telephony_minutes = round(total_seconds / 60, 1) if total_seconds else 0
+                telephony_missed = int(row.get("missed_calls") or 0)
+    except Exception:
+        telephony_minutes = 0
+        telephony_missed = 0
+
+    total_time_hours = round(total_time_ms / 3600000, 2) if total_time_ms else 0
+    open_time_hours = round(open_time_ms / 3600000, 2) if open_time_ms else 0
+    open_time_minutes = round(open_time_ms / 60000, 1) if open_time_ms else 0
+    revenue_estimate = round(open_time_hours * hourly_rate, 2) if hourly_rate else 0
+
+    return {
+        "dayTasks": {
+            "total": day_tasks_total,
+            "open": day_tasks_open,
+            "done": day_tasks_done,
+        },
+        "timeTracking": {
+            "totalTasks": total_time_tasks,
+            "openTasks": open_time_tasks,
+            "totalHours": total_time_hours,
+            "openHours": open_time_hours,
+            "openMinutes": open_time_minutes,
+        },
+        "telephony": {
+            "minutes": telephony_minutes,
+            "missed": telephony_missed,
+        },
+        "reports": {
+            "total": reports_total,
+            "sent": reports_sent,
+            "opened": reports_opened,
+            "unread": reports_unread,
+            "confirmed": reports_confirmed,
+        },
+        "revenueEstimateEur": revenue_estimate,
+        "hourlyRateEur": hourly_rate,
+    }
 
 
 @app.post("/api/reports/{report_id}/send")

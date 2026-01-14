@@ -1,10 +1,10 @@
 import { useState } from "react";
 import {
+  BarChart3,
   Clock,
   ClipboardList,
   FileText,
   Settings,
-  Sparkles,
   StickyNote,
   Users,
   Wrench
@@ -18,6 +18,7 @@ import ToolsView from "./tools/ToolsView";
 import SettingsView from "./settings/SettingsView";
 import CustomerDirectoryView from "./customers/CustomerDirectoryView";
 import DayPlanView from "./dayplan/DayPlanView";
+import StatsView from "./stats/StatsView";
 
 export default function App() {
   const [activeView, setActiveView] = useState("dayplan");
@@ -102,6 +103,16 @@ export default function App() {
               Betriebsintern
             </p>
             <button
+              onClick={() => setActiveView("stats")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "stats"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <BarChart3 size={18} /> Statistik
+            </button>
+            <button
               onClick={() => setActiveView("tools")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
                 activeView === "tools"
@@ -158,6 +169,8 @@ export default function App() {
             <SettingsView />
           ) : activeView === "telephony" ? (
             <TelephonyView />
+          ) : activeView === "stats" ? (
+            <StatsView />
           ) : (
             <ReportView />
           )}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BadgeCheck,
   Building2,
+  Eye,
   Mail,
   Phone,
   Plus,
@@ -9,7 +10,7 @@ import {
   Trash2,
   Users
 } from "lucide-react";
-import { uid } from "../reporting/utils";
+import { renderReportHTML, uid } from "../reporting/utils";
 
 const API = "/api";
 
@@ -84,6 +85,11 @@ export default function CustomerDirectoryView() {
   const [reportOverview, setReportOverview] = useState([]);
   const [reportStatus, setReportStatus] = useState("idle");
   const [settingsTab, setSettingsTab] = useState("details");
+  const [previewModal, setPreviewModal] = useState({
+    open: false,
+    title: "",
+    html: ""
+  });
   const [metricsSettings, setMetricsSettings] = useState({
     office_address: "",
     km_rate_eur: "",
@@ -242,6 +248,34 @@ export default function CustomerDirectoryView() {
       scheduleSave(updated);
       return next;
     });
+  };
+
+  const openReportPreview = async (report) => {
+    if (!report?.id) return;
+    try {
+      const res = await fetch(`/api/reports/${report.id}`);
+      if (!res.ok) throw new Error("report_failed");
+      const data = await res.json();
+      const normalized = {
+        customer: data.customer || report.customer || "",
+        period: data.period || report.period || "",
+        status: data.status || "",
+        summary: data.summary || "",
+        customer_action_text: data.customer_action_text || "",
+        actions: data.items || []
+      };
+      setPreviewModal({
+        open: true,
+        title: normalized.period || "Bericht",
+        html: renderReportHTML(normalized)
+      });
+    } catch (error) {
+      setPreviewModal({
+        open: true,
+        title: "Bericht",
+        html: "<p>Vorschau konnte nicht geladen werden.</p>"
+      });
+    }
   };
 
   const handleCreate = () => {
@@ -697,6 +731,29 @@ export default function CustomerDirectoryView() {
 
   return (
     <div className="min-h-screen bg-sand-50">
+      {previewModal.open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-5xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+            <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Vorschau</p>
+                <h3 className="text-lg font-display">{previewModal.title}</h3>
+              </div>
+              <button
+                onClick={() => setPreviewModal({ open: false, title: "", html: "" })}
+                className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+              >
+                Schließen
+              </button>
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto p-6 bg-sand-50">
+              <div className="bg-white border border-sand-200 rounded-2xl p-4">
+                <div dangerouslySetInnerHTML={{ __html: previewModal.html }} />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-6xl mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -1092,7 +1149,7 @@ export default function CustomerDirectoryView() {
                   ) : metricsStatus === "error" ? (
                     <p className="text-sm text-rose-600">Kennzahlen konnten nicht geladen werden.</p>
                   ) : metrics ? (
-                    <div className="grid gap-3 sm:grid-cols-3 text-sm text-sand-700">
+                    <div className="grid gap-3 sm:grid-cols-4 text-sm text-sand-700">
                       <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Entfernung</p>
                         <p className="text-base font-semibold">
@@ -1107,6 +1164,20 @@ export default function CustomerDirectoryView() {
                           Offene Tasks
                         </p>
                         <p className="text-base font-semibold">{metrics.openTasks}</p>
+                        <p className="text-xs text-sand-500">
+                          Tagesplan: {metrics.openDayTasks ?? 0} · Zeit: {metrics.openTimeTasks ?? 0}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">
+                          Offene Zeit
+                        </p>
+                        <p className="text-base font-semibold">
+                          {metrics.openTimeMinutes ?? 0} Min
+                        </p>
+                        <p className="text-xs text-sand-500">
+                          Umsatz: € {Number(metrics.estimatedRevenueEur ?? 0).toFixed(2)}
+                        </p>
                       </div>
                       <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">
@@ -1149,9 +1220,21 @@ export default function CustomerDirectoryView() {
                                 : ""}
                             </div>
                           </div>
-                          <span className="text-xs uppercase tracking-wide text-sand-500">
-                            {report.opened_count ? `${report.opened_count}x gelesen` : "nicht gelesen"}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs uppercase tracking-wide text-sand-500">
+                              {report.opened_count
+                                ? `${report.opened_count}x gelesen`
+                                : "nicht gelesen"}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => openReportPreview(report)}
+                              className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                              title="Vorschau"
+                            >
+                              <Eye size={12} />
+                            </button>
+                          </div>
                         </div>
                       ))}
                       {reportOverview.length > 5 ? (

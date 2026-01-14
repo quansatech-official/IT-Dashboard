@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardList, Trash2 } from "lucide-react";
+import { ClipboardList, Clock, DollarSign, Sparkles, Star, Trash2 } from "lucide-react";
 
 const API = "/api";
 
@@ -140,7 +140,12 @@ export default function DayPlanView() {
       map[bucket].push(group);
     });
     Object.keys(map).forEach((key) => {
-      map[key].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      map[key].sort((a, b) => {
+        const pinnedA = a.pinned ? 1 : 0;
+        const pinnedB = b.pinned ? 1 : 0;
+        if (pinnedA !== pinnedB) return pinnedB - pinnedA;
+        return (a.position ?? 0) - (b.position ?? 0);
+      });
     });
     return map;
   }, [groups]);
@@ -321,13 +326,13 @@ export default function DayPlanView() {
     return (
       <div
         key={task.id}
-        className="rounded-2xl border border-amber-100 bg-amber-50/70 px-4 py-3 shadow-[0_6px_14px_rgba(150,120,60,0.08)]"
+        className="rounded-xl border border-amber-100 bg-amber-50/70 px-3 py-2 shadow-[0_4px_10px_rgba(150,120,60,0.08)]"
         draggable
         onDragStart={(event) => {
           event.dataTransfer.setData("text/plain", `task:${task.id}`);
         }}
       >
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-2">
           <button
             type="button"
             onClick={() => updateTask(task, { status: isDone ? "todo" : "done" })}
@@ -339,100 +344,120 @@ export default function DayPlanView() {
             {isDone ? <span className="text-[10px] text-white">✓</span> : null}
           </button>
           <div className="flex-1 min-w-0">
-            {editingId === task.id ? (
-              <input
-                value={editingTitle}
-                onChange={(event) => setEditingTitle(event.target.value)}
-                onBlur={() => commitEdit(task)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    commitEdit(task);
-                  }
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    cancelEdit();
-                  }
-                }}
-                className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                autoFocus
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => startEdit(task)}
-                className="text-left text-sm font-semibold text-sand-900 hover:text-sand-700"
-                title="Aufgabe bearbeiten"
-              >
-                {task.title}
-              </button>
-            )}
-            {task.customer ? (
-              <div className="text-xs text-sand-500 mt-1">{task.customer}</div>
-            ) : null}
-            {!task.customer && suggestions.length ? (
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="text-[10px] uppercase tracking-wide text-sand-400">
-                  Vorschläge
-                </span>
-                {suggestions.map((name) => (
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                {editingId === task.id ? (
+                  <input
+                    value={editingTitle}
+                    onChange={(event) => setEditingTitle(event.target.value)}
+                    onBlur={() => commitEdit(task)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        commitEdit(task);
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelEdit();
+                      }
+                    }}
+                    className="w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-sm font-medium text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    autoFocus
+                  />
+                ) : (
                   <button
-                    key={name}
                     type="button"
-                    onClick={() => updateTask(task, { customer: name })}
-                    className="rounded-full border border-amber-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-amber-100"
-                    title="Kunde zuordnen"
+                    onClick={() => startEdit(task)}
+                    className={`text-left text-sm font-medium hover:text-sand-700 ${
+                      isDone ? "line-through text-sand-400" : "text-sand-900"
+                    }`}
+                    title="Aufgabe bearbeiten"
                   >
-                    {name}
+                    {task.title}
                   </button>
-                ))}
+                )}
               </div>
-            ) : null}
-            {task.customer_number ? (
-              <div className="text-xs text-sand-400">Nr. {task.customer_number}</div>
-            ) : null}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {!task.task_id ? (
+              <div className="flex items-center gap-1">
+                {!task.customer ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (suggestions.length) {
+                        updateTask(task, { customer: suggestions[0] });
+                      } else {
+                        setError("Kein Kundenvorschlag gefunden.");
+                      }
+                    }}
+                    className="rounded-full border border-amber-200 bg-white p-1 text-sand-600 hover:bg-amber-100"
+                    title={
+                      suggestions.length
+                        ? `Kundenvorschlag: ${suggestions[0]}`
+                        : "Kein Kundenvorschlag"
+                    }
+                    disabled={!suggestions.length}
+                  >
+                    <Sparkles size={12} />
+                  </button>
+                ) : null}
+                {!task.task_id ? (
+                  <button
+                    type="button"
+                    onClick={() => promoteTask(task)}
+                    disabled={!canPromote}
+                    className={`rounded-full border p-1 ${
+                      canPromote
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                        : "border-sand-100 text-sand-300 cursor-not-allowed"
+                    }`}
+                    title={
+                      canPromote
+                        ? "In Zeiterfassung übernehmen"
+                        : "Kunde zuordnen, um zu übernehmen"
+                    }
+                  >
+                    <Clock size={12} />
+                  </button>
+                ) : (
+                  <span
+                    className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700"
+                    title="In Zeiterfassung"
+                  >
+                    <Clock size={12} />
+                  </span>
+                )}
                 <button
                   type="button"
-                  onClick={() => promoteTask(task)}
-                  disabled={!canPromote}
-                  className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
-                    canPromote
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                  onClick={() => setError("Faktura (Dummy) ist noch nicht angebunden.")}
+                  disabled={!canInvoice}
+                  className={`rounded-full border p-1 ${
+                    canInvoice
+                      ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
                       : "border-sand-100 text-sand-300 cursor-not-allowed"
                   }`}
-                  title={canPromote ? "In Zeiterfassung übernehmen" : "Kunde zuordnen, um zu übernehmen"}
+                  title={
+                    canInvoice
+                      ? "In Faktura übernehmen (Dummy)"
+                      : "Kunde zuordnen, um zu übernehmen"
+                  }
                 >
-                  Zeiterfassung
+                  <DollarSign size={12} />
                 </button>
-              ) : (
-                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                  Zeiterfassung
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => setError("Faktura (Dummy) ist noch nicht angebunden.")}
-                disabled={!canInvoice}
-                className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
-                  canInvoice
-                    ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                    : "border-sand-100 text-sand-300 cursor-not-allowed"
-                }`}
-                title={canInvoice ? "In Faktura übernehmen (Dummy)" : "Kunde zuordnen, um zu übernehmen"}
-              >
-                Faktura
-              </button>
-              <button
-                type="button"
-                onClick={() => removeTask(task)}
-                className="ml-auto inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                title="Löschen"
-              >
-                <Trash2 size={12} />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => removeTask(task)}
+                  className="rounded-full border border-rose-200 bg-rose-50 p-1 text-rose-700 hover:bg-rose-100"
+                  title="Löschen"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
             </div>
+            {task.customer ? (
+              <div className="text-[11px] text-sand-500 mt-1">{task.customer}</div>
+            ) : null}
+            {task.customer_number ? (
+              <div className="text-[10px] text-sand-400">Nr. {task.customer_number}</div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -463,11 +488,11 @@ export default function DayPlanView() {
           </div>
         ) : null}
 
-        <div className="grid gap-6 lg:grid-cols-1">
+        <div className="grid gap-5 lg:grid-cols-1">
           {columns.map((column) => (
             <div
               key={column.id}
-              className={`rounded-3xl border bg-white/80 shadow-[0_8px_30px_rgba(150,120,60,0.1)] p-5 transition min-h-[65vh] ${
+              className={`rounded-2xl border bg-white/80 shadow-[0_6px_20px_rgba(150,120,60,0.08)] p-4 transition min-h-[60vh] ${
                 dragOver === column.id
                   ? "border-amber-400 bg-amber-50/60"
                   : "border-amber-100"
@@ -479,7 +504,7 @@ export default function DayPlanView() {
               onDragLeave={() => setDragOver("")}
               onDrop={(event) => handleDrop(event, column.id)}
             >
-              <div className="flex items-center justify-between mb-4 gap-3">
+              <div className="flex items-center justify-between mb-3 gap-3">
                 <div>
                   <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">
                     {column.label}
@@ -488,7 +513,7 @@ export default function DayPlanView() {
                 </div>
                 <span className="text-xs text-sand-500">{grouped[column.id].length}</span>
               </div>
-              <div className="flex items-center gap-2 mb-4">
+              <div className="flex items-center gap-2 mb-3">
                 <input
                   value={groupDrafts[column.id] || ""}
                   onChange={(event) =>
@@ -511,9 +536,9 @@ export default function DayPlanView() {
                   Gruppe
                 </button>
               </div>
-              <div className="space-y-4 max-h-[60vh] overflow-auto pr-1">
+              <div className="space-y-3 max-h-[65vh] overflow-auto pr-1">
                 <div
-                  className="rounded-2xl border border-dashed border-amber-200 bg-white/70 px-4 py-3"
+                  className="rounded-xl border border-dashed border-amber-200 bg-white/70 px-3 py-2"
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => handleUngroupedDrop(event, column.id)}
                 >
@@ -543,14 +568,14 @@ export default function DayPlanView() {
                         }
                       }}
                       placeholder="Neue Aufgabe…"
-                      className="w-full rounded-full border border-amber-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                      className="w-full rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
                     />
                   </div>
                 </div>
                 {groupsByColumn[column.id].map((group) => (
                   <div
                     key={group.id}
-                    className={`rounded-2xl border border-amber-200 bg-white/80 px-4 py-3 ${
+                    className={`rounded-xl border border-amber-200 bg-white/80 px-3 py-2 ${
                       dragOverGroupId === group.id ? "ring-2 ring-amber-300" : ""
                     }`}
                     draggable
@@ -581,7 +606,7 @@ export default function DayPlanView() {
                               setEditingGroupTitle("");
                             }
                           }}
-                          className="flex-1 rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                          className="flex-1 rounded-full border border-amber-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
                           autoFocus
                         />
                       ) : (
@@ -596,13 +621,25 @@ export default function DayPlanView() {
                       )}
                       <button
                         type="button"
+                        onClick={() => updateGroup(group, { pinned: !group.pinned })}
+                        className={`rounded-full border p-1 ${
+                          group.pinned
+                            ? "border-amber-300 bg-amber-100 text-amber-700"
+                            : "border-sand-200 bg-white text-sand-400 hover:bg-amber-50"
+                        }`}
+                        title={group.pinned ? "Gruppe lösen" : "Gruppe anheften"}
+                      >
+                        <Star size={12} />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => removeGroup(group)}
                         className="ml-auto text-[10px] uppercase tracking-wide text-rose-500 hover:text-rose-700"
                       >
                         Entfernen
                       </button>
                     </div>
-                    <div className="mt-3 space-y-3">
+                    <div className="mt-2 space-y-3">
                       {grouped[column.id].filter((task) => task.group_id === group.id).length ? (
                         grouped[column.id]
                           .filter((task) => task.group_id === group.id)
@@ -620,7 +657,7 @@ export default function DayPlanView() {
                           }
                         }}
                         placeholder="Neue Aufgabe…"
-                        className="w-full rounded-full border border-amber-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                        className="w-full rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
                       />
                     </div>
                   </div>
@@ -630,8 +667,8 @@ export default function DayPlanView() {
           ))}
         </div>
 
-        <section className="rounded-3xl border border-amber-100 bg-white/80 p-5 shadow-[0_8px_30px_rgba(150,120,60,0.08)]">
-          <div className="flex items-center justify-between mb-4">
+        <section className="rounded-2xl border border-amber-100 bg-white/80 p-4 shadow-[0_6px_20px_rgba(150,120,60,0.08)]">
+          <div className="flex items-center justify-between mb-3">
             <div>
               <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">Erledigt</h2>
               <p className="text-xs text-sand-400 mt-1">Ziehe Aufgaben hierher</p>
@@ -639,7 +676,7 @@ export default function DayPlanView() {
             <span className="text-xs text-sand-500">{doneTasks.length}</span>
           </div>
           <div
-            className="space-y-3 max-h-[50vh] overflow-auto pr-1"
+            className="space-y-3 max-h-[45vh] overflow-auto pr-1"
             onDragOver={(event) => event.preventDefault()}
             onDrop={handleDoneDrop}
           >
