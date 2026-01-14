@@ -226,7 +226,7 @@ function CustomerCard({ customer, reload }) {
       <div className="flex justify-between mb-3">
         <h2 className="font-bold">{customer.name}</h2>
         <span className="text-sm flex items-center gap-1 text-slate-500">
-          <Clock size={14} /> {msToMMSS(total)}
+          <Clock size={14} /> {msToHHMMSS(total)}
         </span>
       </div>
 
