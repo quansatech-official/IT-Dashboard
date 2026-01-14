@@ -292,15 +292,18 @@ export default function TimeTrackingView() {
 
   return (
     <div className="min-h-screen bg-slate-100">
-      <header className="bg-white border-b sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto h-16 flex items-center justify-between px-4">
-          <div className="flex gap-3 items-center">
-            <div className="h-9 w-9 rounded-xl bg-slate-900 text-white flex items-center justify-center">
+      <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
               <Clock size={18} />
             </div>
-            <h1 className="font-bold text-xl">QT-Workbench · Zeiterfassung</h1>
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
+              <h1 className="text-2xl font-display text-sand-900">Zeiterfassung</h1>
+            </div>
           </div>
-          <span className="text-sm text-slate-500">{visibleCustomers.length} Kunden</span>
+          <span className="text-sm text-sand-500">{visibleCustomers.length} Kunden</span>
         </div>
       </header>
 

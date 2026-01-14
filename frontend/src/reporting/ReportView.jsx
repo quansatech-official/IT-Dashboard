@@ -47,7 +47,7 @@ const buildBeaconUrl = (guid) => {
   return `${window.location.origin}/api/reports/open?guid=${encodeURIComponent(guid)}`;
 };
 
-function CustomerCombobox({ customers, value, onChange }) {
+function CustomerCombobox({ groups, value, onChange }) {
   const [query, setQuery] = useState(value || "");
   const [open, setOpen] = useState(false);
 
@@ -55,12 +55,18 @@ function CustomerCombobox({ customers, value, onChange }) {
     setQuery(value || "");
   }, [value]);
 
-  const filtered = customers.filter((item) =>
-    item.toLowerCase().includes(query.trim().toLowerCase())
-  );
+  const needle = query.trim().toLowerCase();
+  const filteredGroups = groups
+    .map((group) => {
+      const items = group.items.filter((item) =>
+        item.value.toLowerCase().includes(needle)
+      );
+      return { ...group, items };
+    })
+    .filter((group) => group.items.length);
 
-  const selectValue = (nextValue) => {
-    onChange(nextValue);
+  const selectValue = (nextValue, meta) => {
+    onChange(nextValue, meta);
     setQuery(nextValue);
     setOpen(false);
   };
@@ -72,7 +78,7 @@ function CustomerCombobox({ customers, value, onChange }) {
         onChange={(event) => {
           const next = event.target.value;
           setQuery(next);
-          onChange(next);
+          onChange(next, null);
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
@@ -86,16 +92,23 @@ function CustomerCombobox({ customers, value, onChange }) {
       />
       {open ? (
         <div className="absolute z-20 mt-2 w-full rounded-2xl border border-sand-200 bg-white shadow-soft max-h-48 overflow-auto">
-          {filtered.length ? (
-            filtered.map((item) => (
-              <button
-                key={item}
-                type="button"
-                onMouseDown={() => selectValue(item)}
-                className="w-full text-left px-4 py-2 text-sm hover:bg-sand-100"
-              >
-                {item}
-              </button>
+          {filteredGroups.length ? (
+            filteredGroups.map((group) => (
+              <div key={group.label} className="border-b border-sand-100 last:border-b-0">
+                <div className="px-4 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  {group.label}
+                </div>
+                {group.items.map((item) => (
+                  <button
+                    key={`${group.label}-${item.value}`}
+                    type="button"
+                    onMouseDown={() => selectValue(item.value, item)}
+                    className="w-full text-left px-4 py-2 text-sm hover:bg-sand-100"
+                  >
+                    {item.value}
+                  </button>
+                ))}
+              </div>
             ))
           ) : (
             <div className="px-4 py-2 text-xs text-sand-500">Kein Treffer — freie Eingabe möglich.</div>
@@ -128,6 +141,7 @@ const getCurrentPeriod = () => {
 
 const defaultReport = {
   customer: "",
+  customer_id: null,
   period: "",
   status: "Gelb",
   summary: "",
@@ -253,6 +267,7 @@ export default function ReportView() {
   const [summaryPick, setSummaryPick] = useState("");
   const [archiveItems, setArchiveItems] = useState([]);
   const [customerList, setCustomerList] = useState(fallbackCustomers);
+  const [customerDirectory, setCustomerDirectory] = useState([]);
   const [section, setSection] = useState("builder");
   const [toast, setToast] = useState("");
   const [customerInput, setCustomerInput] = useState(defaultReport.customer);
@@ -291,6 +306,36 @@ export default function ReportView() {
     archiveItems.forEach((group) => push(group.customer));
     return merged;
   }, [archiveItems, customerList]);
+
+  const customerGroups = useMemo(() => {
+    const directoryNames = new Set(
+      customerDirectory.map((item) => (item?.name || "").trim()).filter(Boolean)
+    );
+    const directoryItems = customerDirectory
+      .map((item) => ({
+        value: String(item.name || "").trim(),
+        id: item.id,
+        source: "directory"
+      }))
+      .filter((item) => item.value);
+
+    const archiveItemsList = archiveItems
+      .map((group) => String(group.customer || "").trim())
+      .filter((name) => name && !directoryNames.has(name))
+      .map((name) => ({ value: name, id: null, source: "archive" }));
+
+    const archiveNames = new Set(archiveItemsList.map((item) => item.value));
+    const fallbackItems = fallbackCustomers
+      .map((name) => String(name || "").trim())
+      .filter((name) => name && !directoryNames.has(name) && !archiveNames.has(name))
+      .map((name) => ({ value: name, id: null, source: "fallback" }));
+
+    const groups = [];
+    if (directoryItems.length) groups.push({ label: "Kundenstamm", items: directoryItems });
+    if (archiveItemsList.length) groups.push({ label: "Archiv", items: archiveItemsList });
+    if (fallbackItems.length) groups.push({ label: "Vorschläge", items: fallbackItems });
+    return groups;
+  }, [archiveItems, customerDirectory]);
 
   useEffect(() => {
     if (!toast) return;
@@ -374,6 +419,7 @@ export default function ReportView() {
         const res = await fetch("/api/customers");
         const data = await res.json();
         if (Array.isArray(data)) {
+          setCustomerDirectory(data);
           data.forEach((item) => {
             const name = String(item?.name || "").trim();
             if (name) names.add(name);
@@ -746,6 +792,7 @@ export default function ReportView() {
     }
     const payload = {
       customer: report.customer.trim(),
+      customer_id: report.customer_id ?? null,
       period: report.period,
       status: report.status,
       summary: report.summary,
@@ -848,6 +895,7 @@ export default function ReportView() {
   const normalizeReport = (data) => ({
     guid: data.guid,
     customer: data.customer,
+    customer_id: data.customer_id ?? null,
     period: data.period,
     status: data.status || "Gelb",
     summary: data.summary,
@@ -1209,11 +1257,15 @@ export default function ReportView() {
                 <label className="text-xs uppercase tracking-wide text-sand-600">
                   Kunde
                   <CustomerCombobox
-                    customers={suggestedCustomers}
+                    groups={customerGroups}
                     value={customerInput}
-                    onChange={(nextValue) => {
+                    onChange={(nextValue, meta) => {
                       setCustomerInput(nextValue);
-                      setReport((prev) => ({ ...prev, customer: nextValue }));
+                      setReport((prev) => ({
+                        ...prev,
+                        customer: nextValue,
+                        customer_id: meta?.id ?? null
+                      }));
                     }}
                   />
                 </label>

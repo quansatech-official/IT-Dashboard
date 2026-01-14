@@ -27,7 +27,14 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
-  remove: (id) => fetch(`${API}/customers/${id}`, { method: "DELETE" })
+  remove: (id) => fetch(`${API}/customers/${id}`, { method: "DELETE" }),
+  getMetricsSettings: () => fetch(`${API}/customer_metrics_settings`).then((r) => r.json()),
+  saveMetricsSettings: (payload) =>
+    fetch(`${API}/customer_metrics_settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then((r) => r.json())
 };
 
 const blankPhone = () => ({
@@ -58,6 +65,7 @@ const customerPayload = (customer) => ({
   phones: (customer.phones || [])
     .filter((phone) => (phone.label || "").trim() || (phone.number || "").trim())
     .map((phone) => ({
+      id: phone.id,
       label: phone.label || "",
       number: phone.number || ""
     }))
@@ -70,6 +78,19 @@ export default function CustomerDirectoryView() {
   const [importStatus, setImportStatus] = useState("");
   const [metrics, setMetrics] = useState(null);
   const [metricsStatus, setMetricsStatus] = useState("idle");
+  const [importPreview, setImportPreview] = useState(null);
+  const [importApplyCreate, setImportApplyCreate] = useState(true);
+  const [importApplyUpdate, setImportApplyUpdate] = useState(true);
+  const [reportOverview, setReportOverview] = useState([]);
+  const [reportStatus, setReportStatus] = useState("idle");
+  const [settingsTab, setSettingsTab] = useState("details");
+  const [metricsSettings, setMetricsSettings] = useState({
+    office_address: "",
+    km_rate_eur: "",
+    min_distance_km: "",
+    min_fee_eur: ""
+  });
+  const [metricsSettingsStatus, setMetricsSettingsStatus] = useState("idle");
   const saveTimers = useRef({});
   const importInputRef = useRef(null);
 
@@ -81,6 +102,20 @@ export default function CustomerDirectoryView() {
         setActiveId(next[0].id);
       }
     });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .getMetricsSettings()
+      .then((data) => {
+        if (!active) return;
+        setMetricsSettings((prev) => ({ ...prev, ...data }));
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -151,6 +186,34 @@ export default function CustomerDirectoryView() {
       active = false;
     };
   }, [activeCustomer?.id]);
+
+  useEffect(() => {
+    if (!activeCustomer?.name) {
+      setReportOverview([]);
+      return;
+    }
+    let active = true;
+    setReportStatus("loading");
+    fetch(`${API}/reports?customer_id=${activeCustomer.id}`)
+      .then((res) => {
+        if (!res.ok) throw new Error("reports_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        const list = Array.isArray(data) ? data : [];
+        list.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+        setReportOverview(list);
+        setReportStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setReportStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeCustomer?.name]);
 
   const scheduleSave = (customer) => {
     if (!customer) return;
@@ -409,15 +472,9 @@ export default function CustomerDirectoryView() {
     return phones.filter((entry) => entry.label || entry.number);
   };
 
-  const importCsv = async (file) => {
-    if (!file) return;
-    setImportStatus("Import läuft...");
-    const text = await file.text();
+  const buildImportRows = (text) => {
     const rows = parseCsv(text);
-    if (!rows.length) {
-      setImportStatus("CSV ist leer.");
-      return;
-    }
+    if (!rows.length) return [];
     const header = rows.shift().map(normalizeHeader);
     const findIndex = (aliases) =>
       aliases.map((alias) => header.indexOf(alias)).find((idx) => idx >= 0) ?? -1;
@@ -435,8 +492,6 @@ export default function CustomerDirectoryView() {
         "kundennummer",
         "kundennr",
         "kunden_nr",
-        "kunden_nr_",
-        "kunden_nr",
         "kunden_nr_"
       ]),
       creditor: findIndex(["creditor_number", "creditor", "kreditor", "kreditorennummer"]),
@@ -452,6 +507,167 @@ export default function CustomerDirectoryView() {
       fax: findIndex(["fax"]),
       creditorAlt: findIndex(["kreditoren_nr", "kreditoren_nr_"])
     };
+
+    return rows.map((row) => {
+      const nameValue = indexes.name >= 0 ? String(row[indexes.name] || "").trim() : "";
+      const organisation =
+        indexes.organisation >= 0 ? String(row[indexes.organisation] || "").trim() : "";
+      const name = organisation || nameValue;
+      const fallbackName = buildNameFromParts([
+        indexes.title >= 0 ? row[indexes.title] : "",
+        indexes.firstName >= 0 ? row[indexes.firstName] : "",
+        indexes.lastName >= 0 ? row[indexes.lastName] : "",
+        indexes.nameSuffix >= 0 ? row[indexes.nameSuffix] : ""
+      ]);
+      const customerNumber =
+        indexes.customerNumber >= 0 ? String(row[indexes.customerNumber] || "").trim() : "";
+      const creditorNumberRaw =
+        indexes.creditor >= 0 ? String(row[indexes.creditor] || "").trim() : "";
+      const creditorNumber =
+        creditorNumberRaw ||
+        (indexes.creditorAlt >= 0 ? String(row[indexes.creditorAlt] || "").trim() : "");
+      const email = indexes.email >= 0 ? String(row[indexes.email] || "").trim() : "";
+      const street = indexes.street >= 0 ? String(row[indexes.street] || "").trim() : "";
+      const postalCode =
+        indexes.postalCode >= 0 ? String(row[indexes.postalCode] || "").trim() : "";
+      const city = indexes.city >= 0 ? String(row[indexes.city] || "").trim() : "";
+      const country = indexes.country >= 0 ? String(row[indexes.country] || "").trim() : "";
+      const phones = parsePhonesFromColumns({
+        phone: indexes.phone >= 0 ? String(row[indexes.phone] || "").trim() : "",
+        phoneCategory:
+          indexes.phoneCategory >= 0 ? String(row[indexes.phoneCategory] || "").trim() : "",
+        mobile: indexes.mobile >= 0 ? String(row[indexes.mobile] || "").trim() : "",
+        fax: indexes.fax >= 0 ? String(row[indexes.fax] || "").trim() : "",
+        extraPhones: indexes.phones >= 0 ? parsePhones(row[indexes.phones]) : []
+      });
+      const finalName = name || fallbackName;
+      const resolvedCreditorNumber = creditorNumber || customerNumber;
+      return {
+        name: finalName,
+        creditorNumber: resolvedCreditorNumber,
+        email,
+        street,
+        postalCode,
+        city,
+        country,
+        phones
+      };
+    });
+  };
+
+  const handleImportFile = async (file) => {
+    if (!file) return;
+    const text = await file.text();
+    const rows = buildImportRows(text);
+    if (!rows.length) {
+      setImportStatus("CSV ist leer.");
+      return;
+    }
+    const byNumber = new Map(
+      customers
+        .filter((customer) => customer.creditorNumber)
+        .map((customer) => [String(customer.creditorNumber).trim(), customer])
+    );
+    const byName = new Map(
+      customers
+        .filter((customer) => customer.name)
+        .map((customer) => [String(customer.name).trim().toLowerCase(), customer])
+    );
+    const preview = rows.map((row) => {
+      const existing =
+        (row.creditorNumber && byNumber.get(row.creditorNumber)) ||
+        (row.name && byName.get(row.name.toLowerCase()));
+      if (!row.name && !row.creditorNumber) {
+        return { action: "skip", row, reason: "Kein Name/Nummer" };
+      }
+      if (existing) {
+        return { action: "update", row };
+      }
+      if (!row.name) {
+        return { action: "skip", row, reason: "Kein Name" };
+      }
+      return { action: "create", row };
+    });
+    setImportPreview(preview);
+  };
+
+  const applyImport = async () => {
+    if (!importPreview?.length) return;
+    setImportStatus("Import läuft...");
+    const byNumber = new Map(
+      customers
+        .filter((customer) => customer.creditorNumber)
+        .map((customer) => [String(customer.creditorNumber).trim(), customer])
+    );
+    const byName = new Map(
+      customers
+        .filter((customer) => customer.name)
+        .map((customer) => [String(customer.name).trim().toLowerCase(), customer])
+    );
+
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const entry of importPreview) {
+      const { row, action } = entry;
+      const existing =
+        (row.creditorNumber && byNumber.get(row.creditorNumber)) ||
+        (row.name && byName.get(row.name.toLowerCase()));
+
+      if (action === "create") {
+        if (!importApplyCreate) {
+          skipped += 1;
+          continue;
+        }
+        await api.create({
+          name: row.name,
+          creditor_number: row.creditorNumber,
+          email: row.email,
+          street: row.street,
+          postal_code: row.postalCode,
+          city: row.city,
+          country: row.country,
+          phones: row.phones
+        });
+        created += 1;
+        continue;
+      }
+
+      if (action === "update" && existing) {
+        if (!importApplyUpdate) {
+          skipped += 1;
+          continue;
+        }
+        const payload = {};
+        if (row.name) payload.name = row.name;
+        if (row.creditorNumber) payload.creditor_number = row.creditorNumber;
+        if (row.email) payload.email = row.email;
+        if (row.street) payload.street = row.street;
+        if (row.postalCode) payload.postal_code = row.postalCode;
+        if (row.city) payload.city = row.city;
+        if (row.country) payload.country = row.country;
+        if (row.phones?.length) payload.phones = row.phones;
+        if (!Object.keys(payload).length) {
+          skipped += 1;
+          continue;
+        }
+        await api.update(existing.id, payload);
+        updated += 1;
+        continue;
+      }
+      skipped += 1;
+    }
+
+    const refreshed = await api.list();
+    setCustomers((refreshed || []).map(normalizeCustomer));
+    setImportStatus(`Import fertig: ${created} neu, ${updated} aktualisiert, ${skipped} übersprungen.`);
+    setImportPreview(null);
+    if (importInputRef.current) {
+      importInputRef.current.value = "";
+    }
+    setTimeout(() => setImportStatus(""), 4000);
+  };
 
     const byInternal = new Map(
       customers
@@ -624,7 +840,7 @@ export default function CustomerDirectoryView() {
               type="file"
               accept=".csv,text/csv"
               className="hidden"
-              onChange={(event) => importCsv(event.target.files?.[0])}
+              onChange={(event) => handleImportFile(event.target.files?.[0])}
             />
             {importStatus ? <div className="text-xs text-sand-500">{importStatus}</div> : null}
           </div>
@@ -693,8 +909,123 @@ export default function CustomerDirectoryView() {
           </section>
 
           <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-            {activeCustomer ? (
-              <div className="space-y-6">
+            <div className="flex flex-wrap items-center gap-2 border-b border-sand-200 pb-3 mb-4">
+              <button
+                type="button"
+                onClick={() => setSettingsTab("details")}
+                className={`rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
+                  settingsTab === "details"
+                    ? "border-sand-900 bg-sand-900 text-white"
+                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                }`}
+              >
+                Kunde
+              </button>
+              <button
+                type="button"
+                onClick={() => setSettingsTab("settings")}
+                className={`rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
+                  settingsTab === "settings"
+                    ? "border-sand-900 bg-sand-900 text-white"
+                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                }`}
+              >
+                Kennzahlenbasis
+              </button>
+            </div>
+            {settingsTab === "settings" ? (
+              <div className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="block md:col-span-2">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">
+                      Firmenstandort
+                    </span>
+                    <input
+                      value={metricsSettings.office_address}
+                      onChange={(event) =>
+                        setMetricsSettings((prev) => ({
+                          ...prev,
+                          office_address: event.target.value
+                        }))
+                      }
+                      placeholder="z. B. Steyrtalstraße 88, 4523 Neuzeug"
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">
+                      Kilometergeld (€/km)
+                    </span>
+                    <input
+                      value={metricsSettings.km_rate_eur}
+                      onChange={(event) =>
+                        setMetricsSettings((prev) => ({
+                          ...prev,
+                          km_rate_eur: event.target.value
+                        }))
+                      }
+                      placeholder="0.80"
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">
+                      Mindeststrecke (km)
+                    </span>
+                    <input
+                      value={metricsSettings.min_distance_km}
+                      onChange={(event) =>
+                        setMetricsSettings((prev) => ({
+                          ...prev,
+                          min_distance_km: event.target.value
+                        }))
+                      }
+                      placeholder="15"
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs uppercase tracking-wide text-sand-500">
+                      Mindestbetrag (€)
+                    </span>
+                    <input
+                      value={metricsSettings.min_fee_eur}
+                      onChange={(event) =>
+                        setMetricsSettings((prev) => ({
+                          ...prev,
+                          min_fee_eur: event.target.value
+                        }))
+                      }
+                      placeholder="15"
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setMetricsSettingsStatus("saving");
+                    try {
+                      const saved = await api.saveMetricsSettings(metricsSettings);
+                      setMetricsSettings(saved);
+                      setMetricsSettingsStatus("saved");
+                    } catch (error) {
+                      setMetricsSettingsStatus("error");
+                    }
+                    setTimeout(() => setMetricsSettingsStatus("idle"), 2000);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                >
+                  Speichern
+                </button>
+                {metricsSettingsStatus === "saved" ? (
+                  <span className="text-xs text-emerald-600">Gespeichert</span>
+                ) : metricsSettingsStatus === "error" ? (
+                  <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
+                ) : null}
+              </div>
+            ) : activeCustomer ? (
+              <div className="space-y-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
                     <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Stammdaten</p>
@@ -711,7 +1042,7 @@ export default function CustomerDirectoryView() {
                   </button>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-3 md:grid-cols-2">
                   <label className="block">
                     <span className="text-xs uppercase tracking-wide text-sand-500">Name</span>
                     <input
@@ -720,7 +1051,7 @@ export default function CustomerDirectoryView() {
                         updateCustomer(activeCustomer.id, { name: event.target.value })
                       }
                       placeholder="z. B. Quansatech GmbH"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>
                   <label className="block">
@@ -733,12 +1064,12 @@ export default function CustomerDirectoryView() {
                         updateCustomer(activeCustomer.id, { creditorNumber: event.target.value })
                       }
                       placeholder="z. B. 1042"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>
                   <label className="block">
                     <span className="text-xs uppercase tracking-wide text-sand-500">E-Mail-Adresse</span>
-                    <div className="mt-1 flex items-center gap-2 rounded-2xl border border-sand-200 px-3 py-2">
+                    <div className="mt-1 flex items-center gap-2 rounded-xl border border-sand-200 px-3 py-2">
                       <Mail size={14} className="text-sand-400" />
                       <input
                         value={activeCustomer.email}
@@ -753,7 +1084,7 @@ export default function CustomerDirectoryView() {
                   </label>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-3 md:grid-cols-2">
                   <label className="block md:col-span-2">
                     <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
                     <input
@@ -762,7 +1093,7 @@ export default function CustomerDirectoryView() {
                         updateCustomer(activeCustomer.id, { street: event.target.value })
                       }
                       placeholder="z. B. Steyrtalstraße 88"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>
                   <label className="block">
@@ -773,7 +1104,7 @@ export default function CustomerDirectoryView() {
                         updateCustomer(activeCustomer.id, { postalCode: event.target.value })
                       }
                       placeholder="z. B. 4523"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>
                   <label className="block">
@@ -784,7 +1115,7 @@ export default function CustomerDirectoryView() {
                         updateCustomer(activeCustomer.id, { city: event.target.value })
                       }
                       placeholder="z. B. Neuzeug"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>
                   <label className="block">
@@ -795,13 +1126,13 @@ export default function CustomerDirectoryView() {
                         updateCustomer(activeCustomer.id, { country: event.target.value })
                       }
                       placeholder="z. B. Österreich"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     />
                   </label>
                 </div>
 
-                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-4">
-                  <div className="flex items-center justify-between gap-3 mb-3">
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                  <div className="flex items-center justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2 text-sand-700">
                       <Phone size={16} />
                       <p className="text-sm uppercase tracking-[0.3em] text-sand-500">
@@ -816,28 +1147,28 @@ export default function CustomerDirectoryView() {
                       <Plus size={12} /> Rufnummer
                     </button>
                   </div>
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {activeCustomer.phones?.map((phone) => (
                       <div
                         key={phone.id}
-                        className="grid gap-2 md:grid-cols-[160px_minmax(0,1fr)_auto] items-center"
+                        className="grid gap-2 md:grid-cols-[140px_minmax(0,1fr)_auto] items-center"
                       >
                         <input
                           value={phone.label}
                           onChange={(event) => updatePhone(phone.id, { label: event.target.value })}
                           placeholder="z. B. Arbeit"
-                          className="rounded-2xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                          className="rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                         />
                         <input
                           value={phone.number}
                           onChange={(event) => updatePhone(phone.id, { number: event.target.value })}
                           placeholder="+49 40 123456"
-                          className="rounded-2xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                          className="rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                         />
                         <button
                           type="button"
                           onClick={() => removePhone(phone.id)}
-                          className="inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 hover:bg-rose-100"
+                          className="inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs text-rose-700 hover:bg-rose-100"
                         >
                           <Trash2 size={12} />
                         </button>
@@ -888,6 +1219,48 @@ export default function CustomerDirectoryView() {
                 </div>
 
                 <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                  <div className="flex items-center gap-2 text-sand-700 mb-3">
+                    <BadgeCheck size={16} />
+                    <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Berichte</p>
+                  </div>
+                  {reportStatus === "loading" ? (
+                    <p className="text-sm text-sand-500">Berichte laden…</p>
+                  ) : reportStatus === "error" ? (
+                    <p className="text-sm text-rose-600">Berichte konnten nicht geladen werden.</p>
+                  ) : reportOverview.length ? (
+                    <div className="space-y-2">
+                      {reportOverview.slice(0, 5).map((report) => (
+                        <div
+                          key={report.id}
+                          className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-700"
+                        >
+                          <div>
+                            <div className="font-semibold">
+                              {report.period || "Bericht"}
+                            </div>
+                            <div className="text-xs text-sand-500">
+                              {report.created_at
+                                ? new Date(report.created_at).toLocaleDateString("de-DE")
+                                : ""}
+                            </div>
+                          </div>
+                          <span className="text-xs uppercase tracking-wide text-sand-500">
+                            {report.opened_count ? `${report.opened_count}x gelesen` : "nicht gelesen"}
+                          </span>
+                        </div>
+                      ))}
+                      {reportOverview.length > 5 ? (
+                        <p className="text-xs text-sand-500">
+                          +{reportOverview.length - 5} weitere Berichte
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-sand-500">Keine Berichte vorhanden.</p>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-white p-4">
                   <div className="grid gap-3 sm:grid-cols-3 text-xs text-sand-600">
                     <div className="flex items-center gap-2">
                       <BadgeCheck size={14} />
@@ -927,6 +1300,89 @@ export default function CustomerDirectoryView() {
             )}
           </section>
         </div>
+        {importPreview ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-soft">
+              <div className="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">CSV Import</p>
+                  <h3 className="text-xl font-display text-sand-900">Vorschau</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setImportPreview(null)}
+                  className="rounded-full border border-sand-200 px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                >
+                  Schließen
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-3 text-xs text-sand-600 mb-4">
+                <span>
+                  Neu: {importPreview.filter((item) => item.action === "create").length}
+                </span>
+                <span>
+                  Update: {importPreview.filter((item) => item.action === "update").length}
+                </span>
+                <span>
+                  Übersprungen: {importPreview.filter((item) => item.action === "skip").length}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-3 mb-4">
+                <label className="inline-flex items-center gap-2 text-xs text-sand-700">
+                  <input
+                    type="checkbox"
+                    checked={importApplyCreate}
+                    onChange={(event) => setImportApplyCreate(event.target.checked)}
+                  />
+                  Neue Kunden anlegen
+                </label>
+                <label className="inline-flex items-center gap-2 text-xs text-sand-700">
+                  <input
+                    type="checkbox"
+                    checked={importApplyUpdate}
+                    onChange={(event) => setImportApplyUpdate(event.target.checked)}
+                  />
+                  Bestehende aktualisieren
+                </label>
+              </div>
+              <div className="max-h-64 overflow-auto rounded-2xl border border-sand-200 bg-sand-50 p-3 text-sm text-sand-700">
+                {importPreview.slice(0, 10).map((item, idx) => (
+                  <div key={`${item.action}-${idx}`} className="flex items-center justify-between py-1">
+                    <span>{item.row.name || "Unbenannt"}</span>
+                    <span className="text-xs uppercase tracking-wide text-sand-500">
+                      {item.action === "create"
+                        ? "Neu"
+                        : item.action === "update"
+                        ? "Update"
+                        : "Skip"}
+                    </span>
+                  </div>
+                ))}
+                {importPreview.length > 10 ? (
+                  <div className="pt-2 text-xs text-sand-500">
+                    +{importPreview.length - 10} weitere Einträge
+                  </div>
+                ) : null}
+              </div>
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setImportPreview(null)}
+                  className="rounded-full border border-sand-200 px-4 py-2 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="button"
+                  onClick={applyImport}
+                  className="rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                >
+                  Import starten
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </main>
     </div>
   );

@@ -12,6 +12,9 @@ export default function ArchivePanel({
   onUpdateStatus
 }) {
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [readFilter, setReadFilter] = useState("all");
+  const [periodFilter, setPeriodFilter] = useState("");
   const [openInfoId, setOpenInfoId] = useState(null);
   const beaconStatus = useMemo(() => {
     if (typeof window === "undefined") return { ok: false, label: "Beacon: unbekannt" };
@@ -29,9 +32,27 @@ export default function ArchivePanel({
   }, []);
   const filteredArchive = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return archive;
-    return archive.filter((group) => group.customer.toLowerCase().includes(needle));
-  }, [archive, query]);
+    const periodNeedle = periodFilter.trim().toLowerCase();
+    const matchesStatus = (item) =>
+      !statusFilter || String(item.status || "").toLowerCase() === statusFilter.toLowerCase();
+    const matchesRead = (item) => {
+      if (readFilter === "read") return item.openedCount > 0;
+      if (readFilter === "unread") return !item.openedCount;
+      return true;
+    };
+    const matchesPeriod = (item) =>
+      !periodNeedle || String(item.period || "").toLowerCase().includes(periodNeedle);
+
+    return archive
+      .filter((group) => (needle ? group.customer.toLowerCase().includes(needle) : true))
+      .map((group) => ({
+        ...group,
+        reports: group.reports.filter(
+          (item) => matchesStatus(item) && matchesRead(item) && matchesPeriod(item)
+        )
+      }))
+      .filter((group) => group.reports.length);
+  }, [archive, query, statusFilter, readFilter, periodFilter]);
 
   return (
     <div className="bg-white border border-sand-200 rounded-3xl p-5 shadow-soft">
@@ -47,6 +68,33 @@ export default function ArchivePanel({
             placeholder="Kunde suchen..."
           />
         </label>
+      </div>
+      <div className="flex flex-wrap gap-2 mb-4">
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+          className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600"
+        >
+          <option value="">Status: alle</option>
+          <option value="Grün">Grün</option>
+          <option value="Gelb">Gelb</option>
+          <option value="Rot">Rot</option>
+        </select>
+        <select
+          value={readFilter}
+          onChange={(event) => setReadFilter(event.target.value)}
+          className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600"
+        >
+          <option value="all">Gelesen: alle</option>
+          <option value="read">Gelesen</option>
+          <option value="unread">Ungelesen</option>
+        </select>
+        <input
+          value={periodFilter}
+          onChange={(event) => setPeriodFilter(event.target.value)}
+          placeholder="Zeitraum filtern..."
+          className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs"
+        />
       </div>
       <div className="space-y-4">
         {filteredArchive.map((group) => (

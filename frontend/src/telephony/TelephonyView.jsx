@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Phone } from "lucide-react";
 import CallListView from "./CallListView";
 import CallStatsView from "./CallStatsView";
 import { telephonyService } from "./telephonyService";
@@ -173,15 +174,16 @@ export default function TelephonyView() {
 
   return (
     <div className="min-h-screen bg-hero-pattern">
-      <div className="max-w-6xl mx-auto px-6 py-10 space-y-8">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">NFON CTI</p>
-            <h1 className="text-3xl font-display text-sand-900">Telefonie Monitoring</h1>
-            <p className="text-sand-600 max-w-2xl">
-              Live-Status fuer eingehende und ausgehende Anrufe inklusive KPI-Widgets und
-              CRM-Mapping.
-            </p>
+      <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
+              <Phone size={18} />
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
+              <h1 className="text-2xl font-display text-sand-900">Telefonie Monitoring</h1>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-xs text-sand-600">
             <span
@@ -199,6 +201,9 @@ export default function TelephonyView() {
             </span>
           </div>
         </div>
+      </header>
+
+      <div className="max-w-6xl mx-auto px-6 py-10 space-y-8">
 
         <div className="flex flex-wrap gap-3">
           <button

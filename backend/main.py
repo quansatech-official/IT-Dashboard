@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 from sqlalchemy import (
     create_engine, Column, Integer, String,
-    Boolean, BigInteger, ForeignKey, inspect, text
+    Boolean, BigInteger, ForeignKey, inspect, text, func
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
@@ -19,10 +19,9 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or (
 )
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL") or "http://ollama:11434"
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "llama3.1"
-
-OFFICE_ADDRESS = "Steyrtalstraße 88, 4523 Neuzeug"
-KM_RATE_EUR = 0.8
 _geo_cache: Dict[str, Optional[tuple[float, float]]] = {}
+GEO_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
+ROUTE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -84,6 +83,28 @@ class CustomerPhone(Base):
     customer = relationship("Customer", back_populates="phones")
 
 
+class GeoCache(Base):
+    __tablename__ = "geo_cache"
+
+    id = Column(Integer, primary_key=True)
+    address = Column(String, unique=True, nullable=False)
+    lat = Column(String, default="")
+    lon = Column(String, default="")
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
+class RouteCache(Base):
+    __tablename__ = "route_cache"
+
+    id = Column(Integer, primary_key=True)
+    origin_lat = Column(String, default="")
+    origin_lon = Column(String, default="")
+    dest_lat = Column(String, default="")
+    dest_lon = Column(String, default="")
+    distance_km = Column(String, default="")
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
 class PinNote(Base):
     __tablename__ = "pin_notes"
 
@@ -122,6 +143,7 @@ class Report(Base):
     id = Column(Integer, primary_key=True)
     guid = Column(String, default=lambda: str(uuid.uuid4()))
     customer = Column(String, nullable=False)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
     period = Column(String, default="")
     status = Column(String, default="")
     summary = Column(String, default="")
@@ -180,6 +202,16 @@ class SmtpSettings(Base):
     use_ssl = Column(Boolean, default=False)
     beacon_base_url = Column(String, default="")
 
+
+class CustomerMetricsSettings(Base):
+    __tablename__ = "customer_metrics_settings"
+
+    id = Column(Integer, primary_key=True)
+    office_address = Column(String, default="Steyrtalstraße 88, 4523 Neuzeug")
+    km_rate_eur = Column(String, default="0.8")
+    min_distance_km = Column(String, default="15")
+    min_fee_eur = Column(String, default="15")
+
 Base.metadata.create_all(bind=engine)
 
 
@@ -205,6 +237,8 @@ def _ensure_report_opened_columns() -> None:
     statements = []
     if "guid" not in columns:
         statements.append("ALTER TABLE reports ADD COLUMN guid VARCHAR")
+    if "customer_id" not in columns:
+        statements.append("ALTER TABLE reports ADD COLUMN customer_id INTEGER")
     if "opened_at" not in columns:
         statements.append("ALTER TABLE reports ADD COLUMN opened_at BIGINT DEFAULT 0")
     if "opened_count" not in columns:
@@ -217,9 +251,21 @@ def _ensure_report_opened_columns() -> None:
         statements.append("ALTER TABLE reports ADD COLUMN customer_status VARCHAR DEFAULT ''")
     if not statements:
         return
+    has_customer_id = "customer_id" in columns or any(
+        "customer_id" in statement for statement in statements
+    )
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+        if has_customer_id:
+            connection.execute(
+                text(
+                    "UPDATE reports r SET customer_id = c.id "
+                    "FROM customers c "
+                    "WHERE r.customer_id IS NULL "
+                    "AND LOWER(r.customer) = LOWER(c.name)"
+                )
+            )
 
 
 _ensure_report_opened_columns()
@@ -290,6 +336,7 @@ _ensure_customer_columns()
 
 # ================= SCHEMAS ==================
 class CustomerPhoneSchema(BaseModel):
+    id: Optional[int] = None
     label: Optional[str] = ""
     number: Optional[str] = ""
 
@@ -391,6 +438,7 @@ class ReportItemSchema(BaseModel):
 
 class ReportCreate(BaseModel):
     customer: str
+    customer_id: Optional[int] = None
     period: Optional[str] = ""
     status: Optional[str] = ""
     summary: Optional[str] = ""
@@ -407,6 +455,7 @@ class ReportUpdate(BaseModel):
 
 class ReportEdit(BaseModel):
     customer: Optional[str] = None
+    customer_id: Optional[int] = None
     period: Optional[str] = None
     status: Optional[str] = None
     summary: Optional[str] = None
@@ -430,6 +479,13 @@ class SmtpSettingsUpdate(BaseModel):
     use_tls: Optional[bool] = None
     use_ssl: Optional[bool] = None
     beacon_base_url: Optional[str] = None
+
+
+class CustomerMetricsSettingsUpdate(BaseModel):
+    office_address: Optional[str] = None
+    km_rate_eur: Optional[str] = None
+    min_distance_km: Optional[str] = None
+    min_fee_eur: Optional[str] = None
 
 
 class ReportSendRequest(BaseModel):
@@ -500,12 +556,29 @@ def _normalize_phone(phone: Optional[str]) -> str:
     return digits
 
 
+def _normalize_phone_for_store(phone: Optional[str]) -> str:
+    normalized = _normalize_phone(phone)
+    if not normalized:
+        return str(phone or "").strip()
+    return f"+{normalized}"
+
+
 def _geocode(address: str) -> Optional[tuple[float, float]]:
     key = address.strip()
     if not key:
         return None
     if key in _geo_cache:
         return _geo_cache[key]
+    now_ms = int(time.time() * 1000)
+    with SessionLocal() as db:
+        cached = db.query(GeoCache).filter(GeoCache.address == key).first()
+        if cached and cached.updated_at and now_ms - cached.updated_at < GEO_CACHE_TTL_MS:
+            if cached.lat and cached.lon:
+                coords = (float(cached.lat), float(cached.lon))
+                _geo_cache[key] = coords
+                return coords
+            _geo_cache[key] = None
+            return None
     try:
         res = requests.get(
             "https://nominatim.openstreetmap.org/search",
@@ -516,10 +589,28 @@ def _geocode(address: str) -> Optional[tuple[float, float]]:
         res.raise_for_status()
         data = res.json()
         if not data:
+            with SessionLocal() as db:
+                entry = db.query(GeoCache).filter(GeoCache.address == key).first()
+                if not entry:
+                    entry = GeoCache(address=key)
+                    db.add(entry)
+                entry.lat = ""
+                entry.lon = ""
+                entry.updated_at = now_ms
+                db.commit()
             _geo_cache[key] = None
             return None
         lat = float(data[0]["lat"])
         lon = float(data[0]["lon"])
+        with SessionLocal() as db:
+            entry = db.query(GeoCache).filter(GeoCache.address == key).first()
+            if not entry:
+                entry = GeoCache(address=key)
+                db.add(entry)
+            entry.lat = str(lat)
+            entry.lon = str(lon)
+            entry.updated_at = now_ms
+            db.commit()
         _geo_cache[key] = (lat, lon)
         return lat, lon
     except requests.RequestException:
@@ -528,6 +619,26 @@ def _geocode(address: str) -> Optional[tuple[float, float]]:
 
 
 def _route_distance_km(origin: tuple[float, float], dest: tuple[float, float]) -> Optional[float]:
+    now_ms = int(time.time() * 1000)
+    origin_lat = f"{origin[0]:.6f}"
+    origin_lon = f"{origin[1]:.6f}"
+    dest_lat = f"{dest[0]:.6f}"
+    dest_lon = f"{dest[1]:.6f}"
+    with SessionLocal() as db:
+        cached = (
+            db.query(RouteCache)
+            .filter(
+                RouteCache.origin_lat == origin_lat,
+                RouteCache.origin_lon == origin_lon,
+                RouteCache.dest_lat == dest_lat,
+                RouteCache.dest_lon == dest_lon,
+            )
+            .first()
+        )
+        if cached and cached.updated_at and now_ms - cached.updated_at < ROUTE_CACHE_TTL_MS:
+            if cached.distance_km:
+                return float(cached.distance_km)
+            return None
     try:
         url = (
             "https://router.project-osrm.org/route/v1/driving/"
@@ -542,7 +653,30 @@ def _route_distance_km(origin: tuple[float, float], dest: tuple[float, float]) -
         distance_m = routes[0].get("distance")
         if distance_m is None:
             return None
-        return round(float(distance_m) / 1000, 1)
+        distance_km = round(float(distance_m) / 1000, 1)
+        with SessionLocal() as db:
+            entry = (
+                db.query(RouteCache)
+                .filter(
+                    RouteCache.origin_lat == origin_lat,
+                    RouteCache.origin_lon == origin_lon,
+                    RouteCache.dest_lat == dest_lat,
+                    RouteCache.dest_lon == dest_lon,
+                )
+                .first()
+            )
+            if not entry:
+                entry = RouteCache(
+                    origin_lat=origin_lat,
+                    origin_lon=origin_lon,
+                    dest_lat=dest_lat,
+                    dest_lon=dest_lon,
+                )
+                db.add(entry)
+            entry.distance_km = str(distance_km)
+            entry.updated_at = now_ms
+            db.commit()
+        return distance_km
     except requests.RequestException:
         return None
 
@@ -588,6 +722,7 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "id": report.id,
         "guid": report.guid,
         "customer": report.customer,
+        "customer_id": report.customer_id,
         "period": report.period,
         "status": report.status,
         "summary": report.summary,
@@ -626,10 +761,30 @@ def serialize_smtp_settings(settings: SmtpSettings) -> Dict[str, Any]:
     }
 
 
+def serialize_customer_metrics_settings(settings: CustomerMetricsSettings) -> Dict[str, Any]:
+    return {
+        "id": settings.id,
+        "office_address": settings.office_address,
+        "km_rate_eur": settings.km_rate_eur,
+        "min_distance_km": settings.min_distance_km,
+        "min_fee_eur": settings.min_fee_eur,
+    }
+
+
 def _get_smtp_settings(db) -> SmtpSettings:
     settings = db.query(SmtpSettings).first()
     if not settings:
         settings = SmtpSettings()
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
+
+
+def _get_customer_metrics_settings(db) -> CustomerMetricsSettings:
+    settings = db.query(CustomerMetricsSettings).first()
+    if not settings:
+        settings = CustomerMetricsSettings()
         db.add(settings)
         db.commit()
         db.refresh(settings)
@@ -779,10 +934,11 @@ def create_customer(data: CustomerCreate):
         db.flush()
         if data.phones:
             for phone in data.phones:
+                normalized_number = _normalize_phone_for_store(phone.number)
                 customer.phones.append(
                     CustomerPhone(
                         label=phone.label or "",
-                        number=phone.number or ""
+                        number=normalized_number or ""
                     )
                 )
         db.commit()
@@ -800,14 +956,25 @@ def update_customer(customer_id: int, data: CustomerUpdate):
             setattr(customer, field, value)
 
         if data.phones is not None:
-            customer.phones.clear()
+            existing = {phone.id: phone for phone in customer.phones}
+            keep_ids = set()
             for phone in data.phones:
-                customer.phones.append(
-                    CustomerPhone(
+                normalized_number = _normalize_phone_for_store(phone.number)
+                if phone.id and phone.id in existing:
+                    entry = existing[phone.id]
+                    entry.label = phone.label or ""
+                    entry.number = normalized_number or ""
+                    keep_ids.add(phone.id)
+                else:
+                    entry = CustomerPhone(
                         label=phone.label or "",
-                        number=phone.number or ""
+                        number=normalized_number or ""
                     )
-                )
+                    customer.phones.append(entry)
+                    db.flush()
+                    if entry.id:
+                        keep_ids.add(entry.id)
+            customer.phones = [phone for phone in customer.phones if phone.id in keep_ids]
 
         db.commit()
         db.refresh(customer)
@@ -837,7 +1004,9 @@ def get_customer_metrics(customer_id: int):
         address = ", ".join([part for part in address_parts if part])
         phone_numbers = [phone.number for phone in customer.phones]
 
-    office_coords = _geocode(OFFICE_ADDRESS)
+    with SessionLocal() as db:
+        metrics_settings = _get_customer_metrics_settings(db)
+    office_coords = _geocode(metrics_settings.office_address)
     customer_coords = _geocode(address) if address else None
     distance_km = None
     if office_coords and customer_coords:
@@ -858,8 +1027,8 @@ def get_customer_metrics(customer_id: int):
         for idx, digits in enumerate(phone_digits):
             params[f"p{idx}"] = f"%{digits}"
             conditions.append(
-                "(regexp_replace(from_number, '\\D', '', 'g') LIKE :p{idx} "
-                "OR regexp_replace(to_number, '\\D', '', 'g') LIKE :p{idx})"
+                f"(regexp_replace(from_number, '\\\\D', '', 'g') LIKE :p{idx} "
+                f"OR regexp_replace(to_number, '\\\\D', '', 'g') LIKE :p{idx})"
             )
         where_clause = " OR ".join(conditions)
         sql = (
@@ -868,14 +1037,32 @@ def get_customer_metrics(customer_id: int):
             "FROM telephony_calls "
             "WHERE start_time >= :since AND (" + where_clause + ")"
         )
-        with engine.begin() as connection:
-            row = connection.execute(text(sql), params).mappings().first()
-            if row:
-                total_seconds = int(row.get("total_seconds") or 0)
-                missed_calls = int(row.get("missed_calls") or 0)
+        try:
+            with engine.begin() as connection:
+                row = connection.execute(text(sql), params).mappings().first()
+                if row:
+                    total_seconds = int(row.get("total_seconds") or 0)
+                    missed_calls = int(row.get("missed_calls") or 0)
+        except Exception:
+            total_seconds = 0
+            missed_calls = 0
 
     total_minutes = round(total_seconds / 60, 1) if total_seconds else 0
-    mileage_eur = round(distance_km * KM_RATE_EUR, 2) if distance_km is not None else None
+    try:
+        km_rate = float(metrics_settings.km_rate_eur or 0)
+        min_distance_km = float(metrics_settings.min_distance_km or 0)
+        min_fee_eur = float(metrics_settings.min_fee_eur or 0)
+    except ValueError:
+        km_rate = 0.0
+        min_distance_km = 0.0
+        min_fee_eur = 0.0
+    mileage_eur = None
+    if distance_km is not None:
+        round_trip_km = distance_km * 2
+        if min_distance_km and round_trip_km < min_distance_km and min_fee_eur:
+            mileage_eur = round(min_fee_eur, 2)
+        else:
+            mileage_eur = round(round_trip_km * km_rate, 2)
 
     return {
         "openTasks": open_tasks,
@@ -1178,9 +1365,14 @@ def delete_report_summary(item_id: int):
 
 # ================== REPORTS =================
 @app.get("/api/reports")
-def get_reports():
+def get_reports(customer: Optional[str] = None, customer_id: Optional[int] = None):
     with SessionLocal() as db:
-        reports = db.query(Report).all()
+        query = db.query(Report)
+        if customer_id is not None:
+            query = query.filter(Report.customer_id == customer_id)
+        elif customer:
+            query = query.filter(func.lower(Report.customer) == customer.strip().lower())
+        reports = query.all()
         return [serialize_report(r) for r in reports]
 
 
@@ -1196,9 +1388,18 @@ def get_report(report_id: int):
 @app.post("/api/reports")
 def create_report(data: ReportCreate):
     with SessionLocal() as db:
+        customer_id = data.customer_id
+        if not customer_id and data.customer:
+            customer = (
+                db.query(Customer)
+                .filter(func.lower(Customer.name) == data.customer.strip().lower())
+                .first()
+            )
+            customer_id = customer.id if customer else None
         report = Report(
             guid=str(uuid.uuid4()),
             customer=data.customer,
+            customer_id=customer_id,
             period=data.period or "",
             status=data.status or "",
             summary=data.summary or "",
@@ -1271,6 +1472,26 @@ def update_smtp_settings(data: SmtpSettingsUpdate):
         db.commit()
         db.refresh(settings)
         return serialize_smtp_settings(settings)
+
+
+@app.get("/api/customer_metrics_settings")
+def get_customer_metrics_settings():
+    with SessionLocal() as db:
+        settings = _get_customer_metrics_settings(db)
+        return serialize_customer_metrics_settings(settings)
+
+
+@app.put("/api/customer_metrics_settings")
+def update_customer_metrics_settings(data: CustomerMetricsSettingsUpdate):
+    with SessionLocal() as db:
+        settings = _get_customer_metrics_settings(db)
+        for field, value in data.dict(exclude_unset=True).items():
+            if value is None:
+                continue
+            setattr(settings, field, value)
+        db.commit()
+        db.refresh(settings)
+        return serialize_customer_metrics_settings(settings)
 
 
 @app.post("/api/reports/{report_id}/send")
@@ -1347,8 +1568,19 @@ def edit_report(report_id: int, data: ReportEdit):
         report = db.query(Report).get(report_id)
         if not report:
             raise HTTPException(404, "Report not found")
-        for field, value in data.dict(exclude_unset=True, exclude={"items"}).items():
+        payload = data.dict(exclude_unset=True, exclude={"items", "customer_id"})
+        for field, value in payload.items():
             setattr(report, field, value if value is not None else "")
+        if data.customer_id is not None:
+            report.customer_id = data.customer_id
+        elif data.customer:
+            customer = (
+                db.query(Customer)
+                .filter(func.lower(Customer.name) == data.customer.strip().lower())
+                .first()
+            )
+            if customer:
+                report.customer_id = customer.id
         if data.items is not None:
             report.items.clear()
             for item in data.items:
