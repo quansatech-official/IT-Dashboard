@@ -1,59 +1,85 @@
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-try:
-    from backend.main import Task, DayTask, Customer
-except ModuleNotFoundError:
-    from main import Task, DayTask, Customer
+from sqlalchemy import create_engine, text, inspect
 
 DATABASE_URL = os.environ.get("DATABASE_URL") or (
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
 )
 
 engine = create_engine(DATABASE_URL, future=True)
-SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def run() -> None:
-    with SessionLocal() as db:
-        tasks = db.query(Task).all()
-        if not tasks:
-            print("No tasks found.")
-            return
+    inspector = inspect(engine)
+    if not inspector.has_table("tasks"):
+        print("tasks table not found; nothing to migrate.")
+        return
+    if not inspector.has_table("day_tasks"):
+        print("day_tasks table not found; nothing to migrate.")
+        return
 
-        existing_links = {
-            row[0]
-            for row in db.query(DayTask.task_id).filter(DayTask.task_id.isnot(None)).all()
-        }
-        migrated = 0
-        for task in tasks:
-            if task.id in existing_links:
-                continue
-            customer_name = ""
-            customer_number = ""
-            if task.customer_id:
-                customer = db.query(Customer).get(task.customer_id)
-                if customer:
-                    customer_name = customer.name or ""
-                    customer_number = customer.creditor_number or ""
-            status = "done" if task.erledigt else "todo"
-            if task.running and not task.erledigt:
-                status = "doing"
-            day_task = DayTask(
-                title=task.title,
-                customer=customer_name,
-                customer_number=customer_number,
-                status=status,
-                task_id=task.id,
-                group_id=None,
-                locked=False,
-                signature_base64=""
+    with engine.begin() as connection:
+        insert_sql = text(
+            """
+            INSERT INTO day_tasks (
+              title,
+              customer,
+              customer_number,
+              status,
+              task_id,
+              group_id,
+              locked,
+              signature_base64,
+              time_enabled,
+              erledigt,
+              aberechnet,
+              kulant,
+              elapsed,
+              running,
+              startTime,
+              created_at
             )
-            db.add(day_task)
-            migrated += 1
-        db.commit()
-        print(f"Migrated {migrated} tasks into day_tasks.")
+            SELECT
+              t.title,
+              COALESCE(c.name, ''),
+              COALESCE(c.creditor_number, ''),
+              CASE WHEN t.erledigt THEN 'done' ELSE 'todo' END,
+              t.id,
+              NULL,
+              FALSE,
+              '',
+              CASE WHEN (t.elapsed > 0 OR t.running = TRUE) THEN TRUE ELSE FALSE END,
+              COALESCE(t.erledigt, FALSE),
+              COALESCE(t.aberechnet, FALSE),
+              COALESCE(t.kulant, FALSE),
+              COALESCE(t.elapsed, 0),
+              COALESCE(t.running, FALSE),
+              COALESCE(t.startTime, 0),
+              (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint
+            FROM tasks t
+            LEFT JOIN customers c ON c.id = t.customer_id
+            LEFT JOIN day_tasks dt ON dt.task_id = t.id
+            WHERE dt.id IS NULL;
+            """
+        )
+        update_sql = text(
+            """
+            UPDATE day_tasks dt
+            SET
+              elapsed = COALESCE(t.elapsed, 0),
+              running = COALESCE(t.running, FALSE),
+              startTime = COALESCE(t.startTime, 0),
+              erledigt = COALESCE(t.erledigt, FALSE),
+              aberechnet = COALESCE(t.aberechnet, FALSE),
+              kulant = COALESCE(t.kulant, FALSE),
+              time_enabled = CASE WHEN (t.elapsed > 0 OR t.running = TRUE) THEN TRUE ELSE FALSE END
+            FROM tasks t
+            WHERE dt.task_id = t.id;
+            """
+        )
+        connection.execute(insert_sql)
+        connection.execute(update_sql)
+
+    print("Migration completed.")
 
 
 if __name__ == "__main__":

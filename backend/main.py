@@ -42,35 +42,11 @@ class Customer(Base):
     city = Column(String, default="")
     country = Column(String, default="")
 
-    tasks = relationship(
-        "Task",
-        back_populates="customer",
-        cascade="all, delete-orphan"
-    )
     phones = relationship(
         "CustomerPhone",
         back_populates="customer",
         cascade="all, delete-orphan"
     )
-
-
-class Task(Base):
-    __tablename__ = "tasks"
-
-    id = Column(Integer, primary_key=True)
-    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=True)
-
-    title = Column(String, nullable=False)
-
-    erledigt = Column(Boolean, default=False)
-    aberechnet = Column(Boolean, default=False)
-    kulant = Column(Boolean, default=False)
-
-    elapsed = Column(BigInteger, default=0)      # ms
-    running = Column(Boolean, default=False)
-    startTime = Column(BigInteger, default=0)    # ms timestamp
-
-    customer = relationship("Customer", back_populates="tasks")
 
 
 class DayTask(Base):
@@ -85,6 +61,13 @@ class DayTask(Base):
     group_id = Column(Integer, nullable=True)
     locked = Column(Boolean, default=False)
     signature_base64 = Column(String, default="")
+    time_enabled = Column(Boolean, default=False)
+    erledigt = Column(Boolean, default=False)
+    aberechnet = Column(Boolean, default=False)
+    kulant = Column(Boolean, default=False)
+    elapsed = Column(BigInteger, default=0)      # ms
+    running = Column(Boolean, default=False)
+    startTime = Column(BigInteger, default=0)    # ms timestamp
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
@@ -397,6 +380,20 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN locked BOOLEAN DEFAULT FALSE")
     if "signature_base64" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN signature_base64 VARCHAR DEFAULT ''")
+    if "time_enabled" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN time_enabled BOOLEAN DEFAULT FALSE")
+    if "erledigt" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN erledigt BOOLEAN DEFAULT FALSE")
+    if "aberechnet" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN aberechnet BOOLEAN DEFAULT FALSE")
+    if "kulant" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN kulant BOOLEAN DEFAULT FALSE")
+    if "elapsed" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN elapsed BIGINT DEFAULT 0")
+    if "running" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN running BOOLEAN DEFAULT FALSE")
+    if "startTime" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN startTime BIGINT DEFAULT 0")
     if not statements:
         return
     with engine.begin() as connection:
@@ -405,22 +402,6 @@ def _ensure_day_tasks_columns() -> None:
 
 
 _ensure_day_tasks_columns()
-
-
-def _ensure_tasks_customer_nullable() -> None:
-    inspector = inspect(engine)
-    if not inspector.has_table("tasks"):
-        return
-    columns = {column["name"]: column for column in inspector.get_columns("tasks")}
-    customer_col = columns.get("customer_id")
-    if not customer_col:
-        return
-    if customer_col.get("nullable") is False:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE tasks ALTER COLUMN customer_id DROP NOT NULL"))
-
-
-_ensure_tasks_customer_nullable()
 
 
 def _ensure_day_task_groups_columns() -> None:
@@ -471,22 +452,6 @@ class CustomerUpdate(BaseModel):
     phones: Optional[List[CustomerPhoneSchema]] = None
 
 
-class TaskCreate(BaseModel):
-    customer_id: Optional[int] = None
-    title: str
-
-
-class TaskUpdate(BaseModel):
-    title: Optional[str] = None
-    erledigt: Optional[bool] = None
-    aberechnet: Optional[bool] = None
-    kulant: Optional[bool] = None
-    elapsed: Optional[int] = None
-    running: Optional[bool] = None
-    startTime: Optional[int] = None
-    customer_id: Optional[int] = None
-
-
 class DayTaskCreate(BaseModel):
     title: str
     customer: Optional[str] = ""
@@ -495,6 +460,13 @@ class DayTaskCreate(BaseModel):
     group_id: Optional[int] = None
     locked: Optional[bool] = False
     signature_base64: Optional[str] = ""
+    time_enabled: Optional[bool] = False
+    erledigt: Optional[bool] = False
+    aberechnet: Optional[bool] = False
+    kulant: Optional[bool] = False
+    elapsed: Optional[int] = 0
+    running: Optional[bool] = False
+    startTime: Optional[int] = 0
 
 
 class DayTaskUpdate(BaseModel):
@@ -506,6 +478,13 @@ class DayTaskUpdate(BaseModel):
     group_id: Optional[int] = None
     locked: Optional[bool] = None
     signature_base64: Optional[str] = None
+    time_enabled: Optional[bool] = None
+    erledigt: Optional[bool] = None
+    aberechnet: Optional[bool] = None
+    kulant: Optional[bool] = None
+    elapsed: Optional[int] = None
+    running: Optional[bool] = None
+    startTime: Optional[int] = None
 
 
 class DayTaskGroupCreate(BaseModel):
@@ -655,20 +634,6 @@ app.add_middleware(
 )
 
 # ================= HELPERS ==================
-def serialize_task(t: Task) -> Dict[str, Any]:
-    return {
-        "id": t.id,
-        "customer_id": t.customer_id,
-        "title": t.title,
-        "erledigt": t.erledigt,
-        "aberechnet": t.aberechnet,
-        "kulant": t.kulant,
-        "elapsed": t.elapsed,
-        "running": t.running,
-        "startTime": t.startTime,
-    }
-
-
 def serialize_day_task(t: DayTask) -> Dict[str, Any]:
     return {
         "id": t.id,
@@ -680,6 +645,13 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "group_id": t.group_id,
         "locked": t.locked,
         "signature_base64": t.signature_base64,
+        "time_enabled": t.time_enabled,
+        "erledigt": t.erledigt,
+        "aberechnet": t.aberechnet,
+        "kulant": t.kulant,
+        "elapsed": t.elapsed,
+        "running": t.running,
+        "startTime": t.startTime,
         "created_at": t.created_at,
     }
 
@@ -708,7 +680,6 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
         "city": c.city,
         "country": c.country,
         "phones": [serialize_customer_phone(p) for p in c.phones],
-        "tasks": [serialize_task(t) for t in c.tasks],
     }
 
 
@@ -1190,12 +1161,12 @@ def get_customer_metrics(customer_id: int):
         open_time_ms = 0
         if day_task_filters:
             task_query = (
-                db.query(Task)
-                .join(DayTask, DayTask.task_id == Task.id)
+                db.query(DayTask)
                 .filter(or_(*day_task_filters))
+                .filter(DayTask.time_enabled == True)
             )
             for task in task_query.all():
-                if task.erledigt:
+                if task.status == "done":
                     continue
                 open_time_tasks += 1
                 elapsed = task.elapsed or 0
@@ -1207,6 +1178,7 @@ def get_customer_metrics(customer_id: int):
             open_day_tasks = (
                 db.query(DayTask)
                 .filter(DayTask.status != "done")
+                .filter(DayTask.time_enabled == False)
                 .filter(or_(*day_task_filters))
                 .count()
             )
@@ -1291,87 +1263,6 @@ def get_customer_metrics(customer_id: int):
         "missedCalls": missed_calls,
         "totalMinutes": total_minutes
     }
-
-
-# ================= TASKS ====================
-@app.post("/api/tasks")
-def create_task(data: TaskCreate):
-    with SessionLocal() as db:
-        task = Task(
-            customer_id=data.customer_id,
-            title=data.title
-        )
-        db.add(task)
-        db.commit()
-        return serialize_task(task)
-
-
-@app.get("/api/tasks")
-def get_tasks():
-    with SessionLocal() as db:
-        tasks = db.query(Task).order_by(Task.id.desc()).all()
-        return [serialize_task(task) for task in tasks]
-
-
-@app.get("/api/tasks/{task_id}")
-def get_task(task_id: int):
-    with SessionLocal() as db:
-        task = db.query(Task).get(task_id)
-        if not task:
-            raise HTTPException(404, "Task not found")
-        return serialize_task(task)
-
-
-@app.patch("/api/tasks/{task_id}")
-def update_task(task_id: int, data: TaskUpdate):
-    with SessionLocal() as db:
-        task = db.query(Task).get(task_id)
-        if not task:
-            raise HTTPException(404, "Task not found")
-
-        for field, value in data.dict(exclude_unset=True).items():
-            setattr(task, field, value)
-        if data.erledigt is not None:
-            status = "done" if data.erledigt else "doing"
-            db.query(DayTask).filter(DayTask.task_id == task.id).update(
-                {"status": status}, synchronize_session=False
-            )
-
-        db.commit()
-        return serialize_task(task)
-
-
-@app.delete("/api/tasks/{task_id}")
-def delete_task(task_id: int):
-    with SessionLocal() as db:
-        task = db.query(Task).get(task_id)
-        if not task:
-            raise HTTPException(404, "Task not found")
-
-        db.delete(task)
-        db.commit()
-        return {"status": "deleted"}
-
-
-@app.patch("/api/tasks/{task_id}/toggle_timer")
-def toggle_timer(task_id: int):
-    now = int(time.time() * 1000)
-
-    with SessionLocal() as db:
-        task = db.query(Task).get(task_id)
-        if not task:
-            raise HTTPException(404, "Task not found")
-
-        if task.running:
-            task.elapsed += now - task.startTime
-            task.running = False
-            task.startTime = 0
-        else:
-            task.running = True
-            task.startTime = now
-
-        db.commit()
-        return serialize_task(task)
 
 
 # ================= DAY PLAN TASKS =================
@@ -1462,6 +1353,13 @@ def create_day_task(data: DayTaskCreate):
             group_id=data.group_id,
             locked=bool(data.locked),
             signature_base64=data.signature_base64 or "",
+            time_enabled=bool(data.time_enabled),
+            erledigt=bool(data.erledigt),
+            aberechnet=bool(data.aberechnet),
+            kulant=bool(data.kulant),
+            elapsed=int(data.elapsed or 0),
+            running=bool(data.running),
+            startTime=int(data.startTime or 0),
         )
         db.add(task)
         db.commit()
@@ -1481,6 +1379,8 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
                 setattr(task, field, "")
             else:
                 setattr(task, field, value)
+        if data.erledigt is not None and data.status is None:
+            task.status = "done" if data.erledigt else "todo"
         db.commit()
         db.refresh(task)
         return serialize_day_task(task)
@@ -1497,34 +1397,24 @@ def delete_day_task(task_id: int):
         return {"status": "deleted"}
 
 
-@app.post("/api/day_tasks/{task_id}/promote")
-def promote_day_task(task_id: int):
+@app.patch("/api/day_tasks/{task_id}/toggle_timer")
+def toggle_day_task_timer(task_id: int):
+    now = int(time.time() * 1000)
     with SessionLocal() as db:
-        day_task = db.query(DayTask).get(task_id)
-        if not day_task:
+        task = db.query(DayTask).get(task_id)
+        if not task:
             raise HTTPException(404, "Task not found")
-        if day_task.task_id:
-            return serialize_day_task(day_task)
-        customer = None
-        if day_task.customer_number:
-            customer = (
-                db.query(Customer)
-                .filter(Customer.creditor_number == day_task.customer_number)
-                .first()
-            )
-        if not customer and day_task.customer:
-            customer = (
-                db.query(Customer)
-                .filter(func.lower(Customer.name) == day_task.customer.strip().lower())
-                .first()
-            )
-        task = Task(customer_id=customer.id if customer else None, title=day_task.title)
-        db.add(task)
-        db.flush()
-        day_task.task_id = task.id
+        task.time_enabled = True
+        if task.running:
+            task.elapsed += max(0, now - (task.startTime or 0))
+            task.running = False
+            task.startTime = 0
+        else:
+            task.running = True
+            task.startTime = now
         db.commit()
-        db.refresh(day_task)
-        return serialize_day_task(day_task)
+        db.refresh(task)
+        return serialize_day_task(task)
 
 # ================= PINBOARD =================
 @app.get("/api/pinboard")
@@ -1902,13 +1792,13 @@ def get_company_stats(days: int = 30):
         open_time_ms = 0
         total_time_tasks = 0
         open_time_tasks = 0
-        for task in db.query(Task).all():
+        for task in db.query(DayTask).filter(DayTask.time_enabled == True).all():
             total_time_tasks += 1
             elapsed = task.elapsed or 0
             if task.running and task.startTime:
                 elapsed += max(0, now_ms - task.startTime)
             total_time_ms += elapsed
-            if not task.erledigt:
+            if task.status != "done":
                 open_time_tasks += 1
                 open_time_ms += elapsed
 
@@ -2095,7 +1985,7 @@ def list_debug_tables():
 
 @app.post("/api/debug/clear_table")
 def clear_debug_table(data: DebugClearRequest):
-    allowed_tables = {"tasks", "day_tasks", "day_task_groups"}
+    allowed_tables = {"day_tasks", "day_task_groups"}
     table = (data.table or "").strip()
     if not table or table not in allowed_tables:
         raise HTTPException(400, "Table not allowed")

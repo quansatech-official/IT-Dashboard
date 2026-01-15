@@ -4,8 +4,7 @@ import { Mail, Settings } from "lucide-react";
 const API = "/api";
 const STORAGE_KEY = "qt_smtp_settings_cache";
 const DEBUG_TABLE_LABELS = {
-  tasks: "Aufgaben (Zeit)",
-  day_tasks: "Aufgaben (Tagesplan)",
+  day_tasks: "Aufgaben",
   day_task_groups: "Aufgabengruppen"
 };
 const DEBUG_CLEARABLE_TABLES = new Set(Object.keys(DEBUG_TABLE_LABELS));

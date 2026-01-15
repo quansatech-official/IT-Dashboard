@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CheckCircle,
   ClipboardList,
@@ -31,17 +31,9 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
-  updateTimeTask: (id, payload) =>
-    fetch(`${API}/tasks/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).then((r) => r.json()),
   toggleTimeTask: (id) =>
-    fetch(`${API}/tasks/${id}/toggle_timer`, { method: "PATCH" }).then((r) => r.json()),
-  getTimeTask: (id) => fetch(`${API}/tasks/${id}`).then((r) => r.json()),
+    fetch(`${API}/day_tasks/${id}/toggle_timer`, { method: "PATCH" }).then((r) => r.json()),
   remove: (id) => fetch(`${API}/day_tasks/${id}`, { method: "DELETE" }),
-  promote: (id) => fetch(`${API}/day_tasks/${id}/promote`, { method: "POST" }).then((r) => r.json()),
   createGroup: (payload) =>
     fetch(`${API}/day_task_groups`, {
       method: "POST",
@@ -75,7 +67,6 @@ export default function DayPlanView() {
   const [editingTitle, setEditingTitle] = useState("");
   const [editingCustomerId, setEditingCustomerId] = useState(null);
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
-  const [timeTaskCache, setTimeTaskCache] = useState({});
   const [timeEdits, setTimeEdits] = useState({});
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -89,8 +80,6 @@ export default function DayPlanView() {
     api.customers().then((data) => {
       setCustomers(Array.isArray(data) ? data : []);
     });
-
-  const timeTaskRequests = useRef(new Set());
 
   useEffect(() => {
     refreshCustomers();
@@ -118,25 +107,6 @@ export default function DayPlanView() {
   const updateTask = async (task, patch) => {
     const updated = await api.update(task.id, patch);
     setTasks((prev) => prev.map((item) => (item.id === task.id ? updated : item)));
-    if (updated?.task_id && (patch.customer !== undefined || patch.customer_number !== undefined)) {
-      const normalizedName = String(updated.customer || "").trim().toLowerCase();
-      const normalizedNumber = String(updated.customer_number || "").trim();
-      const match = customers.find((customer) => {
-        if (normalizedNumber && String(customer.creditor_number || "").trim() === normalizedNumber) {
-          return true;
-        }
-        if (normalizedName) {
-          return String(customer.name || "").trim().toLowerCase() === normalizedName;
-        }
-        return false;
-      });
-      if (match) {
-        await api.updateTimeTask(updated.task_id, { customer_id: match.id });
-      } else if (!normalizedName && !normalizedNumber) {
-        await api.updateTimeTask(updated.task_id, { customer_id: null });
-      }
-      refreshCustomers();
-    }
   };
 
   const updateGroup = async (group, patch) => {
@@ -157,12 +127,11 @@ export default function DayPlanView() {
     setTasks((prev) => prev.filter((item) => item.id !== task.id));
   };
 
-  const promoteTask = async (task) => {
+  const enableTime = async (task) => {
     setError("");
-    const updated = await api.promote(task.id);
+    const updated = await api.update(task.id, { time_enabled: true });
     if (updated?.id) {
       setTasks((prev) => prev.map((item) => (item.id === task.id ? updated : item)));
-      refreshCustomers();
     } else {
       setError("Zeit konnte nicht aktiviert werden.");
     }
@@ -380,6 +349,12 @@ export default function DayPlanView() {
     return text;
   };
 
+  const normalizeVariants = (value) => {
+    const base = normalizeText(value);
+    const noH = base.replace(/([aeiou])h/g, "$1");
+    return Array.from(new Set([base, noH])).filter(Boolean);
+  };
+
   const msToHHMMSS = (ms = 0) => {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -417,28 +392,18 @@ export default function DayPlanView() {
     [customers]
   );
 
-  const timeTasksById = useMemo(() => {
-    const map = { ...timeTaskCache };
-    customers.forEach((customer) => {
-      (customer?.tasks || []).forEach((task) => {
-        map[task.id] = { ...task, customer };
-      });
-    });
-    return map;
-  }, [customers, timeTaskCache]);
-
   useEffect(() => {
-    const hasRunning = Object.values(timeTasksById).some((task) => task?.running);
+    const hasRunning = tasks.some((task) => task?.running);
     if (!hasRunning) return;
     const interval = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [timeTasksById]);
+  }, [tasks]);
 
   const toggleTimeTask = async (timeTask) => {
     if (!timeTask?.id) return;
     const updated = await api.toggleTimeTask(timeTask.id);
     if (updated?.id) {
-      setTimeTaskCache((prev) => ({ ...prev, [updated.id]: updated }));
+      setTasks((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setTimeEdits((prev) => {
         if (!prev[updated.id]) return prev;
         const next = { ...prev };
@@ -446,7 +411,6 @@ export default function DayPlanView() {
         return next;
       });
     }
-    refreshCustomers();
   };
 
   const commitManualTime = async (taskId, timeTask, value) => {
@@ -455,11 +419,15 @@ export default function DayPlanView() {
       setError("Zeitformat ungültig. Beispiel: 96:00 oder 01:30:00");
       return;
     }
-    await api.updateTimeTask(timeTask.id, { elapsed: parsedMs, running: false, startTime: 0 });
-    setTimeTaskCache((prev) => ({
-      ...prev,
-      [timeTask.id]: { ...timeTask, elapsed: parsedMs, running: false, startTime: 0 }
-    }));
+    const updated = await api.update(timeTask.id, {
+      elapsed: parsedMs,
+      running: false,
+      startTime: 0,
+      time_enabled: true
+    });
+    if (updated?.id) {
+      setTasks((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    }
     setTimeEdits((prev) => {
       if (!prev[taskId]) return prev;
       const next = { ...prev };
@@ -467,7 +435,6 @@ export default function DayPlanView() {
       return next;
     });
     setError("");
-    refreshCustomers();
   };
 
   const isKnownCustomer = (value) => {
@@ -475,29 +442,11 @@ export default function DayPlanView() {
     return name ? knownCustomerNames.includes(name) : false;
   };
 
-  useEffect(() => {
-    const missingIds = tasks
-      .map((task) => task.task_id)
-      .filter(Boolean)
-      .filter((id) => !timeTasksById[id]);
-    missingIds.forEach((id) => {
-      if (timeTaskRequests.current.has(id)) return;
-      timeTaskRequests.current.add(id);
-      api
-        .getTimeTask(id)
-        .then((task) => {
-          if (!task?.id) return;
-          setTimeTaskCache((prev) => ({ ...prev, [task.id]: task }));
-        })
-        .catch(() => {})
-        .finally(() => {
-          timeTaskRequests.current.delete(id);
-        });
-    });
-  }, [tasks, timeTasksById]);
+  // no extra time task fetch needed; timing fields live on day_tasks
 
   const getCustomerSuggestions = (task) => {
-    const titleText = normalizeText(`${task?.title || ""} ${task?.customer || ""}`);
+    const titleVariants = normalizeVariants(`${task?.title || ""} ${task?.customer || ""}`);
+    const titleText = titleVariants[0] || "";
     if (!titleText) return [];
     const tokens = titleText.split(" ").filter((token) => token.length > 2);
     const scored = customers
@@ -505,28 +454,37 @@ export default function DayPlanView() {
         const name = String(customerItem?.name || "").trim();
         const shortCode = String(customerItem?.short_code || customerItem?.shortCode || "").trim();
         if (!name) return null;
-        const nameText = normalizeText(name);
-        const shortCodeText = shortCode ? normalizeText(shortCode) : "";
+        const nameVariants = normalizeVariants(name);
+        const shortCodeVariants = shortCode ? normalizeVariants(shortCode) : [];
+        const nameText = nameVariants[0] || "";
+        const shortCodeText = shortCodeVariants[0] || "";
         if (!nameText) return null;
         let score = 0;
-        if (titleText.includes(nameText)) {
+        if (nameVariants.some((variant) => titleVariants.some((t) => t.includes(variant)))) {
           score += 100 + nameText.length;
         }
-        if (shortCodeText && titleText.includes(shortCodeText)) {
+        if (
+          shortCodeVariants.length &&
+          shortCodeVariants.some((variant) => titleVariants.some((t) => t.includes(variant)))
+        ) {
           score += 80 + shortCodeText.length;
         }
-        if (!score && nameText.includes(titleText) && titleText.length > 2) {
+        if (
+          !score &&
+          titleVariants.some((t) => nameVariants.some((variant) => variant.includes(t))) &&
+          titleText.length > 2
+        ) {
           score += 40 + titleText.length;
         }
         if (!score) {
           tokens.forEach((token) => {
-            if (nameText.includes(token)) {
+            if (nameVariants.some((variant) => variant.includes(token))) {
               score += 5;
             }
-            if (shortCodeText && shortCodeText.includes(token)) {
+            if (shortCodeVariants.some((variant) => variant.includes(token))) {
               score += 8;
             }
-            if (token.length > 2 && token.includes(nameText)) {
+            if (token.length > 2 && nameVariants.some((variant) => token.includes(variant))) {
               score += 3;
             }
           });
@@ -549,11 +507,11 @@ export default function DayPlanView() {
   const renderTaskCard = (task) => {
     const suggestions = getCustomerSuggestions(task);
     const hasCustomer = Boolean(task.customer || task.customer_number);
-    const canPromote = !task.task_id;
+    const canPromote = !task.time_enabled;
     const isDone = task.status === "done";
     const canInvoice = hasCustomer;
     const knownCustomer = isKnownCustomer(task.customer);
-    const timeTask = task.task_id ? timeTasksById[task.task_id] : null;
+    const timeTask = task.time_enabled ? task : null;
     const elapsedMs = timeTask
       ? (timeTask.elapsed || 0) +
         (timeTask.running && timeTask.startTime ? nowMs - timeTask.startTime : 0)
@@ -624,10 +582,10 @@ export default function DayPlanView() {
                 >
                   <Sparkles size={12} />
                 </button>
-                {!task.task_id ? (
+                {!task.time_enabled ? (
                   <button
                     type="button"
-                    onClick={() => promoteTask(task)}
+                    onClick={() => enableTime(task)}
                     disabled={!canPromote}
                     className={`rounded-full border p-1 ${
                       canPromote
@@ -675,14 +633,16 @@ export default function DayPlanView() {
                     />
                   </div>
                 )}
-                <button
-                  type="button"
-                  onClick={() => updateTask(task, { status: "done" })}
-                  className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700 hover:bg-emerald-100"
-                  title="Erledigt"
-                >
-                  <CheckCircle size={12} />
-                </button>
+                {!isDone ? (
+                  <button
+                    type="button"
+                    onClick={() => updateTask(task, { status: "done" })}
+                    className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700 hover:bg-emerald-100"
+                    title="Erledigt"
+                  >
+                    <CheckCircle size={12} />
+                  </button>
+                ) : null}
                 {isDone ? (
                   <button
                     type="button"
@@ -801,11 +761,11 @@ export default function DayPlanView() {
   };
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#fff7e6,_#f6efe1_55%,_#efe7d6_100%)]">
-      <header className="border-b border-sand-200/70 bg-white/70 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+    <div className="min-h-screen bg-sand-50">
+      <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center shadow-soft">
+            <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
               <ClipboardList size={18} />
             </div>
             <div>
@@ -842,7 +802,7 @@ export default function DayPlanView() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+      <main className="max-w-7xl mx-auto px-4 md:px-6 py-8 space-y-8">
         {error ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
             {error}
@@ -874,7 +834,7 @@ export default function DayPlanView() {
                 <span className="text-xs text-sand-500">{grouped[column.id].length}</span>
               </div>
               <div className="grid gap-3 lg:grid-cols-2">
-                <div className="space-y-2 max-h-[65vh] overflow-auto pr-1">
+                <div className="space-y-2 max-h-[70vh] overflow-auto pr-1">
                   <div
                     className="rounded-xl border border-dashed border-amber-200 bg-white/70 px-3 py-2"
                     onDragOver={(event) => event.preventDefault()}
@@ -889,13 +849,6 @@ export default function DayPlanView() {
                       </span>
                     </div>
                     <div className="mt-2 space-y-2">
-                      {grouped[column.id].filter((task) => !task.group_id).length ? (
-                        grouped[column.id]
-                          .filter((task) => !task.group_id)
-                          .map((task) => renderTaskCard(task))
-                      ) : (
-                        <div className="text-xs text-sand-400">Keine Aufgaben.</div>
-                      )}
                       <input
                         onKeyDown={(event) => {
                           if (event.key === "Enter") {
@@ -908,10 +861,17 @@ export default function DayPlanView() {
                         placeholder="Neue Aufgabe…"
                         className="w-full rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
                       />
+                      {grouped[column.id].filter((task) => !task.group_id).length ? (
+                        grouped[column.id]
+                          .filter((task) => !task.group_id)
+                          .map((task) => renderTaskCard(task))
+                      ) : (
+                        <div className="text-xs text-sand-400">Keine Aufgaben.</div>
+                      )}
                     </div>
                   </div>
                 </div>
-                <div className="space-y-2 max-h-[65vh] overflow-auto pr-1">
+                <div className="space-y-2 max-h-[70vh] overflow-auto pr-1">
                   {groupsByColumn[column.id].map((group) => (
                     <div
                       key={group.id}

@@ -5,15 +5,15 @@ const API = "/api";
 
 const api = {
   customers: () => fetch(`${API}/customers`).then((r) => r.json()),
-  tasks: () => fetch(`${API}/tasks`).then((r) => r.json()),
+  tasks: () => fetch(`${API}/day_tasks`).then((r) => r.json()),
   createTask: (payload) =>
-    fetch(`${API}/tasks`, {
+    fetch(`${API}/day_tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
   updateTask: (id, payload) =>
-    fetch(`${API}/tasks/${id}`, {
+    fetch(`${API}/day_tasks/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -64,16 +64,6 @@ export default function App() {
     [customers]
   );
 
-  const customerById = useMemo(() => {
-    const map = {};
-    customers.forEach((customer) => {
-      if (customer?.id) {
-        map[customer.id] = customer;
-      }
-    });
-    return map;
-  }, [customers]);
-
   const findCustomer = (name) =>
     customers.find((item) => (item.name || "").toLowerCase() === name.trim().toLowerCase());
 
@@ -84,7 +74,8 @@ export default function App() {
 
   const visibleTasks = useMemo(() => {
     if (!timeCustomerMatch) return tasks;
-    return tasks.filter((task) => task.customer_id === timeCustomerMatch.id);
+    const needle = timeCustomerMatch.name.trim().toLowerCase();
+    return tasks.filter((task) => (task.customer || "").trim().toLowerCase() === needle);
   }, [tasks, timeCustomerMatch]);
 
   const addQuickTasks = async () => {
@@ -100,8 +91,9 @@ export default function App() {
     }
     for (const line of lines) {
       await api.createTask({
-        customer_id: customer?.id ?? null,
-        title: line
+        customer: customer?.name ?? "",
+        title: line,
+        status: "todo"
       });
     }
     setQuickText("");
@@ -130,7 +122,8 @@ export default function App() {
     await api.updateTask(selectedTaskId, {
       elapsed: totalMinutes * 60000,
       running: false,
-      startTime: 0
+      startTime: 0,
+      time_enabled: true
     });
     setStatus("Zeit gespeichert.");
     setArrivalTime("");
@@ -201,12 +194,9 @@ export default function App() {
               >
                 <option value="">Bitte waehlen</option>
                 {visibleTasks.map((task) => {
-                  const customerName = task.customer_id
-                    ? customerById[task.customer_id]?.name
-                    : "";
                   return (
                     <option key={task.id} value={task.id}>
-                      {customerName ? `${customerName}: ` : ""}{task.title}
+                      {task.customer ? `${task.customer}: ` : ""}{task.title}
                     </option>
                   );
                 })}
