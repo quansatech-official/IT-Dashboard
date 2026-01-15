@@ -70,6 +70,7 @@ export default function DayPlanView() {
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
   const [detailOpenId, setDetailOpenId] = useState(null);
   const [detailEdits, setDetailEdits] = useState({});
+  const [collapsedTimers, setCollapsedTimers] = useState({});
   const [timeEdits, setTimeEdits] = useState({});
   const [nowMs, setNowMs] = useState(() => Date.now());
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
@@ -620,10 +621,11 @@ export default function DayPlanView() {
         (timeTask.running && timeTask.startTime ? nowMs - timeTask.startTime : 0)
       : 0;
     const timeInputValue = timeEdits[task.id] ?? msToHHMMSS(elapsedMs);
+    const isTimerCollapsed = Boolean(collapsedTimers[task.id]);
     return (
       <div
         key={task.id}
-        className="relative rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] md:px-2 md:py-1.5"
+        className="relative rounded-lg border border-sand-200 bg-white px-3 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] md:px-2 md:py-1.5"
         draggable
         onDragStart={(event) => {
           event.dataTransfer.setData("text/plain", `task:${task.id}`);
@@ -665,7 +667,7 @@ export default function DayPlanView() {
                   </button>
                 )}
               </div>
-              <div className="flex flex-col items-center gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-1">
                 <button
                   type="button"
                   onClick={() => {
@@ -676,99 +678,114 @@ export default function DayPlanView() {
                 >
                   <Sparkles size={12} />
                 </button>
-                <div className="grid grid-cols-2 gap-1">
-                  {!task.time_enabled ? (
-                    <button
-                      type="button"
-                      onClick={() => enableTime(task)}
-                      disabled={!canPromote}
-                      className={`rounded-full border p-1 ${
-                        canPromote
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                          : "border-sand-100 text-sand-300 cursor-not-allowed"
-                      }`}
-                      title="Zeit in Aufgabe aktivieren"
-                    >
-                      <Clock size={12} />
-                    </button>
-                  ) : (
-                    <div className="col-span-2 flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1">
-                      <button
-                        type="button"
-                        onClick={() => toggleTimeTask(timeTask)}
-                        className={`rounded-full border p-1 ${
-                          timeTask?.running
-                            ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
-                            : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                        }`}
-                        title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
-                        disabled={!timeTask}
-                      >
-                        {timeTask?.running ? <Square size={10} /> : <Play size={10} />}
-                      </button>
-                      <input
-                        value={timeInputValue}
-                        onChange={(event) =>
-                          setTimeEdits((prev) => ({ ...prev, [task.id]: event.target.value }))
-                        }
-                        onBlur={() => commitManualTime(task.id, timeTask, timeInputValue)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            commitManualTime(task.id, timeTask, timeInputValue);
-                          }
-                        }}
-                        className="w-[78px] bg-transparent text-base font-mono text-sand-600 focus:outline-none md:text-[10px]"
-                        title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
-                        disabled={!timeTask}
-                      />
-                    </div>
-                  )}
-                  {!isDone ? (
-                    <button
-                      type="button"
-                      onClick={() => updateTask(task, { status: "done" })}
-                      className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700 hover:bg-emerald-100"
-                      title="Erledigt"
-                    >
-                      <CheckCircle size={12} />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => updateTask(task, { status: "todo" })}
-                      className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                      title="Unerledigt"
-                    >
-                      <Undo2 size={12} />
-                    </button>
-                  )}
+                {!task.time_enabled || isTimerCollapsed ? (
                   <button
                     type="button"
-                    onClick={() => setError("Faktura (Dummy) ist noch nicht angebunden.")}
-                    disabled={!canInvoice}
+                    onClick={() => {
+                      if (task.time_enabled) {
+                        setCollapsedTimers((prev) => {
+                          if (!prev[task.id]) return prev;
+                          const next = { ...prev };
+                          delete next[task.id];
+                          return next;
+                        });
+                        return;
+                      }
+                      enableTime(task);
+                    }}
+                    disabled={!canPromote}
                     className={`rounded-full border p-1 ${
-                      canInvoice
-                        ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                      canPromote
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                         : "border-sand-100 text-sand-300 cursor-not-allowed"
                     }`}
-                    title={
-                      canInvoice
-                        ? "In Faktura übernehmen (Dummy)"
-                        : "Kunde zuordnen, um zu übernehmen"
-                    }
+                    title="Zeit in Aufgabe aktivieren"
                   >
-                    <DollarSign size={12} />
+                    <Clock size={12} />
                   </button>
+                ) : (
+                  <div
+                    className="flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1"
+                    onDoubleClick={() =>
+                      setCollapsedTimers((prev) => ({ ...prev, [task.id]: true }))
+                    }
+                    title="Doppelklick zum Ausblenden"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleTimeTask(timeTask)}
+                      className={`rounded-full border p-1 ${
+                        timeTask?.running
+                          ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                          : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                      }`}
+                      title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
+                      disabled={!timeTask}
+                    >
+                      {timeTask?.running ? <Square size={10} /> : <Play size={10} />}
+                    </button>
+                    <input
+                      value={timeInputValue}
+                      onChange={(event) =>
+                        setTimeEdits((prev) => ({ ...prev, [task.id]: event.target.value }))
+                      }
+                      onBlur={() => commitManualTime(task.id, timeTask, timeInputValue)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitManualTime(task.id, timeTask, timeInputValue);
+                        }
+                      }}
+                      className="w-[78px] bg-transparent text-base font-mono text-sand-600 focus:outline-none md:text-[10px]"
+                      title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
+                      disabled={!timeTask}
+                    />
+                  </div>
+                )}
+                {!isDone ? (
                   <button
                     type="button"
-                    onClick={() => removeTask(task)}
-                    className="rounded-full border border-rose-200 bg-rose-50 p-1 text-rose-700 hover:bg-rose-100"
-                    title="Löschen"
+                    onClick={() => updateTask(task, { status: "done" })}
+                    className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700 hover:bg-emerald-100"
+                    title="Erledigt"
                   >
-                    <Trash2 size={12} />
+                    <CheckCircle size={12} />
                   </button>
-                </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => updateTask(task, { status: "todo" })}
+                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                    title="Unerledigt"
+                  >
+                    <Undo2 size={12} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setError("Faktura (Dummy) ist noch nicht angebunden.")}
+                  disabled={!canInvoice}
+                  className={`rounded-full border p-1 ${
+                    canInvoice
+                      ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                      : "border-sand-100 text-sand-300 cursor-not-allowed"
+                  }`}
+                  title={
+                    canInvoice
+                      ? "In Faktura übernehmen (Dummy)"
+                      : "Kunde zuordnen, um zu übernehmen"
+                  }
+                >
+                  <DollarSign size={12} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeTask(task)}
+                  className="rounded-full border border-rose-200 bg-rose-50 p-1 text-rose-700 hover:bg-rose-100"
+                  title="Löschen"
+                >
+                  <Trash2 size={12} />
+                </button>
               </div>
             </div>
             {editingCustomerId === task.id ? (
@@ -847,7 +864,7 @@ export default function DayPlanView() {
               </div>
             ) : null}
             {detailOpenId === task.id ? (
-              <div className="mt-2 rounded-xl border border-amber-200 bg-white/90 p-2 space-y-2">
+              <div className="mt-2 rounded-xl border border-sand-200 bg-white p-2 space-y-2">
                 <div className="text-xs text-sand-700 whitespace-pre-wrap">
                   {task.title}
                 </div>
@@ -966,10 +983,10 @@ export default function DayPlanView() {
           {columns.map((column) => (
             <div
               key={column.id}
-              className={`rounded-2xl border bg-white/80 shadow-[0_6px_20px_rgba(150,120,60,0.08)] p-4 transition min-h-[60vh] ${
+              className={`rounded-2xl border shadow-[0_6px_20px_rgba(150,120,60,0.08)] p-4 transition min-h-[60vh] ${
                 dragOver === column.id
-                  ? "border-amber-400 bg-amber-50/60"
-                  : "border-amber-100"
+                  ? "border-sand-300 bg-sand-100"
+                  : "border-sand-200 bg-white"
               }`}
               onDragOver={(event) => {
                 event.preventDefault();
@@ -989,7 +1006,7 @@ export default function DayPlanView() {
               <div className="grid gap-3 lg:grid-cols-2">
                 <div className="space-y-2 max-h-[70vh] overflow-auto pr-1">
                   <div
-                    className="rounded-xl border border-dashed border-amber-200 bg-white/70 px-3 py-2"
+                    className="rounded-xl border border-dashed border-sand-200 bg-white px-3 py-2"
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={(event) => handleUngroupedDrop(event, column.id)}
                   >
@@ -1029,8 +1046,8 @@ export default function DayPlanView() {
                   {groupsByColumn[column.id].map((group) => (
                     <div
                       key={group.id}
-                      className={`rounded-lg border border-amber-200 bg-white/80 px-2 py-1.5 ${
-                        dragOverGroupId === group.id ? "ring-2 ring-amber-300" : ""
+                      className={`rounded-lg border border-sand-200 bg-white px-2 py-1.5 ${
+                        dragOverGroupId === group.id ? "ring-2 ring-sand-300" : ""
                       }`}
                       onDragOver={(event) => handleGroupDragOver(event, group.id)}
                       onDragLeave={() => setDragOverGroupId(null)}
@@ -1135,7 +1152,7 @@ export default function DayPlanView() {
           ))}
         </div>
 
-        <section className="rounded-2xl border border-amber-100 bg-white/80 p-4 shadow-[0_6px_20px_rgba(150,120,60,0.08)]">
+        <section className="rounded-2xl border border-sand-200 bg-white p-4 shadow-[0_6px_20px_rgba(150,120,60,0.08)]">
           <div className="flex items-center justify-between mb-3">
             <div>
               <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">Erledigt</h2>
