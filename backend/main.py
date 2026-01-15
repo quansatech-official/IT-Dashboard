@@ -67,7 +67,7 @@ class DayTask(Base):
     kulant = Column(Boolean, default=False)
     elapsed = Column(BigInteger, default=0)      # ms
     running = Column(Boolean, default=False)
-    startTime = Column(BigInteger, default=0)    # ms timestamp
+    startTime = Column("starttime", BigInteger, default=0)    # ms timestamp
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
@@ -392,8 +392,8 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN elapsed BIGINT DEFAULT 0")
     if "running" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN running BOOLEAN DEFAULT FALSE")
-    if "startTime" not in columns:
-        statements.append("ALTER TABLE day_tasks ADD COLUMN startTime BIGINT DEFAULT 0")
+    if "starttime" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN starttime BIGINT DEFAULT 0")
     if not statements:
         return
     with engine.begin() as connection:
