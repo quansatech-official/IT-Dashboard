@@ -391,7 +391,6 @@ export default function DayPlanView() {
     setDetailEdits((prev) => ({
       ...prev,
       [task.id]: {
-        details: task.details || "",
         arrival_time: task.arrival_time || "",
         departure_time: task.departure_time || "",
         deadline: task.deadline || ""
@@ -666,7 +665,7 @@ export default function DayPlanView() {
                   </button>
                 )}
               </div>
-              <div className="flex items-center gap-0.5">
+              <div className="flex flex-col items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -677,95 +676,90 @@ export default function DayPlanView() {
                 >
                   <Sparkles size={12} />
                 </button>
-                {!task.time_enabled ? (
+                <div className="grid grid-cols-2 gap-1">
+                  {!task.time_enabled ? (
+                    <button
+                      type="button"
+                      onClick={() => enableTime(task)}
+                      disabled={!canPromote}
+                      className={`rounded-full border p-1 ${
+                        canPromote
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                          : "border-sand-100 text-sand-300 cursor-not-allowed"
+                      }`}
+                      title="Zeit in Aufgabe aktivieren"
+                    >
+                      <Clock size={12} />
+                    </button>
+                  ) : (
+                    <div className="col-span-2 flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1">
+                      <button
+                        type="button"
+                        onClick={() => toggleTimeTask(timeTask)}
+                        className={`rounded-full border p-1 ${
+                          timeTask?.running
+                            ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                            : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                        }`}
+                        title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
+                        disabled={!timeTask}
+                      >
+                        {timeTask?.running ? <Square size={10} /> : <Play size={10} />}
+                      </button>
+                      <input
+                        value={timeInputValue}
+                        onChange={(event) =>
+                          setTimeEdits((prev) => ({ ...prev, [task.id]: event.target.value }))
+                        }
+                        onBlur={() => commitManualTime(task.id, timeTask, timeInputValue)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            commitManualTime(task.id, timeTask, timeInputValue);
+                          }
+                        }}
+                        className="w-[78px] bg-transparent text-base font-mono text-sand-600 focus:outline-none md:text-[10px]"
+                        title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
+                        disabled={!timeTask}
+                      />
+                    </div>
+                  )}
+                  {!isDone ? (
+                    <button
+                      type="button"
+                      onClick={() => updateTask(task, { status: "done" })}
+                      className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700 hover:bg-emerald-100"
+                      title="Erledigt"
+                    >
+                      <CheckCircle size={12} />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => updateTask(task, { status: "todo" })}
+                      className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                      title="Unerledigt"
+                    >
+                      <Undo2 size={12} />
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => enableTime(task)}
-                    disabled={!canPromote}
+                    onClick={() => setError("Faktura (Dummy) ist noch nicht angebunden.")}
+                    disabled={!canInvoice}
                     className={`rounded-full border p-1 ${
-                      canPromote
-                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                      canInvoice
+                        ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
                         : "border-sand-100 text-sand-300 cursor-not-allowed"
                     }`}
                     title={
-                      canPromote
-                        ? "Zeit in Aufgabe aktivieren"
-                        : "Zeit in Aufgabe aktivieren"
+                      canInvoice
+                        ? "In Faktura übernehmen (Dummy)"
+                        : "Kunde zuordnen, um zu übernehmen"
                     }
                   >
-                    <Clock size={12} />
+                    <DollarSign size={12} />
                   </button>
-                ) : (
-                  <div className="flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1">
-                    <button
-                      type="button"
-                      onClick={() => toggleTimeTask(timeTask)}
-                      className={`rounded-full border p-1 ${
-                        timeTask?.running
-                          ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
-                          : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                      }`}
-                      title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
-                      disabled={!timeTask}
-                    >
-                      {timeTask?.running ? <Square size={10} /> : <Play size={10} />}
-                    </button>
-                    <input
-                      value={timeInputValue}
-                      onChange={(event) =>
-                        setTimeEdits((prev) => ({ ...prev, [task.id]: event.target.value }))
-                      }
-                      onBlur={() => commitManualTime(task.id, timeTask, timeInputValue)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          commitManualTime(task.id, timeTask, timeInputValue);
-                        }
-                      }}
-                      className="w-[78px] bg-transparent text-base font-mono text-sand-600 focus:outline-none md:text-[10px]"
-                      title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
-                      disabled={!timeTask}
-                    />
-                  </div>
-                )}
-                {!isDone ? (
-                  <button
-                    type="button"
-                    onClick={() => updateTask(task, { status: "done" })}
-                    className="rounded-full border border-emerald-200 bg-emerald-50 p-1 text-emerald-700 hover:bg-emerald-100"
-                    title="Erledigt"
-                  >
-                    <CheckCircle size={12} />
-                  </button>
-                ) : null}
-                {isDone ? (
-                  <button
-                    type="button"
-                    onClick={() => updateTask(task, { status: "todo" })}
-                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                    title="Unerledigt"
-                  >
-                    <Undo2 size={12} />
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => setError("Faktura (Dummy) ist noch nicht angebunden.")}
-                  disabled={!canInvoice}
-                  className={`rounded-full border p-1 ${
-                    canInvoice
-                      ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                      : "border-sand-100 text-sand-300 cursor-not-allowed"
-                  }`}
-                  title={
-                    canInvoice
-                      ? "In Faktura übernehmen (Dummy)"
-                      : "Kunde zuordnen, um zu übernehmen"
-                  }
-                >
-                  <DollarSign size={12} />
-                </button>
-                <div className="flex flex-col items-center gap-1">
                   <button
                     type="button"
                     onClick={() => removeTask(task)}
@@ -773,17 +767,6 @@ export default function DayPlanView() {
                     title="Löschen"
                   >
                     <Trash2 size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => toggleDetails(task)}
-                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
-                    title="Details anzeigen"
-                  >
-                    <ChevronDown
-                      size={12}
-                      className={`transition ${detailOpenId === task.id ? "rotate-180" : ""}`}
-                    />
                   </button>
                 </div>
               </div>
@@ -865,18 +848,8 @@ export default function DayPlanView() {
             ) : null}
             {detailOpenId === task.id ? (
               <div className="mt-2 rounded-xl border border-amber-200 bg-white/90 p-2 space-y-2">
-                <div>
-                  <label className="text-[10px] uppercase tracking-wide text-sand-500">
-                    Mehr Text
-                  </label>
-                  <textarea
-                    value={getDetailValue(task, "details")}
-                    onChange={(event) => setDetailValue(task.id, "details", event.target.value)}
-                    onBlur={() => commitDetail(task, "details")}
-                    rows={3}
-                    className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                    placeholder="Zusatzinfos zur Aufgabe…"
-                  />
+                <div className="text-xs text-sand-700 whitespace-pre-wrap">
+                  {task.title}
                 </div>
                 <div className="grid gap-2 md:grid-cols-3">
                   <div>
@@ -924,6 +897,17 @@ export default function DayPlanView() {
             ) : null}
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => toggleDetails(task)}
+          className="absolute bottom-2 right-2 rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
+          title="Details anzeigen"
+        >
+          <ChevronDown
+            size={12}
+            className={`transition ${detailOpenId === task.id ? "rotate-180" : ""}`}
+          />
+        </button>
       </div>
     );
   };
@@ -931,7 +915,7 @@ export default function DayPlanView() {
   return (
     <div className="min-h-screen bg-sand-50 touch-manipulation md:touch-auto">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-5 md:py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-3 md:py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
               <ClipboardList size={18} />
@@ -971,7 +955,7 @@ export default function DayPlanView() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8 space-y-6 md:space-y-8">
+      <main className="max-w-7xl mx-auto px-4 md:px-6 py-4 md:py-6 space-y-4 md:space-y-6">
         {error ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
             {error}

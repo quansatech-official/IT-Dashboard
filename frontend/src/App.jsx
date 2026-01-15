@@ -38,15 +38,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
-      <button
-        type="button"
-        onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
-        className="fixed top-4 right-4 z-50 inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600 shadow-soft hover:bg-sand-100"
-        title={theme === "dark" ? "Tagmodus" : "Nachtmodus"}
-      >
-        {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
-        {theme === "dark" ? "Tag" : "Nacht"}
-      </button>
       <div className="flex min-h-screen">
         <aside
           className="bg-white border-r border-sand-200 p-4 flex flex-col gap-6"
@@ -159,6 +150,15 @@ export default function App() {
                 className="mt-2 w-full"
               />
             </label>
+            <button
+              type="button"
+              onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600 shadow-soft hover:bg-sand-100"
+              title={theme === "dark" ? "Tagmodus" : "Nachtmodus"}
+            >
+              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+              {theme === "dark" ? "Tag" : "Nacht"}
+            </button>
             <div className="text-xs text-sand-500">
               Schnellzugriff für Aufgaben, Notizen und Kundenberichte.
             </div>
