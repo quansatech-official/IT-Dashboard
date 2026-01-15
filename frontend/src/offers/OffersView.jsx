@@ -2,10 +2,10 @@ import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, Link, Plus, Receipt, Sparkles } from "lucide-react";
 
 const inputClass =
-  "w-full rounded-2xl border border-sand-200 bg-white px-4 py-2 text-sm text-sand-800 focus:outline-none focus:ring-2 focus:ring-sand-300";
+  "w-full rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400";
 
 const textareaClass =
-  "w-full min-h-[110px] rounded-2xl border border-sand-200 bg-white px-4 py-3 text-sm text-sand-800 focus:outline-none focus:ring-2 focus:ring-sand-300";
+  "w-full min-h-[110px] rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400";
 
 const impulses = ["Gespräch", "Bericht", "Standardleistung", "Erneuerung", "Empfehlung"];
 const statusOptions = ["Entwurf", "gesendet", "angenommen", "abgelehnt"];
@@ -31,6 +31,12 @@ const formatMoney = (value) => {
     currency: "EUR",
     maximumFractionDigits: 0
   });
+};
+
+const shorten = (value, limit = 120) => {
+  const text = String(value || "").trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}...`;
 };
 
 const makeVersion = (text, createdAt) => ({
@@ -160,7 +166,7 @@ const ensureDraft = (item) => item.aiDraft || getActiveVersion(item)?.text || ""
 
 function Field({ label, children }) {
   return (
-    <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+    <label className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
       {label}
       <div className="mt-2">{children}</div>
     </label>
@@ -176,6 +182,8 @@ export default function OffersView() {
   const [payloadTimestamp, setPayloadTimestamp] = useState("");
 
   const activeOffer = offers.find((offer) => offer.id === activeId) || null;
+  const headKey = activeOffer ? `head-${activeOffer.id}` : "head";
+  const headOpen = !!detailOpen[headKey];
 
   const totals = useMemo(() => {
     if (!activeOffer) return { total: 0, count: 0 };
@@ -209,6 +217,12 @@ export default function OffersView() {
       )
     }));
   };
+
+  const toggleDetail = (key) =>
+    setDetailOpen((prev) => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
 
   const addOffer = () => {
     const year = new Date().getFullYear();
@@ -289,15 +303,15 @@ export default function OffersView() {
   };
 
   return (
-    <div className="min-h-screen bg-sand-50">
-      <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
+          <div className="h-10 w-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center">
             <Receipt size={18} />
           </div>
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kundenorientierung</p>
-            <h1 className="text-2xl font-display text-sand-900">Angebote</h1>
+            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Kundenorientierung</p>
+            <h1 className="text-2xl font-semibold text-slate-900">Angebote</h1>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <button
@@ -305,8 +319,8 @@ export default function OffersView() {
               onClick={() => setViewMode("internal")}
               className={`rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
                 viewMode === "internal"
-                  ? "border-sand-900 bg-sand-900 text-white"
-                  : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                  ? "border-blue-600 bg-blue-600 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
               }`}
             >
               Intern
@@ -316,8 +330,8 @@ export default function OffersView() {
               onClick={() => setViewMode("customer")}
               className={`rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
                 viewMode === "customer"
-                  ? "border-sand-900 bg-sand-900 text-white"
-                  : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                  ? "border-blue-600 bg-blue-600 text-white"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
               }`}
             >
               Kundenansicht
@@ -327,18 +341,18 @@ export default function OffersView() {
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
-        <section className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Leitsatz</p>
-              <p className="text-sm text-sand-700">
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Leitsatz</p>
+              <p className="text-sm text-slate-700">
                 Workbench erklärt das Warum – sevDesk verrechnet das Was.
               </p>
             </div>
             <button
               type="button"
               onClick={handleSevDesk}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              className="inline-flex items-center gap-2 rounded-full border border-blue-600 bg-blue-600 px-4 py-2 text-xs uppercase tracking-wide text-white hover:bg-blue-700"
             >
               Rechnungsentwurf in sevDesk erzeugen
             </button>
@@ -346,13 +360,13 @@ export default function OffersView() {
         </section>
 
         <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-          <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Angebote</p>
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Angebote</p>
               <button
                 type="button"
                 onClick={addOffer}
-                className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                className="inline-flex items-center gap-2 rounded-full border border-blue-600 bg-blue-600 px-3 py-1 text-xs uppercase tracking-wide text-white hover:bg-blue-700"
               >
                 <Plus size={12} /> Neu
               </button>
@@ -365,8 +379,8 @@ export default function OffersView() {
                   onClick={() => setActiveId(offer.id)}
                   className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
                     offer.id === activeId
-                      ? "border-sand-900 bg-sand-900 text-white"
-                      : "border-sand-200 bg-sand-50 text-sand-700 hover:bg-sand-100"
+                      ? "border-blue-600 bg-blue-600 text-white"
+                      : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
                   }`}
                 >
                   <p className="text-xs uppercase tracking-[0.3em] opacity-70">
@@ -383,29 +397,72 @@ export default function OffersView() {
 
           {activeOffer ? (
             <section className="space-y-6">
-              <div className="rounded-3xl border border-sand-200 bg-white p-6 shadow-soft space-y-6">
-                <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+                <div className="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Angebotskopf</p>
-                    <h2 className="text-xl font-display text-sand-900">{activeOffer.reference}</h2>
-                    <p className="text-sm text-sand-500">
+                    <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Angebotskopf</p>
+                    <h2 className="text-xl font-semibold text-slate-900">{activeOffer.reference}</h2>
+                    <p className="text-sm text-slate-500">
                       Erstellt {formatDate(activeOffer.createdAt)}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs uppercase tracking-wide text-slate-600">
                       {activeOffer.status}
                     </span>
-                    <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs uppercase tracking-wide text-slate-600">
                       {totals.count} Positionen
                     </span>
-                    <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs uppercase tracking-wide text-slate-600">
                       Gesamt {formatMoney(totals.total)}
                     </span>
+                    {viewMode === "internal" ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleDetail(headKey)}
+                        className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
+                      >
+                        {headOpen ? "Fertig" : "Bearbeiten"}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
 
-                {viewMode === "internal" ? (
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">Kunde</p>
+                    <p className="mt-2 text-sm text-slate-800">{activeOffer.customer || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">
+                      Angebotsursprung
+                    </p>
+                    <p className="mt-2 text-sm text-slate-800">{activeOffer.impulse}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">Status</p>
+                    <p className="mt-2 text-sm text-slate-800">{activeOffer.status}</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">
+                      Optionale Aufgabe
+                    </p>
+                    <p className="mt-2 text-sm text-slate-800">{activeOffer.linkedTask || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">
+                      Optionaler Bericht
+                    </p>
+                    <p className="mt-2 text-sm text-slate-800">
+                      {activeOffer.linkedReport || "—"}
+                    </p>
+                  </div>
+                </div>
+
+                {viewMode === "internal" && headOpen ? (
                   <div className="grid gap-4 md:grid-cols-3">
                     <Field label="Kunde">
                       <input
@@ -483,33 +540,16 @@ export default function OffersView() {
                       />
                     </Field>
                   </div>
-                ) : (
-                  <div className="grid gap-4 md:grid-cols-3">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Kunde</p>
-                      <p className="mt-2 text-sm text-sand-800">{activeOffer.customer || "—"}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                        Angebotsursprung
-                      </p>
-                      <p className="mt-2 text-sm text-sand-800">{activeOffer.impulse}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Status</p>
-                      <p className="mt-2 text-sm text-sand-800">{activeOffer.status}</p>
-                    </div>
-                  </div>
-                )}
+                ) : null}
               </div>
 
-              <div className="rounded-3xl border border-sand-200 bg-white p-6 shadow-soft space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                    <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
                       Angebotspositionen
                     </p>
-                    <p className="text-sm text-sand-600">
+                    <p className="text-sm text-slate-600">
                       Dienstleistung oder Gerät, kurze Titel und klare Stichworte.
                     </p>
                   </div>
@@ -517,7 +557,7 @@ export default function OffersView() {
                     <button
                       type="button"
                       onClick={addLineItem}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                      className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
                     >
                       <Plus size={12} /> Position
                     </button>
@@ -528,52 +568,94 @@ export default function OffersView() {
                   {activeOffer.lineItems.length ? (
                     activeOffer.lineItems.map((item) => {
                       const activeVersion = getActiveVersion(item);
-                      const showDetails = viewMode === "internal" || detailOpen[item.id];
+                      const editKey = `line-${item.id}`;
+                      const aiKey = `line-ai-${item.id}`;
+                      const detailsOpen =
+                        viewMode === "internal" ? !!detailOpen[editKey] : !!detailOpen[item.id];
+                      const aiOpen = !!detailOpen[aiKey];
+                      const aiPreview = activeVersion?.text
+                        ? shorten(activeVersion.text.split("\n")[0] || "")
+                        : "";
                       return (
                         <div
                           key={item.id}
-                          className="rounded-3xl border border-sand-200 bg-sand-50 p-5"
+                          className="rounded-2xl border border-slate-200 bg-slate-50 p-5"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
-                              <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                              <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">
                                 {item.type}
                               </p>
-                              <p className="text-lg font-medium text-sand-900">
+                              <p className="text-lg font-medium text-slate-900">
                                 {item.title || "Unbenannte Position"}
                               </p>
-                              {viewMode === "internal" || showDetails ? (
-                                <p className="text-sm text-sand-600">
+                              {viewMode === "internal" || detailsOpen ? (
+                                <p className="text-sm text-slate-600">
                                   {item.keywords?.length
                                     ? item.keywords.join(" · ")
                                     : "Keine Stichworte"}
                                 </p>
                               ) : null}
+                              {viewMode === "internal" && aiPreview ? (
+                                <p className="mt-2 text-xs text-slate-500">
+                                  KI: {aiPreview}
+                                </p>
+                              ) : null}
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-slate-600">
                                 {item.complexity}
                               </span>
                               {item.securityRelevant ? (
-                                <span className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                                <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-slate-600">
                                   Sicherheitsrelevant
                                 </span>
                               ) : null}
-                              <span className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-slate-600">
                                 {formatMoney(item.price)} · {item.quantity}x
                               </span>
-                              {viewMode === "customer" ? (
+                              {viewMode === "internal" ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleDetail(editKey)}
+                                    className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
+                                  >
+                                    {detailsOpen ? (
+                                      <>
+                                        <ChevronUp size={12} /> Schliessen
+                                      </>
+                                    ) : (
+                                      <>
+                                        <ChevronDown size={12} /> Bearbeiten
+                                      </>
+                                    )}
+                                  </button>
+                                  {detailsOpen ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleDetail(aiKey)}
+                                      className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
+                                    >
+                                      {aiOpen ? (
+                                        <>
+                                          <ChevronUp size={12} /> KI-Text
+                                        </>
+                                      ) : (
+                                        <>
+                                          <ChevronDown size={12} /> KI-Text
+                                        </>
+                                      )}
+                                    </button>
+                                  ) : null}
+                                </>
+                              ) : (
                                 <button
                                   type="button"
-                                  onClick={() =>
-                                    setDetailOpen((prev) => ({
-                                      ...prev,
-                                      [item.id]: !prev[item.id]
-                                    }))
-                                  }
-                                  className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                                  onClick={() => toggleDetail(item.id)}
+                                  className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
                                 >
-                                  {showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                  {detailsOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                                   Details
                                 </button>
                               ) : null}
@@ -581,12 +663,12 @@ export default function OffersView() {
                           </div>
 
                           {viewMode === "customer" ? (
-                            <div className="mt-4 text-sm text-sand-700 whitespace-pre-line">
+                            <div className="mt-4 text-sm text-slate-700 whitespace-pre-line">
                               {activeVersion?.text || "Noch keine Erklärung hinterlegt."}
                             </div>
                           ) : null}
 
-                          {showDetails ? (
+                          {detailsOpen ? (
                             <div className="mt-4 space-y-4">
                               {viewMode === "internal" ? (
                                 <div className="grid gap-4 md:grid-cols-3">
@@ -699,7 +781,7 @@ export default function OffersView() {
                                       }
                                       className="h-4 w-4"
                                     />
-                                    <label htmlFor={`security-${item.id}`} className="text-sm text-sand-700">
+                                    <label htmlFor={`security-${item.id}`} className="text-sm text-slate-700">
                                       Sicherheitsrelevant
                                     </label>
                                   </div>
@@ -707,33 +789,33 @@ export default function OffersView() {
                               ) : null}
 
                               {viewMode === "customer" ? (
-                                <div className="rounded-2xl border border-sand-200 bg-white p-4 text-sm text-sand-700">
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                                <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">
                                     Details
                                   </p>
                                   <div className="mt-2 space-y-2">
                                     <p>
-                                      <span className="text-sand-500">Stichworte:</span>{" "}
+                                      <span className="text-slate-500">Stichworte:</span>{" "}
                                       {item.keywords?.length
                                         ? item.keywords.join(", ")
                                         : "Keine"}
                                     </p>
                                     <p>
-                                      <span className="text-sand-500">Sicherheitsrelevant:</span>{" "}
+                                      <span className="text-slate-500">Sicherheitsrelevant:</span>{" "}
                                       {item.securityRelevant ? "Ja" : "Nein"}
                                     </p>
                                   </div>
                                 </div>
                               ) : null}
 
-                              {viewMode === "internal" ? (
-                                <div className="rounded-2xl border border-sand-200 bg-white p-4 space-y-3">
+                              {viewMode === "internal" && aiOpen ? (
+                                <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
                                   <div className="flex flex-wrap items-center justify-between gap-3">
                                     <div>
-                                      <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                                      <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
                                         KI-Erklärung
                                       </p>
-                                      <p className="text-sm text-sand-600">
+                                      <p className="text-sm text-slate-600">
                                         Ruhig, kurz, ohne Preise. Versioniert.
                                       </p>
                                     </div>
@@ -745,14 +827,14 @@ export default function OffersView() {
                                             aiDraft: generateAiText(item)
                                           })
                                         }
-                                        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                                        className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
                                       >
                                         <Sparkles size={12} /> Text erzeugen
                                       </button>
                                       <button
                                         type="button"
                                         onClick={() => saveAiVersion(item)}
-                                        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                                        className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
                                       >
                                         Neue Version
                                       </button>
@@ -771,11 +853,11 @@ export default function OffersView() {
                                   />
 
                                   {activeVersion ? (
-                                    <div className="text-sm text-sand-700 whitespace-pre-line">
+                                    <div className="text-sm text-slate-700 whitespace-pre-line">
                                       {activeVersion.text}
                                     </div>
                                   ) : (
-                                    <div className="text-sm text-sand-500">
+                                    <div className="text-sm text-slate-500">
                                       Noch keine Version gespeichert.
                                     </div>
                                   )}
@@ -794,8 +876,8 @@ export default function OffersView() {
                                           }
                                           className={`rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
                                             version.id === normalizeVersionId(item)
-                                              ? "border-sand-900 bg-sand-900 text-white"
-                                              : "border-sand-300 bg-white text-sand-600 hover:bg-sand-100"
+                                              ? "border-blue-600 bg-blue-600 text-white"
+                                              : "border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
                                           }`}
                                         >
                                           Version {formatDate(version.createdAt)}
@@ -811,20 +893,20 @@ export default function OffersView() {
                       );
                     })
                   ) : (
-                    <div className="rounded-3xl border border-dashed border-sand-200 bg-sand-50 p-6 text-sm text-sand-500">
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
                       Noch keine Positionen erfasst.
                     </div>
                   )}
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-sand-200 bg-white p-6 shadow-soft space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                    <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
                       Gerätepositionen
                     </p>
-                    <p className="text-sm text-sand-600">
+                    <p className="text-sm text-slate-600">
                       Geräteprofil statt fixer Link. Reproduzierbar ohne Händler-URL.
                     </p>
                   </div>
@@ -832,7 +914,7 @@ export default function OffersView() {
                     <button
                       type="button"
                       onClick={addDeviceItem}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                      className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
                     >
                       <Plus size={12} /> Gerät
                     </button>
@@ -843,29 +925,29 @@ export default function OffersView() {
                   {activeOffer.deviceItems.length ? (
                     activeOffer.deviceItems.map((item) => {
                       const detailKey = `device-${item.id}`;
-                      const showDetails = viewMode === "internal" || detailOpen[detailKey];
+                      const showDetails = !!detailOpen[detailKey];
                       return (
                         <div
                           key={item.id}
-                          className="rounded-3xl border border-sand-200 bg-sand-50 p-5"
+                          className="rounded-2xl border border-slate-200 bg-slate-50 p-5"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
-                              <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                              <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">
                                 Geräteprofil
                               </p>
-                              <p className="text-lg font-medium text-sand-900">
+                              <p className="text-lg font-medium text-slate-900">
                                 {item.manufacturer || "Hersteller"} ·{" "}
                                 {item.modelFamily || "Modellfamilie"}
                               </p>
-                              <p className="text-sm text-sand-600">
+                              <p className="text-sm text-slate-600">
                                 {item.minSpec || "Mindest-Spezifikation definieren"}
                               </p>
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
                               {viewMode === "customer" && item.dealerLink ? (
                                 <a
-                                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                                  className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
                                   href={item.dealerLink}
                                   target="_blank"
                                   rel="noreferrer"
@@ -873,21 +955,25 @@ export default function OffersView() {
                                   <Link size={12} /> Händlerlink
                                 </a>
                               ) : null}
-                              {viewMode === "customer" ? (
+                              {viewMode === "internal" ? (
                                 <button
                                   type="button"
-                                  onClick={() =>
-                                    setDetailOpen((prev) => ({
-                                      ...prev,
-                                      [detailKey]: !prev[detailKey]
-                                    }))
-                                  }
-                                  className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                                  onClick={() => toggleDetail(detailKey)}
+                                  className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
+                                >
+                                  {showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                  {showDetails ? "Schliessen" : "Bearbeiten"}
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleDetail(detailKey)}
+                                  className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-slate-100"
                                 >
                                   {showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                                   Details
                                 </button>
-                              ) : null}
+                              )}
                             </div>
                           </div>
 
@@ -895,18 +981,18 @@ export default function OffersView() {
                             <>
                               <div className="mt-4 grid gap-4 md:grid-cols-2">
                                 <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">
                                     Qualitätskriterien
                                   </p>
-                                  <p className="mt-2 text-sm text-sand-700">
+                                  <p className="mt-2 text-sm text-slate-700">
                                     {item.qualityCriteria || "Noch nicht hinterlegt."}
                                   </p>
                                 </div>
                                 <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-slate-500">
                                     Entscheidungsgrund
                                   </p>
-                                  <p className="mt-2 text-sm text-sand-700">
+                                  <p className="mt-2 text-sm text-slate-700">
                                     {item.decisionReason || "Noch nicht hinterlegt."}
                                   </p>
                                 </div>
@@ -1006,22 +1092,22 @@ export default function OffersView() {
                       );
                     })
                   ) : (
-                    <div className="rounded-3xl border border-dashed border-sand-200 bg-sand-50 p-6 text-sm text-sand-500">
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">
                       Keine Gerätepositionen angelegt.
                     </div>
                   )}
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-sand-200 bg-white p-6 shadow-soft">
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">sevDesk Übergabe</p>
-                <p className="mt-2 text-sm text-sand-600">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-500">sevDesk Übergabe</p>
+                <p className="mt-2 text-sm text-slate-600">
                   Es werden nur Kurzpositionstitel, Menge, Preis und Referenz-ID übergeben.
                 </p>
                 {payloadPreview ? (
-                  <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="uppercase tracking-[0.3em] text-sand-500">Preview</span>
+                      <span className="uppercase tracking-[0.3em] text-slate-500">Preview</span>
                       <span>{formatDate(payloadTimestamp)}</span>
                     </div>
                     <pre className="mt-3 whitespace-pre-wrap">
@@ -1029,14 +1115,14 @@ export default function OffersView() {
                     </pre>
                   </div>
                 ) : (
-                  <div className="mt-4 rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-4 text-sm text-sand-500">
+                  <div className="mt-4 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                     Noch keine Übergabe erzeugt.
                   </div>
                 )}
               </div>
             </section>
           ) : (
-            <section className="rounded-3xl border border-sand-200 bg-white p-6 shadow-soft text-sm text-sand-500">
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm text-sm text-slate-500">
               Kein Angebot ausgewählt.
             </section>
           )}
