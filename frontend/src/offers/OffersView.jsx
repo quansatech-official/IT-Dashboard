@@ -658,7 +658,7 @@ export default function OffersView() {
                                   {detailsOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                                   Details
                                 </button>
-                              ) : null}
+                              )}
                             </div>
                           </div>
 
