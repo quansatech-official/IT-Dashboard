@@ -873,135 +873,35 @@ export default function DayPlanView() {
                 </div>
                 <span className="text-xs text-sand-500">{grouped[column.id].length}</span>
               </div>
-              <div className="space-y-2 max-h-[65vh] overflow-auto pr-1">
-                <div
-                  className="rounded-xl border border-dashed border-amber-200 bg-white/70 px-3 py-2"
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => handleUngroupedDrop(event, column.id)}
-                >
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs uppercase tracking-[0.25em] text-sand-400">
-                      Ohne Gruppe
-                    </h3>
-                    <span className="text-[10px] text-sand-400">
-                      {grouped[column.id].filter((task) => !task.group_id).length}
-                    </span>
-                  </div>
-                  <div className="mt-2 space-y-2">
-                    {grouped[column.id].filter((task) => !task.group_id).length ? (
-                      grouped[column.id]
-                        .filter((task) => !task.group_id)
-                        .map((task) => renderTaskCard(task))
-                    ) : (
-                      <div className="text-xs text-sand-400">Keine Aufgaben.</div>
-                    )}
-                    <input
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          const value = event.currentTarget.value;
-                          addTaskToGroup(null, value);
-                          event.currentTarget.value = "";
-                        }
-                      }}
-                      placeholder="Neue Aufgabe…"
-                      className="w-full rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
-                    />
-                  </div>
-                </div>
-                {groupsByColumn[column.id].map((group) => (
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="space-y-2 max-h-[65vh] overflow-auto pr-1">
                   <div
-                    key={group.id}
-                    className={`rounded-lg border border-amber-200 bg-white/80 px-2 py-1.5 ${
-                      dragOverGroupId === group.id ? "ring-2 ring-amber-300" : ""
-                    }`}
-                    onDragOver={(event) => handleGroupDragOver(event, group.id)}
-                    onDragLeave={() => setDragOverGroupId(null)}
-                    onDrop={(event) => handleGroupDrop(event, group, column.id)}
+                    className="rounded-xl border border-dashed border-amber-200 bg-white/70 px-3 py-2"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => handleUngroupedDrop(event, column.id)}
                   >
-                    <div
-                      className="flex items-center gap-2"
-                      onDragOver={(event) => handleGroupDragOver(event, group.id)}
-                      onDrop={(event) => handleGroupDrop(event, group, column.id)}
-                    >
-                      <button
-                        type="button"
-                        draggable
-                        onDragStart={(event) => {
-                          event.dataTransfer.setData("text/plain", `group:${group.id}`);
-                        }}
-                        className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-400 hover:bg-sand-100"
-                        title="Gruppe verschieben"
-                      >
-                        ::
-                      </button>
-                      {editingGroupId === group.id ? (
-                        <input
-                          value={editingGroupTitle}
-                          onChange={(event) => setEditingGroupTitle(event.target.value)}
-                          onBlur={() => commitGroupEdit(group)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              commitGroupEdit(group);
-                            }
-                            if (event.key === "Escape") {
-                              event.preventDefault();
-                              setEditingGroupId(null);
-                              setEditingGroupTitle("");
-                            }
-                          }}
-                          className="flex-1 rounded-full border border-amber-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
-                          autoFocus
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => startGroupEdit(group)}
-                          className="text-left text-xs uppercase tracking-[0.25em] text-sand-600 hover:text-sand-800"
-                          title="Gruppe umbenennen"
-                        >
-                          {group.title}
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => updateGroup(group, { pinned: !group.pinned })}
-                        className={`rounded-full border p-1 ${
-                          group.pinned
-                            ? "border-amber-300 bg-amber-100 text-amber-700"
-                            : "border-sand-200 bg-white text-sand-400 hover:bg-amber-50"
-                        }`}
-                        title={group.pinned ? "Gruppe lösen" : "Gruppe anheften"}
-                      >
-                        <Star size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => removeGroup(group)}
-                        className="ml-auto text-[10px] uppercase tracking-wide text-rose-500 hover:text-rose-700"
-                      >
-                        Entfernen
-                      </button>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs uppercase tracking-[0.25em] text-sand-400">
+                        Ohne Gruppe
+                      </h3>
+                      <span className="text-[10px] text-sand-400">
+                        {grouped[column.id].filter((task) => !task.group_id).length}
+                      </span>
                     </div>
-                    <div
-                      className="mt-2 space-y-2"
-                      onDragOver={(event) => handleGroupDragOver(event, group.id)}
-                      onDrop={(event) => handleGroupDrop(event, group, column.id)}
-                    >
-                      {grouped[column.id].filter((task) => task.group_id === group.id).length ? (
+                    <div className="mt-2 space-y-2">
+                      {grouped[column.id].filter((task) => !task.group_id).length ? (
                         grouped[column.id]
-                          .filter((task) => task.group_id === group.id)
+                          .filter((task) => !task.group_id)
                           .map((task) => renderTaskCard(task))
                       ) : (
-                        <div className="text-xs text-sand-400">Ziehe Aufgaben hierher.</div>
+                        <div className="text-xs text-sand-400">Keine Aufgaben.</div>
                       )}
                       <input
                         onKeyDown={(event) => {
                           if (event.key === "Enter") {
                             event.preventDefault();
                             const value = event.currentTarget.value;
-                            addTaskToGroup(group.id, value);
+                            addTaskToGroup(null, value);
                             event.currentTarget.value = "";
                           }
                         }}
@@ -1010,7 +910,111 @@ export default function DayPlanView() {
                       />
                     </div>
                   </div>
-                ))}
+                </div>
+                <div className="space-y-2 max-h-[65vh] overflow-auto pr-1">
+                  {groupsByColumn[column.id].map((group) => (
+                    <div
+                      key={group.id}
+                      className={`rounded-lg border border-amber-200 bg-white/80 px-2 py-1.5 ${
+                        dragOverGroupId === group.id ? "ring-2 ring-amber-300" : ""
+                      }`}
+                      onDragOver={(event) => handleGroupDragOver(event, group.id)}
+                      onDragLeave={() => setDragOverGroupId(null)}
+                      onDrop={(event) => handleGroupDrop(event, group, column.id)}
+                    >
+                      <div
+                        className="flex items-center gap-2"
+                        onDragOver={(event) => handleGroupDragOver(event, group.id)}
+                        onDrop={(event) => handleGroupDrop(event, group, column.id)}
+                      >
+                        <button
+                          type="button"
+                          draggable
+                          onDragStart={(event) => {
+                            event.dataTransfer.setData("text/plain", `group:${group.id}`);
+                          }}
+                          className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-400 hover:bg-sand-100"
+                          title="Gruppe verschieben"
+                        >
+                          ::
+                        </button>
+                        {editingGroupId === group.id ? (
+                          <input
+                            value={editingGroupTitle}
+                            onChange={(event) => setEditingGroupTitle(event.target.value)}
+                            onBlur={() => commitGroupEdit(group)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitGroupEdit(group);
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                setEditingGroupId(null);
+                                setEditingGroupTitle("");
+                              }
+                            }}
+                            className="flex-1 rounded-full border border-amber-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                            autoFocus
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => startGroupEdit(group)}
+                            className="text-left text-xs uppercase tracking-[0.25em] text-sand-600 hover:text-sand-800"
+                            title="Gruppe umbenennen"
+                          >
+                            {group.title}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => updateGroup(group, { pinned: !group.pinned })}
+                          className={`rounded-full border p-1 ${
+                            group.pinned
+                              ? "border-amber-300 bg-amber-100 text-amber-700"
+                              : "border-sand-200 bg-white text-sand-400 hover:bg-amber-50"
+                          }`}
+                          title={group.pinned ? "Gruppe lösen" : "Gruppe anheften"}
+                        >
+                          <Star size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeGroup(group)}
+                          className="ml-auto text-[10px] uppercase tracking-wide text-rose-500 hover:text-rose-700"
+                        >
+                          Entfernen
+                        </button>
+                      </div>
+                      <div
+                        className="mt-2 space-y-2"
+                        onDragOver={(event) => handleGroupDragOver(event, group.id)}
+                        onDrop={(event) => handleGroupDrop(event, group, column.id)}
+                      >
+                        {grouped[column.id].filter((task) => task.group_id === group.id).length ? (
+                          grouped[column.id]
+                            .filter((task) => task.group_id === group.id)
+                            .map((task) => renderTaskCard(task))
+                        ) : (
+                          <div className="text-xs text-sand-400">Ziehe Aufgaben hierher.</div>
+                        )}
+                        <input
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              const value = event.currentTarget.value;
+                              addTaskToGroup(group.id, value);
+                              event.currentTarget.value = "";
+                            }
+                          }}
+                          placeholder="Neue Aufgabe…"
+                          className="w-full rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           ))}
