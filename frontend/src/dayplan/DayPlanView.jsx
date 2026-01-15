@@ -70,7 +70,15 @@ export default function DayPlanView() {
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
   const [detailOpenId, setDetailOpenId] = useState(null);
   const [detailEdits, setDetailEdits] = useState({});
-  const [collapsedTimers, setCollapsedTimers] = useState({});
+  const [collapsedTimers, setCollapsedTimers] = useState(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = window.localStorage.getItem("qt_dayplan_collapsed_timers");
+      return raw ? JSON.parse(raw) : {};
+    } catch (error) {
+      return {};
+    }
+  });
   const [timeEdits, setTimeEdits] = useState({});
   const [nowMs, setNowMs] = useState(() => Date.now());
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
@@ -503,6 +511,18 @@ export default function DayPlanView() {
     return () => cancelAnimationFrame(frame);
   }, [hasRunningTimer]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        "qt_dayplan_collapsed_timers",
+        JSON.stringify(collapsedTimers)
+      );
+    } catch (error) {
+      // ignore storage errors
+    }
+  }, [collapsedTimers]);
+
   const toggleTimeTask = async (timeTask) => {
     if (!timeTask?.id) return;
     const updated = await api.toggleTimeTask(timeTask.id);
@@ -636,13 +656,13 @@ export default function DayPlanView() {
             <div className="flex items-start justify-between gap-1.5">
               <div className="flex-1 min-w-0">
                 {editingId === task.id ? (
-                  <input
+                  <textarea
                     value={editingTitle}
                     onChange={(event) => setEditingTitle(event.target.value)}
                     onBlur={() => commitEdit(task)}
                     onKeyDown={(event) => {
                       if (event.isComposing || event.keyCode === 229 || event.repeat) return;
-                      if (event.key === "Enter") {
+                      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
                         event.preventDefault();
                         commitEdit(task);
                       }
@@ -651,17 +671,18 @@ export default function DayPlanView() {
                         cancelEdit();
                       }
                     }}
-                    className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-base font-medium text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-2 md:py-1 md:text-xs"
+                    rows={3}
+                    className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-base font-medium text-sand-900 shadow-soft focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-2 md:py-1 md:text-xs"
                     autoFocus
                   />
                 ) : (
                   <button
                     type="button"
-                    onClick={() => startEdit(task)}
+                    onDoubleClick={() => startEdit(task)}
                     className={`text-left text-xs font-medium hover:text-sand-700 ${
                       isDone ? "line-through text-sand-400" : "text-sand-900"
                     }`}
-                    title="Aufgabe bearbeiten"
+                    title="Doppelklick zum Bearbeiten"
                   >
                     {task.title}
                   </button>
