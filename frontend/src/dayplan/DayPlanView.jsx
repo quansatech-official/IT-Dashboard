@@ -646,7 +646,7 @@ export default function DayPlanView() {
       <div
         key={task.id}
         className="relative rounded-lg border border-sand-200 bg-white px-3 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] md:px-2 md:py-1.5"
-        draggable
+        draggable={editingId !== task.id}
         onDragStart={(event) => {
           event.dataTransfer.setData("text/plain", `task:${task.id}`);
         }}
