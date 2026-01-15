@@ -667,7 +667,7 @@ export default function DayPlanView() {
                   </button>
                 )}
               </div>
-              <div className="flex flex-wrap items-center justify-end gap-1">
+              <div className="flex flex-wrap items-center justify-end gap-1 pr-6">
                 <button
                   type="button"
                   onClick={() => {
@@ -693,9 +693,9 @@ export default function DayPlanView() {
                       }
                       enableTime(task);
                     }}
-                    disabled={!canPromote}
+                    disabled={!canPromote && !task.time_enabled}
                     className={`rounded-full border p-1 ${
-                      canPromote
+                      canPromote || task.time_enabled
                         ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                         : "border-sand-100 text-sand-300 cursor-not-allowed"
                     }`}
@@ -865,9 +865,6 @@ export default function DayPlanView() {
             ) : null}
             {detailOpenId === task.id ? (
               <div className="mt-2 rounded-xl border border-sand-200 bg-white p-2 space-y-2">
-                <div className="text-xs text-sand-700 whitespace-pre-wrap">
-                  {task.title}
-                </div>
                 <div className="grid gap-2 md:grid-cols-3">
                   <div>
                     <label className="text-[10px] uppercase tracking-wide text-sand-500">

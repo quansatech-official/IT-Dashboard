@@ -20,17 +20,17 @@
   }
 
   :root[data-theme="dark"] {
-    --bg-50: #0f1721;
-    --bg-100: #151f2c;
-    --bg-900: #243142;
-    --card-bg: #182232;
-    --border-200: #253245;
-    --border-300: #33465f;
-    --text-500: #b7c6d8;
-    --text-600: #c6d3e2;
-    --text-700: #d5dfee;
-    --text-800: #e3eaf4;
-    --text-900: #f2f6fb;
+    --bg-50: #0f172a;
+    --bg-100: #1b2433;
+    --bg-900: #101826;
+    --card-bg: #1f2a3a;
+    --border-200: #2b3a52;
+    --border-300: #3b4f6c;
+    --text-500: #a9b7c8;
+    --text-600: #c0ccda;
+    --text-700: #d2dbe7;
+    --text-800: #e1e8f0;
+    --text-900: #f6f8fb;
   }
 
   body {
