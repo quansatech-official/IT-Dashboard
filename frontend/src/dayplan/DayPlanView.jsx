@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle,
+  ChevronDown,
   ClipboardList,
   Clock,
   DollarSign,
@@ -67,8 +68,11 @@ export default function DayPlanView() {
   const [editingTitle, setEditingTitle] = useState("");
   const [editingCustomerId, setEditingCustomerId] = useState(null);
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
+  const [detailOpenId, setDetailOpenId] = useState(null);
+  const [detailEdits, setDetailEdits] = useState({});
   const [timeEdits, setTimeEdits] = useState({});
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
 
   useEffect(() => {
     api.list().then((data) => {
@@ -94,9 +98,16 @@ export default function DayPlanView() {
   const addTaskToGroup = async (groupId, text) => {
     const trimmed = String(text || "").trim();
     if (!trimmed) return;
+    const normalizedGroupId = groupId ?? null;
+    const now = Date.now();
+    const last = lastCreateRef.current;
+    if (last.text === trimmed && last.groupId === normalizedGroupId && now - last.at < 800) {
+      return;
+    }
+    lastCreateRef.current = { text: trimmed, groupId: normalizedGroupId, at: now };
     const created = await api.create({
       title: trimmed,
-      group_id: groupId ?? null,
+      group_id: normalizedGroupId,
       status: "todo"
     });
     if (created?.id) {
@@ -123,6 +134,11 @@ export default function DayPlanView() {
   };
 
   const removeTask = async (task) => {
+    const label = String(task?.title || "").trim();
+    const ok = window.confirm(
+      label ? `Aufgabe "${label}" wirklich löschen?` : "Aufgabe wirklich löschen?"
+    );
+    if (!ok) return;
     await api.remove(task.id);
     setTasks((prev) => prev.filter((item) => item.id !== task.id));
   };
@@ -143,6 +159,20 @@ export default function DayPlanView() {
       const bucket = task.status === "done" ? "done" : "todo";
       map[bucket].push(task);
     });
+    const normalizeCustomer = (value) => String(value || "").trim().toLowerCase();
+    const sortByCustomer = (items) =>
+      [...items].sort((a, b) => {
+        const aCustomer = normalizeCustomer(a.customer);
+        const bCustomer = normalizeCustomer(b.customer);
+        if (aCustomer && bCustomer && aCustomer !== bCustomer) {
+          return aCustomer.localeCompare(bCustomer, "de");
+        }
+        if (aCustomer && !bCustomer) return -1;
+        if (!aCustomer && bCustomer) return 1;
+        return (b.created_at || 0) - (a.created_at || 0);
+      });
+    map.todo = sortByCustomer(map.todo);
+    map.done = sortByCustomer(map.done);
     return map;
   }, [tasks]);
 
@@ -305,6 +335,70 @@ export default function DayPlanView() {
     setEditingCustomerValue("");
   };
 
+  const getDetailValue = (task, field) => {
+    const current = detailEdits[task.id]?.[field];
+    if (current !== undefined) return current;
+    return task?.[field] || "";
+  };
+
+  const setDetailValue = (taskId, field, value) => {
+    setDetailEdits((prev) => ({
+      ...prev,
+      [taskId]: {
+        ...(prev[taskId] || {}),
+        [field]: value
+      }
+    }));
+  };
+
+  const parseTimeToMinutes = (value) => {
+    const parts = String(value || "").split(":");
+    if (parts.length < 2) return null;
+    const hours = Number(parts[0]);
+    const minutes = Number(parts[1]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+    return hours * 60 + minutes;
+  };
+
+  const commitDetail = async (task, field) => {
+    const value = getDetailValue(task, field);
+    if (value === (task?.[field] || "")) return;
+    const patch = { [field]: value };
+    if (field === "arrival_time" || field === "departure_time") {
+      const arrival = field === "arrival_time" ? value : getDetailValue(task, "arrival_time");
+      const departure =
+        field === "departure_time" ? value : getDetailValue(task, "departure_time");
+      const startMinutes = parseTimeToMinutes(arrival);
+      const endMinutes = parseTimeToMinutes(departure);
+      if (startMinutes !== null && endMinutes !== null) {
+        let diffMinutes = endMinutes - startMinutes;
+        if (diffMinutes < 0) diffMinutes += 24 * 60;
+        const runningExtra =
+          task.running && task.startTime ? Math.max(0, Date.now() - task.startTime) : 0;
+        const baseElapsed = (task.elapsed || 0) + runningExtra;
+        patch.elapsed = baseElapsed + diffMinutes * 60 * 1000;
+        patch.time_enabled = true;
+        patch.running = false;
+        patch.startTime = 0;
+      }
+    }
+    await updateTask(task, patch);
+  };
+
+  const toggleDetails = (task) => {
+    setDetailOpenId((prev) => (prev === task.id ? null : task.id));
+    setDetailEdits((prev) => ({
+      ...prev,
+      [task.id]: {
+        details: task.details || "",
+        arrival_time: task.arrival_time || "",
+        departure_time: task.departure_time || "",
+        deadline: task.deadline || ""
+      }
+    }));
+  };
+
   const commitCustomerEdit = async (task) => {
     const trimmed = editingCustomerValue.trim();
     if (trimmed === task.customer) {
@@ -392,12 +486,22 @@ export default function DayPlanView() {
     [customers]
   );
 
+  const hasRunningTimer = useMemo(() => tasks.some((task) => task?.running), [tasks]);
+
   useEffect(() => {
-    const hasRunning = tasks.some((task) => task?.running);
-    if (!hasRunning) return;
-    const interval = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => clearInterval(interval);
-  }, [tasks]);
+    if (!hasRunningTimer) return;
+    let frame = 0;
+    let lastTick = 0;
+    const tick = (now) => {
+      if (now - lastTick >= 250) {
+        lastTick = now;
+        setNowMs(Date.now());
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [hasRunningTimer]);
 
   const toggleTimeTask = async (timeTask) => {
     if (!timeTask?.id) return;
@@ -520,23 +624,13 @@ export default function DayPlanView() {
     return (
       <div
         key={task.id}
-        className="relative rounded-lg border border-amber-100 bg-amber-50/70 px-2 py-1.5 shadow-[0_2px_6px_rgba(150,120,60,0.08)]"
+        className="relative rounded-lg border border-amber-100 bg-amber-50/70 px-3 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] md:px-2 md:py-1.5"
         draggable
         onDragStart={(event) => {
           event.dataTransfer.setData("text/plain", `task:${task.id}`);
         }}
       >
         <div className="flex items-start gap-1.5">
-          <button
-            type="button"
-            onClick={() => updateTask(task, { status: isDone ? "todo" : "done" })}
-            className={`mt-0.5 h-3.5 w-3.5 rounded-full border flex items-center justify-center ${
-              isDone ? "border-emerald-400 bg-emerald-400" : "border-amber-300 bg-white"
-            }`}
-            title={isDone ? "Als unzugeordnet markieren" : "Als erledigt markieren"}
-          >
-            {isDone ? <span className="text-[10px] text-white">✓</span> : null}
-          </button>
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-1.5">
               <div className="flex-1 min-w-0">
@@ -546,6 +640,7 @@ export default function DayPlanView() {
                     onChange={(event) => setEditingTitle(event.target.value)}
                     onBlur={() => commitEdit(task)}
                     onKeyDown={(event) => {
+                      if (event.isComposing || event.keyCode === 229 || event.repeat) return;
                       if (event.key === "Enter") {
                         event.preventDefault();
                         commitEdit(task);
@@ -555,7 +650,7 @@ export default function DayPlanView() {
                         cancelEdit();
                       }
                     }}
-                    className="w-full rounded-md border border-amber-200 bg-white px-2 py-1 text-xs font-medium text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-base font-medium text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-2 md:py-1 md:text-xs"
                     autoFocus
                   />
                 ) : (
@@ -627,7 +722,7 @@ export default function DayPlanView() {
                           commitManualTime(task.id, timeTask, timeInputValue);
                         }
                       }}
-                      className="w-[78px] bg-transparent text-[10px] font-mono text-sand-600 focus:outline-none"
+                      className="w-[78px] bg-transparent text-base font-mono text-sand-600 focus:outline-none md:text-[10px]"
                       title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
                       disabled={!timeTask}
                     />
@@ -670,14 +765,27 @@ export default function DayPlanView() {
                 >
                   <DollarSign size={12} />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => removeTask(task)}
-                  className="rounded-full border border-rose-200 bg-rose-50 p-1 text-rose-700 hover:bg-rose-100"
-                  title="Löschen"
-                >
-                  <Trash2 size={12} />
-                </button>
+                <div className="flex flex-col items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => removeTask(task)}
+                    className="rounded-full border border-rose-200 bg-rose-50 p-1 text-rose-700 hover:bg-rose-100"
+                    title="Löschen"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleDetails(task)}
+                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                    title="Details anzeigen"
+                  >
+                    <ChevronDown
+                      size={12}
+                      className={`transition ${detailOpenId === task.id ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
             {editingCustomerId === task.id ? (
@@ -686,6 +794,7 @@ export default function DayPlanView() {
                 onChange={(event) => setEditingCustomerValue(event.target.value)}
                 onBlur={() => commitCustomerEdit(task)}
                 onKeyDown={(event) => {
+                  if (event.isComposing || event.keyCode === 229 || event.repeat) return;
                   if (event.key === "Enter") {
                     event.preventDefault();
                     commitCustomerEdit(task);
@@ -697,7 +806,7 @@ export default function DayPlanView() {
                 }}
                 list="dayplan-customers"
                 placeholder="Kunde zuordnen…"
-                className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-base text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-2 md:py-1 md:text-[11px]"
                 autoFocus
               />
             ) : task.customer ? (
@@ -722,7 +831,7 @@ export default function DayPlanView() {
                     value={suggestionQuery}
                     onChange={(event) => setSuggestionQuery(event.target.value)}
                     placeholder="Kunde suchen..."
-                    className="w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-base text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-2 md:py-1 md:text-xs"
                   />
                 </div>
                 <div className="max-h-48 overflow-auto border-t border-amber-100">
@@ -754,6 +863,65 @@ export default function DayPlanView() {
                 </div>
               </div>
             ) : null}
+            {detailOpenId === task.id ? (
+              <div className="mt-2 rounded-xl border border-amber-200 bg-white/90 p-2 space-y-2">
+                <div>
+                  <label className="text-[10px] uppercase tracking-wide text-sand-500">
+                    Mehr Text
+                  </label>
+                  <textarea
+                    value={getDetailValue(task, "details")}
+                    onChange={(event) => setDetailValue(task.id, "details", event.target.value)}
+                    onBlur={() => commitDetail(task, "details")}
+                    rows={3}
+                    className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    placeholder="Zusatzinfos zur Aufgabe…"
+                  />
+                </div>
+                <div className="grid gap-2 md:grid-cols-3">
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wide text-sand-500">
+                      Anfahrtszeit
+                    </label>
+                    <input
+                      type="time"
+                      value={getDetailValue(task, "arrival_time")}
+                      onChange={(event) =>
+                        setDetailValue(task.id, "arrival_time", event.target.value)
+                      }
+                      onBlur={() => commitDetail(task, "arrival_time")}
+                      className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wide text-sand-500">
+                      Abfahrtszeit
+                    </label>
+                    <input
+                      type="time"
+                      value={getDetailValue(task, "departure_time")}
+                      onChange={(event) =>
+                        setDetailValue(task.id, "departure_time", event.target.value)
+                      }
+                      onBlur={() => commitDetail(task, "departure_time")}
+                      className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wide text-sand-500">
+                      Deadline
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={getDetailValue(task, "deadline")}
+                      onChange={(event) => setDetailValue(task.id, "deadline", event.target.value)}
+                      onBlur={() => commitDetail(task, "deadline")}
+                      className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -761,9 +929,9 @@ export default function DayPlanView() {
   };
 
   return (
-    <div className="min-h-screen bg-sand-50">
+    <div className="min-h-screen bg-sand-50 touch-manipulation md:touch-auto">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-5 md:py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
               <ClipboardList size={18} />
@@ -782,18 +950,19 @@ export default function DayPlanView() {
                   setGroupDrafts((prev) => ({ ...prev, todo: event.target.value }))
                 }
                 onKeyDown={(event) => {
+                  if (event.isComposing || event.keyCode === 229 || event.repeat) return;
                   if (event.key === "Enter") {
                     event.preventDefault();
                     createGroup("todo");
                   }
                 }}
                 placeholder="Neue Gruppe…"
-                className="w-40 rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                className="w-full md:w-40 rounded-full border border-amber-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
               />
               <button
                 type="button"
                 onClick={() => createGroup("todo")}
-                className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-amber-100"
+                className="rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-amber-100 md:px-3 md:py-1 md:text-[10px]"
               >
                 Gruppe
               </button>
@@ -802,7 +971,7 @@ export default function DayPlanView() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 md:px-6 py-8 space-y-8">
+      <main className="max-w-7xl mx-auto px-4 md:px-6 py-6 md:py-8 space-y-6 md:space-y-8">
         {error ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
             {error}
@@ -851,6 +1020,7 @@ export default function DayPlanView() {
                     <div className="mt-2 space-y-2">
                       <input
                         onKeyDown={(event) => {
+                          if (event.isComposing || event.keyCode === 229 || event.repeat) return;
                           if (event.key === "Enter") {
                             event.preventDefault();
                             const value = event.currentTarget.value;
@@ -859,7 +1029,7 @@ export default function DayPlanView() {
                           }
                         }}
                         placeholder="Neue Aufgabe…"
-                        className="w-full rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                        className="w-full rounded-full border border-amber-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
                       />
                       {grouped[column.id].filter((task) => !task.group_id).length ? (
                         grouped[column.id]
@@ -961,6 +1131,7 @@ export default function DayPlanView() {
                         )}
                         <input
                           onKeyDown={(event) => {
+                            if (event.isComposing || event.keyCode === 229 || event.repeat) return;
                             if (event.key === "Enter") {
                               event.preventDefault();
                               const value = event.currentTarget.value;
@@ -969,7 +1140,7 @@ export default function DayPlanView() {
                             }
                           }}
                           placeholder="Neue Aufgabe…"
-                          className="w-full rounded-full border border-amber-200 bg-white px-3 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
+                          className="w-full rounded-full border border-amber-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
                         />
                       </div>
                     </div>

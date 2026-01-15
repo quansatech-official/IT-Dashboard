@@ -65,6 +65,10 @@ class DayTask(Base):
     erledigt = Column(Boolean, default=False)
     aberechnet = Column(Boolean, default=False)
     kulant = Column(Boolean, default=False)
+    details = Column(String, default="")
+    arrival_time = Column(String, default="")
+    departure_time = Column(String, default="")
+    deadline = Column(String, default="")
     elapsed = Column(BigInteger, default=0)      # ms
     running = Column(Boolean, default=False)
     startTime = Column("starttime", BigInteger, default=0)    # ms timestamp
@@ -388,6 +392,14 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN aberechnet BOOLEAN DEFAULT FALSE")
     if "kulant" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN kulant BOOLEAN DEFAULT FALSE")
+    if "details" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN details VARCHAR DEFAULT ''")
+    if "arrival_time" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN arrival_time VARCHAR DEFAULT ''")
+    if "departure_time" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN departure_time VARCHAR DEFAULT ''")
+    if "deadline" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN deadline VARCHAR DEFAULT ''")
     if "elapsed" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN elapsed BIGINT DEFAULT 0")
     if "running" not in columns:
@@ -464,6 +476,10 @@ class DayTaskCreate(BaseModel):
     erledigt: Optional[bool] = False
     aberechnet: Optional[bool] = False
     kulant: Optional[bool] = False
+    details: Optional[str] = ""
+    arrival_time: Optional[str] = ""
+    departure_time: Optional[str] = ""
+    deadline: Optional[str] = ""
     elapsed: Optional[int] = 0
     running: Optional[bool] = False
     startTime: Optional[int] = 0
@@ -482,6 +498,10 @@ class DayTaskUpdate(BaseModel):
     erledigt: Optional[bool] = None
     aberechnet: Optional[bool] = None
     kulant: Optional[bool] = None
+    details: Optional[str] = None
+    arrival_time: Optional[str] = None
+    departure_time: Optional[str] = None
+    deadline: Optional[str] = None
     elapsed: Optional[int] = None
     running: Optional[bool] = None
     startTime: Optional[int] = None
@@ -649,6 +669,10 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "erledigt": t.erledigt,
         "aberechnet": t.aberechnet,
         "kulant": t.kulant,
+        "details": t.details,
+        "arrival_time": t.arrival_time,
+        "departure_time": t.departure_time,
+        "deadline": t.deadline,
         "elapsed": t.elapsed,
         "running": t.running,
         "startTime": t.startTime,
@@ -1357,6 +1381,10 @@ def create_day_task(data: DayTaskCreate):
             erledigt=bool(data.erledigt),
             aberechnet=bool(data.aberechnet),
             kulant=bool(data.kulant),
+            details=data.details or "",
+            arrival_time=data.arrival_time or "",
+            departure_time=data.departure_time or "",
+            deadline=data.deadline or "",
             elapsed=int(data.elapsed or 0),
             running=bool(data.running),
             startTime=int(data.startTime or 0),
@@ -1373,7 +1401,17 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
         task = db.query(DayTask).get(task_id)
         if not task:
             raise HTTPException(404, "Task not found")
-        string_fields = {"title", "customer", "customer_number", "status", "signature_base64"}
+        string_fields = {
+            "title",
+            "customer",
+            "customer_number",
+            "status",
+            "signature_base64",
+            "details",
+            "arrival_time",
+            "departure_time",
+            "deadline",
+        }
         for field, value in data.dict(exclude_unset=True).items():
             if value is None and field in string_fields:
                 setattr(task, field, "")

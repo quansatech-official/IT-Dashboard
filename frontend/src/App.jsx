@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   BarChart3,
   ClipboardList,
   FileText,
+  Moon,
   Settings,
   StickyNote,
+  Sun,
   Users,
   Wrench
 } from "lucide-react";
@@ -21,9 +23,30 @@ import StatsView from "./stats/StatsView";
 export default function App() {
   const [activeView, setActiveView] = useState("dayplan");
   const [sidebarWidth, setSidebarWidth] = useState(200);
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === "undefined") return "light";
+    const stored = window.localStorage.getItem("qt_theme");
+    if (stored === "dark" || stored === "light") return stored;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("qt_theme", theme);
+  }, [theme]);
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
+      <button
+        type="button"
+        onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
+        className="fixed top-4 right-4 z-50 inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600 shadow-soft hover:bg-sand-100"
+        title={theme === "dark" ? "Tagmodus" : "Nachtmodus"}
+      >
+        {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+        {theme === "dark" ? "Tag" : "Nacht"}
+      </button>
       <div className="flex min-h-screen">
         <aside
           className="bg-white border-r border-sand-200 p-4 flex flex-col gap-6"

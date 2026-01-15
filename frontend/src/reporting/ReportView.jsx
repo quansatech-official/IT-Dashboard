@@ -659,20 +659,9 @@ export default function ReportView() {
     }
     setIsGenerating(true);
     try {
-      const res = await fetch("/api/ai_action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: freeText })
-      });
-      if (!res.ok) throw new Error("ai_failed");
-      const data = await res.json();
-      if (!data?.action) throw new Error("ai_invalid");
-      addAction(data.action);
-      setFreeText("");
-    } catch (error) {
       const payload = parseActionFromText(freeText);
       addAction(payload);
-      setToast("KI nicht erreichbar, Freitext lokal ausgewertet.");
+      setFreeText("");
     } finally {
       setIsGenerating(false);
     }
@@ -1464,13 +1453,10 @@ export default function ReportView() {
                 <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 lg:col-span-2">
                   <div className="flex items-center gap-2 text-sand-700">
                     <Sparkles size={16} />
-                    <p className="text-xs uppercase tracking-wide text-sand-600">Mit KI erstellen</p>
-                    <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] font-semibold tracking-wide text-sand-700">
-                      <Sparkles size={10} /> KI
-                    </span>
+                    <p className="text-xs uppercase tracking-wide text-sand-600">Aus Freitext</p>
                   </div>
                   <p className="text-sm text-sand-600">
-                    Kurzer Freitext, wir füllen die bekannten Felder vor.
+                    Freitext wird direkt in eine Maßnahme übernommen.
                   </p>
                   <textarea
                     value={freeText}
@@ -1488,11 +1474,11 @@ export default function ReportView() {
                     {isGenerating ? (
                       <span className="inline-flex items-center gap-2">
                         <span className="h-3.5 w-3.5 rounded-full border-2 border-sand-300 border-t-sand-700 animate-spin" />
-                        KI erstellt ...
+                        Übernehme ...
                       </span>
                     ) : (
                       <>
-                        <Plus size={14} /> Aus Freitext erzeugen
+                        <Plus size={14} /> Übernehmen
                       </>
                     )}
                   </button>

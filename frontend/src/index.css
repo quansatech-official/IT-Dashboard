@@ -6,18 +6,37 @@
 
 @layer base {
   :root {
-    --sand-50: #f4f7fb;
-    --sand-100: #e8eef6;
-    --sand-200: #d9e3ef;
-    --sand-400: #9fb1c7;
-    --sand-600: #5a6a7c;
-    --sand-900: #1f2a37;
+    --bg-50: #f4f7fb;
+    --bg-100: #e8eef6;
+    --bg-900: #1f2a37;
+    --card-bg: #ffffff;
+    --border-200: #d9e3ef;
+    --border-300: #9fb1c7;
+    --text-500: #5a6a7c;
+    --text-600: #5a6a7c;
+    --text-700: #594f45;
+    --text-800: #40362e;
+    --text-900: #1f2a37;
+  }
+
+  :root[data-theme="dark"] {
+    --bg-50: #0b1220;
+    --bg-100: #0f172a;
+    --bg-900: #111827;
+    --card-bg: #0f172a;
+    --border-200: #1f2a37;
+    --border-300: #334155;
+    --text-500: #9aa9bb;
+    --text-600: #9aa9bb;
+    --text-700: #c2cbd6;
+    --text-800: #d6dde8;
+    --text-900: #e6edf6;
   }
 
   body {
     font-family: "Space Grotesk", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-    color: var(--sand-900);
-    background: var(--sand-50);
+    color: var(--text-900);
+    background: var(--bg-50);
     font-size: 15px;
     line-height: 1.5;
   }
@@ -42,11 +61,11 @@
   }
 
   .bg-sand-50 {
-    background-color: var(--sand-50);
+    background-color: var(--bg-50);
   }
 
   .bg-sand-100 {
-    background-color: var(--sand-100);
+    background-color: var(--bg-100);
   }
 
   .bg-sand-100-70 {
@@ -58,34 +77,38 @@
   }
 
   .border-sand-200 {
-    border-color: var(--sand-200);
+    border-color: var(--border-200);
   }
 
   .border-sand-300 {
-    border-color: var(--sand-400);
+    border-color: var(--border-300);
   }
 
   .text-sand-500 {
-    color: var(--sand-600);
+    color: var(--text-500);
   }
 
   .text-sand-600 {
-    color: var(--sand-600);
+    color: var(--text-600);
   }
 
   .text-sand-700 {
-    color: #594f45;
+    color: var(--text-700);
   }
 
   .text-sand-800 {
-    color: #40362e;
+    color: var(--text-800);
   }
 
   .text-sand-900 {
-    color: var(--sand-900);
+    color: var(--text-900);
   }
 
   .bg-sand-900 {
-    background-color: var(--sand-900);
+    background-color: var(--bg-900);
+  }
+
+  .bg-white {
+    background-color: var(--card-bg);
   }
 }
