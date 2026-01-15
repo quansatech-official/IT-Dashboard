@@ -4,6 +4,7 @@ import {
   ClipboardList,
   FileText,
   Moon,
+  Receipt,
   Settings,
   StickyNote,
   Sun,
@@ -18,6 +19,7 @@ import ToolsView from "./tools/ToolsView";
 import SettingsView from "./settings/SettingsView";
 import CustomerDirectoryView from "./customers/CustomerDirectoryView";
 import DayPlanView from "./dayplan/DayPlanView";
+import OffersView from "./offers/OffersView";
 import StatsView from "./stats/StatsView";
 
 export default function App() {
@@ -85,6 +87,16 @@ export default function App() {
               } flex items-center gap-3`}
             >
               <FileText size={18} /> Kundenbericht
+            </button>
+            <button
+              onClick={() => setActiveView("offers")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "offers"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <Receipt size={18} /> Angebote
             </button>
             <button
               onClick={() => setActiveView("customers")}
@@ -180,6 +192,8 @@ export default function App() {
             <TelephonyView />
           ) : activeView === "stats" ? (
             <StatsView />
+          ) : activeView === "offers" ? (
+            <OffersView />
           ) : (
             <ReportView />
           )}

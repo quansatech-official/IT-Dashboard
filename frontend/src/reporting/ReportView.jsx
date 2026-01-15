@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileDown, FileText, Flag, Plus, Save, Sparkles, Users2, PenLine } from "lucide-react";
+import html2pdf from "html2pdf.js";
 import ActionCard from "./components/ActionCard";
 import ArchivePanel from "./components/ArchivePanel";
 import CatalogManager from "./components/CatalogManager";
@@ -279,6 +280,7 @@ export default function ReportView() {
   });
   const [freeText, setFreeText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isPdfExporting, setIsPdfExporting] = useState(false);
   const [integrationSettings, setIntegrationSettings] = useState({
     rmm_host: "",
     rmm_user: "",
@@ -574,33 +576,57 @@ export default function ReportView() {
     }
   };
 
-  const printHtml = (contentHtml) => {
-    const htmlDoc = `
-      <html>
-        <head>
-          <title>IT-Kundenbericht</title>
-          <style>
-            @page { size: A4; margin: 16mm; }
-            body { margin: 0; font-family: Arial, sans-serif; }
-          </style>
-        </head>
-        <body>${contentHtml}</body>
-      </html>
-    `;
-    const popup = window.open("", "_blank", "width=960,height=720");
-    if (!popup) {
-      setToast("Popup blockiert.");
+  const downloadPdf = async () => {
+    if (!report.customer?.trim()) {
+      setToast("Bitte Kunde angeben.");
       return;
     }
-    popup.document.open();
-    popup.document.write(htmlDoc);
-    popup.document.close();
-    popup.focus();
-    popup.print();
-  };
-
-  const downloadPdf = () => {
-    printHtml(previewHtml);
+    if (isPdfExporting) return;
+    setIsPdfExporting(true);
+    const html = renderReportHTML(report, { mode: "pdf" });
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    container.style.position = "fixed";
+    container.style.left = "-9999px";
+    container.style.top = "0";
+    container.style.width = "210mm";
+    container.style.background = "#ffffff";
+    document.body.appendChild(container);
+    const filename = `IT-Kundenbericht_${report.customer}_${report.period || "ohne Zeitraum"}`
+      .replaceAll(" ", "_")
+      .replaceAll("/", "-");
+    try {
+      const images = Array.from(container.querySelectorAll("img"));
+      await Promise.all(
+        images.map(
+          (img) =>
+            new Promise((resolve) => {
+              if (img.complete) {
+                resolve();
+                return;
+              }
+              img.onload = resolve;
+              img.onerror = resolve;
+            })
+        )
+      );
+      await html2pdf()
+        .set({
+          margin: [12, 12, 14, 12],
+          filename: `${filename}.pdf`,
+          html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+          pagebreak: { mode: ["css", "legacy"] }
+        })
+        .from(container)
+        .save();
+      setToast("PDF erstellt.");
+    } catch (error) {
+      setToast("PDF Export fehlgeschlagen.");
+    } finally {
+      document.body.removeChild(container);
+      setIsPdfExporting(false);
+    }
   };
 
   const addAction = (payload = {}) => {
@@ -1159,9 +1185,14 @@ export default function ReportView() {
     <div className="flex flex-wrap gap-2">
       <button
         onClick={downloadPdf}
-        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+        disabled={isPdfExporting}
+        className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
+          isPdfExporting
+            ? "border-sand-200 bg-sand-100 text-sand-500 cursor-wait"
+            : "border-sand-300 bg-white hover:bg-sand-100"
+        }`}
       >
-        <FileDown size={14} /> PDF
+        <FileDown size={14} /> {isPdfExporting ? "PDF…" : "PDF"}
       </button>
       <button
         onClick={archiveReport}

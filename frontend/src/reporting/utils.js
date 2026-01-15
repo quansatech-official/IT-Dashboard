@@ -9,6 +9,7 @@ export const escapeHTML = (value = "") =>
 
 export const renderReportHTML = (report, options = {}) => {
   const isEmail = options.mode === "email";
+  const isPdf = options.mode === "pdf";
   const beaconUrl = options.beaconUrl || "";
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
@@ -75,7 +76,7 @@ export const renderReportHTML = (report, options = {}) => {
       return `
         <tr>
           <td style="padding: 0;">
-            <div style="padding: 16px; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 14px;">
+            <div style="padding: 16px; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 14px; page-break-inside: avoid; break-inside: avoid;">
               ${content}
             </div>
           </td>
@@ -86,7 +87,16 @@ export const renderReportHTML = (report, options = {}) => {
 
   const containerStyle = isEmail
     ? "width: 640px; max-width: 100%;"
+    : isPdf
+      ? "width: 100%; max-width: 100%;"
     : "width: 100%; max-width: 720px; margin: 0 auto;";
+
+  const outerBackground = isPdf ? "#ffffff" : "#f7f2ea";
+  const outerPadding = isPdf ? "0" : "24px 0";
+  const outerCellPadding = isPdf ? "0" : "24px";
+  const cardDecoration = isPdf
+    ? ""
+    : "border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);";
 
   const innerTable = `
             <tr>
@@ -171,7 +181,7 @@ export const renderReportHTML = (report, options = {}) => {
   `;
 
   const emailContainer = `
-    <table style="${containerStyle} border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; border-radius: 22px; overflow: hidden; box-shadow: 0 18px 36px rgba(40, 30, 20, 0.12);">
+    <table style="${containerStyle} border-collapse: collapse; background: #ffffff; border: 1px solid #e7e1d7; ${cardDecoration}">
       ${innerTable}
     </table>`;
 
@@ -181,9 +191,9 @@ export const renderReportHTML = (report, options = {}) => {
       : "";
 
   return `
-    <table style="width: 100%; border-collapse: collapse; background: #f7f2ea; padding: 24px 0;">
+    <table style="width: 100%; border-collapse: collapse; background: ${outerBackground}; padding: ${outerPadding};">
       <tr>
-        <td align="center" style="padding: 24px;">
+        <td align="center" style="padding: ${outerCellPadding};">
           ${emailContainer}
           ${beaconTag}
         </td>
