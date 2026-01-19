@@ -65,6 +65,7 @@ class DayTask(Base):
     erledigt = Column(Boolean, default=False)
     aberechnet = Column(Boolean, default=False)
     kulant = Column(Boolean, default=False)
+    randzeit = Column(Boolean, default=False)
     details = Column(String, default="")
     arrival_time = Column(String, default="")
     departure_time = Column(String, default="")
@@ -392,6 +393,8 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN aberechnet BOOLEAN DEFAULT FALSE")
     if "kulant" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN kulant BOOLEAN DEFAULT FALSE")
+    if "randzeit" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN randzeit BOOLEAN DEFAULT FALSE")
     if "details" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN details VARCHAR DEFAULT ''")
     if "arrival_time" not in columns:
@@ -476,6 +479,7 @@ class DayTaskCreate(BaseModel):
     erledigt: Optional[bool] = False
     aberechnet: Optional[bool] = False
     kulant: Optional[bool] = False
+    randzeit: Optional[bool] = False
     details: Optional[str] = ""
     arrival_time: Optional[str] = ""
     departure_time: Optional[str] = ""
@@ -498,6 +502,7 @@ class DayTaskUpdate(BaseModel):
     erledigt: Optional[bool] = None
     aberechnet: Optional[bool] = None
     kulant: Optional[bool] = None
+    randzeit: Optional[bool] = None
     details: Optional[str] = None
     arrival_time: Optional[str] = None
     departure_time: Optional[str] = None
@@ -669,6 +674,7 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "erledigt": t.erledigt,
         "aberechnet": t.aberechnet,
         "kulant": t.kulant,
+        "randzeit": t.randzeit,
         "details": t.details,
         "arrival_time": t.arrival_time,
         "departure_time": t.departure_time,

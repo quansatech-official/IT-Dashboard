@@ -1,4 +1,5 @@
 const API = "/api/telephony";
+const CUSTOMER_API = "/api/customers";
 
 const safeJson = async (response) => {
   if (!response.ok) {
@@ -103,6 +104,26 @@ export const telephonyService = {
       return response.ok;
     } catch (error) {
       return false;
+    }
+  },
+  fetchCustomers: async () => {
+    try {
+      const response = await fetch(CUSTOMER_API);
+      return await safeJson(response);
+    } catch (error) {
+      return [];
+    }
+  },
+  updateCustomer: async (customerId, payload) => {
+    try {
+      const response = await fetch(`${CUSTOMER_API}/${customerId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      return null;
     }
   }
 };

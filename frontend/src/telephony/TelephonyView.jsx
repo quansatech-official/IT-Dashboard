@@ -32,6 +32,7 @@ export default function TelephonyView() {
   const [apiStatus, setApiStatus] = useState("idle");
   const [extensions, setExtensions] = useState([]);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [customers, setCustomers] = useState([]);
   const [debugInfo, setDebugInfo] = useState({
     lastSettingsFetchAt: "",
     lastHealthCheckAt: "",
@@ -95,6 +96,47 @@ export default function TelephonyView() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    telephonyService.fetchCustomers().then((data) => {
+      if (!active) return;
+      if (Array.isArray(data)) {
+        setCustomers(data);
+      } else {
+        setCustomers([]);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleAssignNumber = async (customerId, number) => {
+    if (!customerId || !number) {
+      return { ok: false, error: "Kunde oder Rufnummer fehlt." };
+    }
+    const customer = customers.find((item) => item.id === customerId);
+    if (!customer) {
+      return { ok: false, error: "Kunde nicht gefunden." };
+    }
+    const existingPhones = Array.isArray(customer.phones) ? customer.phones : [];
+    const nextPhones = [
+      ...existingPhones,
+      {
+        label: "Telefonie",
+        number
+      }
+    ];
+    const updated = await telephonyService.updateCustomer(customerId, { phones: nextPhones });
+    if (!updated?.id) {
+      return { ok: false, error: "Konnte Rufnummer nicht speichern." };
+    }
+    setCustomers((prev) =>
+      prev.map((item) => (item.id === updated.id ? updated : item))
+    );
+    return { ok: true, customer: updated };
+  };
 
   useEffect(() => {
     if (activeTab !== "monitoring") return;
@@ -234,10 +276,12 @@ export default function TelephonyView() {
             <CallListView
               calls={calls}
               extensions={extensions}
+              customers={customers}
               onResolve={(number) => telephonyService.reverseLookup(number)}
               onCallback={(extension, number) =>
                 telephonyService.clickToDial({ extension, number })
               }
+              onAssignNumber={handleAssignNumber}
             />
           </>
         ) : (

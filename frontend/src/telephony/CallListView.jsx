@@ -23,6 +23,8 @@ const formatDuration = (seconds) => {
   return `${mins}:${secs}`;
 };
 
+const normalizeDigits = (value) => String(value || "").replace(/\D/g, "");
+
 const directionLabel = (direction) => {
   if (!direction) return "-";
   const value = direction.toLowerCase();
@@ -65,7 +67,14 @@ const durationSeconds = (call) => {
   return 0;
 };
 
-export default function CallListView({ calls, extensions, onCallback, onResolve }) {
+export default function CallListView({
+  calls,
+  extensions,
+  customers = [],
+  onCallback,
+  onResolve,
+  onAssignNumber
+}) {
   const pageSize = 10;
   const [page, setPage] = useState(1);
   const totalPages = Math.min(3, Math.max(1, Math.ceil(calls.length / pageSize)));
@@ -74,6 +83,10 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
   const [callbackStatus, setCallbackStatus] = useState("");
   const [resolvedNames, setResolvedNames] = useState({});
   const [onlyMissed, setOnlyMissed] = useState(false);
+  const [assignTarget, setAssignTarget] = useState(null);
+  const [assignQuery, setAssignQuery] = useState("");
+  const [assignStatus, setAssignStatus] = useState("");
+  const [assignBusy, setAssignBusy] = useState(false);
 
   useEffect(() => {
     if (page > totalPages) setPage(1);
@@ -95,6 +108,12 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
     return call.from || call.to || "-";
   };
 
+  const assignNumber = (call) => {
+    const number = displayNumber(call);
+    if (!number || number === "-") return "";
+    return number;
+  };
+
   const resolveNumber = (call) => {
     if (call.customerName) return "";
     return displayNumber(call);
@@ -111,6 +130,27 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
     3,
     Math.max(1, Math.ceil(filteredCalls.length / pageSize))
   );
+
+  const assignCandidates = useMemo(() => {
+    const needle = assignQuery.trim().toLowerCase();
+    const list = Array.isArray(customers) ? customers : [];
+    if (!needle) return list.slice(0, 12);
+    return list
+      .filter((customer) => {
+        const name = String(customer?.name || "").toLowerCase();
+        const code = String(customer?.short_code || "").toLowerCase();
+        const creditor = String(customer?.creditor_number || "").toLowerCase();
+        return name.includes(needle) || code.includes(needle) || creditor.includes(needle);
+      })
+      .slice(0, 12);
+  }, [customers, assignQuery]);
+
+  useEffect(() => {
+    if (!assignTarget) return;
+    setAssignQuery("");
+    setAssignStatus("");
+    setAssignBusy(false);
+  }, [assignTarget]);
 
   useEffect(() => {
     if (page > visibleTotalPages) setPage(1);
@@ -133,6 +173,13 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
       active = false;
     };
   }, [pagedCalls, resolvedNames, onResolve]);
+
+  const customerHasNumber = (customer, number) => {
+    const target = normalizeDigits(number);
+    if (!target) return false;
+    const phones = Array.isArray(customer?.phones) ? customer.phones : [];
+    return phones.some((phone) => normalizeDigits(phone?.number) === target);
+  };
 
   return (
     <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
@@ -210,7 +257,21 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
                     </span>
                   </td>
                   <td className="py-3">
-                    {call.customerName || resolvedNames[resolveNumber(call)] || "-"}
+                    {call.customerName || resolvedNames[resolveNumber(call)] ? (
+                      call.customerName || resolvedNames[resolveNumber(call)]
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <span>-</span>
+                        {assignNumber(call) ? (
+                          <button
+                            onClick={() => setAssignTarget(call)}
+                            className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
+                          >
+                            Übernehmen
+                          </button>
+                        ) : null}
+                      </div>
+                    )}
                   </td>
                   <td className="py-3 text-right">
                     {!call.answered && callbackNumber(call) ? (
@@ -327,6 +388,100 @@ export default function CallListView({ calls, extensions, onCallback, onResolve 
                   className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
                 >
                   Jetzt anrufen
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {assignTarget ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-md rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="border-b border-sand-200 px-5 py-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                Rufnummer übernehmen
+              </p>
+              <h3 className="text-lg font-display text-sand-900">
+                {assignNumber(assignTarget) || "Nummer unbekannt"}
+              </h3>
+            </div>
+            <div className="p-5 space-y-4">
+              <label className="text-xs uppercase tracking-wide text-sand-600">
+                Kunde suchen
+                <input
+                  value={assignQuery}
+                  onChange={(event) => setAssignQuery(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                  placeholder="Name, Kürzel, Kundennummer..."
+                />
+              </label>
+              <div className="space-y-2 max-h-60 overflow-auto">
+                {assignCandidates.length ? (
+                  assignCandidates.map((customer) => {
+                    const hasNumber = customerHasNumber(customer, assignNumber(assignTarget));
+                    return (
+                      <div
+                        key={customer.id}
+                        className="flex items-center justify-between rounded-2xl border border-sand-200 bg-white px-3 py-2"
+                      >
+                        <div>
+                          <p className="text-sm text-sand-900">{customer.name}</p>
+                          <p className="text-[11px] text-sand-500">
+                            {customer.short_code || customer.creditor_number || "—"}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={assignBusy || hasNumber}
+                          onClick={async () => {
+                            const number = assignNumber(assignTarget);
+                            if (!number) {
+                              setAssignStatus("Keine Rufnummer gefunden.");
+                              return;
+                            }
+                            if (!onAssignNumber) {
+                              setAssignStatus("Aktion nicht verfügbar.");
+                              return;
+                            }
+                            setAssignBusy(true);
+                            setAssignStatus("Speichere...");
+                            const result = await onAssignNumber(customer.id, number);
+                            if (result?.ok) {
+                              setResolvedNames((prev) => ({
+                                ...prev,
+                                [number]: result.customer?.name || customer.name
+                              }));
+                              setAssignStatus("Rufnummer übernommen.");
+                              setTimeout(() => setAssignTarget(null), 900);
+                            } else {
+                              setAssignStatus(result?.error || "Übernahme fehlgeschlagen.");
+                            }
+                            setAssignBusy(false);
+                          }}
+                          className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                            hasNumber
+                              ? "border-sand-200 text-sand-400 cursor-not-allowed"
+                              : "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                          }`}
+                        >
+                          {hasNumber ? "Schon vorhanden" : "Übernehmen"}
+                        </button>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-xs text-sand-500">Kein Kunde gefunden.</div>
+                )}
+              </div>
+              {assignStatus ? (
+                <p className="text-xs text-sand-500">{assignStatus}</p>
+              ) : null}
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => setAssignTarget(null)}
+                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Schließen
                 </button>
               </div>
             </div>
