@@ -3,6 +3,7 @@ import { Mail, Settings } from "lucide-react";
 
 const API = "/api";
 const STORAGE_KEY = "qt_smtp_settings_cache";
+const defaultOfferFormat = "AN-XXXX";
 const DEBUG_TABLE_LABELS = {
   day_tasks: "Aufgaben",
   day_task_groups: "Aufgabengruppen"
@@ -38,6 +39,15 @@ const loadCachedSmtp = () => {
   }
 };
 
+const makeOfferNumber = (format, index) => {
+  const template = (format || defaultOfferFormat).trim() || defaultOfferFormat;
+  const match = template.match(/X+/);
+  if (!match) return template;
+  const width = match[0].length;
+  const number = String(index).padStart(width, "0");
+  return template.replace(match[0], number);
+};
+
 export default function SettingsView() {
   const [smtp, setSmtp] = useState(loadCachedSmtp);
   const [status, setStatus] = useState("idle");
@@ -45,6 +55,9 @@ export default function SettingsView() {
   const [tables, setTables] = useState([]);
   const [debugStatus, setDebugStatus] = useState("idle");
   const [clearingTable, setClearingTable] = useState("");
+  const [offerNumberFormat, setOfferNumberFormat] = useState(defaultOfferFormat);
+  const [offerLoadStatus, setOfferLoadStatus] = useState("loading");
+  const [offerStatus, setOfferStatus] = useState("idle");
   const beaconDisplay =
     smtp.beacon_base_url && smtp.beacon_base_url.trim()
       ? smtp.beacon_base_url.trim()
@@ -89,6 +102,27 @@ export default function SettingsView() {
       .catch(() => {
         if (!active) return;
         setTables([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${API}/offer_settings`)
+      .then((res) => {
+        if (!res.ok) throw new Error("load_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        setOfferNumberFormat(data?.offer_number_format || defaultOfferFormat);
+        setOfferLoadStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setOfferLoadStatus("error");
       });
     return () => {
       active = false;
@@ -151,6 +185,27 @@ export default function SettingsView() {
       setStatus("error");
     }
     setTimeout(() => setStatus("idle"), 2000);
+  };
+
+  const saveOfferSettings = async () => {
+    setOfferStatus("saving");
+    const safeFormat = (offerNumberFormat || defaultOfferFormat).trim() || defaultOfferFormat;
+    try {
+      const res = await fetch(`${API}/offer_settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          offer_number_format: safeFormat
+        })
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      setOfferNumberFormat(data?.offer_number_format || safeFormat);
+      setOfferStatus("saved");
+    } catch (error) {
+      setOfferStatus("error");
+    }
+    setTimeout(() => setOfferStatus("idle"), 2000);
   };
 
   return (
@@ -283,6 +338,44 @@ export default function SettingsView() {
             )}
             {status === "saved" && <span className="text-sm text-emerald-600">Gespeichert</span>}
             {status === "error" && (
+              <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <div className="flex items-center gap-2 text-sand-700 mb-4">
+            <Settings size={18} />
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Angebote</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-sand-500">Angebotsnummer Format</label>
+              <input
+                value={offerNumberFormat}
+                onChange={(event) => setOfferNumberFormat(event.target.value)}
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder={defaultOfferFormat}
+              />
+              <p className="mt-2 text-xs text-sand-500">
+                Beispiel: {makeOfferNumber(offerNumberFormat, 1)}
+              </p>
+            </div>
+          </div>
+          <div className="mt-6 flex items-center gap-3">
+            <button
+              onClick={saveOfferSettings}
+              className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+            >
+              Speichern
+            </button>
+            {offerLoadStatus === "error" && (
+              <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+            )}
+            {offerStatus === "saved" && (
+              <span className="text-sm text-emerald-600">Gespeichert</span>
+            )}
+            {offerStatus === "error" && (
               <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
             )}
           </div>

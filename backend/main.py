@@ -218,6 +218,13 @@ class SmtpSettings(Base):
     beacon_base_url = Column(String, default="")
 
 
+class OfferSettings(Base):
+    __tablename__ = "offer_settings"
+
+    id = Column(Integer, primary_key=True)
+    offer_number_format = Column(String, default="AN-XXXX")
+
+
 class CustomerMetricsSettings(Base):
     __tablename__ = "customer_metrics_settings"
 
@@ -635,7 +642,17 @@ class CustomerMetricsSettingsUpdate(BaseModel):
     hourly_rate_eur: Optional[str] = None
 
 
+class OfferSettingsUpdate(BaseModel):
+    offer_number_format: Optional[str] = None
+
+
 class ReportSendRequest(BaseModel):
+    to: str
+    subject: Optional[str] = None
+    html: str
+    text: Optional[str] = None
+
+class OfferSendRequest(BaseModel):
     to: str
     subject: Optional[str] = None
     html: str
@@ -937,6 +954,13 @@ def serialize_smtp_settings(settings: SmtpSettings) -> Dict[str, Any]:
     }
 
 
+def serialize_offer_settings(settings: OfferSettings) -> Dict[str, Any]:
+    return {
+        "id": settings.id,
+        "offer_number_format": settings.offer_number_format,
+    }
+
+
 def serialize_customer_metrics_settings(settings: CustomerMetricsSettings) -> Dict[str, Any]:
     return {
         "id": settings.id,
@@ -952,6 +976,16 @@ def _get_smtp_settings(db) -> SmtpSettings:
     settings = db.query(SmtpSettings).first()
     if not settings:
         settings = SmtpSettings()
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
+
+
+def _get_offer_settings(db) -> OfferSettings:
+    settings = db.query(OfferSettings).first()
+    if not settings:
+        settings = OfferSettings()
         db.add(settings)
         db.commit()
         db.refresh(settings)
@@ -1802,6 +1836,26 @@ def update_smtp_settings(data: SmtpSettingsUpdate):
         return serialize_smtp_settings(settings)
 
 
+@app.get("/api/offer_settings")
+def get_offer_settings():
+    with SessionLocal() as db:
+        settings = _get_offer_settings(db)
+        return serialize_offer_settings(settings)
+
+
+@app.put("/api/offer_settings")
+def update_offer_settings(data: OfferSettingsUpdate):
+    with SessionLocal() as db:
+        settings = _get_offer_settings(db)
+        for field, value in data.dict(exclude_unset=True).items():
+            if value is None:
+                continue
+            setattr(settings, field, value)
+        db.commit()
+        db.refresh(settings)
+        return serialize_offer_settings(settings)
+
+
 @app.get("/api/customer_metrics_settings")
 def get_customer_metrics_settings():
     with SessionLocal() as db:
@@ -1959,6 +2013,55 @@ def send_report(report_id: int, data: ReportSendRequest):
         db.commit()
         db.refresh(report)
         return serialize_report(report)
+
+
+@app.post("/api/offers/send")
+def send_offer(data: OfferSendRequest):
+    with SessionLocal() as db:
+        settings = _get_smtp_settings(db)
+        if not settings.host or not settings.sender_email:
+            raise HTTPException(400, "SMTP settings missing")
+
+        subject = data.subject or "Angebot"
+        from_addr = settings.sender_email
+        if settings.sender_name:
+            from_addr = f"{settings.sender_name} <{settings.sender_email}>"
+
+        tracking_guid = ""
+        html = data.html or ""
+        if settings.beacon_base_url:
+            tracking_guid = str(uuid.uuid4())
+            if "{guid}" in settings.beacon_base_url:
+                pixel_url = settings.beacon_base_url.replace("{guid}", tracking_guid)
+            else:
+                separator = "&" if "?" in settings.beacon_base_url else "?"
+                pixel_url = f"{settings.beacon_base_url}{separator}guid={tracking_guid}"
+            html += f'<img src="{pixel_url}" alt="" width="1" height="1" style="display:none;" />'
+
+        import smtplib
+        from email.message import EmailMessage
+
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = from_addr
+        msg["To"] = data.to
+        msg.set_content(data.text or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung.")
+        msg.add_alternative(html, subtype="html")
+
+        if settings.use_ssl:
+            server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
+        else:
+            server = smtplib.SMTP(settings.host, settings.port or 587, timeout=20)
+        try:
+            if settings.use_tls and not settings.use_ssl:
+                server.starttls()
+            if settings.username:
+                server.login(settings.username, settings.password or "")
+            server.send_message(msg)
+        finally:
+            server.quit()
+
+        return {"status": "sent", "tracking_guid": tracking_guid}
 
 
 @app.patch("/api/reports/{report_id}")
