@@ -9,7 +9,7 @@ def normalize_phone(phone: Optional[str]) -> str:
     if digits.startswith("00"):
         digits = digits[2:]
     if digits.startswith("0"):
-        digits = "49" + digits[1:]
+        digits = "43" + digits[1:]
     return digits
 
 
