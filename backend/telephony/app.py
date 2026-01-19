@@ -137,7 +137,9 @@ def _reverse_lookup(number: str, settings: Optional[TelephonySettings]) -> Optio
     now = time.time()
     cached = _reverse_cache.get(number)
     if cached and now - cached["ts"] < _reverse_cache_ttl:
-        return cached.get("name")
+        cached_name = cached.get("name")
+        if cached_name:
+            return cached_name
     customer_mapping = _load_customer_mapping()
     customer_name = resolve_customer_name(number, customer_mapping)
     if customer_name:
@@ -173,7 +175,8 @@ def _reverse_lookup(number: str, settings: Optional[TelephonySettings]) -> Optio
         or data.get("company")
     )
     name = str(name).strip() if name else None
-    _reverse_cache[number] = {"name": name, "ts": now}
+    if name:
+        _reverse_cache[number] = {"name": name, "ts": now}
     return name
 
 
