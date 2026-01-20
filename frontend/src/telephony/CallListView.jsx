@@ -72,6 +72,7 @@ export default function CallListView({
   extensions,
   customers = [],
   pbxEntries = [],
+  pbxApiActive = false,
   onCallback,
   onResolve,
   onAssignNumber,
@@ -342,7 +343,12 @@ export default function CallListView({
                                 number: assignNumber(call)
                               })
                             }
-                            className="rounded-full border border-sand-300 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                            disabled={!pbxApiActive}
+                            className={`rounded-full border p-1 text-sand-600 ${
+                              pbxApiActive
+                                ? "border-sand-300 bg-white hover:bg-sand-100"
+                                : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
+                            }`}
                             title="In Anlagen-Telefonbuch übernehmen"
                           >
                             <BookPlus size={14} />
@@ -352,7 +358,7 @@ export default function CallListView({
                           <button
                             onClick={() => setAssignTarget(call)}
                             className="rounded-full border border-amber-200 bg-amber-50 p-1 text-amber-700 hover:bg-amber-100"
-                            title="Nummer übernehmen"
+                            title="In Kundenstamm übernehmen"
                           >
                             <ArrowDownLeft size={14} />
                           </button>

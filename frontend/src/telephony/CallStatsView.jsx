@@ -31,8 +31,8 @@ export default function CallStatsView({ stats, calls = [] }) {
     recent.forEach((call) => {
       const direction = call.direction?.toLowerCase() || "";
       const number = direction.includes("out") ? call.to || call.from : call.from || call.to;
-      const label = call.customerName || number || "Unbekannt";
-      if (!label) return;
+      if (!number) return;
+      const label = call.customerName ? `${call.customerName} · ${number}` : number;
       counts.set(label, (counts.get(label) || 0) + 1);
     });
     return Array.from(counts.entries())

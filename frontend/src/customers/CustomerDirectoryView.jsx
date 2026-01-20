@@ -92,6 +92,7 @@ export default function CustomerDirectoryView() {
   const [deliveryNotes, setDeliveryNotes] = useState([]);
   const [deliveryStatus, setDeliveryStatus] = useState("idle");
   const [settingsTab, setSettingsTab] = useState("details");
+  const [pbxApiActive, setPbxApiActive] = useState(false);
   const [previewModal, setPreviewModal] = useState({
     open: false,
     title: "",
@@ -116,6 +117,17 @@ export default function CustomerDirectoryView() {
         setActiveId(next[0].id);
       }
     });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    telephonyService.checkPbxHealth().then((ok) => {
+      if (!active) return;
+      setPbxApiActive(ok);
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -1265,7 +1277,12 @@ export default function CustomerDirectoryView() {
                         <button
                           type="button"
                           onClick={() => addPhoneToPbx(phone)}
-                          className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white px-3 py-1 text-xs text-sand-600 hover:bg-sand-100"
+                          disabled={!pbxApiActive}
+                          className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs text-sand-600 ${
+                            pbxApiActive
+                              ? "border-sand-200 bg-white hover:bg-sand-100"
+                              : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
+                          }`}
                           title="Ins Anlagen-Telefonbuch übernehmen"
                         >
                           <BookPlus size={12} />

@@ -153,5 +153,13 @@ export const telephonyService = {
     } catch (error) {
       return null;
     }
+  },
+  checkPbxHealth: async () => {
+    try {
+      const response = await fetch(`/api/pbx_phonebook/remote?_pagesize=1`);
+      return response.ok;
+    } catch (error) {
+      return false;
+    }
   }
 };

@@ -102,7 +102,11 @@ export default function SettingsView() {
     lastCheckAt: "",
     lastCheckOk: null,
     lastError: "",
-    sampleCount: null
+    sampleCount: null,
+    statusCode: null,
+    baseUrl: "",
+    customerAccount: "",
+    responsePreview: ""
   });
   const [tables, setTables] = useState([]);
   const [debugStatus, setDebugStatus] = useState("idle");
@@ -466,23 +470,21 @@ export default function SettingsView() {
 
   const refreshPbxDebug = async () => {
     try {
-      const response = await fetch(`${API}/pbx_phonebook/remote?_pagesize=1`);
-      const text = await response.text();
-      if (!response.ok) {
-        throw new Error(text || "PBX check failed");
-      }
-      let parsed = [];
-      try {
-        parsed = JSON.parse(text);
-      } catch (error) {
-        parsed = [];
+      const response = await fetch(`${API}/pbx_phonebook/health`);
+      const data = await response.json();
+      if (!data?.ok) {
+        throw new Error(data?.error || "PBX check failed");
       }
       setPbxApiStatus("connected");
       setPbxDebugInfo({
         lastCheckAt: new Date().toISOString(),
         lastCheckOk: true,
         lastError: "",
-        sampleCount: Array.isArray(parsed) ? parsed.length : null
+        sampleCount: data?.entry_count ?? null,
+        statusCode: data?.status_code ?? null,
+        baseUrl: data?.base_url || "",
+        customerAccount: data?.customer_account || "",
+        responsePreview: data?.response_preview || ""
       });
     } catch (error) {
       setPbxApiStatus("error");
@@ -490,7 +492,11 @@ export default function SettingsView() {
         lastCheckAt: new Date().toISOString(),
         lastCheckOk: false,
         lastError: error?.message ? String(error.message) : "Fehler",
-        sampleCount: null
+        sampleCount: null,
+        statusCode: null,
+        baseUrl: "",
+        customerAccount: "",
+        responsePreview: ""
       });
     }
   };
@@ -748,12 +754,28 @@ export default function SettingsView() {
                     : "fehlgeschlagen"}
                 </div>
                 <div>
+                  <span className="text-sand-500">Status Code:</span>{" "}
+                  {pbxDebugInfo.statusCode ?? "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Base URL:</span>{" "}
+                  {pbxDebugInfo.baseUrl || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Customer Account:</span>{" "}
+                  {pbxDebugInfo.customerAccount || "n/a"}
+                </div>
+                <div>
                   <span className="text-sand-500">Beispielanzahl:</span>{" "}
                   {pbxDebugInfo.sampleCount ?? "n/a"}
                 </div>
                 <div className="md:col-span-2">
                   <span className="text-sand-500">Letzter Fehler:</span>{" "}
                   {pbxDebugInfo.lastError || "n/a"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Response Preview:</span>{" "}
+                  {pbxDebugInfo.responsePreview || "n/a"}
                 </div>
               </div>
             ) : null}

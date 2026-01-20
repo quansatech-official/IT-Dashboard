@@ -33,6 +33,7 @@ export default function TelephonyView() {
   const [extensions, setExtensions] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [pbxEntries, setPbxEntries] = useState([]);
+  const [pbxApiActive, setPbxApiActive] = useState(false);
   const hasPasswordAuth = settings.hasPassword && settings.username?.trim();
   const hasRefreshAuth = settings.hasRefreshToken;
   const hasCredentials = Boolean(hasPasswordAuth || hasRefreshAuth);
@@ -89,6 +90,17 @@ export default function TelephonyView() {
     telephonyService.fetchPbxPhonebook().then((data) => {
       if (!active) return;
       setPbxEntries(Array.isArray(data) ? data : []);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    telephonyService.checkPbxHealth().then((ok) => {
+      if (!active) return;
+      setPbxApiActive(ok);
     });
     return () => {
       active = false;
@@ -213,6 +225,7 @@ export default function TelephonyView() {
               extensions={extensions}
               customers={customers}
               pbxEntries={pbxEntries}
+              pbxApiActive={pbxApiActive}
               onResolve={(number) => telephonyService.reverseLookup(number)}
               onCallback={(extension, number) =>
                 telephonyService.clickToDial({ extension, number })

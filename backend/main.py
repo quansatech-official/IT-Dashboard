@@ -1882,6 +1882,48 @@ def create_remote_pbx_phonebook(data: PbxPhonebookCreate):
         return entries[0]
     return {"name": data.name or "", "number": data.number or ""}
 
+
+@app.get("/api/pbx_phonebook/health")
+def pbx_phonebook_health():
+    with SessionLocal() as db:
+        try:
+            base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
+        except HTTPException as exc:
+            return {
+                "ok": False,
+                "status_code": exc.status_code,
+                "error": exc.detail,
+                "entry_count": 0,
+                "base_url": "",
+                "customer_account": "",
+                "response_preview": "",
+            }
+    path = f"/api/customers/{customer_account}/phone-books?_pagesize=1"
+    date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+    string_to_sign = f"GET\n\n\n{date}\n{path}"
+    signature = hmac.new(api_key_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1)
+    signature_b64 = base64.b64encode(signature.digest()).decode("utf-8")
+    headers = {
+        "Authorization": f"NFON-API {api_key_id}:{signature_b64}",
+        "x-nfon-date": date,
+    }
+    response = requests.request("GET", f"{base_url}{path}", headers=headers, timeout=20)
+    text = response.text or ""
+    entries = []
+    try:
+        entries = _extract_phonebook_entries(response.json())
+    except ValueError:
+        entries = []
+    return {
+        "ok": response.ok,
+        "status_code": response.status_code,
+        "error": "" if response.ok else text[:300],
+        "entry_count": len(entries),
+        "base_url": base_url,
+        "customer_account": customer_account,
+        "response_preview": text[:300],
+    }
+
 # ============== OLLAMA AI =================
 @app.post("/api/ai_action")
 def generate_action(data: ActionAiRequest):
