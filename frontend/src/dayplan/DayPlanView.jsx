@@ -378,7 +378,8 @@ export default function DayPlanView() {
         arrival_time: task.arrival_time || "",
         departure_time: task.departure_time || "",
         deadline: task.deadline || "",
-        randzeit: Boolean(task.randzeit)
+        randzeit: Boolean(task.randzeit),
+        details: task.details || ""
       }
     }));
   };
@@ -989,6 +990,18 @@ export default function DayPlanView() {
                     />
                     Randzeit
                   </label>
+                  <div className="md:col-span-3">
+                    <label className="text-[10px] uppercase tracking-wide text-sand-500">
+                      Notiz
+                    </label>
+                    <textarea
+                      value={getDetailValue(task, "details")}
+                      onChange={(event) => setDetailValue(task.id, "details", event.target.value)}
+                      onBlur={() => commitDetail(task, "details")}
+                      placeholder="Interne Notiz zur Aufgabe"
+                      className="mt-1 w-full min-h-[80px] rounded-lg border border-amber-200 bg-white px-2 py-2 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    />
+                  </div>
                 </div>
               </div>
             ) : null}

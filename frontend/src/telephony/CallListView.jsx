@@ -119,6 +119,12 @@ export default function CallListView({
     return displayNumber(call);
   };
 
+  const resolveKey = (call) => {
+    const number = resolveNumber(call);
+    if (!number) return "";
+    return normalizeDigits(number) || number;
+  };
+
   const callbackNumber = (call) => {
     const direction = call.direction?.toLowerCase();
     if (direction?.includes("out")) return call.to || "";
@@ -159,13 +165,32 @@ export default function CallListView({
   useEffect(() => {
     let active = true;
     const lookup = async () => {
+      if (!onResolve) return;
+      const pending = new Map();
       for (const call of pagedCalls) {
         const number = resolveNumber(call);
-        if (!number || resolvedNames[number]) continue;
-        const result = await onResolve?.(number);
-        if (!active) return;
-        const name = result?.name || "";
-        setResolvedNames((prev) => (prev[number] ? prev : { ...prev, [number]: name }));
+        const key = resolveKey(call);
+        if (!number || !key || resolvedNames[key]) continue;
+        if (pending.has(key)) continue;
+        pending.set(key, number);
+      }
+      if (!pending.size) return;
+      const entries = Array.from(pending.entries());
+      const results = await Promise.allSettled(
+        entries.map(([, number]) => onResolve(number))
+      );
+      if (!active) return;
+      const next = {};
+      results.forEach((result, index) => {
+        if (result.status !== "fulfilled") return;
+        const name = result.value?.name || "";
+        if (name) {
+          const key = entries[index][0];
+          next[key] = name;
+        }
+      });
+      if (Object.keys(next).length) {
+        setResolvedNames((prev) => ({ ...prev, ...next }));
       }
     };
     lookup();
@@ -257,8 +282,8 @@ export default function CallListView({
                     </span>
                   </td>
                   <td className="py-3">
-                    {call.customerName || resolvedNames[resolveNumber(call)] ? (
-                      call.customerName || resolvedNames[resolveNumber(call)]
+                    {call.customerName || resolvedNames[resolveKey(call)] ? (
+                      call.customerName || resolvedNames[resolveKey(call)]
                     ) : (
                       <div className="flex items-center justify-between gap-2">
                         <span>-</span>

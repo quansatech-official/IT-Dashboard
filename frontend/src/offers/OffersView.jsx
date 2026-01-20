@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
   ChevronDown,
   ChevronUp,
   Eye,
@@ -7,6 +8,8 @@ import {
   Image,
   Link,
   Plus,
+  Copy,
+  Pencil,
   Receipt,
   Save,
   Send,
@@ -22,25 +25,28 @@ const inputClass =
 const textareaClass =
   "w-full min-h-[90px] rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400";
 const noteTextareaClass = `${textareaClass} min-h-[70px]`;
+const selectClass = `${inputClass} appearance-none pr-10 bg-[url('data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"%234B5563\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 7l5 5 5-5\"/></svg>')] bg-no-repeat bg-[right_0.9rem_center] bg-[length:18px]`;
+const priceInputClass = `${inputClass} pr-8 appearance-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
+const quantityInputClass = `${inputClass} appearance-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
 const statusOptions = ["Entwurf", "gesendet", "angenommen", "abgelehnt"];
 const complexityOptions = ["niedrig", "mittel", "hoch"];
 const positionTypes = [
   { value: "Dienstleistung", label: "Leistung" },
-  { value: "Gerät", label: "Geraet" },
+  { value: "Gerät", label: "Gerät" },
   { value: "Sonstiges", label: "Sonstiges" }
 ];
 const unitOptions = [
   { value: "hours", label: "Stunden" },
   { value: "flat", label: "Pauschal" },
-  { value: "piece", label: "Stueck" },
+  { value: "piece", label: "Stück" },
   { value: "day", label: "Tag" }
 ];
 
 const initialServiceBlocks = [
   {
     id: "block-secure",
-    title: "Sicherheits-Haertung",
+    title: "Sicherheits-Härtung",
     summary: "Regeln, Logging, Segmentierung",
     type: "Dienstleistung",
     complexity: "hoch",
@@ -157,8 +163,12 @@ const formatMoney = (value) => {
 const formatLineTotal = (price, quantity) =>
   formatMoney(Number(price || 0) * Number(quantity || 1));
 
-const formatDeviceTitle = (item) =>
-  `${item.manufacturer || "Geraet"}${item.model ? ` · ${item.model}` : ""}`;
+const getDeviceProduct = (item) =>
+  item.product ||
+  [item.manufacturer, item.model].filter(Boolean).join(" · ") ||
+  "Gerät";
+
+const formatDeviceTitle = (item) => getDeviceProduct(item);
 
 const shorten = (value, limit = 120) => {
   const text = String(value || "").trim();
@@ -172,47 +182,78 @@ const makeVersion = (text, createdAt) => ({
   createdAt: createdAt || new Date().toISOString()
 });
 
+const fetchPagePreview = async (url) => {
+  if (!url) return { headline: "", snippet: "", hostname: "" };
+  const normalized = String(url || "").replace(/^https?:\/\//, "");
+  let headline = "";
+  let snippet = "";
+  try {
+    const response = await fetch(`https://r.jina.ai/http://${normalized}`);
+    if (response.ok) {
+      const lines = (await response.text())
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (lines.length) {
+        headline = lines[0].slice(0, 120);
+      }
+      if (lines.length > 1) {
+        snippet = lines.slice(1, 4).join(" ").slice(0, 300);
+      }
+    }
+  } catch (error) {
+    // ignore fetch failures
+  }
+  let hostname = "";
+  try {
+    hostname = new URL(url).hostname.replace(/^www\./, "");
+  } catch (error) {
+    hostname = "";
+  }
+  return { headline, snippet, hostname };
+};
+
 const generateAiText = (item) => {
   const title = item.title || "die Leistung";
   const keywords = Array.isArray(item.keywords) ? item.keywords.filter(Boolean) : [];
-  const keywordLine = keywords.length ? `Schwerpunkte: ${keywords.join(", ")}.` : "";
-  const quantityLine = item.quantity ? `Menge: ${item.quantity}x.` : "";
+  const scopeLine = keywords.length
+    ? `Leistungsumfang: ${keywords.join(", ")}.`
+    : "Leistungsumfang wird gemeinsam abgestimmt und dokumentiert.";
+  const approachLine =
+    "Vorgehen: Aufnahme der Ausgangslage, zielgerichtete Umsetzung, Funktionscheck.";
+  const outcomeLine =
+    "Ergebnis: Umsetzung inkl. kurzer Dokumentation und Übergabe der wichtigsten Punkte.";
   const securityLine = item.securityRelevant
-    ? "Sicherheitsrelevant: Umsetzung nach Best Practices und mit enger Abstimmung."
+    ? "Sicherheitsrelevante Aspekte setzen wir nach Best Practices um."
     : "";
 
-  if (item.complexity === "hoch") {
-    return [
-      `Wir planen und realisieren ${title} in klaren Phasen, damit Ablauf und Risiko sauber kontrolliert bleiben.`,
-      keywordLine,
-      "Vorgehen: Analyse der Ausgangslage, abgestimmte Umsetzung, anschliessender Funktionscheck.",
-      securityLine || "Abnahme erfolgt nach gemeinsam definierten Kriterien.",
-      quantityLine
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  if (item.complexity === "niedrig") {
-    return [
-      `Wir setzen ${title} kompakt und nachvollziehbar um.`,
-      keywordLine || "Umfang und Ergebnis werden kurz dokumentiert.",
-      quantityLine
-    ]
-      .filter(Boolean)
-      .join("\n");
-  }
-
   return [
-    `Wir realisieren ${title} strukturiert und mit Fokus auf stabile Ergebnisse.`,
-    keywordLine,
-    "Im Anschluss pruefen wir die Wirkung und dokumentieren die wichtigsten Punkte.",
-    securityLine,
-    quantityLine
+    `Wir setzen ${title} klar strukturiert und nachvollziehbar um.`,
+    scopeLine,
+    approachLine,
+    outcomeLine,
+    securityLine
   ]
     .filter(Boolean)
     .join("\n");
 };
+
+const generateDeviceDescription = (item) => {
+  const title = formatDeviceTitle(item);
+  return [
+    "Kurzbeschreibung: Funktionsumfang, technische Eckdaten und Lieferumfang.",
+    "Integration: Einbindung in die bestehende Umgebung sowie Inbetriebnahme-Hinweise.",
+    "Hinweis: Garantie- und Supportbedingungen nach Herstellerangaben."
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+const splitSenderLines = (value) =>
+  String(value || "")
+    .split(" - ")
+    .map((part) => part.trim())
+    .filter(Boolean);
 
 const generateCoverIntro = (offer) => {
   const customer = offer.customer || "Ihrem Team";
@@ -220,10 +261,30 @@ const generateCoverIntro = (offer) => {
     .map((item) => ensureDraft(item).trim())
     .filter(Boolean);
   if (!positionTexts.length) {
-    return `Im folgenden Angebot zeigen wir die wichtigsten Positionen fuer ${customer} und fassen Umfang sowie Kalkulation kompakt zusammen.`;
+    return `Im folgenden Angebot bündeln wir die wichtigsten Leistungen für ${customer} und geben einen kompakten Überblick zu Umfang und Kosten.`;
   }
-  const excerpts = positionTexts.slice(0, 3).map((text) => `- ${text}`);
-  return `Im folgenden Angebot zeigen wir die wichtigsten Positionen fuer ${customer} und fassen Umfang sowie Kalkulation kompakt zusammen.\n\nBereits erfasste Positionen:\n${excerpts.join("\n")}`;
+  const excerpts = positionTexts.slice(0, 2).map((text) => `- ${text}`);
+  return `Im folgenden Angebot bündeln wir die wichtigsten Leistungen für ${customer} und geben einen kompakten Überblick zu Umfang und Kosten.\n\nAuszug:\n${excerpts.join("\n")}`;
+};
+
+const generateOverviewText = (offer) => {
+  const customer = offer.customer || "Ihrem Team";
+  const titles = [...(offer.lineItems || []), ...(offer.deviceItems || [])]
+    .map((item) => item.title || formatDeviceTitle(item))
+    .filter(Boolean);
+  if (!titles.length) {
+    return `Überblick für ${customer}: Leistungsumfang, Ziele und erwartete Ergebnisse werden im Angebot zusammengefasst.`;
+  }
+  const shortlist = titles.slice(0, 3).map((title) => `- ${title}`);
+  return `Überblick für ${customer}: Die wichtigsten Leistungen und Geräte im Angebot.\n\n${shortlist.join("\n")}`;
+};
+
+const generateCalculationText = (offer) => {
+  const total = (offer.lineItems || []).length + (offer.deviceItems || []).length;
+  if (!total) {
+    return "Hinweis zur Kalkulation: Preise verstehen sich netto pro Position, zzgl. gesetzlicher Umsatzsteuer.";
+  }
+  return "Hinweis zur Kalkulation: Alle Preise sind netto pro Position angegeben. Mengen und Einheiten sind im Kalkulationsblatt ausgewiesen; die Umsatzsteuer wird gesondert ausgewiesen.";
 };
 
 const VAT_MODE_OPTIONS = [
@@ -267,7 +328,11 @@ const formatUnitQuantity = (quantity, unit) => {
 const buildSevDeskPayload = (offer) => ({
   offer_reference: offer.reference,
   items: [...offer.lineItems, ...offer.deviceItems].map((item) => ({
-    title: item.title || `${item.manufacturer || "Geraet"} ${item.model || ""}`.trim(),
+    title:
+      item.title ||
+      (item.product || item.manufacturer || item.model
+        ? getDeviceProduct(item)
+        : "Position"),
     quantity: Number(item.quantity || 1),
     price: Number(item.price || 0)
   }))
@@ -314,8 +379,12 @@ const buildLineItemFromBlock = (block = {}) => ({
 
 const buildDeviceItemFromBlock = (block = {}) => ({
   id: uid(),
+  product:
+    block.product ||
+    [block.manufacturer, block.model].filter(Boolean).join(" · "),
   manufacturer: block.manufacturer || "",
   model: block.model || block.modelFamily || "",
+  description: block.description || "",
   price: Number(block.price || 0),
   quantity: Number(block.quantity || 1),
   images: [],
@@ -336,6 +405,17 @@ const createEmptyOffer = (index, format) => ({
   id: uid(),
   reference: makeReference(format, index),
   customer: "",
+  senderLine: "Quansatech GmbH - Steyrtalstraße 88 - 4523 Neuzeug",
+  recipientName: "",
+  recipientCompany: "",
+  recipientStreet: "",
+  recipientPostalCity: "",
+  recipientCountry: "Österreich",
+  customerNumber: "",
+  orderNumber: "",
+  salutation: "Sehr geehrte Damen und Herren,",
+  introText:
+    "vielen Dank für Ihre Anfrage. Gerne unterbreiten wir Ihnen das gewünschte freibleibende Angebot:",
   status: "Entwurf",
   createdAt: new Date().toISOString(),
   vatMode: "standard",
@@ -349,7 +429,10 @@ const createEmptyOffer = (index, format) => ({
   detailHtml: "",
   attachments: [],
   lineItems: [],
-  deviceItems: []
+  deviceItems: [],
+  serverId: null,
+  confirmGuid: "",
+  trackingGuid: ""
 });
 
 const sanitizeOffersForSave = (offers) =>
@@ -362,6 +445,8 @@ const sanitizeOffersForSave = (offers) =>
       return item;
     })
   }));
+
+const sanitizeOfferForSave = (offer) => sanitizeOffersForSave([offer])[0];
 
 const buildPreviewPositions = (offer) => {
   if (!offer) return [];
@@ -384,14 +469,14 @@ const buildPreviewPositions = (offer) => {
     quantity: item.quantity,
     price: item.price,
     unit: "piece",
-    text: "",
+    text: item.description || "",
     images: item.images || [],
     category: "device"
   }));
   return [...linePositions, ...devicePositions];
 };
 
-const buildOfferEmailHtml = (offer) => {
+const buildOfferEmailHtml = (offer, confirmUrl) => {
   const positions = buildPreviewPositions(offer);
   const rows = positions
     .map(
@@ -412,16 +497,27 @@ const buildOfferEmailHtml = (offer) => {
     `
     )
     .join("");
+  const confirmBlock = confirmUrl
+    ? `
+      <div style="margin:20px 0;padding:16px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;">
+        <p style="margin:0 0 12px;">Bitte bestätigen Sie das Angebot:</p>
+        <a href="${confirmUrl}" style="display:inline-block;padding:10px 16px;background:#111827;color:#ffffff;text-decoration:none;border-radius:999px;font-size:12px;text-transform:uppercase;letter-spacing:0.2em;">
+          Angebot bestätigen
+        </a>
+      </div>
+    `
+    : "";
   return `
     <div style="font-family:Arial,sans-serif;color:#1f2937">
       <h2>Ihr Angebot ${offer.reference || ""}</h2>
       <p>Kunde: ${offer.customer || "Kunde offen"}</p>
       ${offer.overviewText ? `<p>${offer.overviewText.replace(/\n/g, "<br/>")}</p>` : ""}
+      ${confirmBlock}
       <table style="width:100%;border-collapse:collapse;margin-top:12px;">
         <thead>
           <tr>
             <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #ddd;">Pos</th>
-            <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #ddd;">Ueberschrift</th>
+            <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #ddd;">Überschrift</th>
             <th style="text-align:right;padding:6px 8px;border-bottom:1px solid #ddd;">Menge</th>
             <th style="text-align:right;padding:6px 8px;border-bottom:1px solid #ddd;">Netto</th>
           </tr>
@@ -436,7 +532,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
   if (!offer) {
     return (
       <div className="rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-4 text-sm text-sand-500">
-        Kein Angebot ausgewaehlt.
+        Kein Angebot ausgewählt.
       </div>
     );
   }
@@ -498,7 +594,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
               </span>
             </div>
             <div className="mt-4 border-t border-sand-200 pt-3 text-[10px] text-sand-500">
-              Es gelten unsere AGB. Firmendaten siehe AGB.
+              Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
             </div>
           </div>
         </div>
@@ -530,17 +626,48 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
             <span className="text-xs text-sand-500">{offer.reference}</span>
           </div>
           <div className="mt-4 flex-1 space-y-6">
-            <div>
-              <h2 className="text-2xl font-display text-sand-900">
-                {offer.customer || "Kunde offen"}
-              </h2>
-              <p className="text-xs text-sand-500">{formatDate(offer.createdAt)}</p>
+            <div className="grid gap-4 md:grid-cols-2 text-xs text-sand-600">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  Absender
+                </p>
+                {splitSenderLines(
+                  offer.senderLine || "Quansatech GmbH - Steyrtalstraße 88 - 4523 Neuzeug"
+                ).map((line) => (
+                  <p key={line} className="mt-1 text-sm font-semibold text-sand-900">
+                    {line}
+                  </p>
+                ))}
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  Empfänger
+                </p>
+                <p className="mt-1 text-sm font-semibold text-sand-900">
+                  {offer.recipientName || offer.customer || "Kunde offen"}
+                </p>
+                {offer.recipientCompany ? <p>{offer.recipientCompany}</p> : null}
+                {offer.recipientStreet ? <p>{offer.recipientStreet}</p> : null}
+                {offer.recipientPostalCity ? <p>{offer.recipientPostalCity}</p> : null}
+                {offer.recipientCountry ? <p>{offer.recipientCountry}</p> : null}
+                {offer.customerNumber ? <p>Ihre Kundennummer {offer.customerNumber}</p> : null}
+                <p>Auftrags-Nr. {offer.orderNumber || offer.reference || "-"}</p>
+                <p>Datum: {formatDate(offer.createdAt) || "-"}</p>
+              </div>
+            </div>
+
+            <div className="space-y-2 text-sm text-sand-700">
+              <p className="text-base font-semibold text-sand-900">
+                Angebot {offer.reference || "-"}
+              </p>
+              <p>{offer.salutation || "Sehr geehrte Damen und Herren,"}</p>
+              <p>{offer.introText || "Vielen Dank für Ihre Anfrage."}</p>
             </div>
 
             {offer.overviewText ? (
               <div>
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Uebersicht
+                  Übersicht
                 </p>
                 <p className="mt-2 text-sm text-sand-700 whitespace-pre-line">
                   {offer.overviewText}
@@ -550,13 +677,10 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
 
             {previewPositions.length ? (
               <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Kalkulation
-                </p>
                 <div className="mt-2 rounded-xl border border-sand-200">
                   <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
                     <span>Pos</span>
-                    <span>Ueberschrift</span>
+                    <span>Leistung</span>
                     <span className="text-right">Menge</span>
                     <span className="text-right">{formatVatLabel(offer)}</span>
                     <span className="text-right">Netto</span>
@@ -572,7 +696,14 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                           <div key={item.id} className="border-b border-sand-100">
                             <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 px-3 py-2 text-xs text-sand-700">
                               <span>Pos. {index + 1}</span>
-                              <span>{item.title}</span>
+                              <div>
+                                <p className="font-semibold text-sand-800">{item.title}</p>
+                                {item.text ? (
+                                  <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
+                                    {item.text}
+                                  </p>
+                                ) : null}
+                              </div>
                               <span className="text-right">
                                 {formatUnitQuantity(item.quantity, item.unit)}
                               </span>
@@ -588,11 +719,6 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                                 {formatLineTotal(item.price, item.quantity)}
                               </span>
                             </div>
-                            {item.text ? (
-                              <div className="px-3 pb-2 text-xs text-sand-500 whitespace-pre-line">
-                                {item.text}
-                              </div>
-                            ) : null}
                           </div>
                         ))}
                       <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700">
@@ -609,7 +735,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                   {previewPositions.some((item) => item.category === "device") ? (
                     <>
                       <div className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                        Geraete
+                        Geräte
                       </div>
                       {previewPositions
                         .filter((item) => item.category === "device")
@@ -617,7 +743,14 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                           <div key={item.id} className="border-b border-sand-100">
                             <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 px-3 py-2 text-xs text-sand-700">
                               <span>Pos. {index + 1 + offer.lineItems.length}</span>
-                              <span>{item.title}</span>
+                              <div>
+                                <p className="font-semibold text-sand-800">{item.title}</p>
+                                {item.text ? (
+                                  <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
+                                    {item.text}
+                                  </p>
+                                ) : null}
+                              </div>
                               <span className="text-right">{item.quantity}x</span>
                               <span className="text-right">
                                 {formatMoney(
@@ -635,7 +768,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                         ))}
                       <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700">
                         <span />
-                        <span>Zwischensumme Geraete</span>
+                        <span>Zwischensumme Geräte</span>
                         <span />
                         <span className="text-right">
                           {formatMoney(calcVat(deviceTotal, offer))}
@@ -656,7 +789,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                     <span>{formatMoney(serviceTotal)}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span>Summe Geraete (netto)</span>
+                    <span>Summe Geräte (netto)</span>
                     <span>{formatMoney(deviceTotal)}</span>
                   </div>
                   <div className="flex items-center justify-between font-semibold text-sand-900">
@@ -704,28 +837,6 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
               </div>
             ) : null}
 
-            {hasPositionText ? (
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Positionen
-                </p>
-                <div className="mt-2 space-y-3">
-                  {previewPositions.map((item, index) =>
-                    item.text ? (
-                      <div key={item.id} className="rounded-xl border border-sand-200 p-3">
-                        <p className="text-sm font-semibold text-sand-900">
-                          Pos. {index + 1}: {item.title}
-                        </p>
-                        <p className="mt-1 text-xs text-sand-600 whitespace-pre-line">
-                          {item.text}
-                        </p>
-                      </div>
-                    ) : null
-                  )}
-                </div>
-              </div>
-            ) : null}
-
             {(offer.attachments || []).length ? (
               <div>
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
@@ -744,7 +855,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
             ) : null}
           </div>
           <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
-            Es gelten unsere AGB. Firmendaten siehe AGB.
+            Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
           </div>
         </div>
       </div>
@@ -786,7 +897,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
               </div>
             </div>
             <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
-              Es gelten unsere AGB. Firmendaten siehe AGB.
+              Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
             </div>
           </div>
         </div>
@@ -816,10 +927,29 @@ const extractDropUrl = (event) => {
 
 function Field({ label, children }) {
   return (
-    <label className="text-[11px] uppercase tracking-[0.2em] text-sand-500">
-      {label}
+    <div className="text-[11px] uppercase tracking-[0.2em] text-sand-500">
+      <span>{label}</span>
       <div className="mt-2">{children}</div>
-    </label>
+    </div>
+  );
+}
+
+function SelectField({ value, onChange, disabled, children }) {
+  return (
+    <div className="relative">
+      <select
+        className={selectClass}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+      >
+        {children}
+      </select>
+      <ChevronDown
+        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-sand-500"
+        aria-hidden="true"
+      />
+    </div>
   );
 }
 
@@ -850,6 +980,7 @@ export default function OffersView() {
   const [sendTo, setSendTo] = useState("");
   const [sendSubject, setSendSubject] = useState("");
   const [sendStatus, setSendStatus] = useState("idle");
+  const [expandedOffers, setExpandedOffers] = useState({});
   const previewRef = useRef(null);
   const exportRef = useRef(null);
   const [previewScale, setPreviewScale] = useState(1);
@@ -1295,29 +1426,31 @@ export default function OffersView() {
     if (!activeOffer || !note?.text) return;
     const url = note.text;
     setImportingItemId(`${item.id}:${note.id}`);
-    let headline = "";
-    try {
-      const normalized = url.replace(/^https?:\/\//, "");
-      const response = await fetch(`https://r.jina.ai/http://${normalized}`);
-      if (response.ok) {
-        const text = await response.text();
-        const line = text.split("\n").find((entry) => entry.trim());
-        if (line) headline = line.trim().slice(0, 120);
-      }
-    } catch (error) {
-      // ignore fetch failures
-    }
-    let fallback = "";
-    try {
-      const hostname = new URL(url).hostname.replace(/^www\./, "");
-      fallback = hostname;
-    } catch (error) {
-      fallback = "";
-    }
-    const nextTitle = headline || fallback || item.title || "Position";
+    const { headline, hostname } = await fetchPagePreview(url);
+    const nextTitle = headline || hostname || item.title || "Position";
     updateLineItem(activeOffer.id, item.id, {
       title: item.title || nextTitle,
       aiDraft: item.aiDraft || generateAiText({ ...item, title: nextTitle })
+    });
+    setImportingItemId("");
+  };
+
+  const importDeviceFromReferenceLink = async (item, note) => {
+    if (!activeOffer || !note?.text) return;
+    const url = note.text;
+    setImportingItemId(`${item.id}:${note.id}`);
+    const { headline, snippet, hostname } = await fetchPagePreview(url);
+    const nextDescription =
+      item.description ||
+      [
+        headline ? `Produkt: ${headline}.` : "",
+        snippet ? `Kurzbeschreibung: ${snippet}` : "",
+        hostname ? `Quelle: ${hostname}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n");
+    updateDeviceItem(activeOffer.id, item.id, {
+      description: nextDescription
     });
     setImportingItemId("");
   };
@@ -1352,15 +1485,91 @@ export default function OffersView() {
     });
   };
 
+  const editOfferFromArchive = (offerId) => {
+    setActiveId(offerId);
+    setMainTab("new");
+  };
+
+  const duplicateOffer = (offer) => {
+    if (!offer) return;
+    const newId = uid();
+    setOffers((prev) => {
+      const reference = makeReference(offerNumberFormat, prev.length + 1);
+      const copy = {
+        ...offer,
+        id: newId,
+        reference,
+        status: "Entwurf",
+        createdAt: new Date().toISOString()
+      };
+      return [copy, ...prev];
+    });
+    setActiveId(newId);
+    setMainTab("new");
+  };
+
   const exportOfferPdf = (offer) => {
     if (!offer) return;
     setExportOfferId(offer.id);
+  };
+
+  const toggleOfferExpanded = (offerId) => {
+    setExpandedOffers((prev) => ({
+      ...prev,
+      [offerId]: !prev[offerId]
+    }));
+  };
+
+  const getOfferTotal = (offer) => {
+    const serviceTotal = (offer.lineItems || []).reduce(
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+      0
+    );
+    const deviceTotal = (offer.deviceItems || []).reduce(
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+      0
+    );
+    return serviceTotal + deviceTotal;
+  };
+
+  const persistOfferForCustomer = async (offer) => {
+    if (!offer) return null;
+    const payload = {
+      reference: offer.reference || "",
+      customer: offer.customer || "",
+      status: offer.status || "",
+      data: sanitizeOfferForSave(offer)
+    };
+    const options = {
+      method: offer.serverId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    };
+    const endpoint = offer.serverId
+      ? `/api/offers/${offer.serverId}`
+      : "/api/offers";
+    const res = await fetch(endpoint, options);
+    if (!res.ok) throw new Error("offer_save_failed");
+    const saved = await res.json();
+    updateOffer(offer.id, (current) => ({
+      ...current,
+      serverId: saved.id,
+      confirmGuid: saved.guid
+    }));
+    return saved;
   };
 
   const sendOfferEmail = async () => {
     if (!activeOffer || !sendTo) return;
     setSendStatus("sending");
     try {
+      let confirmUrl = "";
+      try {
+        const saved = await persistOfferForCustomer(activeOffer);
+        confirmUrl = saved?.confirm_url || "";
+      } catch (error) {
+        confirmUrl = "";
+      }
       const res = await fetch("/api/offers/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1369,11 +1578,20 @@ export default function OffersView() {
           subject:
             sendSubject ||
             `Angebot ${activeOffer.reference || ""}`.trim(),
-          html: buildOfferEmailHtml(activeOffer),
-          text: `Angebot ${activeOffer.reference || ""}`
+          html: buildOfferEmailHtml(activeOffer, confirmUrl),
+          text: `Angebot ${activeOffer.reference || ""}${
+            confirmUrl ? `\nBestätigungslink: ${confirmUrl}` : ""
+          }`
         })
       });
       if (!res.ok) throw new Error("send_failed");
+      const responsePayload = await res.json();
+      if (responsePayload?.tracking_guid) {
+        updateOffer(activeOffer.id, (offer) => ({
+          ...offer,
+          trackingGuid: responsePayload.tracking_guid
+        }));
+      }
       setSendStatus("sent");
     } catch (error) {
       setSendStatus("error");
@@ -1424,6 +1642,7 @@ export default function OffersView() {
       {
         id: uid(),
         title: "",
+        product: "",
         manufacturer: "",
         model: "",
         price: 0,
@@ -1475,7 +1694,8 @@ export default function OffersView() {
     setDeviceBlocks((prev) => [
       {
         id: uid(),
-        title: item.model || item.manufacturer || "Geraet",
+        title: getDeviceProduct(item),
+        product: getDeviceProduct(item),
         manufacturer: item.manufacturer || "",
         model: item.model || "",
         price: Number(item.price || 0),
@@ -1581,69 +1801,12 @@ export default function OffersView() {
         {mainTab === "new" ? (
           <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.65fr] gap-3">
             <section className="space-y-4">
-          <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft animate-fade-in">
-            <div className="flex items-center justify-between">
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Angebote</p>
-              <button
-                type="button"
-                onClick={addOffer}
-                className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white hover:opacity-90"
-              >
-                <Plus size={12} /> Neu
-              </button>
-            </div>
-            <div className="mt-4 space-y-3">
-              {offers.map((offer) => (
-                <div
-                  key={offer.id}
-                  className={`rounded-2xl border px-4 py-3 text-left transition ${
-                    offer.id === activeId
-                      ? "border-sand-900 bg-sand-900 text-white shadow-soft"
-                      : "border-sand-200 bg-sand-50 text-sand-700 hover:bg-sand-100"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setActiveId(offer.id)}
-                    className="w-full text-left"
-                  >
-                    <p className="text-[10px] uppercase tracking-[0.3em] opacity-70">
-                      {offer.reference}
-                    </p>
-                    <p className="mt-1 text-sm font-semibold">
-                      {offer.customer || "Neues Angebot"}
-                    </p>
-                    <p className="mt-2 text-[10px] uppercase tracking-[0.3em] opacity-70">
-                      {offer.status} · {formatDate(offer.createdAt)}
-                    </p>
-                  </button>
-                  <div className="mt-2 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => removeOffer(offer.id)}
-                      className={`rounded-full border p-1 ${
-                        offer.id === activeId
-                          ? "border-white/40 text-white hover:bg-white/10"
-                          : "border-sand-200 bg-white text-sand-500 hover:bg-sand-100"
-                      }`}
-                      title="Angebot entfernen"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
 
           {activeOffer ? (
             <>
               <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                      Header Konfigurator
-                    </p>
                     <h2 className="text-lg font-display text-sand-900">Angebotskopf</h2>
                     <p className="text-sm text-sand-600">
                       Kunde, Anlass, Status und Referenzen.
@@ -1665,6 +1828,15 @@ export default function OffersView() {
                       className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                     >
                       <Save size={12} /> Speichern
+                    </button>
+                    <button
+                      type="button"
+                      onClick={sendOfferEmail}
+                      disabled={!sendTo || sendStatus === "sending"}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Send size={12} />
+                      {sendStatus === "sending" ? "Sende..." : "Senden"}
                     </button>
                     {saveStatus === "saved" && (
                       <span className="text-xs text-emerald-600">Gespeichert</span>
@@ -1704,26 +1876,23 @@ export default function OffersView() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-4">
-                  <div className="md:col-span-2">
-                    <Field label="Kunde">
-                      <input
-                        className={inputClass}
-                        value={activeOffer.customer}
-                        onChange={(event) =>
-                          updateOffer(activeOffer.id, (offer) => ({
-                            ...offer,
-                            customer: event.target.value
-                          }))
-                        }
-                        placeholder="Kunde eingeben"
-                        list="offer-customers"
-                      />
-                    </Field>
-                  </div>
-                  <Field label="Status">
-                    <select
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <Field label="Kunde">
+                    <input
                       className={inputClass}
+                      value={activeOffer.customer}
+                      onChange={(event) =>
+                        updateOffer(activeOffer.id, (offer) => ({
+                          ...offer,
+                          customer: event.target.value
+                        }))
+                      }
+                      placeholder="Kunde eingeben"
+                      list="offer-customers"
+                    />
+                  </Field>
+                  <Field label="Status">
+                    <SelectField
                       value={activeOffer.status}
                       onChange={(event) =>
                         updateOffer(activeOffer.id, (offer) => ({
@@ -1737,11 +1906,10 @@ export default function OffersView() {
                           {status}
                         </option>
                       ))}
-                    </select>
+                    </SelectField>
                   </Field>
                   <Field label="MwSt Modus">
-                    <select
-                      className={inputClass}
+                    <SelectField
                       value={activeOffer.vatMode || "standard"}
                       onChange={(event) =>
                         updateOffer(activeOffer.id, (offer) => ({
@@ -1755,8 +1923,11 @@ export default function OffersView() {
                           {option.label}
                         </option>
                       ))}
-                    </select>
+                    </SelectField>
                   </Field>
+                </div>
+
+                <div className="mt-3 grid gap-3 md:grid-cols-4">
                   <Field label="MwSt Satz (%)">
                     <input
                       className={inputClass}
@@ -1768,11 +1939,11 @@ export default function OffersView() {
                           vatRate: Number(event.target.value)
                         }))
                       }
-                      disabled={activeOffer.vatMode !== "standard"}
-                    />
-                  </Field>
-                  <Field label="Empfaenger E-Mail">
-                    <input
+                    disabled={activeOffer.vatMode !== "standard"}
+                  />
+                </Field>
+                <Field label="Empfänger E-Mail">
+                  <input
                       className={inputClass}
                       value={sendTo}
                       onChange={(event) => setSendTo(event.target.value)}
@@ -1787,22 +1958,40 @@ export default function OffersView() {
                       placeholder={`Angebot ${activeOffer.reference || ""}`}
                     />
                   </Field>
-                  <div className="flex items-end gap-2">
-                    <button
-                      type="button"
-                      onClick={sendOfferEmail}
-                      disabled={!sendTo}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Send size={12} /> Senden
-                    </button>
-                    {sendStatus === "sent" && (
-                      <span className="text-xs text-emerald-600">Gesendet</span>
-                    )}
-                    {sendStatus === "error" && (
-                      <span className="text-xs text-rose-600">Versand fehlgeschlagen</span>
-                    )}
-                  </div>
+                  {sendStatus === "sent" && (
+                    <span className="text-xs text-emerald-600">Gesendet</span>
+                  )}
+                  {sendStatus === "error" && (
+                    <span className="text-xs text-rose-600">Versand fehlgeschlagen</span>
+                  )}
+                </div>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <Field label="Anrede">
+                    <input
+                      className={inputClass}
+                      value={activeOffer.salutation || ""}
+                      onChange={(event) =>
+                        updateOffer(activeOffer.id, (offer) => ({
+                          ...offer,
+                          salutation: event.target.value
+                        }))
+                      }
+                      placeholder="Sehr geehrte Damen und Herren,"
+                    />
+                  </Field>
+                  <Field label="Einleitung">
+                    <textarea
+                      className={noteTextareaClass}
+                      value={activeOffer.introText || ""}
+                      onChange={(event) =>
+                        updateOffer(activeOffer.id, (offer) => ({
+                          ...offer,
+                          introText: event.target.value
+                        }))
+                      }
+                      placeholder="Vielen Dank für Ihre Anfrage..."
+                    />
+                  </Field>
                 </div>
               </section>
 
@@ -1853,18 +2042,20 @@ export default function OffersView() {
                       </Field>
                       <Field label="Kurzintro">
                         <div className="space-y-1.5">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateOffer(activeOffer.id, (offer) => ({
-                                ...offer,
-                                coverIntro: generateCoverIntro(offer)
-                              }))
-                            }
-                            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                          >
-                            <Sparkles size={12} /> Text
-                          </button>
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateOffer(activeOffer.id, (offer) => ({
+                                  ...offer,
+                                  coverIntro: generateCoverIntro(offer)
+                                }))
+                              }
+                              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                            >
+                              <Sparkles size={12} /> Text
+                            </button>
+                          </div>
                           <textarea
                             className={noteTextareaClass}
                             value={activeOffer.coverIntro}
@@ -1874,37 +2065,69 @@ export default function OffersView() {
                                 coverIntro: event.target.value
                               }))
                             }
-                            placeholder="Einleitung fuer das Deckblatt"
+                            placeholder="Einleitung für das Deckblatt"
                           />
                         </div>
                       </Field>
                     </div>
                   ) : null}
-                  <Field label="Uebersicht">
-                    <textarea
-                      className={noteTextareaClass}
-                      value={activeOffer.overviewText}
-                      onChange={(event) =>
-                        updateOffer(activeOffer.id, (offer) => ({
-                          ...offer,
-                          overviewText: event.target.value
-                        }))
-                      }
-                      placeholder="Kurzer Überblick zum Angebot"
-                    />
+                  <Field label="Übersicht">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateOffer(activeOffer.id, (offer) => ({
+                              ...offer,
+                              overviewText: generateOverviewText(offer)
+                            }))
+                          }
+                          className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                        >
+                          <Sparkles size={12} /> Text
+                        </button>
+                      </div>
+                      <textarea
+                        className={noteTextareaClass}
+                        value={activeOffer.overviewText}
+                        onChange={(event) =>
+                          updateOffer(activeOffer.id, (offer) => ({
+                            ...offer,
+                            overviewText: event.target.value
+                          }))
+                        }
+                        placeholder="Kurzer Überblick zum Angebot"
+                      />
+                    </div>
                   </Field>
                   <Field label="Kalkulation (Zusatztext)">
-                    <textarea
-                      className={noteTextareaClass}
-                      value={activeOffer.calculationText}
-                      onChange={(event) =>
-                        updateOffer(activeOffer.id, (offer) => ({
-                          ...offer,
-                          calculationText: event.target.value
-                        }))
-                      }
-                      placeholder="Hinweise zur Kalkulation"
-                    />
+                    <div className="space-y-1.5">
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateOffer(activeOffer.id, (offer) => ({
+                              ...offer,
+                              calculationText: generateCalculationText(offer)
+                            }))
+                          }
+                          className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                        >
+                          <Sparkles size={12} /> Text
+                        </button>
+                      </div>
+                      <textarea
+                        className={noteTextareaClass}
+                        value={activeOffer.calculationText}
+                        onChange={(event) =>
+                          updateOffer(activeOffer.id, (offer) => ({
+                            ...offer,
+                            calculationText: event.target.value
+                          }))
+                        }
+                        placeholder="Hinweise zur Kalkulation"
+                      />
+                    </div>
                   </Field>
                 </div>
               </section>
@@ -1919,7 +2142,7 @@ export default function OffersView() {
                       Positionen zusammenstellen
                     </h2>
                     <p className="text-sm text-sand-600">
-                      Leistung oder Geraet anlegen, Vorlagen nutzen.
+                      Leistung oder Gerät anlegen, Vorlagen nutzen.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -1927,7 +2150,7 @@ export default function OffersView() {
                       {activeOffer.lineItems.length} Leistungspositionen
                     </span>
                     <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                      {activeOffer.deviceItems.length} Geraetepositionen
+                      {activeOffer.deviceItems.length} Gerätepositionen
                     </span>
                   </div>
                 </div>
@@ -1942,26 +2165,25 @@ export default function OffersView() {
                           </p>
                         </div>
                         <p className="text-sm text-sand-600">
-                          Leistung oder Geraet direkt anlegen.
+                          Leistung oder Gerät direkt anlegen.
                         </p>
                         <div className="flex flex-col gap-2">
-                          <select
+                          <SelectField
                             value={positionType}
                             onChange={(event) => setPositionType(event.target.value)}
-                            className="rounded-full border border-sand-200 px-3 py-2 text-sm bg-white"
                           >
                             {positionTypes.map((option) => (
                               <option key={option.value} value={option.value}>
                                 {option.label}
                               </option>
                             ))}
-                          </select>
+                          </SelectField>
                           <button
                             type="button"
                             onClick={addPosition}
                             className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
                           >
-                            <Plus size={12} /> Hinzufuegen
+                            <Plus size={12} /> Hinzufügen
                           </button>
                         </div>
                       </div>
@@ -1974,12 +2196,11 @@ export default function OffersView() {
                           </p>
                         </div>
                         <p className="text-sm text-sand-600">
-                          Vorgefertigte Leistung uebernehmen.
+                          Vorgefertigte Leistung übernehmen.
                         </p>
-                        <select
+                        <SelectField
                           value={servicePick}
                           onChange={(event) => setServicePick(event.target.value)}
-                          className="rounded-full border border-sand-200 px-3 py-2 text-sm bg-white"
                           disabled={!serviceBlocks.length}
                         >
                           {serviceBlocks.map((block) => (
@@ -1987,14 +2208,14 @@ export default function OffersView() {
                               {block.title}
                             </option>
                           ))}
-                        </select>
+                        </SelectField>
                         <button
                           type="button"
                           onClick={addSelectedService}
                           disabled={!serviceBlocks.length || !servicePick}
                           className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          <Plus size={14} /> Hinzufuegen
+                          <Plus size={14} /> Hinzufügen
                         </button>
                       </div>
 
@@ -2002,16 +2223,15 @@ export default function OffersView() {
                         <div className="flex items-center gap-2 text-sand-700">
                           <Link size={16} />
                           <p className="text-xs uppercase tracking-wide text-sand-600">
-                            Geraete-Baustein
+                            Geräte-Baustein
                           </p>
                         </div>
                         <p className="text-sm text-sand-600">
-                          Vorgefertigtes Geraeteprofil uebernehmen.
+                          Vorgefertigtes Geräteprofil übernehmen.
                         </p>
-                        <select
+                        <SelectField
                           value={devicePick}
                           onChange={(event) => setDevicePick(event.target.value)}
-                          className="rounded-full border border-sand-200 px-3 py-2 text-sm bg-white"
                           disabled={!deviceBlocks.length}
                         >
                           {deviceBlocks.map((block) => (
@@ -2019,14 +2239,14 @@ export default function OffersView() {
                               {block.title}
                             </option>
                           ))}
-                        </select>
+                        </SelectField>
                         <button
                           type="button"
                           onClick={addSelectedDevice}
                           disabled={!deviceBlocks.length || !devicePick}
                           className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          <Plus size={14} /> Hinzufuegen
+                          <Plus size={14} /> Hinzufügen
                         </button>
                       </div>
                     </div>
@@ -2056,15 +2276,6 @@ export default function OffersView() {
                                   <p className="text-sm font-semibold text-sand-900">
                                     {item.title || "Unbenannte Position"}
                                   </p>
-                                  {ensureDraft(item) ? (
-                                    <p className="mt-1 text-xs text-sand-600 whitespace-pre-line">
-                                      {ensureDraft(item)}
-                                    </p>
-                                  ) : (
-                                    <p className="mt-1 text-xs text-sand-400">
-                                      Kein Positionstext hinterlegt.
-                                    </p>
-                                  )}
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-sand-500">
                                   <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-1">
@@ -2090,7 +2301,7 @@ export default function OffersView() {
                               </div>
 
                               <div className="mt-3 space-y-3">
-                                  <div className="grid gap-2 md:grid-cols-4">
+                                  <div className="space-y-2">
                                     <Field label="Titel">
                                       <input
                                         className={inputClass}
@@ -2103,33 +2314,38 @@ export default function OffersView() {
                                         placeholder="Kurz & fakturierbar"
                                       />
                                     </Field>
+                                    <div className="grid gap-2 md:grid-cols-3">
                                     <Field label="Preis">
-                                      <input
-                                        className={inputClass}
-                                        type="number"
-                                        value={item.price}
-                                        onChange={(event) =>
-                                          updateLineItem(activeOffer.id, item.id, {
-                                            price: Number(event.target.value)
-                                          })
-                                        }
-                                      />
+                                      <div className="relative">
+                                        <input
+                                          className={priceInputClass}
+                                          type="number"
+                                          value={item.price}
+                                          onChange={(event) =>
+                                            updateLineItem(activeOffer.id, item.id, {
+                                              price: Number(event.target.value)
+                                            })
+                                          }
+                                        />
+                                        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sand-400">
+                                          €
+                                        </span>
+                                      </div>
                                     </Field>
                                     <Field label="Menge">
                                       <input
-                                        className={inputClass}
+                                        className={quantityInputClass}
                                         type="number"
                                         value={item.quantity}
                                         onChange={(event) =>
                                           updateLineItem(activeOffer.id, item.id, {
-                                            quantity: Number(event.target.value)
-                                          })
-                                        }
-                                      />
-                                    </Field>
+                                              quantity: Number(event.target.value)
+                                            })
+                                          }
+                                        />
+                                      </Field>
                                     <Field label="Einheit">
-                                      <select
-                                        className={inputClass}
+                                      <SelectField
                                         value={item.unit || "hours"}
                                         onChange={(event) =>
                                           updateLineItem(activeOffer.id, item.id, {
@@ -2142,8 +2358,37 @@ export default function OffersView() {
                                             {unit.label}
                                           </option>
                                         ))}
-                                      </select>
+                                      </SelectField>
                                     </Field>
+                                    </div>
+                                  </div>
+                                  <div className="mt-3">
+                                    <div className="flex items-center justify-between">
+                                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                                        Positionstext
+                                      </p>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          updateLineItem(activeOffer.id, item.id, {
+                                            aiDraft: generateAiText(item)
+                                          })
+                                        }
+                                        className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                                      >
+                                        <Sparkles size={12} /> Text
+                                      </button>
+                                    </div>
+                                    <textarea
+                                      className={noteTextareaClass}
+                                      value={item.aiDraft || ""}
+                                      onChange={(event) =>
+                                        updateLineItem(activeOffer.id, item.id, {
+                                          aiDraft: event.target.value
+                                        })
+                                      }
+                                      placeholder="Optionaler Positionstext für die Vorschau"
+                                    />
                                   </div>
                                   <button
                                     type="button"
@@ -2155,7 +2400,7 @@ export default function OffersView() {
                                   </button>
                                   {detailsOpen ? (
                                     <>
-                                      <div className="mt-3 space-y-2">
+                                      <div className="mt-3 rounded-2xl border border-sand-200/70 bg-sand-50/70 p-3">
                                         <div className="flex items-center justify-between">
                                           <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
                                             Interne Vermerke
@@ -2173,59 +2418,89 @@ export default function OffersView() {
                                             <Plus size={12} /> Vermerk
                                           </button>
                                         </div>
-                                        {notes.length ? (
-                                          notes.map((note) => (
-                                            <div
-                                              key={note.id}
-                                              className="rounded-xl border border-sand-200 bg-sand-50 p-2"
-                                            >
-                                              <div className="flex items-center justify-between">
-                                                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                                  Vermerk
-                                                </p>
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    updateLineItemNotes(activeOffer.id, item.id, (prev) =>
-                                                      prev.filter((entry) => entry.id !== note.id)
-                                                    )
-                                                  }
-                                                  className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                                                  title="Vermerk entfernen"
-                                                >
-                                                  <Trash2 size={12} />
-                                                </button>
-                                              </div>
-                                              <div className="mt-2 grid gap-2 md:grid-cols-2">
-                                                <Field label="Typ">
-                                                  <select
-                                                    className={inputClass}
-                                                    value={note.type || ""}
-                                                    onChange={(event) =>
+                                        <div className="mt-2 space-y-2">
+                                          {notes.length ? (
+                                            notes.map((note) => (
+                                              <div
+                                                key={note.id}
+                                                className="rounded-xl border border-sand-200 bg-white p-2"
+                                              >
+                                                <div className="flex items-center justify-between">
+                                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                                                    Vermerk
+                                                  </p>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() =>
                                                       updateLineItemNotes(activeOffer.id, item.id, (prev) =>
-                                                        prev.map((entry) =>
-                                                          entry.id === note.id
-                                                            ? {
-                                                                ...entry,
-                                                                type: event.target.value
-                                                              }
-                                                            : entry
-                                                        )
+                                                        prev.filter((entry) => entry.id !== note.id)
                                                       )
                                                     }
+                                                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                                                    title="Vermerk entfernen"
                                                   >
-                                                    {internalNoteOptions.map((option) => (
-                                                      <option key={option.value} value={option.value}>
-                                                        {option.label}
-                                                      </option>
-                                                    ))}
-                                                  </select>
-                                                </Field>
-                                                <Field label="Vermerktext">
-                                                  {note.type === "bezugslink" ? (
-                                                    <div className="space-y-2">
-                                                      <input
-                                                        className={inputClass}
+                                                    <Trash2 size={12} />
+                                                  </button>
+                                                </div>
+                                                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                                                  <Field label="Typ">
+                                                    <SelectField
+                                                      value={note.type || ""}
+                                                      onChange={(event) =>
+                                                        updateLineItemNotes(activeOffer.id, item.id, (prev) =>
+                                                          prev.map((entry) =>
+                                                            entry.id === note.id
+                                                              ? {
+                                                                  ...entry,
+                                                                  type: event.target.value
+                                                                }
+                                                              : entry
+                                                          )
+                                                        )
+                                                      }
+                                                    >
+                                                      {internalNoteOptions.map((option) => (
+                                                        <option key={option.value} value={option.value}>
+                                                          {option.label}
+                                                        </option>
+                                                      ))}
+                                                    </SelectField>
+                                                  </Field>
+                                                  <Field label="Vermerktext">
+                                                    {note.type === "bezugslink" ? (
+                                                      <div className="space-y-2">
+                                                        <input
+                                                          className={inputClass}
+                                                          value={note.text || ""}
+                                                          onChange={(event) =>
+                                                            updateLineItemNotes(activeOffer.id, item.id, (prev) =>
+                                                              prev.map((entry) =>
+                                                                entry.id === note.id
+                                                                  ? { ...entry, text: event.target.value }
+                                                                  : entry
+                                                              )
+                                                            )
+                                                          }
+                                                          placeholder="https://..."
+                                                        />
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => importFromReferenceLink(item, note)}
+                                                          disabled={
+                                                            !note.text ||
+                                                            importingItemId === `${item.id}:${note.id}`
+                                                          }
+                                                          className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                                        >
+                                                          <Sparkles size={12} />
+                                                          {importingItemId === `${item.id}:${note.id}`
+                                                            ? "Import..."
+                                                            : "Import"}
+                                                        </button>
+                                                      </div>
+                                                    ) : (
+                                                      <textarea
+                                                        className={noteTextareaClass}
                                                         value={note.text || ""}
                                                         onChange={(event) =>
                                                           updateLineItemNotes(activeOffer.id, item.id, (prev) =>
@@ -2236,76 +2511,19 @@ export default function OffersView() {
                                                             )
                                                           )
                                                         }
-                                                        placeholder="https://..."
+                                                        placeholder="Interner Vermerk"
                                                       />
-                                                      <button
-                                                        type="button"
-                                                        onClick={() => importFromReferenceLink(item, note)}
-                                                        disabled={
-                                                          !note.text ||
-                                                          importingItemId === `${item.id}:${note.id}`
-                                                        }
-                                                        className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                                      >
-                                                        <Sparkles size={12} />
-                                                        {importingItemId === `${item.id}:${note.id}`
-                                                          ? "Import..."
-                                                          : "Import"}
-                                                      </button>
-                                                    </div>
-                                                  ) : (
-                                                    <textarea
-                                                      className={noteTextareaClass}
-                                                      value={note.text || ""}
-                                                      onChange={(event) =>
-                                                        updateLineItemNotes(activeOffer.id, item.id, (prev) =>
-                                                          prev.map((entry) =>
-                                                            entry.id === note.id
-                                                              ? { ...entry, text: event.target.value }
-                                                              : entry
-                                                          )
-                                                        )
-                                                      }
-                                                      placeholder="Interner Vermerk"
-                                                    />
-                                                  )}
-                                                </Field>
+                                                    )}
+                                                  </Field>
+                                                </div>
                                               </div>
+                                            ))
+                                          ) : (
+                                            <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-2 text-xs text-sand-500">
+                                              Noch keine Vermerke.
                                             </div>
-                                          ))
-                                        ) : (
-                                          <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-2 text-xs text-sand-500">
-                                            Noch keine Vermerke.
-                                          </div>
-                                        )}
-                                      </div>
-                                      <div className="mt-3">
-                                        <div className="flex items-center justify-between">
-                                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                            Positionstext
-                                          </p>
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              updateLineItem(activeOffer.id, item.id, {
-                                                aiDraft: generateAiText(item)
-                                              })
-                                            }
-                                            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                                          >
-                                            <Sparkles size={12} /> Text
-                                          </button>
+                                          )}
                                         </div>
-                                        <textarea
-                                          className={noteTextareaClass}
-                                          value={item.aiDraft || ""}
-                                          onChange={(event) =>
-                                            updateLineItem(activeOffer.id, item.id, {
-                                              aiDraft: event.target.value
-                                            })
-                                          }
-                                          placeholder="Optionaler Positionstext fuer die Vorschau"
-                                        />
                                       </div>
                                     </>
                                   ) : null}
@@ -2315,7 +2533,7 @@ export default function OffersView() {
                         })
                       ) : (
                         <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-4 text-sm text-sand-500">
-                          Noch keine Leistungspositionen ausgewaehlt.
+                          Noch keine Leistungspositionen ausgewählt.
                         </div>
                       )}
                     </div>
@@ -2323,7 +2541,7 @@ export default function OffersView() {
                     <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
                       <div className="flex items-center justify-between">
                         <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                          Geraeteprofile
+                          Geräteprofile
                         </p>
                         <span className="text-xs text-sand-500">
                           {activeOffer.deviceItems.length} Positionen
@@ -2342,10 +2560,10 @@ export default function OffersView() {
                               <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div>
                                   <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                    Geraeteprofil
+                                    Geräteprofil
                                   </p>
                                   <p className="text-sm font-semibold text-sand-900">
-                                    {item.manufacturer || "Hersteller"} · {item.model || "Modell"}
+                                    {getDeviceProduct(item)}
                                   </p>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2">
@@ -2381,22 +2599,27 @@ export default function OffersView() {
 
                               {showDetails ? (
                                 <>
-                                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                  <div className="mt-3 grid gap-3 md:grid-cols-3">
                                     <Field label="Preis">
-                                      <input
-                                        className={inputClass}
-                                        type="number"
-                                        value={item.price}
-                                        onChange={(event) =>
-                                          updateDeviceItem(activeOffer.id, item.id, {
-                                            price: Number(event.target.value)
-                                          })
-                                        }
-                                      />
+                                      <div className="relative">
+                                        <input
+                                          className={priceInputClass}
+                                          type="number"
+                                          value={item.price}
+                                          onChange={(event) =>
+                                            updateDeviceItem(activeOffer.id, item.id, {
+                                              price: Number(event.target.value)
+                                            })
+                                          }
+                                        />
+                                        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sand-400">
+                                          €
+                                        </span>
+                                      </div>
                                     </Field>
                                     <Field label="Menge">
                                       <input
-                                        className={inputClass}
+                                        className={quantityInputClass}
                                         type="number"
                                         value={item.quantity}
                                         onChange={(event) =>
@@ -2406,32 +2629,50 @@ export default function OffersView() {
                                         }
                                       />
                                     </Field>
-                                    <Field label="Hersteller">
+                                    <Field label="Produkt">
                                       <input
                                         className={inputClass}
-                                        value={item.manufacturer}
+                                        value={item.product || getDeviceProduct(item)}
                                         onChange={(event) =>
                                           updateDeviceItem(activeOffer.id, item.id, {
-                                            manufacturer: event.target.value
+                                            product: event.target.value
                                           })
                                         }
-                                        placeholder="Hersteller"
-                                      />
-                                    </Field>
-                                    <Field label="Modell">
-                                      <input
-                                        className={inputClass}
-                                        value={item.model}
-                                        onChange={(event) =>
-                                          updateDeviceItem(activeOffer.id, item.id, {
-                                            model: event.target.value
-                                          })
-                                        }
-                                        placeholder="Modell"
+                                        placeholder="Produkt"
                                       />
                                     </Field>
                                   </div>
-                                  <div className="mt-3 space-y-2">
+                                  <div className="mt-3">
+                                    <div className="flex items-center justify-between">
+                                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                                        Produktbeschreibung
+                                      </p>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          updateDeviceItem(activeOffer.id, item.id, {
+                                            description:
+                                              item.description ||
+                                              generateDeviceDescription(item)
+                                          })
+                                        }
+                                        className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                                      >
+                                        <Sparkles size={12} /> Text
+                                      </button>
+                                    </div>
+                                    <textarea
+                                      className={noteTextareaClass}
+                                      value={item.description || ""}
+                                      onChange={(event) =>
+                                        updateDeviceItem(activeOffer.id, item.id, {
+                                          description: event.target.value
+                                        })
+                                      }
+                                      placeholder="Produktbeschreibung oder kurzer Freitext"
+                                    />
+                                  </div>
+                                  <div className="mt-3 rounded-2xl border border-sand-200/70 bg-sand-50/70 p-3">
                                     <div className="flex items-center justify-between">
                                       <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
                                         Interne Vermerke
@@ -2449,92 +2690,109 @@ export default function OffersView() {
                                         <Plus size={12} /> Vermerk
                                       </button>
                                     </div>
-                                    {notes.length ? (
-                                      notes.map((note) => (
-                                        <div
-                                          key={note.id}
-                                          className="rounded-xl border border-sand-200 bg-sand-50 p-2"
-                                        >
-                                          <div className="flex items-center justify-between">
-                                            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                              Vermerk
-                                            </p>
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
-                                                  prev.filter((entry) => entry.id !== note.id)
-                                                )
-                                              }
-                                              className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                                              title="Vermerk entfernen"
-                                            >
-                                              <Trash2 size={12} />
-                                            </button>
-                                          </div>
-                                          <div className="mt-2 grid gap-2 md:grid-cols-2">
-                                            <Field label="Typ">
-                                              <select
-                                                className={inputClass}
-                                                value={note.type || ""}
-                                                onChange={(event) =>
+                                    <div className="mt-2 space-y-2">
+                                      {notes.length ? (
+                                        notes.map((note) => (
+                                          <div
+                                            key={note.id}
+                                            className="rounded-xl border border-sand-200 bg-white p-2"
+                                          >
+                                            <div className="flex items-center justify-between">
+                                              <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                                                Vermerk
+                                              </p>
+                                              <button
+                                                type="button"
+                                                onClick={() =>
                                                   updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
-                                                    prev.map((entry) =>
-                                                      entry.id === note.id
-                                                        ? { ...entry, type: event.target.value }
-                                                        : entry
-                                                    )
+                                                    prev.filter((entry) => entry.id !== note.id)
                                                   )
                                                 }
+                                                className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                                                title="Vermerk entfernen"
                                               >
-                                                {internalNoteOptions.map((option) => (
-                                                  <option key={option.value} value={option.value}>
-                                                    {option.label}
-                                                  </option>
-                                                ))}
-                                              </select>
-                                            </Field>
-                                            <Field label="Vermerktext">
-                                              {note.type === "bezugslink" ? (
-                                                <input
-                                                  className={inputClass}
-                                                  value={note.text || ""}
+                                                <Trash2 size={12} />
+                                              </button>
+                                            </div>
+                                            <div className="mt-2 grid gap-2 md:grid-cols-2">
+                                              <Field label="Typ">
+                                                <SelectField
+                                                  value={note.type || ""}
                                                   onChange={(event) =>
                                                     updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
                                                       prev.map((entry) =>
                                                         entry.id === note.id
-                                                          ? { ...entry, text: event.target.value }
+                                                          ? { ...entry, type: event.target.value }
                                                           : entry
                                                       )
                                                     )
                                                   }
-                                                  placeholder="https://..."
-                                                />
-                                              ) : (
-                                                <textarea
-                                                  className={noteTextareaClass}
-                                                  value={note.text || ""}
-                                                  onChange={(event) =>
-                                                    updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
-                                                      prev.map((entry) =>
-                                                        entry.id === note.id
-                                                          ? { ...entry, text: event.target.value }
-                                                          : entry
+                                                >
+                                                  {internalNoteOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>
+                                                      {option.label}
+                                                    </option>
+                                                  ))}
+                                                </SelectField>
+                                              </Field>
+                                              <Field label="Vermerktext">
+                                                {note.type === "bezugslink" ? (
+                                                  <div className="space-y-2">
+                                                    <input
+                                                      className={inputClass}
+                                                      value={note.text || ""}
+                                                      onChange={(event) =>
+                                                        updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
+                                                          prev.map((entry) =>
+                                                            entry.id === note.id
+                                                              ? { ...entry, text: event.target.value }
+                                                              : entry
+                                                          )
+                                                        )
+                                                      }
+                                                      placeholder="https://..."
+                                                    />
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => importDeviceFromReferenceLink(item, note)}
+                                                      disabled={
+                                                        !note.text ||
+                                                        importingItemId === `${item.id}:${note.id}`
+                                                      }
+                                                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                                    >
+                                                      <Sparkles size={12} />
+                                                      {importingItemId === `${item.id}:${note.id}`
+                                                        ? "Import..."
+                                                        : "Import"}
+                                                    </button>
+                                                  </div>
+                                                ) : (
+                                                  <textarea
+                                                    className={noteTextareaClass}
+                                                    value={note.text || ""}
+                                                    onChange={(event) =>
+                                                      updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
+                                                        prev.map((entry) =>
+                                                          entry.id === note.id
+                                                            ? { ...entry, text: event.target.value }
+                                                            : entry
+                                                        )
                                                       )
-                                                    )
-                                                  }
-                                                  placeholder="Interner Vermerk"
-                                                />
-                                              )}
-                                            </Field>
+                                                    }
+                                                    placeholder="Interner Vermerk"
+                                                  />
+                                                )}
+                                              </Field>
+                                            </div>
                                           </div>
+                                        ))
+                                      ) : (
+                                        <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-2 text-xs text-sand-500">
+                                          Noch keine Vermerke.
                                         </div>
-                                      ))
-                                    ) : (
-                                      <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-2 text-xs text-sand-500">
-                                        Noch keine Vermerke.
-                                      </div>
-                                    )}
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="mt-3">
                                       <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
@@ -2549,7 +2807,7 @@ export default function OffersView() {
                                           addDeviceImage(activeOffer.id, item.id, url);
                                         }}
                                       >
-                                        Bild-URL einfuegen oder per Drag & Drop aus dem Browser.
+                                        Bild-URL einfügen oder per Drag & Drop aus dem Browser.
                                       </div>
                                       <div className="mt-2 flex items-center gap-2">
                                         <input
@@ -2585,7 +2843,7 @@ export default function OffersView() {
                                           }}
                                           className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
                                         >
-                                          <Image size={12} /> Hinzufuegen
+                                          <Image size={12} /> Hinzufügen
                                         </button>
                                       </div>
                                       <div className="mt-2 flex flex-wrap gap-2">
@@ -2613,7 +2871,7 @@ export default function OffersView() {
                                         ))}
                                         {item.images?.length ? null : (
                                           <div className="text-xs text-sand-500">
-                                            Noch keine Bilder hinzugefuegt.
+                                            Noch keine Bilder hinzugefügt.
                                           </div>
                                         )}
                                       </div>
@@ -2625,7 +2883,7 @@ export default function OffersView() {
                         })
                       ) : (
                         <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-4 text-sm text-sand-500">
-                          Keine Geraetepositionen hinterlegt.
+                          Keine Gerätepositionen hinterlegt.
                         </div>
                       )}
                     </div>
@@ -2648,7 +2906,7 @@ export default function OffersView() {
                   </div>
                 </div>
                 <textarea
-                  className="mt-3 min-h-[160px] rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400"
+                  className="mt-3 w-full min-h-[160px] rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400"
                   value={detailDraft}
                   onChange={(event) => setDetailDraft(event.target.value)}
                   placeholder="Projektablauf, Hintergrund, Vorgehen..."
@@ -2785,14 +3043,14 @@ export default function OffersView() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                      Uebergabe
+                      Übergabe
                     </p>
                     <h2 className="text-lg font-display text-sand-900">
-                      Uebergabe & Abrechnung
+                      Übergabe & Abrechnung
                     </h2>
                     <p className="text-sm text-sand-600">
                       Es werden nur Kurzpositionstitel, Menge, Preis und Referenz-ID
-                      uebergeben.
+                      übergeben.
                     </p>
                   </div>
                   <button
@@ -2816,14 +3074,14 @@ export default function OffersView() {
                   </div>
                 ) : (
                   <div className="mt-4 rounded-2xl border border-dashed border-sand-200 bg-sand-100 p-4 text-sm text-sand-500">
-                    Noch keine Uebergabe erzeugt.
+                    Noch keine Übergabe erzeugt.
                   </div>
                 )}
               </section>
             </>
           ) : (
             <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft text-sm text-sand-500">
-              Kein Angebot ausgewaehlt.
+              Kein Angebot ausgewählt.
             </section>
           )}
         </section>
@@ -2867,36 +3125,88 @@ export default function OffersView() {
             <div className="mt-3 space-y-2">
               {offerBuckets.open.length ? (
                 offerBuckets.open.map((offer) => (
-                  <div
-                    key={offer.id}
-                    className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between"
-                  >
-                    <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                        {offer.reference}
-                      </p>
-                      <p className="text-sm font-semibold">
-                        {offer.customer || "Neues Angebot"}
-                      </p>
-                    </button>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewOfferId(offer.id)}
-                        className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                        title="Vorschau"
-                      >
-                        <Eye size={14} />
+                  <div key={offer.id}>
+                    <div className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
+                      <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
+                        <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                          {offer.reference}
+                        </p>
+                        <p className="text-sm font-semibold">
+                          {offer.customer || "Neues Angebot"}
+                        </p>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => exportOfferPdf(offer)}
-                        className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                        title="PDF exportieren"
-                      >
-                        <FileDown size={14} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleOfferExpanded(offer.id)}
+                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                          title="Details"
+                        >
+                          {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateOffer(offer.id, (entry) => ({
+                              ...entry,
+                              status: "angenommen"
+                            }))
+                          }
+                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-600 hover:bg-emerald-50"
+                          title="Akzeptieren"
+                        >
+                          <Check size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateOffer(offer.id, (entry) => ({
+                              ...entry,
+                              status: "abgelehnt"
+                            }))
+                          }
+                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
+                          title="Ablehnen"
+                        >
+                          <X size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => editOfferFromArchive(offer.id)}
+                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                          title="Bearbeiten"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewOfferId(offer.id)}
+                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                          title="Vorschau"
+                        >
+                          <Eye size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => exportOfferPdf(offer)}
+                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                          title="PDF exportieren"
+                        >
+                          <FileDown size={14} />
+                        </button>
+                      </div>
                     </div>
+                    {expandedOffers[offer.id] ? (
+                      <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-600">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span>Summe: {formatMoney(getOfferTotal(offer))}</span>
+                          <span>Datum: {formatDate(offer.createdAt)}</span>
+                          <span>
+                            Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
+                          </span>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ))
               ) : (
@@ -2912,36 +3222,76 @@ export default function OffersView() {
             <div className="mt-3 space-y-2">
               {offerBuckets.accepted.length ? (
                 offerBuckets.accepted.map((offer) => (
-                  <div
-                    key={offer.id}
-                    className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between"
-                  >
-                    <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
-                        {offer.reference}
-                      </p>
-                      <p className="text-sm font-semibold">
-                        {offer.customer || "Angebot"}
-                      </p>
-                    </button>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewOfferId(offer.id)}
-                        className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                        title="Vorschau"
-                      >
-                        <Eye size={14} />
+                  <div key={offer.id}>
+                    <div className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
+                      <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
+                        <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
+                          {offer.reference}
+                        </p>
+                        <p className="text-sm font-semibold">
+                          {offer.customer || "Angebot"}
+                        </p>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => exportOfferPdf(offer)}
-                        className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                        title="PDF exportieren"
-                      >
-                        <FileDown size={14} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleOfferExpanded(offer.id)}
+                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                          title="Details"
+                        >
+                          {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => duplicateOffer(offer)}
+                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                          title="Duplizieren"
+                        >
+                          <Copy size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewOfferId(offer.id)}
+                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                          title="Vorschau"
+                        >
+                          <Eye size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => exportOfferPdf(offer)}
+                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                          title="PDF exportieren"
+                        >
+                          <FileDown size={14} />
+                        </button>
+                      </div>
                     </div>
+                    {expandedOffers[offer.id] ? (
+                      <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-xs text-emerald-700">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span>Summe: {formatMoney(getOfferTotal(offer))}</span>
+                          <span>Datum: {formatDate(offer.createdAt)}</span>
+                          <span>
+                            Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateOffer(offer.id, (entry) => ({
+                                ...entry,
+                                status: "Entwurf"
+                              }))
+                            }
+                            className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-600 hover:bg-emerald-50"
+                          >
+                            Wieder öffnen
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ))
               ) : (
@@ -2959,36 +3309,76 @@ export default function OffersView() {
             <div className="mt-3 space-y-2">
               {offerBuckets.declined.length ? (
                 offerBuckets.declined.map((offer) => (
-                  <div
-                    key={offer.id}
-                    className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between"
-                  >
-                    <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
-                        {offer.reference}
-                      </p>
-                      <p className="text-sm font-semibold">
-                        {offer.customer || "Angebot"}
-                      </p>
-                    </button>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setPreviewOfferId(offer.id)}
-                        className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                        title="Vorschau"
-                      >
-                        <Eye size={14} />
+                  <div key={offer.id}>
+                    <div className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
+                      <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
+                        <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
+                          {offer.reference}
+                        </p>
+                        <p className="text-sm font-semibold">
+                          {offer.customer || "Angebot"}
+                        </p>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => exportOfferPdf(offer)}
-                        className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                        title="PDF exportieren"
-                      >
-                        <FileDown size={14} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleOfferExpanded(offer.id)}
+                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                          title="Details"
+                        >
+                          {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => duplicateOffer(offer)}
+                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                          title="Duplizieren"
+                        >
+                          <Copy size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewOfferId(offer.id)}
+                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                          title="Vorschau"
+                        >
+                          <Eye size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => exportOfferPdf(offer)}
+                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                          title="PDF exportieren"
+                        >
+                          <FileDown size={14} />
+                        </button>
+                      </div>
                     </div>
+                    {expandedOffers[offer.id] ? (
+                      <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50/60 p-3 text-xs text-rose-700">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <span>Summe: {formatMoney(getOfferTotal(offer))}</span>
+                          <span>Datum: {formatDate(offer.createdAt)}</span>
+                          <span>
+                            Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateOffer(offer.id, (entry) => ({
+                                ...entry,
+                                status: "Entwurf"
+                              }))
+                            }
+                            className="rounded-full border border-rose-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                          >
+                            Wieder öffnen
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ))
               ) : (
@@ -3008,7 +3398,7 @@ export default function OffersView() {
               Textbausteine
             </p>
             <h2 className="text-lg font-display text-sand-900">
-              Service & Geraete pflegen
+              Service & Geräte pflegen
             </h2>
           </div>
         </div>
@@ -3051,7 +3441,7 @@ export default function OffersView() {
                           onClick={() => toggleBlockOpen(key)}
                           className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                         >
-                          {isOpen ? "Schliessen" : "Bearbeiten"}
+                          {isOpen ? "Schließen" : "Bearbeiten"}
                         </button>
                         <button
                           type="button"
@@ -3065,7 +3455,7 @@ export default function OffersView() {
                     </div>
                     {isOpen ? (
                       <div className="mt-3 space-y-2">
-                        <div className="grid gap-2 md:grid-cols-4">
+                        <div className="space-y-2">
                           <Field label="Titel">
                             <input
                               className={inputClass}
@@ -3076,52 +3466,57 @@ export default function OffersView() {
                               placeholder="Titel"
                             />
                           </Field>
-                          <Field label="Preis">
-                            <input
-                              className={inputClass}
-                              type="number"
-                              value={block.price || 0}
-                              onChange={(event) =>
-                                updateServiceBlock(block.id, {
-                                  price: Number(event.target.value)
-                                })
-                              }
-                            />
-                          </Field>
-                          <Field label="Menge">
-                            <input
-                              className={inputClass}
-                              type="number"
-                              value={block.quantity || 1}
-                              onChange={(event) =>
-                                updateServiceBlock(block.id, {
-                                  quantity: Number(event.target.value)
-                                })
-                              }
-                            />
-                          </Field>
-                          <Field label="Einheit">
-                            <select
-                              className={inputClass}
-                              value={block.unit || "hours"}
-                              onChange={(event) =>
-                                updateServiceBlock(block.id, {
-                                  unit: event.target.value
-                                })
-                              }
-                            >
-                              {unitOptions.map((unit) => (
-                                <option key={unit.value} value={unit.value}>
-                                  {unit.label}
-                                </option>
-                              ))}
-                            </select>
-                          </Field>
+                          <div className="grid gap-2 md:grid-cols-3">
+                            <Field label="Preis">
+                              <div className="relative">
+                                <input
+                                  className={priceInputClass}
+                                  type="number"
+                                  value={block.price || 0}
+                                  onChange={(event) =>
+                                    updateServiceBlock(block.id, {
+                                      price: Number(event.target.value)
+                                    })
+                                  }
+                                />
+                                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sand-400">
+                                  €
+                                </span>
+                              </div>
+                            </Field>
+                            <Field label="Menge">
+                              <input
+                                className={quantityInputClass}
+                                type="number"
+                                value={block.quantity || 1}
+                                onChange={(event) =>
+                                  updateServiceBlock(block.id, {
+                                    quantity: Number(event.target.value)
+                                  })
+                                }
+                              />
+                            </Field>
+                            <Field label="Einheit">
+                              <SelectField
+                                value={block.unit || "hours"}
+                                onChange={(event) =>
+                                  updateServiceBlock(block.id, {
+                                    unit: event.target.value
+                                  })
+                                }
+                              >
+                                {unitOptions.map((unit) => (
+                                  <option key={unit.value} value={unit.value}>
+                                    {unit.label}
+                                  </option>
+                                ))}
+                              </SelectField>
+                            </Field>
+                          </div>
                         </div>
                         <div className="grid gap-2 md:grid-cols-3">
-                          <Field label="Komplexitaet">
-                            <select
-                              className={inputClass}
+                          <Field label="Komplexität">
+                            <SelectField
                               value={block.complexity || "mittel"}
                               onChange={(event) =>
                                 updateServiceBlock(block.id, {
@@ -3134,7 +3529,7 @@ export default function OffersView() {
                                   {level}
                                 </option>
                               ))}
-                            </select>
+                            </SelectField>
                           </Field>
                           <Field label="Stichworte">
                             <input
@@ -3198,7 +3593,7 @@ export default function OffersView() {
           <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                Geraetebausteine
+                Gerätebausteine
               </p>
               <button
                 type="button"
@@ -3220,10 +3615,10 @@ export default function OffersView() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-xs font-semibold text-sand-900">
-                          {block.title || "Geraetebaustein"}
+                          {block.title || "Gerätebaustein"}
                         </p>
                         <p className="mt-1 text-xs text-sand-500">
-                          {block.manufacturer || "Hersteller"} · {block.model || "Modell"}
+                          {getDeviceProduct(block)}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -3232,7 +3627,7 @@ export default function OffersView() {
                           onClick={() => toggleBlockOpen(key)}
                           className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                         >
-                          {isOpen ? "Schliessen" : "Bearbeiten"}
+                          {isOpen ? "Schließen" : "Bearbeiten"}
                         </button>
                         <button
                           type="button"
@@ -3256,43 +3651,36 @@ export default function OffersView() {
                             placeholder="Titel"
                           />
                         </Field>
-                        <Field label="Hersteller">
+                        <Field label="Produkt">
                           <input
                             className={inputClass}
-                            value={block.manufacturer || ""}
+                            value={block.product || getDeviceProduct(block)}
                             onChange={(event) =>
-                              updateDeviceBlock(block.id, {
-                                manufacturer: event.target.value
-                              })
+                              updateDeviceBlock(block.id, { product: event.target.value })
                             }
-                            placeholder="Hersteller"
-                          />
-                        </Field>
-                        <Field label="Modell">
-                          <input
-                            className={inputClass}
-                            value={block.model || ""}
-                            onChange={(event) =>
-                              updateDeviceBlock(block.id, { model: event.target.value })
-                            }
-                            placeholder="Modell"
+                            placeholder="Produkt"
                           />
                         </Field>
                         <Field label="Preis">
-                          <input
-                            className={inputClass}
-                            type="number"
-                            value={block.price || 0}
-                            onChange={(event) =>
-                              updateDeviceBlock(block.id, {
-                                price: Number(event.target.value)
-                              })
-                            }
-                          />
+                          <div className="relative">
+                            <input
+                              className={priceInputClass}
+                              type="number"
+                              value={block.price || 0}
+                              onChange={(event) =>
+                                updateDeviceBlock(block.id, {
+                                  price: Number(event.target.value)
+                                })
+                              }
+                            />
+                            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sand-400">
+                              €
+                            </span>
+                          </div>
                         </Field>
                         <Field label="Menge">
                           <input
-                            className={inputClass}
+                            className={quantityInputClass}
                             type="number"
                             value={block.quantity || 1}
                             onChange={(event) =>
@@ -3309,7 +3697,7 @@ export default function OffersView() {
               })
             ) : (
               <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-3 text-xs text-sand-500">
-                Noch keine Geraetebausteine hinterlegt.
+                Noch keine Gerätebausteine hinterlegt.
               </div>
             )}
           </div>
@@ -3340,7 +3728,7 @@ export default function OffersView() {
                 type="button"
                 onClick={() => setPreviewOfferId("")}
                 className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
-                title="Schliessen"
+                title="Schließen"
               >
                 <X size={14} />
               </button>

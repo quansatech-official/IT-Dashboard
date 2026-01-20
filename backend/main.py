@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Request, Form
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -193,6 +194,23 @@ class ReportItem(Base):
     cost = Column(String, default="")
 
     report = relationship("Report", back_populates="items")
+
+
+class Offer(Base):
+    __tablename__ = "offers"
+
+    id = Column(Integer, primary_key=True)
+    guid = Column(String, default=lambda: str(uuid.uuid4()))
+    reference = Column(String, default="")
+    customer = Column(String, default="")
+    status = Column(String, default="offen")
+    data_json = Column(String, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    confirmed_at = Column(BigInteger, default=0)
+    customer_name = Column(String, default="")
+    customer_email = Column(String, default="")
+    customer_note = Column(String, default="")
 
 class IntegrationSettings(Base):
     __tablename__ = "integration_settings"
@@ -658,6 +676,25 @@ class OfferSendRequest(BaseModel):
     html: str
     text: Optional[str] = None
 
+
+class OfferSaveRequest(BaseModel):
+    reference: Optional[str] = ""
+    customer: Optional[str] = ""
+    status: Optional[str] = ""
+    data: Dict[str, Any]
+
+
+class OfferSaveResponse(BaseModel):
+    id: int
+    guid: str
+    confirm_url: str
+
+
+class OfferCustomerConfirm(BaseModel):
+    name: Optional[str] = ""
+    email: Optional[str] = ""
+    note: Optional[str] = ""
+
 class ActionAiRequest(BaseModel):
     text: str
 
@@ -959,6 +996,13 @@ def serialize_offer_settings(settings: OfferSettings) -> Dict[str, Any]:
         "id": settings.id,
         "offer_number_format": settings.offer_number_format,
     }
+
+
+def _build_offer_confirm_url(request: Request, guid: str) -> str:
+    base = (os.environ.get("OFFER_CONFIRM_BASE_URL") or "").strip()
+    if not base:
+        base = str(request.base_url).rstrip("/")
+    return f"{base}/offers/confirm/{guid}"
 
 
 def serialize_customer_metrics_settings(settings: CustomerMetricsSettings) -> Dict[str, Any]:
@@ -1856,6 +1900,50 @@ def update_offer_settings(data: OfferSettingsUpdate):
         return serialize_offer_settings(settings)
 
 
+@app.post("/api/offers", response_model=OfferSaveResponse)
+def create_offer(data: OfferSaveRequest, request: Request):
+    with SessionLocal() as db:
+        now_ms = int(time.time() * 1000)
+        offer = Offer(
+            guid=str(uuid.uuid4()),
+            reference=data.reference or "",
+            customer=data.customer or "",
+            status=data.status or "offen",
+            data_json=json.dumps(data.data or {}),
+            created_at=now_ms,
+            updated_at=now_ms,
+        )
+        db.add(offer)
+        db.commit()
+        db.refresh(offer)
+        return OfferSaveResponse(
+            id=offer.id,
+            guid=offer.guid,
+            confirm_url=_build_offer_confirm_url(request, offer.guid),
+        )
+
+
+@app.put("/api/offers/{offer_id}", response_model=OfferSaveResponse)
+def update_offer(offer_id: int, data: OfferSaveRequest, request: Request):
+    with SessionLocal() as db:
+        offer = db.query(Offer).get(offer_id)
+        if not offer:
+            raise HTTPException(404, "Offer not found")
+        offer.reference = data.reference or offer.reference
+        offer.customer = data.customer or offer.customer
+        if data.status is not None:
+            offer.status = data.status or offer.status
+        offer.data_json = json.dumps(data.data or {})
+        offer.updated_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(offer)
+        return OfferSaveResponse(
+            id=offer.id,
+            guid=offer.guid,
+            confirm_url=_build_offer_confirm_url(request, offer.guid),
+        )
+
+
 @app.get("/api/customer_metrics_settings")
 def get_customer_metrics_settings():
     with SessionLocal() as db:
@@ -2062,6 +2150,85 @@ def send_offer(data: OfferSendRequest):
             server.quit()
 
         return {"status": "sent", "tracking_guid": tracking_guid}
+
+
+@app.get("/offers/confirm/{guid}", response_class=HTMLResponse)
+def offer_confirm_page(guid: str):
+    with SessionLocal() as db:
+        offer = db.query(Offer).filter(Offer.guid == guid).first()
+    if not offer:
+        return HTMLResponse(
+            content="<h2>Angebot nicht gefunden</h2><p>Bitte prüfen Sie den Link.</p>",
+            status_code=404,
+        )
+    title = offer.reference or "Angebot"
+    customer = offer.customer or "Kunde"
+    return HTMLResponse(
+        content=f"""
+        <!doctype html>
+        <html lang="de">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>Angebot bestätigen</title>
+            <style>
+              body {{ font-family: Arial, sans-serif; background:#f8f5ef; color:#1f2937; padding:24px; }}
+              .card {{ max-width:620px; margin:0 auto; background:#fff; border-radius:18px; padding:24px; box-shadow:0 8px 24px rgba(15,23,42,0.08); }}
+              label {{ display:block; font-size:12px; text-transform:uppercase; letter-spacing:0.2em; color:#6b7280; margin-top:14px; }}
+              input, textarea {{ width:100%; padding:10px 12px; border-radius:12px; border:1px solid #e2e8f0; margin-top:6px; font-size:14px; }}
+              button {{ margin-top:18px; background:#111827; color:#fff; border:none; padding:10px 16px; border-radius:999px; cursor:pointer; text-transform:uppercase; font-size:12px; letter-spacing:0.2em; }}
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.3em; color:#9ca3af;">Angebot</p>
+              <h2 style="margin:6px 0 4px;">{title}</h2>
+              <p style="color:#6b7280; margin:0 0 14px;">{customer}</p>
+              <form method="post">
+                <label for="name">Name</label>
+                <input id="name" name="name" placeholder="Vor- und Nachname" />
+                <label for="email">E-Mail</label>
+                <input id="email" name="email" type="email" placeholder="name@firma.at" />
+                <label for="note">Anmerkungen</label>
+                <textarea id="note" name="note" rows="5" placeholder="Optionale Hinweise oder Wünsche"></textarea>
+                <button type="submit">Angebot bestätigen</button>
+              </form>
+            </div>
+          </body>
+        </html>
+        """,
+        status_code=200,
+    )
+
+
+@app.post("/offers/confirm/{guid}", response_class=HTMLResponse)
+def offer_confirm_submit(
+    guid: str,
+    name: str = Form(default=""),
+    email: str = Form(default=""),
+    note: str = Form(default=""),
+):
+    with SessionLocal() as db:
+        offer = db.query(Offer).filter(Offer.guid == guid).first()
+        if not offer:
+            return HTMLResponse(
+                content="<h2>Angebot nicht gefunden</h2><p>Bitte prüfen Sie den Link.</p>",
+                status_code=404,
+            )
+        offer.status = "angenommen"
+        offer.confirmed_at = int(time.time() * 1000)
+        offer.customer_name = name or offer.customer_name
+        offer.customer_email = email or offer.customer_email
+        offer.customer_note = note or offer.customer_note
+        offer.updated_at = int(time.time() * 1000)
+        db.commit()
+    return HTMLResponse(
+        content="""
+        <h2>Vielen Dank!</h2>
+        <p>Ihre Angebotsbestätigung ist eingegangen.</p>
+        """,
+        status_code=200,
+    )
 
 
 @app.patch("/api/reports/{report_id}")
