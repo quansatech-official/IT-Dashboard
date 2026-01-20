@@ -1859,9 +1859,9 @@ def list_remote_pbx_phonebook(pagesize: int = 100, offset: int = 0, q: Optional[
         query.append(f"_offset={offset}")
     if q:
         query.append(f"_q={q}")
-    query_string = f\"?{'&'.join(query)}\" if query else \"\"
-    path = f\"/api/customers/{customer_account}/phone-books{query_string}\"
-    payload = _nfon_request(\"GET\", base_url, api_key_id, api_key_secret, path)
+    query_string = f"?{'&'.join(query)}" if query else ""
+    path = f"/api/customers/{customer_account}/phone-books{query_string}"
+    payload = _nfon_request("GET", base_url, api_key_id, api_key_secret, path)
     return _extract_phonebook_entries(payload)
 
 
@@ -1870,13 +1870,13 @@ def create_remote_pbx_phonebook(data: PbxPhonebookCreate):
     with SessionLocal() as db:
         base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
     body = {
-        \"data\": [
-            {\"name\": \"displayName\", \"value\": data.name or \"\"},
-            {\"name\": \"displayNumber\", \"value\": data.number or \"\"},
+        "data": [
+            {"name": "displayName", "value": data.name or ""},
+            {"name": "displayNumber", "value": data.number or ""},
         ]
     }
-    path = f\"/api/customers/{customer_account}/phone-books\"
-    payload = _nfon_request(\"POST\", base_url, api_key_id, api_key_secret, path, body_obj=body)
+    path = f"/api/customers/{customer_account}/phone-books"
+    payload = _nfon_request("POST", base_url, api_key_id, api_key_secret, path, body_obj=body)
     entries = _extract_phonebook_entries(payload)
     if entries:
         return entries[0]
