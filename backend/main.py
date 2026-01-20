@@ -1938,6 +1938,33 @@ def pbx_phonebook_health():
             entries = _extract_phonebook_entries(response.json())
         except ValueError:
             entries = []
+        version_path = "/api/version"
+        version_url = f"{base_url}{version_path}"
+        version_status_code = None
+        version_ok = False
+        version_error = ""
+        version_preview = ""
+        try:
+            version_date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+            version_string_to_sign = f"GET\n\n\n{version_date}\n{version_path}"
+            version_signature = hmac.new(
+                api_key_secret.encode("utf-8"),
+                version_string_to_sign.encode("utf-8"),
+                hashlib.sha1,
+            )
+            version_signature_b64 = base64.b64encode(version_signature.digest()).decode("utf-8")
+            version_headers = {
+                "Authorization": f"NFON-API {api_key_id}:{version_signature_b64}",
+                "x-nfon-date": version_date,
+            }
+            version_response = requests.request("GET", version_url, headers=version_headers, timeout=20)
+            version_status_code = version_response.status_code
+            version_ok = version_response.ok
+            version_preview = (version_response.text or "")[:300]
+            if not version_response.ok:
+                version_error = version_preview
+        except Exception as exc:
+            version_error = str(exc)
         return {
             "ok": response.ok,
             "status_code": response.status_code,
@@ -1948,6 +1975,10 @@ def pbx_phonebook_health():
             "response_preview": text[:300],
             "request_path": path,
             "request_url": request_url,
+            "version_status_code": version_status_code,
+            "version_ok": version_ok,
+            "version_error": version_error,
+            "version_preview": version_preview,
         }
     except Exception as exc:
         return {
@@ -1960,6 +1991,10 @@ def pbx_phonebook_health():
             "response_preview": "",
             "request_path": path,
             "request_url": request_url,
+            "version_status_code": None,
+            "version_ok": False,
+            "version_error": "",
+            "version_preview": "",
         }
 
 # ============== OLLAMA AI =================

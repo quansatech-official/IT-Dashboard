@@ -108,7 +108,11 @@ export default function SettingsView() {
     customerAccount: "",
     responsePreview: "",
     requestPath: "",
-    requestUrl: ""
+    requestUrl: "",
+    versionStatusCode: null,
+    versionOk: null,
+    versionError: "",
+    versionPreview: ""
   });
   const [tables, setTables] = useState([]);
   const [debugStatus, setDebugStatus] = useState("idle");
@@ -502,6 +506,11 @@ export default function SettingsView() {
           (pbx.pbx_base_url && pbx.pbx_customer_account
             ? `${pbx.pbx_base_url}/api/customers/${pbx.pbx_customer_account}/phone-books?_pagesize=1`
             : "")
+        ,
+        versionStatusCode: data?.version_status_code ?? null,
+        versionOk: data?.version_ok ?? null,
+        versionError: data?.version_error || "",
+        versionPreview: data?.version_preview || ""
       });
     } catch (error) {
       setPbxApiStatus("error");
@@ -515,7 +524,11 @@ export default function SettingsView() {
         customerAccount: pbx.pbx_customer_account || "",
         responsePreview: "",
         requestPath: "",
-        requestUrl: ""
+        requestUrl: "",
+        versionStatusCode: null,
+        versionOk: null,
+        versionError: "",
+        versionPreview: ""
       });
     }
   };
@@ -803,6 +816,21 @@ export default function SettingsView() {
                 <div className="md:col-span-2">
                   <span className="text-sand-500">Response Preview:</span>{" "}
                   {pbxDebugInfo.responsePreview || "n/a"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Version Status:</span>{" "}
+                  {pbxDebugInfo.versionOk === null
+                    ? "n/a"
+                    : pbxDebugInfo.versionOk
+                    ? "ok"
+                    : "fehlgeschlagen"}
+                  {pbxDebugInfo.versionStatusCode !== null
+                    ? ` (${pbxDebugInfo.versionStatusCode})`
+                    : ""}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Version Preview:</span>{" "}
+                  {pbxDebugInfo.versionPreview || pbxDebugInfo.versionError || "n/a"}
                 </div>
               </div>
             ) : null}

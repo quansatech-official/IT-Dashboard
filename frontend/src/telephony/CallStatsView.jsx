@@ -20,6 +20,17 @@ const formatDurationHms = (seconds) => {
 
 const normalizeNumber = (value) => String(value || "").replace(/\D/g, "");
 
+const durationSeconds = (call) => {
+  if (call.duration) return call.duration;
+  if (call.startTime && call.endTime && call.endTime >= call.startTime) {
+    return Math.floor((call.endTime - call.startTime) / 1000);
+  }
+  if (call.answered && call.startTime) {
+    return Math.floor((Date.now() - call.startTime) / 1000);
+  }
+  return 0;
+};
+
 export default function CallStatsView({ stats, calls = [], customers = [], pbxEntries = [] }) {
   const periods = [
     { key: "today", label: "Heute" },
@@ -57,6 +68,7 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
   }, [pbxEntries]);
   const topTargets = (() => {
     const counts = new Map();
+    const seenByNumber = new Map();
     const labels = new Map();
     const recent = Array.isArray(calls) ? calls.slice(0, 100) : [];
     recent.forEach((call) => {
@@ -71,16 +83,33 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
         pbxMatches.get(normalized) ||
         "";
       const nextLabel = name ? `${name} · ${safeNumber}` : safeNumber;
-      counts.set(normalized, (counts.get(normalized) || 0) + 1);
+      const uniqueId =
+        call.uuid ||
+        `${call.startTime || ""}-${call.endTime || ""}-${call.direction || ""}-${safeNumber}`;
+      const callDuration = durationSeconds(call);
+      const seen = seenByNumber.get(normalized) || new Set();
+      if (!seen.has(uniqueId)) {
+        seen.add(uniqueId);
+        seenByNumber.set(normalized, seen);
+        const current = counts.get(normalized) || { count: 0, duration: 0 };
+        counts.set(normalized, {
+          count: current.count + 1,
+          duration: current.duration + callDuration
+        });
+      }
       const currentLabel = labels.get(normalized);
       if (!currentLabel || (name && !currentLabel.includes("·"))) {
         labels.set(normalized, nextLabel);
       }
     });
     return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
+      .sort((a, b) => b[1].count - a[1].count)
       .slice(0, 5)
-      .map(([key, count]) => ({ label: labels.get(key) || key, count }));
+      .map(([key, payload]) => ({
+        label: labels.get(key) || key,
+        count: payload.count,
+        duration: payload.duration
+      }));
   })();
 
   const renderBreakdown = (title, rows) => (
@@ -189,7 +218,9 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
                   className="flex items-center justify-between rounded-xl border border-sand-200 bg-sand-50 px-3 py-2"
                 >
                   <span className="text-sand-700">{entry.label}</span>
-                  <span className="text-sand-500">{entry.count}x</span>
+                  <span className="text-sand-500">
+                    {entry.count}x · {formatDuration(entry.duration)}
+                  </span>
                 </div>
               ))}
             </div>

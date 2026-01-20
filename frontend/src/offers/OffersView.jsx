@@ -547,8 +547,10 @@ const buildPreviewPositions = (offer) => {
   return [...linePositions, ...devicePositions];
 };
 
-const buildOfferEmailHtml = (offer, confirmUrl) => {
+const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer") => {
   const positions = buildPreviewPositions(offer);
+  const headline =
+    mode === "confirmation" ? "Ihre Auftragsbestätigung" : "Ihr Angebot";
   const rows = positions
     .map(
       (item, index) => `
@@ -580,7 +582,7 @@ const buildOfferEmailHtml = (offer, confirmUrl) => {
     : "";
   return `
     <div style="font-family:Arial,sans-serif;color:#1f2937">
-      <h2>Ihr Angebot ${offer.reference || ""}</h2>
+      <h2>${headline} ${offer.reference || ""}</h2>
       <p>Kunde: ${offer.customer || "Kunde offen"}</p>
       ${offer.overviewText ? `<p>${offer.overviewText.replace(/\n/g, "<br/>")}</p>` : ""}
       ${confirmBlock}
@@ -599,7 +601,7 @@ const buildOfferEmailHtml = (offer, confirmUrl) => {
   `;
 };
 
-function OfferPreview({ offer, scale = 1, containerRef }) {
+function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   if (!offer) {
     return (
       <div className="rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-4 text-sm text-sand-500">
@@ -618,6 +620,8 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
   );
   const totalNet = serviceTotal + deviceTotal;
   const totalVat = calcVat(totalNet, offer);
+  const recipientName = offer.recipientName || offer.customer || "Kunde offen";
+  const recipientCompany = (offer.recipientCompany || "").trim();
   const totalGross = totalNet + totalVat;
   const hasPositionText = previewPositions.some((item) => item.text);
   const hasProductPhotos = previewPositions.some((item) => item.images?.length);
@@ -715,21 +719,24 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                   Empfänger
                 </p>
                 <p className="mt-1 text-sm font-semibold text-sand-900">
-                  {offer.recipientName || offer.customer || "Kunde offen"}
+                  {recipientName}
                 </p>
-                {offer.recipientCompany ? <p>{offer.recipientCompany}</p> : null}
+                {recipientCompany && recipientCompany !== recipientName.trim() ? (
+                  <p>{recipientCompany}</p>
+                ) : null}
                 {offer.recipientStreet ? <p>{offer.recipientStreet}</p> : null}
                 {offer.recipientPostalCity ? <p>{offer.recipientPostalCity}</p> : null}
                 {offer.recipientCountry ? <p>{offer.recipientCountry}</p> : null}
                 {offer.customerNumber ? <p>Kundennummer {offer.customerNumber}</p> : null}
-                <p>Auftrags-Nr. {offer.orderNumber || offer.reference || "-"}</p>
+                <p>Angebots-Nr. {offer.orderNumber || offer.reference || "-"}</p>
                 <p>Datum: {formatDate(offer.createdAt) || "-"}</p>
               </div>
             </div>
 
             <div className="space-y-2 text-sm text-sand-700">
               <p className="text-base font-semibold text-sand-900">
-                Angebot {offer.reference || "-"}
+                {mode === "confirmation" ? "Auftragsbestätigung" : "Angebot"}{" "}
+                {offer.reference || "-"}
               </p>
               <p>{offer.salutation || "Sehr geehrte Damen und Herren,"}</p>
               <p>{offer.introText || "Vielen Dank für Ihre Anfrage."}</p>
@@ -1081,11 +1088,14 @@ export default function OffersView() {
   const [offerNumberFormat, setOfferNumberFormat] = useState(defaultOfferFormat);
   const [offerSettingsLoaded, setOfferSettingsLoaded] = useState(false);
   const [previewOfferId, setPreviewOfferId] = useState("");
+  const [previewMode, setPreviewMode] = useState("offer");
   const [exportOfferId, setExportOfferId] = useState("");
+  const [exportMode, setExportMode] = useState("offer");
   const [sendTo, setSendTo] = useState("");
   const [sendSubject, setSendSubject] = useState("");
   const [sendStatus, setSendStatus] = useState("idle");
   const [expandedOffers, setExpandedOffers] = useState({});
+  const [confirmationMenuOpen, setConfirmationMenuOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState({});
   const previewWrapperRef = useRef(null);
   const exportRef = useRef(null);
@@ -1297,9 +1307,13 @@ export default function OffersView() {
     const offer = offers.find((item) => item.id === exportOfferId);
     if (!offer || !exportRef.current) return;
     const element = exportRef.current;
+    const filenameBase =
+      exportMode === "confirmation"
+        ? `auftragsbestaetigung_${offer.reference || "angebot"}`
+        : offer.reference || "angebot";
     const options = {
       margin: 0,
-      filename: `${offer.reference || "angebot"}.pdf`,
+      filename: `${filenameBase}.pdf`,
       image: { type: "jpeg", quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
@@ -1310,8 +1324,9 @@ export default function OffersView() {
       .save()
       .finally(() => {
         setExportOfferId("");
+        setExportMode("offer");
       });
-  }, [exportOfferId, offers]);
+  }, [exportOfferId, offers, exportMode]);
 
   useEffect(() => {
     let active = true;
@@ -1683,8 +1698,9 @@ export default function OffersView() {
     setMainTab("new");
   };
 
-  const exportOfferPdf = (offer) => {
+  const exportOfferPdf = (offer, mode = "offer") => {
     if (!offer) return;
+    setExportMode(mode);
     setExportOfferId(offer.id);
   };
 
@@ -1753,7 +1769,7 @@ export default function OffersView() {
           subject:
             sendSubject ||
             `Angebot ${activeOffer.reference || ""}`.trim(),
-          html: buildOfferEmailHtml(activeOffer, confirmUrl),
+          html: buildOfferEmailHtml(activeOffer, confirmUrl, "offer"),
           text: `Angebot ${activeOffer.reference || ""}${
             confirmUrl ? `\nBestätigungslink: ${confirmUrl}` : ""
           }`
@@ -1767,6 +1783,35 @@ export default function OffersView() {
           trackingGuid: responsePayload.tracking_guid
         }));
       }
+      setSendStatus("sent");
+    } catch (error) {
+      setSendStatus("error");
+    }
+    setTimeout(() => setSendStatus("idle"), 3000);
+  };
+
+  const sendConfirmationEmail = async () => {
+    if (!activeOffer || !sendTo) return;
+    setSendStatus("sending");
+    try {
+      let confirmUrl = "";
+      try {
+        const saved = await persistOfferForCustomer(activeOffer);
+        confirmUrl = saved?.confirm_url || "";
+      } catch (error) {
+        confirmUrl = "";
+      }
+      const res = await fetch("/api/offers/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: sendTo,
+          subject: `Auftragsbestätigung ${activeOffer.reference || ""}`.trim(),
+          html: buildOfferEmailHtml(activeOffer, confirmUrl, "confirmation"),
+          text: `Auftragsbestätigung ${activeOffer.reference || ""}`.trim()
+        })
+      });
+      if (!res.ok) throw new Error("send_failed");
       setSendStatus("sent");
     } catch (error) {
       setSendStatus("error");
@@ -2055,6 +2100,55 @@ export default function OffersView() {
                     >
                       <FileDown size={12} /> PDF
                     </button>
+                    {activeOffer.status === "angenommen" ? (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setConfirmationMenuOpen((prev) => !prev)
+                          }
+                          className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                        >
+                          <Receipt size={12} /> Auftragsbestätigung
+                        </button>
+                        {confirmationMenuOpen ? (
+                          <div className="absolute right-0 mt-2 w-48 rounded-2xl border border-sand-200 bg-white p-2 shadow-soft text-xs text-sand-700 z-30">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPreviewMode("confirmation");
+                                setPreviewOfferId(activeOffer.id);
+                                setConfirmationMenuOpen(false);
+                              }}
+                              className="w-full rounded-xl px-3 py-2 text-left hover:bg-sand-100"
+                            >
+                              Vorschau
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                exportOfferPdf(activeOffer, "confirmation");
+                                setConfirmationMenuOpen(false);
+                              }}
+                              className="w-full rounded-xl px-3 py-2 text-left hover:bg-sand-100"
+                            >
+                              PDF exportieren
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                sendConfirmationEmail();
+                                setConfirmationMenuOpen(false);
+                              }}
+                              disabled={sendStatus === "sending"}
+                              className="w-full rounded-xl px-3 py-2 text-left hover:bg-sand-100 disabled:opacity-50"
+                            >
+                              E-Mail senden
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -3531,7 +3625,10 @@ export default function OffersView() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setPreviewOfferId(offer.id)}
+                          onClick={() => {
+                            setPreviewMode("offer");
+                            setPreviewOfferId(offer.id);
+                          }}
                           className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
                           title="Vorschau"
                         >
@@ -3602,7 +3699,10 @@ export default function OffersView() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setPreviewOfferId(offer.id)}
+                          onClick={() => {
+                            setPreviewMode("offer");
+                            setPreviewOfferId(offer.id);
+                          }}
                           className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
                           title="Vorschau"
                         >
@@ -3689,7 +3789,10 @@ export default function OffersView() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setPreviewOfferId(offer.id)}
+                          onClick={() => {
+                            setPreviewMode("offer");
+                            setPreviewOfferId(offer.id);
+                          }}
                           className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
                           title="Vorschau"
                         >
@@ -4005,11 +4108,11 @@ export default function OffersView() {
                         <Field label="Produkt">
                           <input
                             className={inputClass}
-                            value={block.product || getDeviceProduct(block)}
+                            value={block.product ?? ""}
                             onChange={(event) =>
                               updateDeviceBlock(block.id, { product: event.target.value })
                             }
-                            placeholder="Produkt"
+                            placeholder={getDeviceProduct(block) || "Produkt"}
                           />
                         </Field>
                         <Field label="Preis">
@@ -4147,20 +4250,25 @@ export default function OffersView() {
                 Vorschau
               </p>
               <h3 className="text-lg font-display text-sand-900">
-                {previewOffer.customer || "Angebot"}
+                {previewMode === "confirmation"
+                  ? "Auftragsbestätigung"
+                  : previewOffer.customer || "Angebot"}
               </h3>
             </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => exportOfferPdf(previewOffer)}
+                onClick={() => exportOfferPdf(previewOffer, previewMode)}
                 className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
               >
                 <FileDown size={12} /> PDF
               </button>
               <button
                 type="button"
-                onClick={() => setPreviewOfferId("")}
+                onClick={() => {
+                  setPreviewOfferId("");
+                  setPreviewMode("offer");
+                }}
                 className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
                 title="Schließen"
               >
@@ -4168,13 +4276,13 @@ export default function OffersView() {
               </button>
             </div>
           </div>
-          <OfferPreview offer={previewOffer} scale={0.9} />
+          <OfferPreview offer={previewOffer} scale={0.9} mode={previewMode} />
         </div>
       </div>
     ) : null}
     {exportOffer ? (
       <div className="fixed -left-[9999px] top-0 opacity-0 pointer-events-none">
-        <OfferPreview offer={exportOffer} scale={1} containerRef={exportRef} />
+        <OfferPreview offer={exportOffer} scale={1} containerRef={exportRef} mode={exportMode} />
       </div>
     ) : null}
   </main>
