@@ -18,7 +18,7 @@ const defaultSmtp = {
   password: "",
   sender_name: "",
   sender_email: "",
-  beacon_base_url: "",
+  beacon_base_url: "https://work.quansatech.at/beacon",
   use_tls: true,
   use_ssl: false,
   has_password: false
@@ -469,22 +469,29 @@ export default function SettingsView() {
   };
 
   const refreshPbxDebug = async () => {
+    let response;
     try {
-      const response = await fetch(`${API}/pbx_phonebook/health`);
-      const data = await response.json();
-      if (!data?.ok) {
-        throw new Error(data?.error || "PBX check failed");
+      response = await fetch(`${API}/pbx_phonebook/health`);
+      const text = await response.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch (error) {
+        data = null;
       }
-      setPbxApiStatus("connected");
+      const ok = Boolean(response.ok && data?.ok);
+      setPbxApiStatus(ok ? "connected" : "error");
       setPbxDebugInfo({
         lastCheckAt: new Date().toISOString(),
-        lastCheckOk: true,
-        lastError: "",
+        lastCheckOk: ok,
+        lastError: ok
+          ? ""
+          : data?.error || (!response.ok ? text.slice(0, 300) : "PBX check failed"),
         sampleCount: data?.entry_count ?? null,
-        statusCode: data?.status_code ?? null,
-        baseUrl: data?.base_url || "",
-        customerAccount: data?.customer_account || "",
-        responsePreview: data?.response_preview || ""
+        statusCode: data?.status_code ?? response.status,
+        baseUrl: data?.base_url || pbx.pbx_base_url || "",
+        customerAccount: data?.customer_account || pbx.pbx_customer_account || "",
+        responsePreview: data?.response_preview || text.slice(0, 300)
       });
     } catch (error) {
       setPbxApiStatus("error");
@@ -493,9 +500,9 @@ export default function SettingsView() {
         lastCheckOk: false,
         lastError: error?.message ? String(error.message) : "Fehler",
         sampleCount: null,
-        statusCode: null,
-        baseUrl: "",
-        customerAccount: "",
+        statusCode: response?.status ?? null,
+        baseUrl: pbx.pbx_base_url || "",
+        customerAccount: pbx.pbx_customer_account || "",
         responsePreview: ""
       });
     }

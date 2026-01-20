@@ -16,6 +16,8 @@ const formatDurationHms = (seconds) => {
   return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 };
 
+const normalizeNumber = (value) => String(value || "").replace(/\D/g, "");
+
 export default function CallStatsView({ stats, calls = [] }) {
   const periods = [
     { key: "today", label: "Heute" },
@@ -27,18 +29,27 @@ export default function CallStatsView({ stats, calls = [] }) {
   const extensionStats = safeStats.byExtension || [];
   const topTargets = (() => {
     const counts = new Map();
+    const labels = new Map();
     const recent = Array.isArray(calls) ? calls.slice(0, 100) : [];
     recent.forEach((call) => {
       const direction = call.direction?.toLowerCase() || "";
-      const number = direction.includes("out") ? call.to || call.from : call.from || call.to;
-      if (!number) return;
-      const label = call.customerName ? `${call.customerName} · ${number}` : number;
-      counts.set(label, (counts.get(label) || 0) + 1);
+      const rawNumber = direction.includes("out") ? call.to || call.from : call.from || call.to;
+      const normalized = normalizeNumber(rawNumber);
+      if (!normalized) return;
+      const safeNumber = rawNumber ? String(rawNumber) : normalized;
+      const nextLabel = call.customerName
+        ? `${call.customerName} · ${safeNumber}`
+        : safeNumber;
+      counts.set(normalized, (counts.get(normalized) || 0) + 1);
+      const currentLabel = labels.get(normalized);
+      if (!currentLabel || (call.customerName && !currentLabel.includes("·"))) {
+        labels.set(normalized, nextLabel);
+      }
     });
     return Array.from(counts.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
-      .map(([label, count]) => ({ label, count }));
+      .map(([key, count]) => ({ label: labels.get(key) || key, count }));
   })();
 
   const renderBreakdown = (title, rows) => (

@@ -138,6 +138,16 @@ const initialDeviceBlocks = [
   }
 ];
 
+const initialCalcBlocks = [
+  {
+    id: "calc-terms",
+    title: "Gültigkeit & Zahlung",
+    text:
+      "Das Angebot ist 14 Tage gültig.\n" +
+      "Zahlungsmodalität: 50% bei Auftragserteilung, Rest nach Projektabschluss/Lieferung."
+  }
+];
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 const formatDate = (value) => {
@@ -247,6 +257,67 @@ const generateDeviceDescription = (item) => {
   ]
     .filter(Boolean)
     .join("\n");
+};
+
+const buildOfferContext = (offer) => {
+  if (!offer) return "n/a";
+  const customer = offer.customer || "Kunde offen";
+  const reference = offer.reference || "";
+  const positions = [...(offer.lineItems || []), ...(offer.deviceItems || [])]
+    .map((item) => item.title || formatDeviceTitle(item))
+    .filter(Boolean)
+    .slice(0, 6);
+  const list = positions.length ? positions.map((title) => `- ${title}`).join("\n") : "n/a";
+  return `Kunde: ${customer}\nReferenz: ${reference}\nPositionen:\n${list}`;
+};
+
+const buildLineItemContext = (offer, item) => {
+  const customer = offer?.customer || "Kunde offen";
+  const title = item?.title || "Leistung";
+  const keywords = Array.isArray(item?.keywords) ? item.keywords.filter(Boolean) : [];
+  const unitLine = formatUnitQuantity(item?.quantity || 1, item?.unit);
+  return [
+    `Kunde: ${customer}`,
+    `Position: ${title}`,
+    `Menge/Einheit: ${unitLine}`,
+    keywords.length ? `Stichworte: ${keywords.join(", ")}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+const buildDeviceContext = (offer, item) => {
+  const customer = offer?.customer || "Kunde offen";
+  const product = getDeviceProduct(item) || "Material";
+  const unitLine = `${Number(item?.quantity || 1)} Stk`;
+  return [
+    `Kunde: ${customer}`,
+    `Produkt: ${product}`,
+    `Menge: ${unitLine}`
+  ]
+    .filter(Boolean)
+    .join("\n");
+};
+
+const requestOfferAiText = async ({ mode, currentText, context, fallback }) => {
+  try {
+    const res = await fetch("/api/offer_ai_text", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        current_text: currentText || "",
+        context: context || ""
+      })
+    });
+    if (!res.ok) throw new Error("ai_failed");
+    const data = await res.json();
+    const text = String(data?.text || "").trim();
+    if (text) return text;
+  } catch (error) {
+    // fall through to fallback
+  }
+  return typeof fallback === "function" ? fallback() : "";
 };
 
 const splitSenderLines = (value) =>
@@ -996,8 +1067,10 @@ export default function OffersView() {
   );
   const [serviceBlocks, setServiceBlocks] = useState(initialServiceBlocks);
   const [deviceBlocks, setDeviceBlocks] = useState(initialDeviceBlocks);
+  const [calcBlocks, setCalcBlocks] = useState(initialCalcBlocks);
   const [servicePick, setServicePick] = useState(initialServiceBlocks[0]?.id || "");
   const [devicePick, setDevicePick] = useState(initialDeviceBlocks[0]?.id || "");
+  const [calcPick, setCalcPick] = useState(initialCalcBlocks[0]?.id || "");
   const [mainTab, setMainTab] = useState("new");
   const [saveStatus, setSaveStatus] = useState("idle");
   const [imageDrafts, setImageDrafts] = useState({});
@@ -1038,7 +1111,8 @@ export default function OffersView() {
       offers: sanitizeOffersForSave(offers),
       activeId,
       serviceBlocks,
-      deviceBlocks
+      deviceBlocks,
+      calcBlocks
     };
     try {
       window.localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
@@ -1098,6 +1172,9 @@ export default function OffersView() {
       }
       if (Array.isArray(stored?.deviceBlocks) && stored.deviceBlocks.length) {
         setDeviceBlocks(stored.deviceBlocks);
+      }
+      if (Array.isArray(stored?.calcBlocks) && stored.calcBlocks.length) {
+        setCalcBlocks(stored.calcBlocks);
       }
     } catch (error) {
       // ignore load errors
@@ -1177,6 +1254,12 @@ export default function OffersView() {
   }, [deviceBlocks, devicePick]);
 
   useEffect(() => {
+    if (!calcBlocks.length) return;
+    if (calcBlocks.some((item) => item.id === calcPick)) return;
+    setCalcPick(calcBlocks[0]?.id || "");
+  }, [calcBlocks, calcPick]);
+
+  useEffect(() => {
     setDetailDraft(activeOffer?.detailHtml || "");
   }, [activeOffer?.id]);
 
@@ -1206,7 +1289,7 @@ export default function OffersView() {
         clearTimeout(autosaveTimer.current);
       }
     };
-  }, [offers, activeId, serviceBlocks, deviceBlocks]);
+  }, [offers, activeId, serviceBlocks, deviceBlocks, calcBlocks]);
 
   useEffect(() => {
     if (!exportOfferId) return;
@@ -1728,6 +1811,17 @@ export default function OffersView() {
     ]);
   };
 
+  const addCalcBlock = () => {
+    setCalcBlocks((prev) => [
+      ...prev,
+      {
+        id: uid(),
+        title: "",
+        text: ""
+      }
+    ]);
+  };
+
   const updateServiceBlock = (id, patch) => {
     setServiceBlocks((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   };
@@ -1736,12 +1830,30 @@ export default function OffersView() {
     setDeviceBlocks((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   };
 
+  const updateCalcBlock = (id, patch) => {
+    setCalcBlocks((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
   const removeServiceBlock = (id) => {
     setServiceBlocks((prev) => prev.filter((item) => item.id !== id));
   };
 
   const removeDeviceBlock = (id) => {
     setDeviceBlocks((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const removeCalcBlock = (id) => {
+    setCalcBlocks((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const applyCalcBlock = () => {
+    if (!activeOffer) return;
+    const block = calcBlocks.find((item) => item.id === calcPick);
+    if (!block || !block.text) return;
+    updateOffer(activeOffer.id, (offer) => ({
+      ...offer,
+      calculationText: [offer.calculationText, block.text].filter(Boolean).join("\n")
+    }));
   };
 
   const saveLineItemAsBlock = (item) => {
@@ -2147,12 +2259,18 @@ export default function OffersView() {
                           <div className="flex justify-end">
                             <button
                               type="button"
-                              onClick={() =>
+                              onClick={async () => {
+                                const text = await requestOfferAiText({
+                                  mode: "cover_intro",
+                                  currentText: activeOffer.coverIntro || "",
+                                  context: buildOfferContext(activeOffer),
+                                  fallback: () => generateCoverIntro(activeOffer)
+                                });
                                 updateOffer(activeOffer.id, (offer) => ({
                                   ...offer,
-                                  coverIntro: generateCoverIntro(offer)
-                                }))
-                              }
+                                  coverIntro: text
+                                }));
+                              }}
                               className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
                             >
                               <Sparkles size={12} /> Text
@@ -2178,12 +2296,18 @@ export default function OffersView() {
                       <div className="flex justify-end">
                         <button
                           type="button"
-                          onClick={() =>
+                          onClick={async () => {
+                            const text = await requestOfferAiText({
+                              mode: "overview",
+                              currentText: activeOffer.overviewText || "",
+                              context: buildOfferContext(activeOffer),
+                              fallback: () => generateOverviewText(activeOffer)
+                            });
                             updateOffer(activeOffer.id, (offer) => ({
                               ...offer,
-                              overviewText: generateOverviewText(offer)
-                            }))
-                          }
+                              overviewText: text
+                            }));
+                          }}
                           className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
                         >
                           <Sparkles size={12} /> Text
@@ -2204,15 +2328,45 @@ export default function OffersView() {
                   </Field>
                   <Field label="Kalkulation (Zusatztext)">
                     <div className="space-y-1.5">
-                      <div className="flex justify-end">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="min-w-[180px]">
+                            <SelectField
+                              value={calcPick}
+                              onChange={(event) => setCalcPick(event.target.value)}
+                              disabled={!calcBlocks.length}
+                            >
+                              {calcBlocks.map((block) => (
+                                <option key={block.id} value={block.id}>
+                                  {block.title || "Zusatztext"}
+                                </option>
+                              ))}
+                            </SelectField>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={applyCalcBlock}
+                            disabled={!calcBlocks.length || !calcPick}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-sand-200 bg-white text-sand-600 hover:bg-sand-100 disabled:opacity-40"
+                            title="Baustein einfügen"
+                          >
+                            <Plus size={12} />
+                          </button>
+                        </div>
                         <button
                           type="button"
-                          onClick={() =>
+                          onClick={async () => {
+                            const text = await requestOfferAiText({
+                              mode: "calculation",
+                              currentText: activeOffer.calculationText || "",
+                              context: buildOfferContext(activeOffer),
+                              fallback: () => generateCalculationText(activeOffer)
+                            });
                             updateOffer(activeOffer.id, (offer) => ({
                               ...offer,
-                              calculationText: generateCalculationText(offer)
-                            }))
-                          }
+                              calculationText: text
+                            }));
+                          }}
                           className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
                         >
                           <Sparkles size={12} /> Text
@@ -2471,11 +2625,15 @@ export default function OffersView() {
                                       </p>
                                       <button
                                         type="button"
-                                        onClick={() =>
-                                          updateLineItem(activeOffer.id, item.id, {
-                                            aiDraft: generateAiText(item)
-                                          })
-                                        }
+                                        onClick={async () => {
+                                          const text = await requestOfferAiText({
+                                            mode: "position_text",
+                                            currentText: item.aiDraft || "",
+                                            context: buildLineItemContext(activeOffer, item),
+                                            fallback: () => generateAiText(item)
+                                          });
+                                          updateLineItem(activeOffer.id, item.id, { aiDraft: text });
+                                        }}
                                         className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                                       >
                                         <Sparkles size={12} /> Text
@@ -2751,13 +2909,17 @@ export default function OffersView() {
                                       </p>
                                       <button
                                         type="button"
-                                        onClick={() =>
+                                        onClick={async () => {
+                                          const text = await requestOfferAiText({
+                                            mode: "device_description",
+                                            currentText: item.description || "",
+                                            context: buildDeviceContext(activeOffer, item),
+                                            fallback: () => generateDeviceDescription(item)
+                                          });
                                           updateDeviceItem(activeOffer.id, item.id, {
-                                            description:
-                                              item.description ||
-                                              generateDeviceDescription(item)
-                                          })
-                                        }
+                                            description: text
+                                          });
+                                        }}
                                         className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                                       >
                                         <Sparkles size={12} /> Text
@@ -3506,7 +3668,7 @@ export default function OffersView() {
             </h2>
           </div>
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
           <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
@@ -3802,6 +3964,89 @@ export default function OffersView() {
             ) : (
               <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-3 text-xs text-sand-500">
                 Noch keine Materialbausteine hinterlegt.
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                Kalkulationsbausteine
+              </p>
+              <button
+                type="button"
+                onClick={addCalcBlock}
+                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+              >
+                <Plus size={12} /> Neu
+              </button>
+            </div>
+            {calcBlocks.length ? (
+              calcBlocks.map((block) => {
+                const key = `calc-${block.id}`;
+                const isOpen = !!blockOpen[key];
+                return (
+                  <div
+                    key={block.id}
+                    className="rounded-2xl border border-sand-200 bg-white p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold text-sand-900">
+                          {block.title || "Zusatztext"}
+                        </p>
+                        <p className="mt-1 text-xs text-sand-500 line-clamp-2">
+                          {block.text || "Kein Inhalt"}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleBlockOpen(key)}
+                          className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                        >
+                          {isOpen ? "Schließen" : "Bearbeiten"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeCalcBlock(block.id)}
+                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                          title="Entfernen"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                    {isOpen ? (
+                      <div className="mt-3 space-y-2">
+                        <Field label="Titel">
+                          <input
+                            className={inputClass}
+                            value={block.title || ""}
+                            onChange={(event) =>
+                              updateCalcBlock(block.id, { title: event.target.value })
+                            }
+                            placeholder="Titel"
+                          />
+                        </Field>
+                        <Field label="Text">
+                          <textarea
+                            className={noteTextareaClass}
+                            value={block.text || ""}
+                            onChange={(event) =>
+                              updateCalcBlock(block.id, { text: event.target.value })
+                            }
+                            placeholder="Zusatztext zur Kalkulation"
+                          />
+                        </Field>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-3 text-xs text-sand-500">
+                Noch keine Kalkulationsbausteine hinterlegt.
               </div>
             )}
           </div>

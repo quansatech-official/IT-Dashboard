@@ -784,6 +784,11 @@ class PbxPhonebookUpdate(BaseModel):
 class ActionAiRequest(BaseModel):
     text: str
 
+class OfferAiRequest(BaseModel):
+    mode: str
+    current_text: Optional[str] = ""
+    context: Optional[str] = ""
+
 
 class DebugClearRequest(BaseModel):
     table: str
@@ -1907,7 +1912,18 @@ def pbx_phonebook_health():
         "Authorization": f"NFON-API {api_key_id}:{signature_b64}",
         "x-nfon-date": date,
     }
-    response = requests.request("GET", f"{base_url}{path}", headers=headers, timeout=20)
+    try:
+        response = requests.request("GET", f"{base_url}{path}", headers=headers, timeout=20)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status_code": None,
+            "error": str(exc),
+            "entry_count": 0,
+            "base_url": base_url,
+            "customer_account": customer_account,
+            "response_preview": "",
+        }
     text = response.text or ""
     entries = []
     try:
@@ -1985,6 +2001,57 @@ def generate_action(data: ActionAiRequest):
     action = parse_action_json(payload.get("response"))
     if not action:
         raise HTTPException(502, "Invalid AI response")
+
+
+@app.post("/api/offer_ai_text")
+def generate_offer_text(data: OfferAiRequest):
+    mode = (data.mode or "").strip().lower()
+    current_text = (data.current_text or "").strip()
+    context = (data.context or "").strip()
+    if not mode:
+        raise HTTPException(400, "Mode required")
+
+    mode_instructions = {
+        "cover_intro": "Schreibe einen kurzen Deckblatt-Introtext (2-4 Saetze).",
+        "overview": "Schreibe einen kurzen Ueberblick fuer den Kunden (2-4 Saetze oder kurze Stichpunkte).",
+        "calculation": "Schreibe kurze Hinweise zur Kalkulation (1-3 Saetze).",
+        "position_text": "Schreibe einen klaren Positionstext fuer eine Dienstleistung (3-6 Saetze).",
+        "device_description": "Schreibe eine kurze Produktbeschreibung fuer Material (3-6 Saetze).",
+    }
+    instruction = mode_instructions.get(mode, "Schreibe einen kurzen, passenden Text.")
+
+    prompt = (
+        "Du bist ein Assistent fuer Angebots-Texte. "
+        "Schreibe auf Deutsch, sachlich und klar. "
+        "Nutze die Informationen im Kontext. "
+        "Wenn bereits Text vorhanden ist, verbessere und ergaenze ihn, "
+        "ohne den Inhalt zu wiederholen. "
+        "Gib nur den Text zurueck, keine Markdown- oder JSON-Formatierung.\n\n"
+        f"Aufgabe: {instruction}\n\n"
+        f"Kontext:\n{context if context else 'n/a'}\n\n"
+        f"Bereits vorhandener Text:\n{current_text if current_text else 'n/a'}\n"
+    )
+
+    try:
+        res = requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.2},
+            },
+            timeout=60,
+        )
+        res.raise_for_status()
+        payload = res.json()
+    except requests.RequestException as exc:
+        raise HTTPException(502, "Ollama request failed") from exc
+
+    text = (payload.get("response") or "").strip()
+    if not text:
+        raise HTTPException(502, "Invalid AI response")
+    return {"text": text}
     return {"action": action}
 
 # ============== REPORT CATALOG =============
