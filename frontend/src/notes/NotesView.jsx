@@ -1,12 +1,45 @@
 import { useEffect, useRef, useState } from "react";
+import ReactQuill, { Quill } from "react-quill";
+import "react-quill/dist/quill.snow.css";
 import { Bold, Italic, Link2, List, ListOrdered, StickyNote, Underline } from "lucide-react";
 
 const API = "/api";
 
+if (Quill) {
+  const Link = Quill.import("formats/link");
+  const originalSanitize = Link.sanitize;
+  Link.sanitize = (url) => {
+    if (!url) return "";
+    try {
+      return originalSanitize(url);
+    } catch {
+      const normalized = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+      try {
+        return originalSanitize(normalized);
+      } catch {
+        return "";
+      }
+    }
+  };
+}
+
+const fetchJson = async (url, options) => {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Invalid JSON: ${text}`);
+  }
+};
+
 const api = {
-  pinboard: () => fetch(`${API}/pinboard`).then((r) => r.json()),
+  pinboard: () => fetchJson(`${API}/pinboard`),
   savePinboard: (id, content) =>
-    fetch(`${API}/pinboard/${id}`, {
+    fetchJson(`${API}/pinboard/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content })
@@ -16,34 +49,52 @@ const api = {
 export default function NotesView() {
   const [note, setNote] = useState({ id: null, content: "" });
   const saveTimer = useRef(null);
-  const editorRef = useRef(null);
   const lastLoadedId = useRef(null);
   const [isEmpty, setIsEmpty] = useState(true);
-  const contentRef = useRef("");
   const inputTimer = useRef(null);
   const lastSavedContent = useRef("");
+  const latestContentRef = useRef("");
+  const hasLocalEdits = useRef(false);
+  const [isLoaded, setIsLoaded] = useState(false);
   const [saveState, setSaveState] = useState({ status: "idle", at: "" });
   const textRef = useRef("");
+  const quillRef = useRef(null);
   const [filterTag, setFilterTag] = useState("");
   const quickTags = ["todo", "urgent", "kunde", "telefon", "termin"];
 
   useEffect(() => {
-    api.pinboard().then(setNote);
+    let cancelled = false;
+    api
+      .pinboard()
+      .then((data) => {
+        if (cancelled) return;
+        lastSavedContent.current = data.content || "";
+        latestContentRef.current = data.content || "";
+        setNote({
+          id: data.id,
+          content: data.content || ""
+        });
+        setIsLoaded(true);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Pinboard load failed", error);
+        setIsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    if (!note.id || !editorRef.current || lastLoadedId.current === note.id) return;
+    if (!note.id || lastLoadedId.current === note.id) return;
     lastLoadedId.current = note.id;
-    const looksLikeHtml = /<\/?[a-z][\s\S]*>/i.test(note.content || "");
-    if (looksLikeHtml) {
-      editorRef.current.innerHTML = note.content;
-    } else {
-      editorRef.current.innerText = note.content || "";
-    }
-    contentRef.current = editorRef.current.innerHTML;
-    textRef.current = editorRef.current.innerText || "";
-    lastSavedContent.current = editorRef.current.innerHTML;
-    setIsEmpty(!editorRef.current.textContent?.trim());
+    const plain = String(note.content || "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    textRef.current = plain;
+    setIsEmpty(!plain);
   }, [note.id, note.content]);
 
   useEffect(() => {
@@ -67,35 +118,67 @@ export default function NotesView() {
     };
   }, [note.id, note.content]);
 
-  const exec = (command, value) => {
-    if (!editorRef.current) return;
-    editorRef.current.focus();
-    document.execCommand(command, false, value);
-    contentRef.current = editorRef.current.innerHTML;
-    textRef.current = editorRef.current.innerText || "";
-    setNote((prev) => ({ ...prev, content: contentRef.current }));
-    setIsEmpty(!editorRef.current.textContent?.trim());
+  const handleInput = (content, delta, source, editor) => {
+    hasLocalEdits.current = true;
+    latestContentRef.current = content;
+    const plain = editor.getText().trim();
+    textRef.current = plain;
+    setIsEmpty(!plain);
+    setNote((prev) => ({ ...prev, content }));
   };
 
-  const insertLink = () => {
-    const url = prompt("Link URL");
-    if (!url) return;
-    exec("createLink", url);
+  const insertText = (text) => {
+    const editor = quillRef.current?.getEditor();
+    if (!editor) return;
+    hasLocalEdits.current = true;
+    const range = editor.getSelection(true);
+    const index = range ? range.index : editor.getLength();
+    editor.insertText(index, text, "user");
+    editor.setSelection(index + text.length, 0);
+    const plain = editor.getText().trim();
+    textRef.current = plain;
+    setIsEmpty(!plain);
+    const nextContent = editor.root.innerHTML;
+    latestContentRef.current = nextContent;
+    setNote((prev) => ({ ...prev, content: nextContent }));
   };
 
-  const handleInput = () => {
-    if (!editorRef.current) return;
-    contentRef.current = editorRef.current.innerHTML;
-    textRef.current = editorRef.current.innerText || "";
-    setIsEmpty(!editorRef.current.textContent?.trim());
-    if (inputTimer.current) clearTimeout(inputTimer.current);
-    inputTimer.current = setTimeout(() => {
-      setNote((prev) => ({ ...prev, content: contentRef.current }));
-    }, 300);
+  const insertTag = (tag) => insertText(`#${tag} `);
+
+  const quillModules = {
+    toolbar: {
+      container: "#pinboard-toolbar",
+      handlers: {
+        insertTable: () => {}
+      }
+    },
+    clipboard: { matchVisual: false },
   };
 
-  const insertTag = (tag) => exec("insertText", `#${tag} `);
-  const insertChecklistItem = () => exec("insertText", "- [ ] ");
+  const quillFormats = [
+    "header",
+    "bold",
+    "italic",
+    "underline",
+    "strike",
+    "script",
+    "blockquote",
+    "code-block",
+    "list",
+    "indent",
+    "align",
+    "direction",
+    "color",
+    "background",
+    "font",
+    "size",
+    "link",
+    "image",
+    "video",
+    "table",
+    "table-row",
+    "table-cell"
+  ];
 
   const filteredLines = filterTag
     ? textRef.current
@@ -134,13 +217,6 @@ export default function NotesView() {
               : ""}
           </div>
           <div className="mb-4 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={insertChecklistItem}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              Checkliste
-            </button>
             {quickTags.map((tag) => (
               <button
                 key={tag}
@@ -166,63 +242,99 @@ export default function NotesView() {
             value={note.content}
             readOnly
           />
-          <div className="sticky top-0 z-10 -mx-6 px-6 py-3 flex flex-wrap items-center gap-2 bg-white/95 backdrop-blur border-b border-sand-200 mb-4">
-            <button
-              type="button"
-              onClick={() => exec("bold")}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              <Bold size={12} /> Fett
+          <div
+            id="pinboard-toolbar"
+            className="sticky top-0 z-10 -mx-6 px-6 py-3 flex flex-wrap items-center gap-2 bg-white/95 backdrop-blur border-b border-sand-200 mb-4"
+          >
+            <select className="ql-font" defaultValue="">
+              <option value="">Schrift</option>
+              <option value="serif">Serif</option>
+              <option value="monospace">Mono</option>
+            </select>
+            <select className="ql-size" defaultValue="">
+              <option value="small">Klein</option>
+              <option value="">Normal</option>
+              <option value="large">Groß</option>
+              <option value="huge">Sehr groß</option>
+            </select>
+            <select className="ql-header" defaultValue="">
+              <option value="">Absatz</option>
+              <option value="1">H1</option>
+              <option value="2">H2</option>
+            </select>
+            <button className="ql-bold" title="Fett">
+              <Bold size={12} />
             </button>
-            <button
-              type="button"
-              onClick={() => exec("italic")}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              <Italic size={12} /> Kursiv
+            <button className="ql-italic" title="Kursiv">
+              <Italic size={12} />
             </button>
-            <button
-              type="button"
-              onClick={() => exec("underline")}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              <Underline size={12} /> Unterstr.
+            <button className="ql-underline" title="Unterstrichen">
+              <Underline size={12} />
             </button>
-            <button
-              type="button"
-              onClick={() => exec("insertUnorderedList")}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              <List size={12} /> Liste
+            <button className="ql-strike" title="Durchgestrichen">S</button>
+            <button className="ql-script" value="sub" title="Tiefgestellt">x₂</button>
+            <button className="ql-script" value="super" title="Hochgestellt">x²</button>
+            <button className="ql-blockquote" title="Zitat">“ ”</button>
+            <button className="ql-code-block" title="Code">{"</>"}</button>
+            <button className="ql-list" value="ordered" title="Nummeriert">
+              <ListOrdered size={12} />
             </button>
-            <button
-              type="button"
-              onClick={() => exec("insertOrderedList")}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              <ListOrdered size={12} /> Nummeriert
+            <button className="ql-list" value="bullet" title="Liste">
+              <List size={12} />
             </button>
-            <button
-              type="button"
-              onClick={insertLink}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              <Link2 size={12} /> Link
+            <button className="ql-indent" value="-1" title="Einzug verringern">-</button>
+            <button className="ql-indent" value="+1" title="Einzug erhöhen">+</button>
+            <select className="ql-align" defaultValue="">
+              <option value="">Links</option>
+              <option value="center">Zentriert</option>
+              <option value="right">Rechts</option>
+              <option value="justify">Blocksatz</option>
+            </select>
+            <button className="ql-direction" value="rtl" title="Rechts nach links">RTL</button>
+            <select className="ql-color" defaultValue="">
+              <option value="">Textfarbe</option>
+              <option value="#111827">Dunkel</option>
+              <option value="#dc2626">Rot</option>
+              <option value="#2563eb">Blau</option>
+              <option value="#16a34a">Grün</option>
+              <option value="#ca8a04">Gold</option>
+            </select>
+            <select className="ql-background" defaultValue="">
+              <option value="">Markierung</option>
+              <option value="#fef08a">Gelb</option>
+              <option value="#bae6fd">Blau</option>
+              <option value="#fecaca">Rot</option>
+              <option value="#bbf7d0">Grün</option>
+            </select>
+            <button className="ql-link" title="Link">
+              <Link2 size={12} />
             </button>
+            <button className="ql-image" title="Bild einfügen">Bild</button>
+            <button className="ql-video" title="Video">Video</button>
+            <button className="ql-insertTable" title="Tabelle">Tabelle</button>
+            <button className="ql-clean" title="Format löschen">Clear</button>
           </div>
           <div className="relative">
-            {isEmpty ? (
+            {isEmpty && isLoaded ? (
               <div className="pointer-events-none absolute left-4 top-3 text-sm text-sand-400">
                 Notizen, Ideen und To-Dos hier sammeln...
               </div>
             ) : null}
-            <div
-              ref={editorRef}
-              onInput={handleInput}
-              contentEditable
-              suppressContentEditableWarning
-              className="w-full min-h-[60vh] rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-sand-300"
-            />
+            {isLoaded ? (
+              <ReactQuill
+                ref={quillRef}
+                theme="snow"
+                modules={quillModules}
+                formats={quillFormats}
+                value={String(note.content || "")}
+                onChange={handleInput}
+                className="pinboard-editor [&_.ql-toolbar]:border-sand-200 [&_.ql-toolbar]:rounded-t-2xl [&_.ql-container]:border-sand-200 [&_.ql-container]:rounded-b-2xl [&_.ql-editor]:min-h-[60vh] [&_.ql-editor]:bg-sand-50 [&_.ql-editor]:text-sand-900 [&_.ql-editor]:text-sm [&_.ql-editor]:px-4 [&_.ql-editor]:py-3 [&_.ql-editor]:focus:outline-none [&_.ql-editor]:focus:ring-2 [&_.ql-editor]:focus:ring-sand-300 [&_.ql-editor_ol]:pl-6 [&_.ql-editor_ul]:pl-6"
+              />
+            ) : (
+              <div className="min-h-[60vh] rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-6 text-sm text-sand-400">
+                Pinboard wird geladen...
+              </div>
+            )}
           </div>
           {filterTag ? (
             <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">

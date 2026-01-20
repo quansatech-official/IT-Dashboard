@@ -15,6 +15,7 @@ import ReportView from "./reporting/ReportView";
 import TelephonyMenu from "./telephony/TelephonyMenu";
 import TelephonyView from "./telephony/TelephonyView";
 import NotesView from "./notes/NotesView";
+import ErrorBoundary from "./components/ErrorBoundary";
 import ToolsView from "./tools/ToolsView";
 import SettingsView from "./settings/SettingsView";
 import CustomerDirectoryView from "./customers/CustomerDirectoryView";
@@ -181,7 +182,9 @@ export default function App() {
           {activeView === "dayplan" ? (
             <DayPlanView />
           ) : activeView === "notes" ? (
-            <NotesView />
+            <ErrorBoundary>
+              <NotesView />
+            </ErrorBoundary>
           ) : activeView === "customers" ? (
             <CustomerDirectoryView />
           ) : activeView === "tools" ? (

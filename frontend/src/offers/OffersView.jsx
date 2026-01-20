@@ -650,7 +650,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                 {offer.recipientStreet ? <p>{offer.recipientStreet}</p> : null}
                 {offer.recipientPostalCity ? <p>{offer.recipientPostalCity}</p> : null}
                 {offer.recipientCountry ? <p>{offer.recipientCountry}</p> : null}
-                {offer.customerNumber ? <p>Ihre Kundennummer {offer.customerNumber}</p> : null}
+                {offer.customerNumber ? <p>Kundennummer {offer.customerNumber}</p> : null}
                 <p>Auftrags-Nr. {offer.orderNumber || offer.reference || "-"}</p>
                 <p>Datum: {formatDate(offer.createdAt) || "-"}</p>
               </div>
@@ -808,7 +808,56 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
               </div>
             ) : null}
 
-            {hasProductPhotos ? (
+            {(offer.attachments || []).length ? (
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  Beilagen
+                </p>
+                <div className="mt-2 space-y-2 text-xs text-sand-600">
+                  {offer.attachments.map((item) => (
+                    <div key={item.id}>
+                      <p className="font-semibold text-sand-800">
+                        {item.title || item.fileName || "Beilage"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+            Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+          </div>
+        </div>
+      </div>
+
+      {hasProductPhotos ? (
+        <div
+          className="mx-auto"
+          style={{
+            width: `${a4WidthPx * scale}px`,
+            height: `${a4HeightPx * scale}px`
+          }}
+        >
+          <div
+            className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+            style={{
+              width: `${a4WidthPx}px`,
+              height: `${a4HeightPx}px`,
+              transform: `scale(${scale})`,
+              transformOrigin: "top left"
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+              <div className="flex items-center gap-2">
+                <img src="/QTLogo.jpg" alt="QT" className="h-6 w-auto" />
+                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  Angebot
+                </span>
+              </div>
+              <span className="text-xs text-sand-500">{offer.reference}</span>
+            </div>
+            <div className="mt-4 flex-1 space-y-4">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                   Produktfotos
@@ -835,30 +884,13 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                   )}
                 </div>
               </div>
-            ) : null}
-
-            {(offer.attachments || []).length ? (
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Beilagen
-                </p>
-                <div className="mt-2 space-y-2 text-xs text-sand-600">
-                  {offer.attachments.map((item) => (
-                    <div key={item.id}>
-                      <p className="font-semibold text-sand-800">
-                        {item.title || item.fileName || "Beilage"}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-          <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
-            Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+            </div>
+            <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+              Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
       {offer.detailHtml ? (
         <div
@@ -981,9 +1013,9 @@ export default function OffersView() {
   const [sendSubject, setSendSubject] = useState("");
   const [sendStatus, setSendStatus] = useState("idle");
   const [expandedOffers, setExpandedOffers] = useState({});
-  const previewRef = useRef(null);
+  const previewWrapperRef = useRef(null);
   const exportRef = useRef(null);
-  const [previewScale, setPreviewScale] = useState(1);
+  const [previewScale, setPreviewScale] = useState(0.75);
   const autosaveTimer = useRef(null);
   const [detailDraft, setDetailDraft] = useState("");
 
@@ -1014,8 +1046,8 @@ export default function OffersView() {
   };
 
   useEffect(() => {
-    if (!previewRef.current) return;
-    const element = previewRef.current;
+    if (!previewWrapperRef.current) return;
+    const element = previewWrapperRef.current;
     const updateScale = () => {
       const width =
         element.clientWidth ||
@@ -1024,11 +1056,11 @@ export default function OffersView() {
         0;
       const a4WidthPx = 210 * 3.7795275591;
       if (!width) {
-        setPreviewScale(1);
+        setPreviewScale(0.75);
         return;
       }
       const next = Math.min(1, width / a4WidthPx);
-      setPreviewScale(Math.max(0.35, next));
+      setPreviewScale(Math.max(0.5, next));
     };
     updateScale();
     if (typeof ResizeObserver === "undefined") {
@@ -1799,8 +1831,8 @@ export default function OffersView() {
         </div>
 
         {mainTab === "new" ? (
-          <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.65fr] gap-3">
-            <section className="space-y-4">
+          <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.65fr] gap-2">
+            <section className="space-y-3">
 
           {activeOffer ? (
             <>
@@ -1873,6 +1905,31 @@ export default function OffersView() {
                     <p className="mt-2 text-sm font-semibold text-sand-900">
                       {activeOffer.customer || "Noch offen"}
                     </p>
+                    {activeOffer.recipientCompany ? (
+                      <p className="mt-1 text-xs text-sand-500">
+                        {activeOffer.recipientCompany}
+                      </p>
+                    ) : null}
+                    {activeOffer.recipientStreet ? (
+                      <p className="text-xs text-sand-500">
+                        {activeOffer.recipientStreet}
+                      </p>
+                    ) : null}
+                    {activeOffer.recipientPostalCity ? (
+                      <p className="text-xs text-sand-500">
+                        {activeOffer.recipientPostalCity}
+                      </p>
+                    ) : null}
+                    {activeOffer.recipientCountry ? (
+                      <p className="text-xs text-sand-500">
+                        {activeOffer.recipientCountry}
+                      </p>
+                    ) : null}
+                    {activeOffer.customerNumber ? (
+                      <p className="mt-1 text-xs text-sand-500">
+                        Kundennummer {activeOffer.customerNumber}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 
@@ -3086,7 +3143,7 @@ export default function OffersView() {
           )}
         </section>
 
-        <aside className="space-y-6 xl:max-w-sm xl:justify-self-end">
+        <aside className="space-y-4 xl:max-w-sm xl:justify-self-end">
           <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft animate-fade-in">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -3101,7 +3158,9 @@ export default function OffersView() {
                 </span>
               ) : null}
             </div>
-            <OfferPreview offer={activeOffer} scale={previewScale} containerRef={previewRef} />
+            <div ref={previewWrapperRef} className="w-full overflow-hidden">
+              <OfferPreview offer={activeOffer} scale={previewScale} />
+            </div>
           </section>
         </aside>
       </div>

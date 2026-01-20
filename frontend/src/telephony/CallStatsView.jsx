@@ -7,6 +7,15 @@ const formatDuration = (seconds) => {
   return `${mins}:${secs}`;
 };
 
+const formatDurationHms = (seconds) => {
+  if (!seconds) return "0:00:00";
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = Math.floor(total % 60);
+  return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+};
+
 export default function CallStatsView({ stats }) {
   const periods = [
     { key: "today", label: "Heute" },
@@ -98,7 +107,7 @@ export default function CallStatsView({ stats }) {
                 <div>
                   <p className="text-[11px] text-sand-500">Gesamtdauer</p>
                   <p className="text-xl font-semibold">
-                    {formatDuration(data.totalDuration)}
+                    {formatDurationHms(data.totalDuration)}
                   </p>
                 </div>
               </div>

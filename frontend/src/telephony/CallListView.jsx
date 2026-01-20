@@ -290,25 +290,27 @@ export default function CallListView({
                         {assignNumber(call) ? (
                           <button
                             onClick={() => setAssignTarget(call)}
-                            className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
+                            className="rounded-full border border-amber-200 bg-amber-50 p-1 text-amber-700 hover:bg-amber-100"
+                            title="Nummer übernehmen"
                           >
-                            Übernehmen
+                            <ArrowDownLeft size={14} />
                           </button>
                         ) : null}
                       </div>
                     )}
                   </td>
                   <td className="py-3 text-right">
-                    {!call.answered && callbackNumber(call) ? (
+                    {callbackNumber(call) ? (
                       <button
                         onClick={() => {
                           setCallbackTarget(call);
                           setSelectedExtension(extensionOptions[0]?.extension_number || "");
                           setCallbackStatus("");
                         }}
-                        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                        className="rounded-full border border-sand-300 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                        title="Rückruf"
                       >
-                        <PhoneOutgoing size={12} /> Rückruf
+                        <PhoneOutgoing size={14} />
                       </button>
                     ) : null}
                   </td>
