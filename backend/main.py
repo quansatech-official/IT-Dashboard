@@ -1921,17 +1921,34 @@ def pbx_phonebook_health():
                 "request_url": "",
             }
     path = f"/api/customers/{customer_account}/phone-books?_pagesize=1"
-    date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
-    string_to_sign = f"GET\n\n\n{date}\n{path}"
-    signature = hmac.new(api_key_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1)
-    signature_b64 = base64.b64encode(signature.digest()).decode("utf-8")
-    headers = {
-        "Authorization": f"NFON-API {api_key_id}:{signature_b64}",
-        "x-nfon-date": date,
-    }
+    request_url = f"{base_url}{path}"
     try:
-        request_url = f"{base_url}{path}"
+        date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+        string_to_sign = f"GET\n\n\n{date}\n{path}"
+        signature = hmac.new(api_key_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1)
+        signature_b64 = base64.b64encode(signature.digest()).decode("utf-8")
+        headers = {
+            "Authorization": f"NFON-API {api_key_id}:{signature_b64}",
+            "x-nfon-date": date,
+        }
         response = requests.request("GET", request_url, headers=headers, timeout=20)
+        text = response.text or ""
+        entries = []
+        try:
+            entries = _extract_phonebook_entries(response.json())
+        except ValueError:
+            entries = []
+        return {
+            "ok": response.ok,
+            "status_code": response.status_code,
+            "error": "" if response.ok else text[:300],
+            "entry_count": len(entries),
+            "base_url": base_url,
+            "customer_account": customer_account,
+            "response_preview": text[:300],
+            "request_path": path,
+            "request_url": request_url,
+        }
     except Exception as exc:
         return {
             "ok": False,
@@ -1942,25 +1959,8 @@ def pbx_phonebook_health():
             "customer_account": customer_account,
             "response_preview": "",
             "request_path": path,
-            "request_url": f"{base_url}{path}",
+            "request_url": request_url,
         }
-    text = response.text or ""
-    entries = []
-    try:
-        entries = _extract_phonebook_entries(response.json())
-    except ValueError:
-        entries = []
-    return {
-        "ok": response.ok,
-        "status_code": response.status_code,
-        "error": "" if response.ok else text[:300],
-        "entry_count": len(entries),
-        "base_url": base_url,
-        "customer_account": customer_account,
-        "response_preview": text[:300],
-        "request_path": path,
-        "request_url": request_url,
-    }
 
 # ============== OLLAMA AI =================
 @app.post("/api/ai_action")

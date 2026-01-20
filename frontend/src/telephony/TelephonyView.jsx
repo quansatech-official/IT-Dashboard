@@ -219,7 +219,12 @@ export default function TelephonyView() {
 
         {activeTab === "monitoring" ? (
           <>
-            <CallStatsView stats={stats} calls={calls} />
+            <CallStatsView
+              stats={stats}
+              calls={calls}
+              customers={customers}
+              pbxEntries={pbxEntries}
+            />
             <CallListView
               calls={calls}
               extensions={extensions}

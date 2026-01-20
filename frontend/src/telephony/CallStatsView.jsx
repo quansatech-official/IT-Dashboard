@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+
 const formatDuration = (seconds) => {
   if (!seconds) return "0:00";
   const mins = Math.floor(seconds / 60);
@@ -18,7 +20,7 @@ const formatDurationHms = (seconds) => {
 
 const normalizeNumber = (value) => String(value || "").replace(/\D/g, "");
 
-export default function CallStatsView({ stats, calls = [] }) {
+export default function CallStatsView({ stats, calls = [], customers = [], pbxEntries = [] }) {
   const periods = [
     { key: "today", label: "Heute" },
     { key: "last24h", label: "24 Stunden" },
@@ -27,6 +29,32 @@ export default function CallStatsView({ stats, calls = [] }) {
 
   const safeStats = stats || {};
   const extensionStats = safeStats.byExtension || [];
+  const customerMatches = useMemo(() => {
+    const map = new Map();
+    const list = Array.isArray(customers) ? customers : [];
+    list.forEach((customer) => {
+      const name = customer?.name || "";
+      const phones = Array.isArray(customer?.phones) ? customer.phones : [];
+      phones.forEach((phone) => {
+        const number = normalizeNumber(phone?.number || "");
+        if (number && name) {
+          map.set(number, name);
+        }
+      });
+    });
+    return map;
+  }, [customers]);
+  const pbxMatches = useMemo(() => {
+    const map = new Map();
+    const list = Array.isArray(pbxEntries) ? pbxEntries : [];
+    list.forEach((entry) => {
+      const number = normalizeNumber(entry?.number || "");
+      if (number) {
+        map.set(number, entry?.name || "");
+      }
+    });
+    return map;
+  }, [pbxEntries]);
   const topTargets = (() => {
     const counts = new Map();
     const labels = new Map();
@@ -37,12 +65,15 @@ export default function CallStatsView({ stats, calls = [] }) {
       const normalized = normalizeNumber(rawNumber);
       if (!normalized) return;
       const safeNumber = rawNumber ? String(rawNumber) : normalized;
-      const nextLabel = call.customerName
-        ? `${call.customerName} · ${safeNumber}`
-        : safeNumber;
+      const name =
+        call.customerName ||
+        customerMatches.get(normalized) ||
+        pbxMatches.get(normalized) ||
+        "";
+      const nextLabel = name ? `${name} · ${safeNumber}` : safeNumber;
       counts.set(normalized, (counts.get(normalized) || 0) + 1);
       const currentLabel = labels.get(normalized);
-      if (!currentLabel || (call.customerName && !currentLabel.includes("·"))) {
+      if (!currentLabel || (name && !currentLabel.includes("·"))) {
         labels.set(normalized, nextLabel);
       }
     });

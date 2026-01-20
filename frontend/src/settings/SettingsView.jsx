@@ -494,8 +494,14 @@ export default function SettingsView() {
         baseUrl: data?.base_url || pbx.pbx_base_url || "",
         customerAccount: data?.customer_account || pbx.pbx_customer_account || "",
         responsePreview: data?.response_preview || text.slice(0, 300),
-        requestPath: data?.request_path || "",
-        requestUrl: data?.request_url || ""
+        requestPath:
+          data?.request_path ||
+          (pbx.pbx_customer_account ? `/api/customers/${pbx.pbx_customer_account}/phone-books?_pagesize=1` : ""),
+        requestUrl:
+          data?.request_url ||
+          (pbx.pbx_base_url && pbx.pbx_customer_account
+            ? `${pbx.pbx_base_url}/api/customers/${pbx.pbx_customer_account}/phone-books?_pagesize=1`
+            : "")
       });
     } catch (error) {
       setPbxApiStatus("error");

@@ -3753,7 +3753,7 @@ export default function OffersView() {
             </h2>
           </div>
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <div className="mt-4 grid gap-3">
           <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
