@@ -1880,7 +1880,7 @@ def create_remote_pbx_phonebook(data: PbxPhonebookCreate):
     entries = _extract_phonebook_entries(payload)
     if entries:
         return entries[0]
-    return {\"name\": data.name or \"\", \"number\": data.number or \"\"}
+    return {"name": data.name or "", "number": data.number or ""}
 
 # ============== OLLAMA AI =================
 @app.post("/api/ai_action")
