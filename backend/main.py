@@ -2404,6 +2404,17 @@ def update_offer(offer_id: int, data: OfferSaveRequest, request: Request):
         )
 
 
+@app.delete("/api/offers/{offer_id}")
+def delete_offer(offer_id: int):
+    with SessionLocal() as db:
+        offer = db.query(Offer).get(offer_id)
+        if not offer:
+            raise HTTPException(404, "Offer not found")
+        db.delete(offer)
+        db.commit()
+        return {"status": "deleted"}
+
+
 @app.get("/api/customer_metrics_settings")
 def get_customer_metrics_settings():
     with SessionLocal() as db:

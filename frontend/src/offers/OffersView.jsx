@@ -1095,7 +1095,7 @@ export default function OffersView() {
   const [sendSubject, setSendSubject] = useState("");
   const [sendStatus, setSendStatus] = useState("idle");
   const [expandedOffers, setExpandedOffers] = useState({});
-  const [confirmationMenuOpen, setConfirmationMenuOpen] = useState(false);
+  const [confirmationMenuOfferId, setConfirmationMenuOfferId] = useState("");
   const [aiLoading, setAiLoading] = useState({});
   const previewWrapperRef = useRef(null);
   const exportRef = useRef(null);
@@ -1503,6 +1503,23 @@ export default function OffersView() {
     });
   };
 
+  const deleteArchivedOffer = async (offer) => {
+    if (!offer) return;
+    const ok = window.confirm("Angebot wirklich löschen?");
+    if (!ok) return;
+    if (offer.serverId) {
+      try {
+        const res = await fetch(`/api/offers/${offer.serverId}`, { method: "DELETE" });
+        if (!res.ok) throw new Error("delete_failed");
+      } catch (error) {
+        setSaveStatus("error");
+        setTimeout(() => setSaveStatus("idle"), 2000);
+        return;
+      }
+    }
+    removeOffer(offer.id);
+  };
+
   const addAttachmentFiles = (files) => {
     if (!activeOffer) return;
     const list = Array.from(files || []);
@@ -1790,13 +1807,13 @@ export default function OffersView() {
     setTimeout(() => setSendStatus("idle"), 3000);
   };
 
-  const sendConfirmationEmail = async () => {
-    if (!activeOffer || !sendTo) return;
+  const sendConfirmationEmail = async (offer) => {
+    if (!offer || !sendTo) return;
     setSendStatus("sending");
     try {
       let confirmUrl = "";
       try {
-        const saved = await persistOfferForCustomer(activeOffer);
+        const saved = await persistOfferForCustomer(offer);
         confirmUrl = saved?.confirm_url || "";
       } catch (error) {
         confirmUrl = "";
@@ -1806,9 +1823,9 @@ export default function OffersView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to: sendTo,
-          subject: `Auftragsbestätigung ${activeOffer.reference || ""}`.trim(),
-          html: buildOfferEmailHtml(activeOffer, confirmUrl, "confirmation"),
-          text: `Auftragsbestätigung ${activeOffer.reference || ""}`.trim()
+          subject: `Auftragsbestätigung ${offer.reference || ""}`.trim(),
+          html: buildOfferEmailHtml(offer, confirmUrl, "confirmation"),
+          text: `Auftragsbestätigung ${offer.reference || ""}`.trim()
         })
       });
       if (!res.ok) throw new Error("send_failed");
@@ -2100,55 +2117,6 @@ export default function OffersView() {
                     >
                       <FileDown size={12} /> PDF
                     </button>
-                    {activeOffer.status === "angenommen" ? (
-                      <div className="relative">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setConfirmationMenuOpen((prev) => !prev)
-                          }
-                          className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                        >
-                          <Receipt size={12} /> Auftragsbestätigung
-                        </button>
-                        {confirmationMenuOpen ? (
-                          <div className="absolute right-0 mt-2 w-48 rounded-2xl border border-sand-200 bg-white p-2 shadow-soft text-xs text-sand-700 z-30">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPreviewMode("confirmation");
-                                setPreviewOfferId(activeOffer.id);
-                                setConfirmationMenuOpen(false);
-                              }}
-                              className="w-full rounded-xl px-3 py-2 text-left hover:bg-sand-100"
-                            >
-                              Vorschau
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                exportOfferPdf(activeOffer, "confirmation");
-                                setConfirmationMenuOpen(false);
-                              }}
-                              className="w-full rounded-xl px-3 py-2 text-left hover:bg-sand-100"
-                            >
-                              PDF exportieren
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                sendConfirmationEmail();
-                                setConfirmationMenuOpen(false);
-                              }}
-                              disabled={sendStatus === "sending"}
-                              className="w-full rounded-xl px-3 py-2 text-left hover:bg-sand-100 disabled:opacity-50"
-                            >
-                              E-Mail senden
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
                   </div>
                 </div>
 
@@ -3716,6 +3684,65 @@ export default function OffersView() {
                         >
                           <FileDown size={14} />
                         </button>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setConfirmationMenuOfferId((prev) =>
+                                prev === offer.id ? "" : offer.id
+                              )
+                            }
+                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                            title="Auftragsbestätigung"
+                          >
+                            <Receipt size={14} />
+                          </button>
+                          {confirmationMenuOfferId === offer.id ? (
+                            <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-emerald-200 bg-white p-2 shadow-soft text-xs text-sand-700 z-30">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPreviewMode("confirmation");
+                                  setPreviewOfferId(offer.id);
+                                  setConfirmationMenuOfferId("");
+                                }}
+                                className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50"
+                              >
+                                Vorschau
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  exportOfferPdf(offer, "confirmation");
+                                  setConfirmationMenuOfferId("");
+                                }}
+                                className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50"
+                              >
+                                PDF exportieren
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveId(offer.id);
+                                  sendConfirmationEmail(offer);
+                                  setConfirmationMenuOfferId("");
+                                }}
+                                disabled={sendStatus === "sending"}
+                                className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50 disabled:opacity-50"
+                              >
+                                E-Mail senden
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => deleteArchivedOffer(offer)}
+                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                          title="Löschen"
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                     </div>
                     {expandedOffers[offer.id] ? (
@@ -3805,6 +3832,14 @@ export default function OffersView() {
                           title="PDF exportieren"
                         >
                           <FileDown size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteArchivedOffer(offer)}
+                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                          title="Löschen"
+                        >
+                          <Trash2 size={14} />
                         </button>
                       </div>
                     </div>
