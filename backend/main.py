@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Response, Request, Form
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from sqlalchemy import (
     create_engine, Column, Integer, String,
     Boolean, BigInteger, ForeignKey, inspect, text, func, or_
@@ -12,6 +12,9 @@ import os
 import time
 import uuid
 import json
+import hashlib
+import hmac
+import base64
 import requests
 
 # ================= DATABASE =================
@@ -219,6 +222,13 @@ class IntegrationSettings(Base):
     rmm_host = Column(String, default="")
     rmm_user = Column(String, default="")
     rmm_password = Column(String, default="")
+    pbx_base_url = Column(String, default="")
+    pbx_username = Column(String, default="")
+    pbx_password = Column(String, default="")
+    pbx_refresh_token = Column(String, default="")
+    pbx_api_key_id = Column(String, default="")
+    pbx_api_key_secret = Column(String, default="")
+    pbx_customer_account = Column(String, default="")
 
 
 class SmtpSettings(Base):
@@ -242,6 +252,18 @@ class OfferSettings(Base):
     id = Column(Integer, primary_key=True)
     offer_number_format = Column(String, default="AN-XXXX")
 
+class PbxPhonebookEntry(Base):
+    __tablename__ = "pbx_phonebook_entries"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, default="")
+    number = Column(String, default="")
+    is_global = Column(Boolean, default=False)
+    company = Column(String, default="")
+    email = Column(String, default="")
+    note = Column(String, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
 
 class CustomerMetricsSettings(Base):
     __tablename__ = "customer_metrics_settings"
@@ -254,6 +276,47 @@ class CustomerMetricsSettings(Base):
     hourly_rate_eur = Column(String, default="0")
 
 Base.metadata.create_all(bind=engine)
+
+def _ensure_integration_settings_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("integration_settings"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("integration_settings")}
+    statements = []
+    if "pbx_base_url" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_base_url VARCHAR DEFAULT ''")
+    if "pbx_username" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_username VARCHAR DEFAULT ''")
+    if "pbx_password" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_password VARCHAR DEFAULT ''")
+    if "pbx_refresh_token" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_refresh_token VARCHAR DEFAULT ''")
+    if "pbx_api_key_id" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_api_key_id VARCHAR DEFAULT ''")
+    if "pbx_api_key_secret" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_api_key_secret VARCHAR DEFAULT ''")
+    if "pbx_customer_account" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_customer_account VARCHAR DEFAULT ''")
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+_ensure_integration_settings_columns()
+
+def _ensure_pbx_phonebook_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("pbx_phonebook_entries"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("pbx_phonebook_entries")}
+    if "is_global" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE pbx_phonebook_entries ADD COLUMN is_global BOOLEAN DEFAULT FALSE")
+        )
+
+_ensure_pbx_phonebook_columns()
 
 
 def _ensure_customer_metrics_settings_columns() -> None:
@@ -638,6 +701,13 @@ class IntegrationSettingsUpdate(BaseModel):
     rmm_host: Optional[str] = None
     rmm_user: Optional[str] = None
     rmm_password: Optional[str] = None
+    pbx_base_url: Optional[str] = None
+    pbx_username: Optional[str] = None
+    pbx_password: Optional[str] = None
+    pbx_refresh_token: Optional[str] = None
+    pbx_api_key_id: Optional[str] = None
+    pbx_api_key_secret: Optional[str] = None
+    pbx_customer_account: Optional[str] = None
 
 
 class SmtpSettingsUpdate(BaseModel):
@@ -694,6 +764,22 @@ class OfferCustomerConfirm(BaseModel):
     name: Optional[str] = ""
     email: Optional[str] = ""
     note: Optional[str] = ""
+
+class PbxPhonebookCreate(BaseModel):
+    name: Optional[str] = ""
+    number: Optional[str] = ""
+    is_global: Optional[bool] = False
+    company: Optional[str] = ""
+    email: Optional[str] = ""
+    note: Optional[str] = ""
+
+class PbxPhonebookUpdate(BaseModel):
+    name: Optional[str] = None
+    number: Optional[str] = None
+    is_global: Optional[bool] = None
+    company: Optional[str] = None
+    email: Optional[str] = None
+    note: Optional[str] = None
 
 class ActionAiRequest(BaseModel):
     text: str
@@ -973,6 +1059,13 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "rmm_host": settings.rmm_host,
         "rmm_user": settings.rmm_user,
         "rmm_password": settings.rmm_password,
+        "pbx_base_url": settings.pbx_base_url,
+        "pbx_username": settings.pbx_username,
+        "has_pbx_password": bool(settings.pbx_password),
+        "has_pbx_refresh_token": bool(settings.pbx_refresh_token),
+        "pbx_api_key_id": settings.pbx_api_key_id,
+        "pbx_customer_account": settings.pbx_customer_account,
+        "has_pbx_api_key_secret": bool(settings.pbx_api_key_secret),
     }
 
 
@@ -996,6 +1089,114 @@ def serialize_offer_settings(settings: OfferSettings) -> Dict[str, Any]:
         "id": settings.id,
         "offer_number_format": settings.offer_number_format,
     }
+
+def serialize_pbx_phonebook_entry(entry: PbxPhonebookEntry) -> Dict[str, Any]:
+    return {
+        "id": entry.id,
+        "name": entry.name,
+        "number": entry.number,
+        "is_global": entry.is_global,
+        "company": entry.company,
+        "email": entry.email,
+        "note": entry.note,
+        "created_at": entry.created_at,
+    }
+
+def _normalize_phonebook_entry(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(item, dict):
+        return None
+    name = ""
+    number = ""
+    company = item.get("company") or ""
+    email = item.get("email") or ""
+    note = item.get("note") or ""
+    is_global = item.get("isGlobal") or item.get("is_global") or False
+    data = item.get("data")
+    if isinstance(data, list):
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            key = entry.get("name")
+            value = entry.get("value")
+            if key == "displayName" and value:
+                name = value
+            elif key == "displayNumber" and value:
+                number = value
+    name = name or item.get("displayName") or item.get("name") or ""
+    number = number or item.get("displayNumber") or item.get("number") or item.get("phoneNumber") or ""
+    remote_id = item.get("id") or item.get("phoneBookId") or item.get("identifier") or ""
+    return {
+        "id": remote_id or item.get("uuid") or item.get("key") or "",
+        "name": name,
+        "number": number,
+        "is_global": bool(is_global),
+        "company": company,
+        "email": email,
+        "note": note,
+    }
+
+def _extract_phonebook_entries(payload: Any) -> List[Dict[str, Any]]:
+    items: List[Any] = []
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        for key in ["items", "data", "entries", "phoneBooks", "phonebooks", "results", "content"]:
+            value = payload.get(key)
+            if isinstance(value, list):
+                items = value
+                break
+    entries: List[Dict[str, Any]] = []
+    for item in items:
+        normalized = _normalize_phonebook_entry(item)
+        if normalized and (normalized.get("name") or normalized.get("number")):
+            entries.append(normalized)
+    return entries
+
+def _get_pbx_credentials(session: SessionLocal) -> Tuple[str, str, str, str]:
+    settings = _get_settings(session)
+    base_url = (settings.pbx_base_url or "").strip()
+    api_key_id = (settings.pbx_api_key_id or "").strip()
+    api_key_secret = (settings.pbx_api_key_secret or "").strip()
+    customer_account = (settings.pbx_customer_account or "").strip()
+    if not base_url or not api_key_id or not api_key_secret or not customer_account:
+        raise HTTPException(400, "PBX API credentials missing")
+    return base_url, api_key_id, api_key_secret, customer_account
+
+def _nfon_request(
+    method: str,
+    base_url: str,
+    api_key_id: str,
+    api_key_secret: str,
+    path: str,
+    body_obj: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    body = json.dumps(body_obj) if body_obj is not None else ""
+    content_md5 = hashlib.md5(body.encode("utf-8")).hexdigest() if body else ""
+    date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+    content_type = "application/json" if body else ""
+    string_to_sign = f"{method}\\n{content_md5}\\n{content_type}\\n{date}\\n{path}"
+    signature = hmac.new(api_key_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1)
+    signature_b64 = base64.b64encode(signature.digest()).decode("utf-8")
+    headers = {
+        "Authorization": f"NFON-API {api_key_id}:{signature_b64}",
+        "x-nfon-date": date,
+    }
+    if body:
+        headers["Content-Type"] = content_type
+        headers["Content-MD5"] = content_md5
+    response = requests.request(
+        method,
+        f"{base_url}{path}",
+        headers=headers,
+        data=body if body else None,
+        timeout=20,
+    )
+    if not response.ok:
+        raise HTTPException(response.status_code, response.text)
+    try:
+        return response.json()
+    except ValueError:
+        return {"raw": response.text}
 
 
 def _build_offer_confirm_url(request: Request, guid: str) -> str:
@@ -1582,11 +1783,104 @@ def update_integrations(data: IntegrationSettingsUpdate):
             db.add(settings)
             db.flush()
 
+        sensitive_fields = {"rmm_password", "pbx_password", "pbx_refresh_token", "pbx_api_key_secret"}
         for field, value in data.dict(exclude_unset=True).items():
+            if field in sensitive_fields and value in (None, ""):
+                continue
             setattr(settings, field, value)
 
         db.commit()
         return serialize_integration_settings(settings)
+
+# ============ PBX PHONEBOOK ============
+@app.get("/api/pbx_phonebook")
+def list_pbx_phonebook():
+    with SessionLocal() as db:
+        entries = (
+            db.query(PbxPhonebookEntry)
+            .order_by(PbxPhonebookEntry.name.asc(), PbxPhonebookEntry.id.asc())
+            .all()
+        )
+        return [serialize_pbx_phonebook_entry(entry) for entry in entries]
+
+
+@app.post("/api/pbx_phonebook")
+def create_pbx_phonebook(data: PbxPhonebookCreate):
+    with SessionLocal() as db:
+        entry = PbxPhonebookEntry(
+            name=data.name or "",
+            number=data.number or "",
+            is_global=bool(data.is_global),
+            company=data.company or "",
+            email=data.email or "",
+            note=data.note or "",
+        )
+        db.add(entry)
+        db.commit()
+        db.refresh(entry)
+        return serialize_pbx_phonebook_entry(entry)
+
+
+@app.patch("/api/pbx_phonebook/{entry_id}")
+def update_pbx_phonebook(entry_id: int, data: PbxPhonebookUpdate):
+    with SessionLocal() as db:
+        entry = db.query(PbxPhonebookEntry).get(entry_id)
+        if not entry:
+            raise HTTPException(404, "Entry not found")
+        for field, value in data.dict(exclude_unset=True).items():
+            if field == "is_global":
+                setattr(entry, field, bool(value))
+            else:
+                setattr(entry, field, value if value is not None else "")
+        db.commit()
+        db.refresh(entry)
+        return serialize_pbx_phonebook_entry(entry)
+
+
+@app.delete("/api/pbx_phonebook/{entry_id}")
+def delete_pbx_phonebook(entry_id: int):
+    with SessionLocal() as db:
+        entry = db.query(PbxPhonebookEntry).get(entry_id)
+        if not entry:
+            raise HTTPException(404, "Entry not found")
+        db.delete(entry)
+        db.commit()
+        return {"status": "deleted"}
+
+
+@app.get("/api/pbx_phonebook/remote")
+def list_remote_pbx_phonebook(pagesize: int = 100, offset: int = 0, q: Optional[str] = None):
+    with SessionLocal() as db:
+        base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
+    query = []
+    if pagesize:
+        query.append(f"_pagesize={pagesize}")
+    if offset:
+        query.append(f"_offset={offset}")
+    if q:
+        query.append(f"_q={q}")
+    query_string = f\"?{'&'.join(query)}\" if query else \"\"
+    path = f\"/api/customers/{customer_account}/phone-books{query_string}\"
+    payload = _nfon_request(\"GET\", base_url, api_key_id, api_key_secret, path)
+    return _extract_phonebook_entries(payload)
+
+
+@app.post("/api/pbx_phonebook/remote")
+def create_remote_pbx_phonebook(data: PbxPhonebookCreate):
+    with SessionLocal() as db:
+        base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
+    body = {
+        \"data\": [
+            {\"name\": \"displayName\", \"value\": data.name or \"\"},
+            {\"name\": \"displayNumber\", \"value\": data.number or \"\"},
+        ]
+    }
+    path = f\"/api/customers/{customer_account}/phone-books\"
+    payload = _nfon_request(\"POST\", base_url, api_key_id, api_key_secret, path, body_obj=body)
+    entries = _extract_phonebook_entries(payload)
+    if entries:
+        return entries[0]
+    return {\"name\": data.name or \"\", \"number\": data.number or \"\"}
 
 # ============== OLLAMA AI =================
 @app.post("/api/ai_action")

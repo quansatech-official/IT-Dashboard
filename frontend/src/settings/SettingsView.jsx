@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Mail, Settings } from "lucide-react";
+import { telephonyService } from "../telephony/telephonyService";
 
 const API = "/api";
 const STORAGE_KEY = "qt_smtp_settings_cache";
@@ -21,6 +22,27 @@ const defaultSmtp = {
   use_tls: true,
   use_ssl: false,
   has_password: false
+};
+
+const defaultCti = {
+  baseUrl: "https://providersupportdata.cloud-cfg.com",
+  username: "",
+  password: "",
+  streamEnabled: false,
+  hasPassword: false,
+  hasRefreshToken: false,
+  numerifyReverseUrl: "",
+  numerifyApiHeader: "",
+  numerifyApiKey: "",
+  hasNumerifyApiKey: false
+};
+
+const defaultPbx = {
+  pbx_base_url: "",
+  pbx_api_key_id: "",
+  pbx_api_key_secret: "",
+  pbx_customer_account: "",
+  has_pbx_api_key_secret: false
 };
 
 const loadCachedSmtp = () => {
@@ -52,6 +74,36 @@ export default function SettingsView() {
   const [smtp, setSmtp] = useState(loadCachedSmtp);
   const [status, setStatus] = useState("idle");
   const [loadStatus, setLoadStatus] = useState("loading");
+  const [cti, setCti] = useState(defaultCti);
+  const [ctiStatus, setCtiStatus] = useState("idle");
+  const [ctiLoadStatus, setCtiLoadStatus] = useState("loading");
+  const [ctiDebugOpen, setCtiDebugOpen] = useState(false);
+  const [ctiApiStatus, setCtiApiStatus] = useState("idle");
+  const [ctiDebugInfo, setCtiDebugInfo] = useState({
+    lastSettingsFetchAt: "",
+    lastHealthCheckAt: "",
+    lastHealthCheckOk: null,
+    lastSettingsSaveAt: "",
+    lastSettingsSaveOk: null,
+    lastCallsCount: null,
+    lastStatsTotals: null,
+    lastSettingsResponse: null,
+    lastCallRawKeys: null,
+    lastCallRawPreview: "",
+    lastCallRawLength: null,
+    lastCallSnapshot: null
+  });
+  const [pbx, setPbx] = useState(defaultPbx);
+  const [pbxStatus, setPbxStatus] = useState("idle");
+  const [pbxLoadStatus, setPbxLoadStatus] = useState("loading");
+  const [pbxApiStatus, setPbxApiStatus] = useState("idle");
+  const [pbxDebugOpen, setPbxDebugOpen] = useState(false);
+  const [pbxDebugInfo, setPbxDebugInfo] = useState({
+    lastCheckAt: "",
+    lastCheckOk: null,
+    lastError: "",
+    sampleCount: null
+  });
   const [tables, setTables] = useState([]);
   const [debugStatus, setDebugStatus] = useState("idle");
   const [clearingTable, setClearingTable] = useState("");
@@ -62,6 +114,9 @@ export default function SettingsView() {
     smtp.beacon_base_url && smtp.beacon_base_url.trim()
       ? smtp.beacon_base_url.trim()
       : "Nicht gesetzt";
+  const hasCtiPasswordAuth = cti.hasPassword && cti.username?.trim();
+  const hasCtiRefreshAuth = cti.hasRefreshToken;
+  const hasCtiCredentials = Boolean(hasCtiPasswordAuth || hasCtiRefreshAuth);
 
   useEffect(() => {
     let active = true;
@@ -87,6 +142,75 @@ export default function SettingsView() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    telephonyService.fetchSettings().then((data) => {
+      if (!active) return;
+      const merged = {
+        ...defaultCti,
+        ...data,
+        baseUrl: data?.baseUrl?.trim() ? data.baseUrl : defaultCti.baseUrl,
+        password: "",
+        numerifyApiKey: ""
+      };
+      setCti(merged);
+      setCtiDebugInfo((current) => ({
+        ...current,
+        lastSettingsFetchAt: new Date().toISOString(),
+        lastSettingsResponse: {
+          baseUrl: data?.baseUrl ?? "",
+          username: data?.username ?? "",
+          hasPassword: Boolean(data?.hasPassword),
+          hasRefreshToken: Boolean(data?.hasRefreshToken),
+          streamEnabled: Boolean(data?.streamEnabled),
+          numerifyReverseUrl: data?.numerifyReverseUrl ?? "",
+          numerifyApiHeader: data?.numerifyApiHeader ?? "",
+          hasNumerifyApiKey: Boolean(data?.hasNumerifyApiKey)
+        }
+      }));
+      setCtiLoadStatus("ready");
+    }).catch(() => {
+      if (!active) return;
+      setCtiLoadStatus("error");
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${API}/integrations`)
+      .then((res) => {
+        if (!res.ok) throw new Error("load_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        setPbx((prev) => ({
+          ...prev,
+          pbx_base_url: data?.pbx_base_url || "",
+          pbx_api_key_id: data?.pbx_api_key_id || "",
+          pbx_customer_account: data?.pbx_customer_account || "",
+          pbx_api_key_secret: "",
+          has_pbx_api_key_secret: Boolean(data?.has_pbx_api_key_secret)
+        }));
+        setPbxLoadStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setPbxLoadStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (pbxLoadStatus !== "ready") return;
+    refreshPbxDebug();
+  }, [pbxLoadStatus]);
 
   useEffect(() => {
     let active = true;
@@ -128,6 +252,11 @@ export default function SettingsView() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (ctiLoadStatus !== "ready") return;
+    refreshCtiDebug();
+  }, [ctiLoadStatus]);
 
   const clearTable = async (table) => {
     if (!window.confirm(`Tabelle "${table}" wirklich leeren?`)) return;
@@ -206,6 +335,164 @@ export default function SettingsView() {
       setOfferStatus("error");
     }
     setTimeout(() => setOfferStatus("idle"), 2000);
+  };
+
+  const refreshCtiDebug = async () => {
+    const [isHealthy, stats, latestCalls] = await Promise.all([
+      telephonyService.fetchHealth(),
+      telephonyService.fetchStats(),
+      telephonyService.fetchLatestCallDebug()
+    ]);
+    const latestCall = Array.isArray(latestCalls) ? latestCalls[0] : null;
+    let latestRawKeys = null;
+    let latestRawPreview = "";
+    let latestRawLength = null;
+    if (latestCall?.rawPayload) {
+      try {
+        const rawObject = JSON.parse(latestCall.rawPayload);
+        latestRawKeys = Object.keys(rawObject).sort();
+        latestRawPreview = JSON.stringify(rawObject).slice(0, 500);
+        latestRawLength = latestCall.rawPayload.length;
+      } catch (error) {
+        latestRawPreview = String(latestCall.rawPayload).slice(0, 500);
+        latestRawLength = String(latestCall.rawPayload).length;
+      }
+    } else if (latestCall?.rawPayload === "") {
+      latestRawPreview = "leer";
+      latestRawLength = 0;
+    }
+    const latestCallSnapshot = latestCall
+      ? {
+          uuid: latestCall.uuid,
+          from: latestCall.from,
+          to: latestCall.to,
+          extension: latestCall.extension,
+          direction: latestCall.direction,
+          startTime: latestCall.startTime,
+          duration: latestCall.duration,
+          answered: latestCall.answered
+        }
+      : null;
+    setCtiDebugInfo((current) => ({
+      ...current,
+      lastHealthCheckAt: new Date().toISOString(),
+      lastHealthCheckOk: isHealthy,
+      lastCallsCount: Array.isArray(latestCalls) ? latestCalls.length : null,
+      lastStatsTotals: stats
+        ? {
+            today: stats.today?.total ?? null,
+            last24h: stats.last24h?.total ?? null,
+            last7d: stats.last7d?.total ?? null
+          }
+        : null,
+      lastCallRawKeys: latestRawKeys,
+      lastCallRawPreview: latestRawPreview,
+      lastCallRawLength: latestRawLength,
+      lastCallSnapshot: latestCallSnapshot
+    }));
+    if (!hasCtiCredentials) {
+      setCtiApiStatus("missing");
+    } else {
+      setCtiApiStatus(isHealthy ? "connected" : "error");
+    }
+  };
+
+  const saveCtiSettings = async () => {
+    setCtiStatus("saving");
+    const payload = {
+      baseUrl: cti.baseUrl,
+      username: cti.username,
+      password: cti.password,
+      streamEnabled: cti.streamEnabled,
+      numerifyReverseUrl: cti.numerifyReverseUrl,
+      numerifyApiHeader: cti.numerifyApiHeader,
+      numerifyApiKey: cti.numerifyApiKey
+    };
+    const result = await telephonyService.updateSettings(payload);
+    if (result) {
+      setCti({
+        ...defaultCti,
+        ...result,
+        password: "",
+        numerifyApiKey: ""
+      });
+      setCtiStatus("saved");
+      setCtiDebugInfo((current) => ({
+        ...current,
+        lastSettingsSaveAt: new Date().toISOString(),
+        lastSettingsSaveOk: true
+      }));
+      refreshCtiDebug();
+    } else {
+      setCtiStatus("error");
+      setCtiDebugInfo((current) => ({
+        ...current,
+        lastSettingsSaveAt: new Date().toISOString(),
+        lastSettingsSaveOk: false
+      }));
+    }
+    setTimeout(() => setCtiStatus("idle"), 2000);
+  };
+
+  const savePbxSettings = async () => {
+    setPbxStatus("saving");
+    try {
+      const res = await fetch(`${API}/integrations`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pbx_base_url: pbx.pbx_base_url,
+          pbx_api_key_id: pbx.pbx_api_key_id,
+          pbx_api_key_secret: pbx.pbx_api_key_secret,
+          pbx_customer_account: pbx.pbx_customer_account
+        })
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      setPbx((prev) => ({
+        ...prev,
+        pbx_base_url: data?.pbx_base_url || "",
+        pbx_api_key_id: data?.pbx_api_key_id || "",
+        pbx_customer_account: data?.pbx_customer_account || "",
+        pbx_api_key_secret: "",
+        has_pbx_api_key_secret: Boolean(data?.has_pbx_api_key_secret)
+      }));
+      setPbxStatus("saved");
+    } catch (error) {
+      setPbxStatus("error");
+    }
+    setTimeout(() => setPbxStatus("idle"), 2000);
+  };
+
+  const refreshPbxDebug = async () => {
+    try {
+      const response = await fetch(`${API}/pbx_phonebook/remote?_pagesize=1`);
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(text || "PBX check failed");
+      }
+      let parsed = [];
+      try {
+        parsed = JSON.parse(text);
+      } catch (error) {
+        parsed = [];
+      }
+      setPbxApiStatus("connected");
+      setPbxDebugInfo({
+        lastCheckAt: new Date().toISOString(),
+        lastCheckOk: true,
+        lastError: "",
+        sampleCount: Array.isArray(parsed) ? parsed.length : null
+      });
+    } catch (error) {
+      setPbxApiStatus("error");
+      setPbxDebugInfo({
+        lastCheckAt: new Date().toISOString(),
+        lastCheckOk: false,
+        lastError: error?.message ? String(error.message) : "Fehler",
+        sampleCount: null
+      });
+    }
   };
 
   return (
@@ -340,6 +627,392 @@ export default function SettingsView() {
             {status === "error" && (
               <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
             )}
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <div className="flex items-center gap-2 text-sand-700 mb-4">
+            <Settings size={18} />
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Anlagen API</p>
+          </div>
+          <p className="text-xs text-sand-500 mb-4">
+            Zugangsdaten fuer das Telefonanlagen-API (nicht CTI).
+          </p>
+          <div className="mb-4 flex items-center gap-2 text-xs text-sand-600">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                pbxApiStatus === "connected" ? "bg-emerald-500" : "bg-rose-500"
+              }`}
+            />
+            <span>
+              API{" "}
+              {pbxApiStatus === "connected"
+                ? "aktiv"
+                : pbxApiStatus === "idle"
+                ? "unbekannt"
+                : "getrennt"}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-sand-500">API Base URL</label>
+              <input
+                value={pbx.pbx_base_url}
+                onChange={(event) =>
+                  setPbx((prev) => ({ ...prev, pbx_base_url: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder="https://portal-api.nfon.net:8090"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-sand-500">API Key ID</label>
+              <input
+                value={pbx.pbx_api_key_id}
+                onChange={(event) =>
+                  setPbx((prev) => ({ ...prev, pbx_api_key_id: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder="API Key ID"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-sand-500">API Key Secret</label>
+              <input
+                type="password"
+                value={pbx.pbx_api_key_secret}
+                onChange={(event) =>
+                  setPbx((prev) => ({ ...prev, pbx_api_key_secret: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder={pbx.has_pbx_api_key_secret ? "Gespeichert" : "••••••••"}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-sand-500">Customer Account</label>
+              <input
+                value={pbx.pbx_customer_account}
+                onChange={(event) =>
+                  setPbx((prev) => ({ ...prev, pbx_customer_account: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder="Customer Account"
+              />
+            </div>
+          </div>
+          <div className="mt-6 flex items-center gap-3">
+            <button
+              onClick={savePbxSettings}
+              className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+            >
+              Speichern
+            </button>
+            <button
+              type="button"
+              onClick={refreshPbxDebug}
+              className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600"
+            >
+              Status neu laden
+            </button>
+            {pbxLoadStatus === "error" && (
+              <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+            )}
+            {pbxStatus === "saved" && (
+              <span className="text-sm text-emerald-600">Gespeichert</span>
+            )}
+            {pbxStatus === "error" && (
+              <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+            )}
+          </div>
+          <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
+            <button
+              type="button"
+              onClick={() => setPbxDebugOpen((current) => !current)}
+              className="w-full flex items-center justify-between uppercase tracking-[0.3em] text-[10px] text-sand-500"
+            >
+              <span>Anlagen API Debug</span>
+              <span>{pbxDebugOpen ? "–" : "+"}</span>
+            </button>
+            {pbxDebugOpen ? (
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                <div>
+                  <span className="text-sand-500">Letzter Check:</span>{" "}
+                  {pbxDebugInfo.lastCheckAt || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Status:</span>{" "}
+                  {pbxDebugInfo.lastCheckOk === null
+                    ? "unbekannt"
+                    : pbxDebugInfo.lastCheckOk
+                    ? "ok"
+                    : "fehlgeschlagen"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Beispielanzahl:</span>{" "}
+                  {pbxDebugInfo.sampleCount ?? "n/a"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Letzter Fehler:</span>{" "}
+                  {pbxDebugInfo.lastError || "n/a"}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2 text-sand-700">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">NFON CTI</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-sand-600">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  ctiApiStatus === "connected" ? "bg-emerald-500" : "bg-rose-500"
+                }`}
+              />
+              <span>
+                API{" "}
+                {ctiApiStatus === "connected"
+                  ? "aktiv"
+                  : ctiApiStatus === "missing"
+                  ? "Zugangsdaten fehlen"
+                  : "getrennt"}
+              </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs text-sand-500">Base URL</label>
+              <input
+                value={cti.baseUrl}
+                onChange={(event) =>
+                  setCti((current) => ({ ...current, baseUrl: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder="https://providersupportdata.cloud-cfg.com"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-sand-500">Benutzername</label>
+              <input
+                value={cti.username}
+                onChange={(event) =>
+                  setCti((current) => ({ ...current, username: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder="cti-user"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-sand-500">Passwort</label>
+              <input
+                type="password"
+                value={cti.password}
+                onChange={(event) =>
+                  setCti((current) => ({ ...current, password: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder={cti.hasPassword ? "Gespeichert" : "••••••••"}
+              />
+            </div>
+            <div className="md:col-span-2 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Numerify</p>
+              <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-xs text-sand-500">Reverse URL</label>
+                  <input
+                    value={cti.numerifyReverseUrl}
+                    onChange={(event) =>
+                      setCti((current) => ({
+                        ...current,
+                        numerifyReverseUrl: event.target.value
+                      }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="https://api.numerify.at/v1/reverse?number={number}"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">API Header</label>
+                  <input
+                    value={cti.numerifyApiHeader}
+                    onChange={(event) =>
+                      setCti((current) => ({
+                        ...current,
+                        numerifyApiHeader: event.target.value
+                      }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="X-API-Key"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">API Key</label>
+                  <input
+                    type="password"
+                    value={cti.numerifyApiKey}
+                    onChange={(event) =>
+                      setCti((current) => ({
+                        ...current,
+                        numerifyApiKey: event.target.value
+                      }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={cti.hasNumerifyApiKey ? "Gespeichert" : "••••••••"}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 mt-4">
+              <input
+                id="cti-stream"
+                type="checkbox"
+                checked={cti.streamEnabled}
+                onChange={(event) =>
+                  setCti((current) => ({
+                    ...current,
+                    streamEnabled: event.target.checked
+                  }))
+                }
+              />
+              <label htmlFor="cti-stream" className="text-sm text-sand-700">
+                Live-Stream aktivieren
+              </label>
+            </div>
+          </div>
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <button
+              onClick={saveCtiSettings}
+              className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+            >
+              Speichern
+            </button>
+            {ctiLoadStatus === "error" && (
+              <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+            )}
+            {ctiStatus === "saved" && (
+              <span className="text-sm text-emerald-600">Gespeichert</span>
+            )}
+            {ctiStatus === "error" && (
+              <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+            )}
+            <button
+              type="button"
+              onClick={refreshCtiDebug}
+              className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600"
+            >
+              Status neu laden
+            </button>
+          </div>
+          <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
+            <button
+              type="button"
+              onClick={() => setCtiDebugOpen((current) => !current)}
+              className="w-full flex items-center justify-between uppercase tracking-[0.3em] text-[10px] text-sand-500"
+            >
+              <span>CTI Debug</span>
+              <span>{ctiDebugOpen ? "–" : "+"}</span>
+            </button>
+            {ctiDebugOpen ? (
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                <div>
+                  <span className="text-sand-500">Base URL:</span> {cti.baseUrl || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Username gesetzt:</span>{" "}
+                  {cti.username?.trim() ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Passwort eingegeben:</span>{" "}
+                  {cti.password ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Password-Auth aktiv:</span>{" "}
+                  {cti.hasPassword ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Refresh Token vorhanden:</span>{" "}
+                  {cti.hasRefreshToken ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Credentials erkannt:</span>{" "}
+                  {hasCtiCredentials ? "ja" : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">API Status:</span> {ctiApiStatus}
+                </div>
+                <div>
+                  <span className="text-sand-500">Health Check:</span>{" "}
+                  {ctiDebugInfo.lastHealthCheckOk === null
+                    ? "unbekannt"
+                    : ctiDebugInfo.lastHealthCheckOk
+                    ? "ok"
+                    : "fehlgeschlagen"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letzter Health Check:</span>{" "}
+                  {ctiDebugInfo.lastHealthCheckAt || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letzte Settings-Abfrage:</span>{" "}
+                  {ctiDebugInfo.lastSettingsFetchAt || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letztes Settings-Update:</span>{" "}
+                  {ctiDebugInfo.lastSettingsSaveAt || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letztes Settings-Update OK:</span>{" "}
+                  {ctiDebugInfo.lastSettingsSaveOk === null
+                    ? "unbekannt"
+                    : ctiDebugInfo.lastSettingsSaveOk
+                    ? "ja"
+                    : "nein"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Letzte Call-Anzahl:</span>{" "}
+                  {ctiDebugInfo.lastCallsCount ?? "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Stats Totals:</span>{" "}
+                  {ctiDebugInfo.lastStatsTotals
+                    ? `today ${ctiDebugInfo.lastStatsTotals.today}, 24h ${ctiDebugInfo.lastStatsTotals.last24h}, 7d ${ctiDebugInfo.lastStatsTotals.last7d}`
+                    : "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Stream aktiv:</span>{" "}
+                  {cti.streamEnabled ? "ja" : "nein"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Settings Response:</span>{" "}
+                  {ctiDebugInfo.lastSettingsResponse
+                    ? JSON.stringify(ctiDebugInfo.lastSettingsResponse)
+                    : "n/a"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Letzte Event-Keys:</span>{" "}
+                  {ctiDebugInfo.lastCallRawKeys?.length
+                    ? ctiDebugInfo.lastCallRawKeys.join(", ")
+                    : "n/a"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Letzter Call (DB Snapshot):</span>{" "}
+                  {ctiDebugInfo.lastCallSnapshot
+                    ? JSON.stringify(ctiDebugInfo.lastCallSnapshot)
+                    : "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Raw Payload Laenge:</span>{" "}
+                  {ctiDebugInfo.lastCallRawLength ?? "n/a"}
+                </div>
+                <div className="md:col-span-2">
+                  <span className="text-sand-500">Letztes Event (Preview):</span>{" "}
+                  {ctiDebugInfo.lastCallRawPreview || "n/a"}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 

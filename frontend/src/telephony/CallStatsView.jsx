@@ -16,7 +16,7 @@ const formatDurationHms = (seconds) => {
   return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 };
 
-export default function CallStatsView({ stats }) {
+export default function CallStatsView({ stats, calls = [] }) {
   const periods = [
     { key: "today", label: "Heute" },
     { key: "last24h", label: "24 Stunden" },
@@ -25,6 +25,21 @@ export default function CallStatsView({ stats }) {
 
   const safeStats = stats || {};
   const extensionStats = safeStats.byExtension || [];
+  const topTargets = (() => {
+    const counts = new Map();
+    const recent = Array.isArray(calls) ? calls.slice(0, 100) : [];
+    recent.forEach((call) => {
+      const direction = call.direction?.toLowerCase() || "";
+      const number = direction.includes("out") ? call.to || call.from : call.from || call.to;
+      const label = call.customerName || number || "Unbekannt";
+      if (!label) return;
+      counts.set(label, (counts.get(label) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([label, count]) => ({ label, count }));
+  })();
 
   const renderBreakdown = (title, rows) => (
     <div className="border border-sand-200 rounded-2xl p-3">
@@ -118,6 +133,26 @@ export default function CallStatsView({ stats }) {
 
       <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-3">
         {renderBreakdown("Nebenstellen (letzte 7 Tage)", extensionStats)}
+        <div className="border border-sand-200 rounded-2xl p-3">
+          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500 mb-2">
+            Top 5 Kunden / Rufnummern (letzte 100)
+          </p>
+          {topTargets.length === 0 ? (
+            <p className="text-xs text-sand-500">Keine Daten vorhanden.</p>
+          ) : (
+            <div className="space-y-2 text-xs">
+              {topTargets.map((entry) => (
+                <div
+                  key={entry.label}
+                  className="flex items-center justify-between rounded-xl border border-sand-200 bg-sand-50 px-3 py-2"
+                >
+                  <span className="text-sand-700">{entry.label}</span>
+                  <span className="text-sand-500">{entry.count}x</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -33,7 +33,7 @@ const statusOptions = ["Entwurf", "gesendet", "angenommen", "abgelehnt"];
 const complexityOptions = ["niedrig", "mittel", "hoch"];
 const positionTypes = [
   { value: "Dienstleistung", label: "Leistung" },
-  { value: "Gerät", label: "Gerät" },
+  { value: "Gerät", label: "Material" },
   { value: "Sonstiges", label: "Sonstiges" }
 ];
 const unitOptions = [
@@ -166,7 +166,7 @@ const formatLineTotal = (price, quantity) =>
 const getDeviceProduct = (item) =>
   item.product ||
   [item.manufacturer, item.model].filter(Boolean).join(" · ") ||
-  "Gerät";
+  "Material";
 
 const formatDeviceTitle = (item) => getDeviceProduct(item);
 
@@ -276,7 +276,7 @@ const generateOverviewText = (offer) => {
     return `Überblick für ${customer}: Leistungsumfang, Ziele und erwartete Ergebnisse werden im Angebot zusammengefasst.`;
   }
   const shortlist = titles.slice(0, 3).map((title) => `- ${title}`);
-  return `Überblick für ${customer}: Die wichtigsten Leistungen und Geräte im Angebot.\n\n${shortlist.join("\n")}`;
+  return `Überblick für ${customer}: Die wichtigsten Leistungen und Materialien im Angebot.\n\n${shortlist.join("\n")}`;
 };
 
 const generateCalculationText = (offer) => {
@@ -735,7 +735,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                   {previewPositions.some((item) => item.category === "device") ? (
                     <>
                       <div className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                        Geräte
+                        Material
                       </div>
                       {previewPositions
                         .filter((item) => item.category === "device")
@@ -768,7 +768,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                         ))}
                       <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700">
                         <span />
-                        <span>Zwischensumme Geräte</span>
+                        <span>Zwischensumme Material</span>
                         <span />
                         <span className="text-right">
                           {formatMoney(calcVat(deviceTotal, offer))}
@@ -789,7 +789,7 @@ function OfferPreview({ offer, scale = 1, containerRef }) {
                     <span>{formatMoney(serviceTotal)}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span>Summe Geräte (netto)</span>
+                    <span>Summe Material (netto)</span>
                     <span>{formatMoney(deviceTotal)}</span>
                   </div>
                   <div className="flex items-center justify-between font-semibold text-sand-900">
@@ -1022,6 +1022,15 @@ export default function OffersView() {
   const activeOffer = offers.find((offer) => offer.id === activeId) || null;
   const previewOffer = offers.find((offer) => offer.id === previewOfferId) || null;
   const exportOffer = offers.find((offer) => offer.id === exportOfferId) || null;
+  const customersByName = useMemo(() => {
+    const map = new Map();
+    customers.forEach((customer) => {
+      if (customer?.name) {
+        map.set(customer.name.toLowerCase(), customer);
+      }
+    });
+    return map;
+  }, [customers]);
 
   const persistToStorage = (withStatus) => {
     if (typeof window === "undefined") return;
@@ -1118,6 +1127,42 @@ export default function OffersView() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeOffer || !activeOffer.customer || !customersByName.size) return;
+    const match = customersByName.get(activeOffer.customer.trim().toLowerCase());
+    if (!match) return;
+    const postalCity = [match.postal_code, match.city].filter(Boolean).join(" ");
+    const customerNumber = match.creditor_number || match.short_code || "";
+    updateOffer(activeOffer.id, (offer) => {
+      let changed = false;
+      const next = { ...offer };
+      if (!offer.recipientCompany && match.name) {
+        next.recipientCompany = match.name;
+        changed = true;
+      }
+      if (!offer.recipientStreet && match.street) {
+        next.recipientStreet = match.street;
+        changed = true;
+      }
+      if (!offer.recipientPostalCity && postalCity) {
+        next.recipientPostalCity = postalCity;
+        changed = true;
+      }
+      if (!offer.recipientCountry && match.country) {
+        next.recipientCountry = match.country;
+        changed = true;
+      }
+      if (!offer.customerNumber && customerNumber) {
+        next.customerNumber = customerNumber;
+        changed = true;
+      }
+      return changed ? next : offer;
+    });
+    if (!sendTo && match.email) {
+      setSendTo(match.email);
+    }
+  }, [activeOffer?.id, activeOffer?.customer, customersByName, sendTo]);
 
   useEffect(() => {
     if (!serviceBlocks.length) return;
@@ -2199,7 +2244,7 @@ export default function OffersView() {
                       Positionen zusammenstellen
                     </h2>
                     <p className="text-sm text-sand-600">
-                      Leistung oder Gerät anlegen, Vorlagen nutzen.
+                      Leistung oder Material anlegen, Vorlagen nutzen.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -2207,7 +2252,7 @@ export default function OffersView() {
                       {activeOffer.lineItems.length} Leistungspositionen
                     </span>
                     <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                      {activeOffer.deviceItems.length} Gerätepositionen
+                      {activeOffer.deviceItems.length} Materialpositionen
                     </span>
                   </div>
                 </div>
@@ -2222,7 +2267,7 @@ export default function OffersView() {
                           </p>
                         </div>
                         <p className="text-sm text-sand-600">
-                          Leistung oder Gerät direkt anlegen.
+                          Leistung oder Material direkt anlegen.
                         </p>
                         <div className="flex flex-col gap-2">
                           <SelectField
@@ -2280,11 +2325,11 @@ export default function OffersView() {
                         <div className="flex items-center gap-2 text-sand-700">
                           <Link size={16} />
                           <p className="text-xs uppercase tracking-wide text-sand-600">
-                            Geräte-Baustein
+                            Material-Baustein
                           </p>
                         </div>
                         <p className="text-sm text-sand-600">
-                          Vorgefertigtes Geräteprofil übernehmen.
+                          Vorgefertigtes Materialprofil übernehmen.
                         </p>
                         <SelectField
                           value={devicePick}
@@ -2598,7 +2643,7 @@ export default function OffersView() {
                     <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
                       <div className="flex items-center justify-between">
                         <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                          Geräteprofile
+                          Materialprofile
                         </p>
                         <span className="text-xs text-sand-500">
                           {activeOffer.deviceItems.length} Positionen
@@ -2617,7 +2662,7 @@ export default function OffersView() {
                               <div className="flex flex-wrap items-start justify-between gap-3">
                                 <div>
                                   <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                    Geräteprofil
+                                    Materialprofil
                                   </p>
                                   <p className="text-sm font-semibold text-sand-900">
                                     {getDeviceProduct(item)}
@@ -2657,6 +2702,18 @@ export default function OffersView() {
                               {showDetails ? (
                                 <>
                                   <div className="mt-3 grid gap-3 md:grid-cols-3">
+                                    <Field label="Produkt">
+                                      <input
+                                        className={inputClass}
+                                        value={item.product || getDeviceProduct(item)}
+                                        onChange={(event) =>
+                                          updateDeviceItem(activeOffer.id, item.id, {
+                                            product: event.target.value
+                                          })
+                                        }
+                                        placeholder="Produkt"
+                                      />
+                                    </Field>
                                     <Field label="Preis">
                                       <div className="relative">
                                         <input
@@ -2684,18 +2741,6 @@ export default function OffersView() {
                                             quantity: Number(event.target.value)
                                           })
                                         }
-                                      />
-                                    </Field>
-                                    <Field label="Produkt">
-                                      <input
-                                        className={inputClass}
-                                        value={item.product || getDeviceProduct(item)}
-                                        onChange={(event) =>
-                                          updateDeviceItem(activeOffer.id, item.id, {
-                                            product: event.target.value
-                                          })
-                                        }
-                                        placeholder="Produkt"
                                       />
                                     </Field>
                                   </div>
@@ -2940,7 +2985,7 @@ export default function OffersView() {
                         })
                       ) : (
                         <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-4 text-sm text-sand-500">
-                          Keine Gerätepositionen hinterlegt.
+                          Keine Materialpositionen hinterlegt.
                         </div>
                       )}
                     </div>
@@ -3457,7 +3502,7 @@ export default function OffersView() {
               Textbausteine
             </p>
             <h2 className="text-lg font-display text-sand-900">
-              Service & Geräte pflegen
+              Service & Material pflegen
             </h2>
           </div>
         </div>
@@ -3652,7 +3697,7 @@ export default function OffersView() {
           <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                Gerätebausteine
+                Materialbausteine
               </p>
               <button
                 type="button"
@@ -3674,7 +3719,7 @@ export default function OffersView() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-xs font-semibold text-sand-900">
-                          {block.title || "Gerätebaustein"}
+                          {block.title || "Materialbaustein"}
                         </p>
                         <p className="mt-1 text-xs text-sand-500">
                           {getDeviceProduct(block)}
@@ -3756,7 +3801,7 @@ export default function OffersView() {
               })
             ) : (
               <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-3 text-xs text-sand-500">
-                Noch keine Gerätebausteine hinterlegt.
+                Noch keine Materialbausteine hinterlegt.
               </div>
             )}
           </div>

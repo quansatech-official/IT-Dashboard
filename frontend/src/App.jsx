@@ -25,7 +25,7 @@ import StatsView from "./stats/StatsView";
 
 export default function App() {
   const [activeView, setActiveView] = useState("dayplan");
-  const [sidebarWidth, setSidebarWidth] = useState(200);
+  const sidebarWidth = 207;
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "light";
     const stored = window.localStorage.getItem("qt_theme");
@@ -152,17 +152,6 @@ export default function App() {
                 <Settings size={18} /> Einstellungen
               </button>
             </div>
-            <label className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-              Sidebar Breite
-              <input
-                type="range"
-                min={180}
-                max={260}
-                value={sidebarWidth}
-                onChange={(event) => setSidebarWidth(Number(event.target.value))}
-                className="mt-2 w-full"
-              />
-            </label>
             <button
               type="button"
               onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}

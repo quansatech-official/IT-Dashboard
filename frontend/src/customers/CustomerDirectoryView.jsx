@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BadgeCheck,
   Building2,
+  BookPlus,
   Eye,
   FileDown,
   Mail,
@@ -12,6 +13,7 @@ import {
   Users
 } from "lucide-react";
 import { renderReportHTML, uid } from "../reporting/utils";
+import { telephonyService } from "../telephony/telephonyService";
 
 const API = "/api";
 
@@ -831,6 +833,17 @@ export default function CustomerDirectoryView() {
     updateCustomer(activeCustomer.id, { phones: nextPhones.length ? nextPhones : [blankPhone()] });
   };
 
+  const addPhoneToPbx = async (phone) => {
+    if (!activeCustomer) return;
+    const number = String(phone?.number || "").trim();
+    if (!number) return;
+    await telephonyService.createPbxPhonebookEntry({
+      name: activeCustomer.name || "",
+      number,
+      is_global: false
+    });
+  };
+
   return (
     <div className="min-h-screen bg-sand-50">
       {previewModal.open ? (
@@ -1235,7 +1248,7 @@ export default function CustomerDirectoryView() {
                     {activeCustomer.phones?.map((phone) => (
                       <div
                         key={phone.id}
-                        className="grid gap-2 md:grid-cols-[140px_minmax(0,1fr)_auto] items-center"
+                        className="grid gap-2 md:grid-cols-[140px_minmax(0,1fr)_auto_auto] items-center"
                       >
                         <input
                           value={phone.label}
@@ -1249,6 +1262,14 @@ export default function CustomerDirectoryView() {
                           placeholder="+49 40 123456"
                           className="rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                         />
+                        <button
+                          type="button"
+                          onClick={() => addPhoneToPbx(phone)}
+                          className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white px-3 py-1 text-xs text-sand-600 hover:bg-sand-100"
+                          title="Ins Anlagen-Telefonbuch übernehmen"
+                        >
+                          <BookPlus size={12} />
+                        </button>
                         <button
                           type="button"
                           onClick={() => removePhone(phone.id)}

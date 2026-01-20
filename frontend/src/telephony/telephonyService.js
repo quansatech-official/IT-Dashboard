@@ -9,7 +9,7 @@ const safeJson = async (response) => {
 };
 
 export const telephonyService = {
-  fetchCalls: async (limit = 30) => {
+  fetchCalls: async (limit = 100) => {
     try {
       const response = await fetch(`${API}/calls?limit=${limit}`);
       return await safeJson(response);
@@ -122,6 +122,34 @@ export const telephonyService = {
         body: JSON.stringify(payload)
       });
       return await safeJson(response);
+    } catch (error) {
+      return null;
+    }
+  },
+  fetchPbxPhonebook: async () => {
+    try {
+      const response = await fetch(`/api/pbx_phonebook/remote?_pagesize=500`);
+      if (response.ok) return await response.json();
+      const fallback = await fetch(`/api/pbx_phonebook`);
+      return await safeJson(fallback);
+    } catch (error) {
+      return [];
+    }
+  },
+  createPbxPhonebookEntry: async ({ name, number, is_global = false }) => {
+    try {
+      const response = await fetch(`/api/pbx_phonebook/remote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, number, is_global })
+      });
+      if (response.ok) return await response.json();
+      const fallback = await fetch(`/api/pbx_phonebook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, number, is_global })
+      });
+      return await safeJson(fallback);
     } catch (error) {
       return null;
     }

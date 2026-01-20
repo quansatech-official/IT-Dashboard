@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, PhoneOutgoing } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, PhoneOutgoing, BookPlus } from "lucide-react";
 
 const formatTime = (timestamp) => {
   if (!timestamp) return "-";
@@ -71,9 +71,11 @@ export default function CallListView({
   calls,
   extensions,
   customers = [],
+  pbxEntries = [],
   onCallback,
   onResolve,
-  onAssignNumber
+  onAssignNumber,
+  onAddToPbx
 }) {
   const pageSize = 10;
   const [page, setPage] = useState(1);
@@ -151,6 +153,33 @@ export default function CallListView({
       .slice(0, 12);
   }, [customers, assignQuery]);
 
+  const customerMatches = useMemo(() => {
+    const map = new Map();
+    const list = Array.isArray(customers) ? customers : [];
+    list.forEach((customer) => {
+      const name = customer?.name || "";
+      const phones = Array.isArray(customer?.phones) ? customer.phones : [];
+      phones.forEach((phone) => {
+        const number = normalizeDigits(phone?.number || "");
+        if (number && name) {
+          map.set(number, name);
+        }
+      });
+    });
+    return map;
+  }, [customers]);
+
+  const pbxMatches = useMemo(() => {
+    const map = new Map();
+    pbxEntries.forEach((entry) => {
+      const number = normalizeDigits(entry?.number || "");
+      if (number) {
+        map.set(number, entry);
+      }
+    });
+    return map;
+  }, [pbxEntries]);
+
   useEffect(() => {
     if (!assignTarget) return;
     setAssignQuery("");
@@ -206,6 +235,16 @@ export default function CallListView({
     return phones.some((phone) => normalizeDigits(phone?.number) === target);
   };
 
+  const pbxEntryForCall = (call) => {
+    const key = resolveKey(call);
+    return key ? pbxMatches.get(key) : null;
+  };
+
+  const customerNameForCall = (call) => {
+    const key = resolveKey(call);
+    return key ? customerMatches.get(key) : "";
+  };
+
   return (
     <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
       <div className="flex items-center justify-between mb-4">
@@ -222,7 +261,7 @@ export default function CallListView({
             />
             Nur verpasste
           </label>
-          <span>letzte 30 Events</span>
+          <span>letzte 100 Events</span>
         </div>
       </div>
 
@@ -282,12 +321,34 @@ export default function CallListView({
                     </span>
                   </td>
                   <td className="py-3">
-                    {call.customerName || resolvedNames[resolveKey(call)] ? (
-                      call.customerName || resolvedNames[resolveKey(call)]
-                    ) : (
-                      <div className="flex items-center justify-between gap-2">
-                        <span>-</span>
-                        {assignNumber(call) ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <span>
+                        {call.customerName ||
+                        customerNameForCall(call) ||
+                        resolvedNames[resolveKey(call)] ||
+                        pbxEntryForCall(call)?.name ||
+                        "-"}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {assignNumber(call) && !pbxEntryForCall(call) && onAddToPbx ? (
+                          <button
+                            onClick={() =>
+                              onAddToPbx({
+                                name:
+                                  call.customerName ||
+                                  customerNameForCall(call) ||
+                                  resolvedNames[resolveKey(call)] ||
+                                  "",
+                                number: assignNumber(call)
+                              })
+                            }
+                            className="rounded-full border border-sand-300 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                            title="In Anlagen-Telefonbuch übernehmen"
+                          >
+                            <BookPlus size={14} />
+                          </button>
+                        ) : null}
+                        {assignNumber(call) && !call.customerName && !customerNameForCall(call) ? (
                           <button
                             onClick={() => setAssignTarget(call)}
                             className="rounded-full border border-amber-200 bg-amber-50 p-1 text-amber-700 hover:bg-amber-100"
@@ -297,7 +358,7 @@ export default function CallListView({
                           </button>
                         ) : null}
                       </div>
-                    )}
+                    </div>
                   </td>
                   <td className="py-3 text-right">
                     {callbackNumber(call) ? (
