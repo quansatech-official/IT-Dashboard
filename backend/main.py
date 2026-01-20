@@ -77,6 +77,7 @@ class DayTask(Base):
     elapsed = Column(BigInteger, default=0)      # ms
     running = Column(Boolean, default=False)
     startTime = Column("starttime", BigInteger, default=0)    # ms timestamp
+    completed_at = Column(BigInteger, default=0)
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
@@ -497,6 +498,8 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN running BOOLEAN DEFAULT FALSE")
     if "starttime" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN starttime BIGINT DEFAULT 0")
+    if "completed_at" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN completed_at BIGINT DEFAULT 0")
     if not statements:
         return
     with engine.begin() as connection:
@@ -575,6 +578,7 @@ class DayTaskCreate(BaseModel):
     elapsed: Optional[int] = 0
     running: Optional[bool] = False
     startTime: Optional[int] = 0
+    completed_at: Optional[int] = 0
 
 
 class DayTaskUpdate(BaseModel):
@@ -598,6 +602,7 @@ class DayTaskUpdate(BaseModel):
     elapsed: Optional[int] = None
     running: Optional[bool] = None
     startTime: Optional[int] = None
+    completed_at: Optional[int] = None
 
 
 class DayTaskGroupCreate(BaseModel):
@@ -827,6 +832,7 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "elapsed": t.elapsed,
         "running": t.running,
         "startTime": t.startTime,
+        "completed_at": t.completed_at,
         "created_at": t.created_at,
     }
 
@@ -1659,16 +1665,19 @@ def delete_day_task_group(group_id: int):
 @app.post("/api/day_tasks")
 def create_day_task(data: DayTaskCreate):
     with SessionLocal() as db:
+        now_ms = int(time.time() * 1000)
+        status = data.status or "todo"
+        erledigt = bool(data.erledigt) or status == "done"
         task = DayTask(
             title=data.title,
             customer=data.customer or "",
             customer_number=data.customer_number or "",
-            status=data.status or "todo",
+            status=status,
             group_id=data.group_id,
             locked=bool(data.locked),
             signature_base64=data.signature_base64 or "",
             time_enabled=bool(data.time_enabled),
-            erledigt=bool(data.erledigt),
+            erledigt=erledigt,
             aberechnet=bool(data.aberechnet),
             kulant=bool(data.kulant),
             details=data.details or "",
@@ -1678,6 +1687,7 @@ def create_day_task(data: DayTaskCreate):
             elapsed=int(data.elapsed or 0),
             running=bool(data.running),
             startTime=int(data.startTime or 0),
+            completed_at=now_ms if erledigt else 0,
         )
         db.add(task)
         db.commit()
@@ -1691,6 +1701,7 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
         task = db.query(DayTask).get(task_id)
         if not task:
             raise HTTPException(404, "Task not found")
+        now_ms = int(time.time() * 1000)
         string_fields = {
             "title",
             "customer",
@@ -1709,6 +1720,10 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
                 setattr(task, field, value)
         if data.erledigt is not None and data.status is None:
             task.status = "done" if data.erledigt else "todo"
+        if data.status is not None or data.erledigt is not None:
+            is_done = task.status == "done"
+            task.erledigt = is_done
+            task.completed_at = now_ms if is_done else 0
         db.commit()
         db.refresh(task)
         return serialize_day_task(task)

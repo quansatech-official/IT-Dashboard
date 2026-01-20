@@ -52,6 +52,15 @@ const api = {
 };
 
 const columns = [{ id: "todo", label: "Aufgaben" }];
+const formatDoneDate = (value) => {
+  const date = new Date(Number(value || 0));
+  if (!value || Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  });
+};
 
 export default function DayPlanView() {
   const [tasks, setTasks] = useState([]);
@@ -724,6 +733,11 @@ export default function DayPlanView() {
                     {task.title}
                   </button>
                 )}
+                {isDone && task.completed_at ? (
+                  <p className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-sand-400">
+                    Erledigt {formatDoneDate(task.completed_at)}
+                  </p>
+                ) : null}
               </div>
               <div className="flex flex-wrap items-center justify-end gap-1 pr-6">
                 <button
