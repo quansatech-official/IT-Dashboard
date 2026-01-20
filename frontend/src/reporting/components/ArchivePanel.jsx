@@ -15,6 +15,7 @@ export default function ArchivePanel({
   const [statusFilter, setStatusFilter] = useState("");
   const [readFilter, setReadFilter] = useState("all");
   const [periodFilter, setPeriodFilter] = useState("");
+  const [hideConfirmed, setHideConfirmed] = useState(false);
   const [openInfoId, setOpenInfoId] = useState(null);
   useEffect(() => {
     if (!openInfoId) return;
@@ -51,6 +52,8 @@ export default function ArchivePanel({
       if (readFilter === "unread") return !item.openedCount;
       return true;
     };
+    const matchesConfirmed = (item) =>
+      !hideConfirmed || String(item.customerStatus || "") !== "Bestätigt";
     const matchesPeriod = (item) =>
       !periodNeedle || String(item.period || "").toLowerCase().includes(periodNeedle);
 
@@ -59,11 +62,12 @@ export default function ArchivePanel({
       .map((group) => ({
         ...group,
         reports: group.reports.filter(
-          (item) => matchesStatus(item) && matchesRead(item) && matchesPeriod(item)
+          (item) =>
+            matchesStatus(item) && matchesRead(item) && matchesConfirmed(item) && matchesPeriod(item)
         )
       }))
       .filter((group) => group.reports.length);
-  }, [archive, query, statusFilter, readFilter, periodFilter]);
+  }, [archive, query, statusFilter, readFilter, hideConfirmed, periodFilter]);
 
   return (
     <div className="bg-white border border-sand-200 rounded-3xl p-5 shadow-soft">
@@ -106,6 +110,15 @@ export default function ArchivePanel({
           placeholder="Zeitraum filtern..."
           className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs"
         />
+        <label className="flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+          <input
+            type="checkbox"
+            checked={hideConfirmed}
+            onChange={(event) => setHideConfirmed(event.target.checked)}
+            className="h-3 w-3 rounded border border-sand-300 text-sand-700"
+          />
+          Bestätigte ausblenden
+        </label>
       </div>
       <div className="space-y-4">
         {filteredArchive.map((group) => (

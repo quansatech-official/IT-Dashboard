@@ -1917,6 +1917,8 @@ def pbx_phonebook_health():
                 "base_url": "",
                 "customer_account": "",
                 "response_preview": "",
+                "request_path": "",
+                "request_url": "",
             }
     path = f"/api/customers/{customer_account}/phone-books?_pagesize=1"
     date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
@@ -1928,7 +1930,8 @@ def pbx_phonebook_health():
         "x-nfon-date": date,
     }
     try:
-        response = requests.request("GET", f"{base_url}{path}", headers=headers, timeout=20)
+        request_url = f"{base_url}{path}"
+        response = requests.request("GET", request_url, headers=headers, timeout=20)
     except Exception as exc:
         return {
             "ok": False,
@@ -1938,6 +1941,8 @@ def pbx_phonebook_health():
             "base_url": base_url,
             "customer_account": customer_account,
             "response_preview": "",
+            "request_path": path,
+            "request_url": f"{base_url}{path}",
         }
     text = response.text or ""
     entries = []
@@ -1953,6 +1958,8 @@ def pbx_phonebook_health():
         "base_url": base_url,
         "customer_account": customer_account,
         "response_preview": text[:300],
+        "request_path": path,
+        "request_url": request_url,
     }
 
 # ============== OLLAMA AI =================

@@ -106,7 +106,9 @@ export default function SettingsView() {
     statusCode: null,
     baseUrl: "",
     customerAccount: "",
-    responsePreview: ""
+    responsePreview: "",
+    requestPath: "",
+    requestUrl: ""
   });
   const [tables, setTables] = useState([]);
   const [debugStatus, setDebugStatus] = useState("idle");
@@ -491,7 +493,9 @@ export default function SettingsView() {
         statusCode: data?.status_code ?? response.status,
         baseUrl: data?.base_url || pbx.pbx_base_url || "",
         customerAccount: data?.customer_account || pbx.pbx_customer_account || "",
-        responsePreview: data?.response_preview || text.slice(0, 300)
+        responsePreview: data?.response_preview || text.slice(0, 300),
+        requestPath: data?.request_path || "",
+        requestUrl: data?.request_url || ""
       });
     } catch (error) {
       setPbxApiStatus("error");
@@ -503,7 +507,9 @@ export default function SettingsView() {
         statusCode: response?.status ?? null,
         baseUrl: pbx.pbx_base_url || "",
         customerAccount: pbx.pbx_customer_account || "",
-        responsePreview: ""
+        responsePreview: "",
+        requestPath: "",
+        requestUrl: ""
       });
     }
   };
@@ -771,6 +777,14 @@ export default function SettingsView() {
                 <div>
                   <span className="text-sand-500">Customer Account:</span>{" "}
                   {pbxDebugInfo.customerAccount || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Request Path:</span>{" "}
+                  {pbxDebugInfo.requestPath || "n/a"}
+                </div>
+                <div>
+                  <span className="text-sand-500">Request URL:</span>{" "}
+                  {pbxDebugInfo.requestUrl || "n/a"}
                 </div>
                 <div>
                   <span className="text-sand-500">Beispielanzahl:</span>{" "}

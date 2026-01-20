@@ -1086,6 +1086,7 @@ export default function OffersView() {
   const [sendSubject, setSendSubject] = useState("");
   const [sendStatus, setSendStatus] = useState("idle");
   const [expandedOffers, setExpandedOffers] = useState({});
+  const [aiLoading, setAiLoading] = useState({});
   const previewWrapperRef = useRef(null);
   const exportRef = useRef(null);
   const [previewScale, setPreviewScale] = useState(0.75);
@@ -1630,6 +1631,20 @@ export default function OffersView() {
       ...prev,
       [key]: !prev[key]
     }));
+
+  const setAiBusy = (key, value) => {
+    setAiLoading((prev) => {
+      const next = { ...prev };
+      if (value) {
+        next[key] = true;
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  };
+
+  const isAiBusy = (key) => Boolean(aiLoading[key]);
 
   const toggleBlockOpen = (key) =>
     setBlockOpen((prev) => ({
@@ -2260,20 +2275,32 @@ export default function OffersView() {
                             <button
                               type="button"
                               onClick={async () => {
-                                const text = await requestOfferAiText({
-                                  mode: "cover_intro",
-                                  currentText: activeOffer.coverIntro || "",
-                                  context: buildOfferContext(activeOffer),
-                                  fallback: () => generateCoverIntro(activeOffer)
-                                });
-                                updateOffer(activeOffer.id, (offer) => ({
-                                  ...offer,
-                                  coverIntro: text
-                                }));
+                                const key = "cover-intro";
+                                if (isAiBusy(key)) return;
+                                setAiBusy(key, true);
+                                try {
+                                  const text = await requestOfferAiText({
+                                    mode: "cover_intro",
+                                    currentText: activeOffer.coverIntro || "",
+                                    context: buildOfferContext(activeOffer),
+                                    fallback: () => generateCoverIntro(activeOffer)
+                                  });
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    coverIntro: text
+                                  }));
+                                } finally {
+                                  setAiBusy(key, false);
+                                }
                               }}
                               className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
                             >
-                              <Sparkles size={12} /> Text
+                              {isAiBusy("cover-intro") ? (
+                                <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                              ) : (
+                                <Sparkles size={12} />
+                              )}{" "}
+                              Text
                             </button>
                           </div>
                           <textarea
@@ -2297,20 +2324,32 @@ export default function OffersView() {
                         <button
                           type="button"
                           onClick={async () => {
-                            const text = await requestOfferAiText({
-                              mode: "overview",
-                              currentText: activeOffer.overviewText || "",
-                              context: buildOfferContext(activeOffer),
-                              fallback: () => generateOverviewText(activeOffer)
-                            });
-                            updateOffer(activeOffer.id, (offer) => ({
-                              ...offer,
-                              overviewText: text
-                            }));
+                            const key = "overview";
+                            if (isAiBusy(key)) return;
+                            setAiBusy(key, true);
+                            try {
+                              const text = await requestOfferAiText({
+                                mode: "overview",
+                                currentText: activeOffer.overviewText || "",
+                                context: buildOfferContext(activeOffer),
+                                fallback: () => generateOverviewText(activeOffer)
+                              });
+                              updateOffer(activeOffer.id, (offer) => ({
+                                ...offer,
+                                overviewText: text
+                              }));
+                            } finally {
+                              setAiBusy(key, false);
+                            }
                           }}
                           className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
                         >
-                          <Sparkles size={12} /> Text
+                          {isAiBusy("overview") ? (
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                          ) : (
+                            <Sparkles size={12} />
+                          )}{" "}
+                          Text
                         </button>
                       </div>
                       <textarea
@@ -2356,20 +2395,32 @@ export default function OffersView() {
                         <button
                           type="button"
                           onClick={async () => {
-                            const text = await requestOfferAiText({
-                              mode: "calculation",
-                              currentText: activeOffer.calculationText || "",
-                              context: buildOfferContext(activeOffer),
-                              fallback: () => generateCalculationText(activeOffer)
-                            });
-                            updateOffer(activeOffer.id, (offer) => ({
-                              ...offer,
-                              calculationText: text
-                            }));
+                            const key = "calculation";
+                            if (isAiBusy(key)) return;
+                            setAiBusy(key, true);
+                            try {
+                              const text = await requestOfferAiText({
+                                mode: "calculation",
+                                currentText: activeOffer.calculationText || "",
+                                context: buildOfferContext(activeOffer),
+                                fallback: () => generateCalculationText(activeOffer)
+                              });
+                              updateOffer(activeOffer.id, (offer) => ({
+                                ...offer,
+                                calculationText: text
+                              }));
+                            } finally {
+                              setAiBusy(key, false);
+                            }
                           }}
                           className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
                         >
-                          <Sparkles size={12} /> Text
+                          {isAiBusy("calculation") ? (
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                          ) : (
+                            <Sparkles size={12} />
+                          )}{" "}
+                          Text
                         </button>
                       </div>
                       <textarea
@@ -2626,17 +2677,31 @@ export default function OffersView() {
                                       <button
                                         type="button"
                                         onClick={async () => {
-                                          const text = await requestOfferAiText({
-                                            mode: "position_text",
-                                            currentText: item.aiDraft || "",
-                                            context: buildLineItemContext(activeOffer, item),
-                                            fallback: () => generateAiText(item)
-                                          });
-                                          updateLineItem(activeOffer.id, item.id, { aiDraft: text });
+                                          const key = `line-ai-${item.id}`;
+                                          if (isAiBusy(key)) return;
+                                          setAiBusy(key, true);
+                                          try {
+                                            const text = await requestOfferAiText({
+                                              mode: "position_text",
+                                              currentText: item.aiDraft || "",
+                                              context: buildLineItemContext(activeOffer, item),
+                                              fallback: () => generateAiText(item)
+                                            });
+                                            updateLineItem(activeOffer.id, item.id, {
+                                              aiDraft: text
+                                            });
+                                          } finally {
+                                            setAiBusy(key, false);
+                                          }
                                         }}
                                         className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                                       >
-                                        <Sparkles size={12} /> Text
+                                        {isAiBusy(`line-ai-${item.id}`) ? (
+                                          <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                                        ) : (
+                                          <Sparkles size={12} />
+                                        )}{" "}
+                                        Text
                                       </button>
                                     </div>
                                     <textarea
@@ -2752,7 +2817,11 @@ export default function OffersView() {
                                                           }
                                                           className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
                                                         >
-                                                          <Sparkles size={12} />
+                                                          {importingItemId === `${item.id}:${note.id}` ? (
+                                                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                                                          ) : (
+                                                            <Sparkles size={12} />
+                                                          )}
                                                           {importingItemId === `${item.id}:${note.id}`
                                                             ? "Import..."
                                                             : "Import"}
@@ -2910,19 +2979,31 @@ export default function OffersView() {
                                       <button
                                         type="button"
                                         onClick={async () => {
-                                          const text = await requestOfferAiText({
-                                            mode: "device_description",
-                                            currentText: item.description || "",
-                                            context: buildDeviceContext(activeOffer, item),
-                                            fallback: () => generateDeviceDescription(item)
-                                          });
-                                          updateDeviceItem(activeOffer.id, item.id, {
-                                            description: text
-                                          });
+                                          const key = `device-ai-${item.id}`;
+                                          if (isAiBusy(key)) return;
+                                          setAiBusy(key, true);
+                                          try {
+                                            const text = await requestOfferAiText({
+                                              mode: "device_description",
+                                              currentText: item.description || "",
+                                              context: buildDeviceContext(activeOffer, item),
+                                              fallback: () => generateDeviceDescription(item)
+                                            });
+                                            updateDeviceItem(activeOffer.id, item.id, {
+                                              description: text
+                                            });
+                                          } finally {
+                                            setAiBusy(key, false);
+                                          }
                                         }}
                                         className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                                       >
-                                        <Sparkles size={12} /> Text
+                                        {isAiBusy(`device-ai-${item.id}`) ? (
+                                          <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                                        ) : (
+                                          <Sparkles size={12} />
+                                        )}{" "}
+                                        Text
                                       </button>
                                     </div>
                                     <textarea
@@ -3025,7 +3106,11 @@ export default function OffersView() {
                                                       }
                                                       className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
                                                     >
-                                                      <Sparkles size={12} />
+                                                      {importingItemId === `${item.id}:${note.id}` ? (
+                                                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                                                      ) : (
+                                                        <Sparkles size={12} />
+                                                      )}
                                                       {importingItemId === `${item.id}:${note.id}`
                                                         ? "Import..."
                                                         : "Import"}
