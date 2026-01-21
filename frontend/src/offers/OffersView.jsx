@@ -566,6 +566,7 @@ const createEmptyOffer = (index, format) => ({
   id: uid(),
   reference: makeReference(format, index),
   customer: "",
+  customerAutoFill: "",
   senderLine: "Quansatech GmbH - Steyrtalstraße 88 - 4523 Neuzeug",
   recipientName: "",
   recipientCompany: "",
@@ -1476,6 +1477,24 @@ export default function OffersView() {
     };
   }, [importerOpen]);
 
+  const loadOffersFromServer = () =>
+    fetch("/api/offers")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        const fetched = Array.isArray(data) ? data.map(normalizeServerOffer).filter(Boolean) : [];
+        setOffers((prev) => {
+          const drafts = prev.filter((offer) => !offer.serverId);
+          const merged = [...drafts, ...fetched];
+          setActiveId((current) =>
+            merged.some((offer) => offer.id === current)
+              ? current
+              : merged[0]?.id || ""
+          );
+          return merged;
+        });
+      })
+      .catch(() => {});
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -1541,14 +1560,7 @@ export default function OffersView() {
     if (offersFetchedRef.current) return;
     offersFetchedRef.current = true;
     let active = true;
-    fetch("/api/offers")
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => {
-        if (!active) return;
-        const next = Array.isArray(data) ? data.map(normalizeServerOffer).filter(Boolean) : [];
-        setOffers(next);
-      })
-      .catch(() => {});
+    loadOffersFromServer();
     return () => {
       active = false;
     };
@@ -1587,27 +1599,43 @@ export default function OffersView() {
     const postalCity = [match.postal_code, match.city].filter(Boolean).join(" ");
     const customerNumber = match.creditor_number || match.short_code || "";
     updateOffer(activeOffer.id, (offer) => {
-      let changed = false;
       const next = { ...offer };
-      if (!offer.recipientCompany && match.name) {
-        next.recipientCompany = match.name;
+      let changed = false;
+      const matchName = match.name || offer.customer;
+      const shouldOverwrite = offer.customerAutoFill !== matchName;
+      if (shouldOverwrite) {
+        next.recipientCompany = match.name || "";
+        next.recipientStreet = match.street || "";
+        next.recipientPostalCity = postalCity || "";
+        next.recipientCountry = match.country || "";
+        next.customerNumber = customerNumber || "";
+        next.customerAutoFill = matchName;
         changed = true;
-      }
-      if (!offer.recipientStreet && match.street) {
-        next.recipientStreet = match.street;
-        changed = true;
-      }
-      if (!offer.recipientPostalCity && postalCity) {
-        next.recipientPostalCity = postalCity;
-        changed = true;
-      }
-      if (!offer.recipientCountry && match.country) {
-        next.recipientCountry = match.country;
-        changed = true;
-      }
-      if (!offer.customerNumber && customerNumber) {
-        next.customerNumber = customerNumber;
-        changed = true;
+      } else {
+        if (!offer.recipientCompany && match.name) {
+          next.recipientCompany = match.name;
+          changed = true;
+        }
+        if (!offer.recipientStreet && match.street) {
+          next.recipientStreet = match.street;
+          changed = true;
+        }
+        if (!offer.recipientPostalCity && postalCity) {
+          next.recipientPostalCity = postalCity;
+          changed = true;
+        }
+        if (!offer.recipientCountry && match.country) {
+          next.recipientCountry = match.country;
+          changed = true;
+        }
+        if (!offer.customerNumber && customerNumber) {
+          next.customerNumber = customerNumber;
+          changed = true;
+        }
+        if (!offer.customerAutoFill && matchName) {
+          next.customerAutoFill = matchName;
+          changed = true;
+        }
       }
       return changed ? next : offer;
     });
@@ -1889,6 +1917,11 @@ export default function OffersView() {
   const removeOffer = (offerId) => {
     setOffers((prev) => {
       const next = prev.filter((offer) => offer.id !== offerId);
+      if (!next.length) {
+        const starter = createEmptyOffer(1, offerNumberFormat);
+        setActiveId(starter.id);
+        return [starter];
+      }
       if (offerId === activeId) {
         setActiveId(next[0]?.id || "");
       }
@@ -2100,7 +2133,10 @@ export default function OffersView() {
         id: newId,
         reference,
         status: "Entwurf",
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        serverId: null,
+        confirmGuid: "",
+        trackingGuid: ""
       };
       return [copy, ...prev];
     });
@@ -4089,6 +4125,13 @@ export default function OffersView() {
               Offene & abgeschlossene Angebote
             </h2>
           </div>
+          <button
+            type="button"
+            onClick={loadOffersFromServer}
+            className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+          >
+            Aktualisieren
+          </button>
         </div>
         <div className="mt-4 space-y-4">
           <div className="rounded-2xl border border-sand-200 bg-sand-50 p-4">
