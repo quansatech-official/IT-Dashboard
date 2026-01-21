@@ -108,12 +108,30 @@ export default function SettingsView() {
   const [tables, setTables] = useState([]);
   const [debugStatus, setDebugStatus] = useState("idle");
   const [debugTablesOpen, setDebugTablesOpen] = useState(false);
+  const [smtpOpen, setSmtpOpen] = useState(false);
+  const [beaconOpen, setBeaconOpen] = useState(false);
+  const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
+  const [pbxOpen, setPbxOpen] = useState(false);
+  const [ctiOpen, setCtiOpen] = useState(false);
   const [beaconCheckStatus, setBeaconCheckStatus] = useState("idle");
   const [beaconHealth, setBeaconHealth] = useState({
     checkedAt: "",
     offers: { ok: null, status_code: null, error: "", url: "" },
     reports: { ok: null, status_code: null, error: "", url: "" }
   });
+  const [aiPrompts, setAiPrompts] = useState({
+    action_prompt: "",
+    offer_base_prompt: "",
+    offer_mode_instructions: {
+      cover_intro: "",
+      overview: "",
+      calculation: "",
+      position_text: "",
+      device_description: ""
+    }
+  });
+  const [aiPromptsStatus, setAiPromptsStatus] = useState("idle");
+  const [aiPromptsLoadStatus, setAiPromptsLoadStatus] = useState("loading");
   const [clearingTable, setClearingTable] = useState("");
   const beaconDisplay =
     smtp.beacon_base_url && smtp.beacon_base_url.trim()
@@ -237,6 +255,37 @@ export default function SettingsView() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    fetch(`${API}/ai_prompts`)
+      .then((res) => {
+        if (!res.ok) throw new Error("load_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        setAiPrompts({
+          action_prompt: data?.action_prompt || "",
+          offer_base_prompt: data?.offer_base_prompt || "",
+          offer_mode_instructions: {
+            cover_intro: data?.offer_mode_instructions?.cover_intro || "",
+            overview: data?.offer_mode_instructions?.overview || "",
+            calculation: data?.offer_mode_instructions?.calculation || "",
+            position_text: data?.offer_mode_instructions?.position_text || "",
+            device_description: data?.offer_mode_instructions?.device_description || ""
+          }
+        });
+        setAiPromptsLoadStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setAiPromptsLoadStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
 
   useEffect(() => {
     if (ctiLoadStatus !== "ready") return;
@@ -317,6 +366,34 @@ export default function SettingsView() {
       setBeaconCheckStatus("error");
     }
     setTimeout(() => setBeaconCheckStatus("idle"), 2000);
+  };
+
+  const saveAiPrompts = async () => {
+    setAiPromptsStatus("saving");
+    try {
+      const res = await fetch(`${API}/ai_prompts`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(aiPrompts)
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      setAiPrompts({
+        action_prompt: data?.action_prompt || "",
+        offer_base_prompt: data?.offer_base_prompt || "",
+        offer_mode_instructions: {
+          cover_intro: data?.offer_mode_instructions?.cover_intro || "",
+          overview: data?.offer_mode_instructions?.overview || "",
+          calculation: data?.offer_mode_instructions?.calculation || "",
+          position_text: data?.offer_mode_instructions?.position_text || "",
+          device_description: data?.offer_mode_instructions?.device_description || ""
+        }
+      });
+      setAiPromptsStatus("saved");
+    } catch (error) {
+      setAiPromptsStatus("error");
+    }
+    setTimeout(() => setAiPromptsStatus("idle"), 2000);
   };
 
 
@@ -522,376 +599,564 @@ export default function SettingsView() {
 
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <div className="flex items-center gap-2 text-sand-700 mb-4">
-            <Mail size={18} />
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">SMTP Versand</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs text-sand-500">SMTP Host</label>
-              <input
-                value={smtp.host}
-                onChange={(event) => setSmtp((prev) => ({ ...prev, host: event.target.value }))}
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="smtp.example.com"
-              />
+          <button
+            type="button"
+            onClick={() => setSmtpOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Mail size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">SMTP Versand</p>
             </div>
-            <div>
-              <label className="text-xs text-sand-500">Port</label>
-              <input
-                value={smtp.port}
-                onChange={(event) => setSmtp((prev) => ({ ...prev, port: event.target.value }))}
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="587"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-sand-500">Benutzername</label>
-              <input
-                value={smtp.username}
-                onChange={(event) => setSmtp((prev) => ({ ...prev, username: event.target.value }))}
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="user@example.com"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-sand-500">Passwort</label>
-              <input
-                type="password"
-                value={smtp.password}
-                onChange={(event) => setSmtp((prev) => ({ ...prev, password: event.target.value }))}
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder={smtp.has_password ? "Gespeichert" : "••••••••"}
-              />
-            </div>
-            <div>
-              <label className="text-xs text-sand-500">Absender Name</label>
-              <input
-                value={smtp.sender_name}
-                onChange={(event) =>
-                  setSmtp((prev) => ({ ...prev, sender_name: event.target.value }))
-                }
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="Quansatech"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-sand-500">Absender E-Mail</label>
-              <input
-                value={smtp.sender_email}
-                onChange={(event) =>
-                  setSmtp((prev) => ({ ...prev, sender_email: event.target.value }))
-                }
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="reports@example.com"
-              />
-            </div>
-            <label className="flex items-center gap-2 text-sm text-sand-700">
-              <input
-                type="checkbox"
-                checked={smtp.use_tls}
-                onChange={(event) =>
-                  setSmtp((prev) => ({ ...prev, use_tls: event.target.checked }))
-                }
-              />
-              TLS verwenden
-            </label>
-            <label className="flex items-center gap-2 text-sm text-sand-700">
-              <input
-                type="checkbox"
-                checked={smtp.use_ssl}
-                onChange={(event) =>
-                  setSmtp((prev) => ({ ...prev, use_ssl: event.target.checked }))
-                }
-              />
-              SSL verwenden
-            </label>
-          </div>
-          <div className="mt-6 flex items-center gap-3">
-            <button
-              onClick={save}
-              className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-            >
-              Speichern
-            </button>
-            {loadStatus === "error" && (
-              <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
-            )}
-            {status === "saved" && <span className="text-sm text-emerald-600">Gespeichert</span>}
-            {status === "error" && (
-              <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
-            )}
-          </div>
+            <span className="text-sm text-sand-500">{smtpOpen ? "–" : "+"}</span>
+          </button>
+          {smtpOpen ? (
+            <>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs text-sand-500">SMTP Host</label>
+                  <input
+                    value={smtp.host}
+                    onChange={(event) => setSmtp((prev) => ({ ...prev, host: event.target.value }))}
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="smtp.example.com"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Port</label>
+                  <input
+                    value={smtp.port}
+                    onChange={(event) => setSmtp((prev) => ({ ...prev, port: event.target.value }))}
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="587"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Benutzername</label>
+                  <input
+                    value={smtp.username}
+                    onChange={(event) => setSmtp((prev) => ({ ...prev, username: event.target.value }))}
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="user@example.com"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Passwort</label>
+                  <input
+                    type="password"
+                    value={smtp.password}
+                    onChange={(event) => setSmtp((prev) => ({ ...prev, password: event.target.value }))}
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={smtp.has_password ? "Gespeichert" : "••••••••"}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Absender Name</label>
+                  <input
+                    value={smtp.sender_name}
+                    onChange={(event) =>
+                      setSmtp((prev) => ({ ...prev, sender_name: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="Quansatech"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Absender E-Mail</label>
+                  <input
+                    value={smtp.sender_email}
+                    onChange={(event) =>
+                      setSmtp((prev) => ({ ...prev, sender_email: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="reports@example.com"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm text-sand-700">
+                  <input
+                    type="checkbox"
+                    checked={smtp.use_tls}
+                    onChange={(event) =>
+                      setSmtp((prev) => ({ ...prev, use_tls: event.target.checked }))
+                    }
+                  />
+                  TLS verwenden
+                </label>
+                <label className="flex items-center gap-2 text-sm text-sand-700">
+                  <input
+                    type="checkbox"
+                    checked={smtp.use_ssl}
+                    onChange={(event) =>
+                      setSmtp((prev) => ({ ...prev, use_ssl: event.target.checked }))
+                    }
+                  />
+                  SSL verwenden
+                </label>
+              </div>
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  onClick={save}
+                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                >
+                  Speichern
+                </button>
+                {loadStatus === "error" && (
+                  <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+                )}
+                {status === "saved" && <span className="text-sm text-emerald-600">Gespeichert</span>}
+                {status === "error" && (
+                  <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+                )}
+              </div>
+            </>
+          ) : null}
         </div>
 
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <div className="flex items-center gap-2 text-sand-700 mb-4">
-            <Settings size={18} />
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Beacon</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2">
-              <label className="text-xs text-sand-500">Beacon Base URL</label>
-              <input
-                value={smtp.beacon_base_url}
-                onChange={(event) =>
-                  setSmtp((prev) => ({ ...prev, beacon_base_url: event.target.value }))
-                }
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="https://beacon.example.com"
-              />
-              <div className="mt-2 text-xs text-sand-500">
-                Aktuell: <span className="text-sand-700">{beaconDisplay}</span>
-              </div>
-              <p className="mt-2 text-xs text-sand-400">
-                Optional: externe Basis-URL oder Template mit {"{guid}"}.
-              </p>
+          <button
+            type="button"
+            onClick={() => setBeaconOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Beacon</p>
             </div>
-          </div>
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-sand-600">
-            <div className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-              <span>Angebote</span>
-              <span
-                className={`inline-flex items-center gap-2 ${
-                  beaconHealth.offers.ok === null
-                    ? "text-sand-500"
-                    : beaconHealth.offers.ok
-                    ? "text-emerald-700"
-                    : "text-rose-600"
-                }`}
-              >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    beaconHealth.offers.ok === null
-                      ? "bg-sand-400"
+            <span className="text-sm text-sand-500">{beaconOpen ? "–" : "+"}</span>
+          </button>
+          {beaconOpen ? (
+            <>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="text-xs text-sand-500">Beacon Base URL</label>
+                  <input
+                    value={smtp.beacon_base_url}
+                    onChange={(event) =>
+                      setSmtp((prev) => ({ ...prev, beacon_base_url: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="https://beacon.example.com"
+                  />
+                  <div className="mt-2 text-xs text-sand-500">
+                    Aktuell: <span className="text-sand-700">{beaconDisplay}</span>
+                  </div>
+                  <p className="mt-2 text-xs text-sand-400">
+                    Optional: externe Basis-URL oder Template mit {"{guid}"}.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-sand-600">
+                <div className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+                  <span>Angebote</span>
+                  <span
+                    className={`inline-flex items-center gap-2 ${
+                      beaconHealth.offers.ok === null
+                        ? "text-sand-500"
+                        : beaconHealth.offers.ok
+                        ? "text-emerald-700"
+                        : "text-rose-600"
+                    }`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        beaconHealth.offers.ok === null
+                          ? "bg-sand-400"
+                          : beaconHealth.offers.ok
+                          ? "bg-emerald-500"
+                          : "bg-rose-500"
+                      }`}
+                    />
+                    {beaconHealth.offers.ok === null
+                      ? "unbekannt"
                       : beaconHealth.offers.ok
-                      ? "bg-emerald-500"
-                      : "bg-rose-500"
-                  }`}
-                />
-                {beaconHealth.offers.ok === null
-                  ? "unbekannt"
-                  : beaconHealth.offers.ok
-                  ? "erreichbar"
-                  : "nicht erreichbar"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-              <span>Kundenberichte</span>
-              <span
-                className={`inline-flex items-center gap-2 ${
-                  beaconHealth.reports.ok === null
-                    ? "text-sand-500"
-                    : beaconHealth.reports.ok
-                    ? "text-emerald-700"
-                    : "text-rose-600"
-                }`}
-              >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    beaconHealth.reports.ok === null
-                      ? "bg-sand-400"
+                      ? "erreichbar"
+                      : "nicht erreichbar"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+                  <span>Kundenberichte</span>
+                  <span
+                    className={`inline-flex items-center gap-2 ${
+                      beaconHealth.reports.ok === null
+                        ? "text-sand-500"
+                        : beaconHealth.reports.ok
+                        ? "text-emerald-700"
+                        : "text-rose-600"
+                    }`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        beaconHealth.reports.ok === null
+                          ? "bg-sand-400"
+                          : beaconHealth.reports.ok
+                          ? "bg-emerald-500"
+                          : "bg-rose-500"
+                      }`}
+                    />
+                    {beaconHealth.reports.ok === null
+                      ? "unbekannt"
                       : beaconHealth.reports.ok
-                      ? "bg-emerald-500"
-                      : "bg-rose-500"
-                  }`}
-                />
-                {beaconHealth.reports.ok === null
-                  ? "unbekannt"
-                  : beaconHealth.reports.ok
-                  ? "erreichbar"
-                  : "nicht erreichbar"}
-              </span>
-            </div>
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
-            <button
-              onClick={refreshBeaconHealth}
-              className="rounded-full border border-sand-200 bg-white px-3 py-2 uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-            >
-              Beacon testen
-            </button>
-            {beaconCheckStatus === "error" && (
-              <span className="text-rose-600">Test fehlgeschlagen</span>
-            )}
-            {beaconHealth.checkedAt ? (
-              <span className="text-sand-500">Letzter Check: {beaconHealth.checkedAt}</span>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <div className="flex items-center gap-2 text-sand-700 mb-4">
-            <Settings size={18} />
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Anlagen API</p>
-          </div>
-          <p className="text-xs text-sand-500 mb-4">
-            Zugangsdaten fuer das Telefonanlagen-API (nicht CTI).
-          </p>
-          <div className="mb-4 flex items-center gap-2 text-xs text-sand-600">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                pbxApiStatus === "connected" ? "bg-emerald-500" : "bg-rose-500"
-              }`}
-            />
-            <span>
-              API{" "}
-              {pbxApiStatus === "connected"
-                ? "aktiv"
-                : pbxApiStatus === "idle"
-                ? "unbekannt"
-                : "getrennt"}
-            </span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs text-sand-500">API Base URL</label>
-              <input
-                value={pbx.pbx_base_url}
-                onChange={(event) =>
-                  setPbx((prev) => ({ ...prev, pbx_base_url: event.target.value }))
-                }
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="https://portal-api.nfon.net:8090"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-sand-500">API Key ID</label>
-              <input
-                value={pbx.pbx_api_key_id}
-                onChange={(event) =>
-                  setPbx((prev) => ({ ...prev, pbx_api_key_id: event.target.value }))
-                }
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="API Key ID"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-sand-500">API Key Secret</label>
-              <input
-                type="password"
-                value={pbx.pbx_api_key_secret}
-                onChange={(event) =>
-                  setPbx((prev) => ({ ...prev, pbx_api_key_secret: event.target.value }))
-                }
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder={pbx.has_pbx_api_key_secret ? "Gespeichert" : "••••••••"}
-              />
-            </div>
-            <div>
-              <label className="text-xs text-sand-500">Customer Account</label>
-              <input
-                value={pbx.pbx_customer_account}
-                onChange={(event) =>
-                  setPbx((prev) => ({ ...prev, pbx_customer_account: event.target.value }))
-                }
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="Customer Account"
-              />
-            </div>
-          </div>
-          <div className="mt-6 flex items-center gap-3">
-            <button
-              onClick={savePbxSettings}
-              className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-            >
-              Speichern
-            </button>
-            <button
-              type="button"
-              onClick={refreshPbxDebug}
-              className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600"
-            >
-              Status neu laden
-            </button>
-            {pbxLoadStatus === "error" && (
-              <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
-            )}
-            {pbxStatus === "saved" && (
-              <span className="text-sm text-emerald-600">Gespeichert</span>
-            )}
-            {pbxStatus === "error" && (
-              <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
-            )}
-          </div>
-          <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
-            <button
-              type="button"
-              onClick={() => setPbxDebugOpen((current) => !current)}
-              className="w-full flex items-center justify-between uppercase tracking-[0.3em] text-[10px] text-sand-500"
-            >
-              <span>Anlagen API Debug</span>
-              <span>{pbxDebugOpen ? "–" : "+"}</span>
-            </button>
-            {pbxDebugOpen ? (
-              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                <div>
-                  <span className="text-sand-500">Letzter Check:</span>{" "}
-                  {pbxDebugInfo.lastCheckAt || "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Status:</span>{" "}
-                  {pbxDebugInfo.lastCheckOk === null
-                    ? "unbekannt"
-                    : pbxDebugInfo.lastCheckOk
-                    ? "ok"
-                    : "fehlgeschlagen"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Status Code:</span>{" "}
-                  {pbxDebugInfo.statusCode ?? "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Base URL:</span>{" "}
-                  {pbxDebugInfo.baseUrl || "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Customer Account:</span>{" "}
-                  {pbxDebugInfo.customerAccount || "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Request Path:</span>{" "}
-                  {pbxDebugInfo.requestPath || "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Request URL:</span>{" "}
-                  {pbxDebugInfo.requestUrl || "n/a"}
-                </div>
-                <div>
-                  <span className="text-sand-500">Beispielanzahl:</span>{" "}
-                  {pbxDebugInfo.sampleCount ?? "n/a"}
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-sand-500">Letzter Fehler:</span>{" "}
-                  {pbxDebugInfo.lastError || "n/a"}
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-sand-500">Response Preview:</span>{" "}
-                  {pbxDebugInfo.responsePreview || "n/a"}
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-sand-500">Version Status:</span>{" "}
-                  {pbxDebugInfo.versionOk === null
-                    ? "n/a"
-                    : pbxDebugInfo.versionOk
-                    ? "ok"
-                    : "fehlgeschlagen"}
-                  {pbxDebugInfo.versionStatusCode !== null
-                    ? ` (${pbxDebugInfo.versionStatusCode})`
-                    : ""}
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-sand-500">Version Preview:</span>{" "}
-                  {pbxDebugInfo.versionPreview || pbxDebugInfo.versionError || "n/a"}
+                      ? "erreichbar"
+                      : "nicht erreichbar"}
+                  </span>
                 </div>
               </div>
-            ) : null}
-          </div>
+              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+                <button
+                  onClick={refreshBeaconHealth}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-2 uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                >
+                  Beacon testen
+                </button>
+                {beaconCheckStatus === "error" && (
+                  <span className="text-rose-600">Test fehlgeschlagen</span>
+                )}
+                {beaconHealth.checkedAt ? (
+                  <span className="text-sand-500">Letzter Check: {beaconHealth.checkedAt}</span>
+                ) : null}
+              </div>
+            </>
+          ) : null}
         </div>
 
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2 text-sand-700">
+          <button
+            type="button"
+            onClick={() => setAiPromptsOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">KI Prompts</p>
+            </div>
+            <span className="text-sm text-sand-500">{aiPromptsOpen ? "–" : "+"}</span>
+          </button>
+          {aiPromptsOpen ? (
+            <>
+              <div className="mt-4 grid grid-cols-1 gap-4">
+                <div>
+                  <label className="text-xs text-sand-500">Kundenbericht: Action Prompt</label>
+                  <textarea
+                    value={aiPrompts.action_prompt}
+                    onChange={(event) =>
+                      setAiPrompts((prev) => ({ ...prev, action_prompt: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
+                    rows={8}
+                    placeholder="Prompt fuer Kundenbericht-Aktionen"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Angebot: Basis Prompt</label>
+                  <textarea
+                    value={aiPrompts.offer_base_prompt}
+                    onChange={(event) =>
+                      setAiPrompts((prev) => ({ ...prev, offer_base_prompt: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
+                    rows={6}
+                    placeholder="Basis-Prompt fuer Angebots-Texte"
+                  />
+                  <p className="mt-2 text-xs text-sand-400">
+                    Platzhalter: {"{instruction}"}, {"{context}"}, {"{current_text}"}
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-sand-500">Deckblatt Intro</label>
+                    <textarea
+                      value={aiPrompts.offer_mode_instructions.cover_intro}
+                      onChange={(event) =>
+                        setAiPrompts((prev) => ({
+                          ...prev,
+                          offer_mode_instructions: {
+                            ...prev.offer_mode_instructions,
+                            cover_intro: event.target.value
+                          }
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
+                      rows={3}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Ueberblick</label>
+                    <textarea
+                      value={aiPrompts.offer_mode_instructions.overview}
+                      onChange={(event) =>
+                        setAiPrompts((prev) => ({
+                          ...prev,
+                          offer_mode_instructions: {
+                            ...prev.offer_mode_instructions,
+                            overview: event.target.value
+                          }
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
+                      rows={3}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Kalkulation</label>
+                    <textarea
+                      value={aiPrompts.offer_mode_instructions.calculation}
+                      onChange={(event) =>
+                        setAiPrompts((prev) => ({
+                          ...prev,
+                          offer_mode_instructions: {
+                            ...prev.offer_mode_instructions,
+                            calculation: event.target.value
+                          }
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
+                      rows={3}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Dienstleistung Positionstext</label>
+                    <textarea
+                      value={aiPrompts.offer_mode_instructions.position_text}
+                      onChange={(event) =>
+                        setAiPrompts((prev) => ({
+                          ...prev,
+                          offer_mode_instructions: {
+                            ...prev.offer_mode_instructions,
+                            position_text: event.target.value
+                          }
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
+                      rows={3}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs text-sand-500">Material Beschreibung</label>
+                    <textarea
+                      value={aiPrompts.offer_mode_instructions.device_description}
+                      onChange={(event) =>
+                        setAiPrompts((prev) => ({
+                          ...prev,
+                          offer_mode_instructions: {
+                            ...prev.offer_mode_instructions,
+                            device_description: event.target.value
+                          }
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
+                      rows={3}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+                <button
+                  onClick={saveAiPrompts}
+                  className="rounded-full border border-sand-200 bg-sand-900 px-3 py-2 uppercase tracking-wide text-white hover:opacity-90"
+                >
+                  Prompts speichern
+                </button>
+                {aiPromptsLoadStatus === "error" && (
+                  <span className="text-rose-600">Laden fehlgeschlagen</span>
+                )}
+                {aiPromptsStatus === "saved" && (
+                  <span className="text-emerald-600">Gespeichert</span>
+                )}
+                {aiPromptsStatus === "error" && (
+                  <span className="text-rose-600">Speichern fehlgeschlagen</span>
+                )}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setPbxOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Anlagen API</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-sand-600">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  pbxApiStatus === "connected" ? "bg-emerald-500" : "bg-rose-500"
+                }`}
+              />
+              <span>
+                API{" "}
+                {pbxApiStatus === "connected"
+                  ? "aktiv"
+                  : pbxApiStatus === "idle"
+                  ? "Zugangsdaten fehlen"
+                  : "getrennt"}
+              </span>
+              <span className="text-sm text-sand-500">{pbxOpen ? "–" : "+"}</span>
+            </div>
+          </button>
+          {pbxOpen ? (
+            <>
+              <p className="mt-4 text-xs text-sand-500 mb-4">
+                Zugangsdaten fuer das Telefonanlagen-API (nicht CTI).
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs text-sand-500">API Base URL</label>
+                  <input
+                    value={pbx.pbx_base_url}
+                    onChange={(event) =>
+                      setPbx((prev) => ({ ...prev, pbx_base_url: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="https://portal-api.nfon.net:8090"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">API Key ID</label>
+                  <input
+                    value={pbx.pbx_api_key_id}
+                    onChange={(event) =>
+                      setPbx((prev) => ({ ...prev, pbx_api_key_id: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="API Key ID"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">API Key Secret</label>
+                  <input
+                    type="password"
+                    value={pbx.pbx_api_key_secret}
+                    onChange={(event) =>
+                      setPbx((prev) => ({ ...prev, pbx_api_key_secret: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={pbx.has_pbx_api_key_secret ? "Gespeichert" : "••••••••"}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Customer Account</label>
+                  <input
+                    value={pbx.pbx_customer_account}
+                    onChange={(event) =>
+                      setPbx((prev) => ({ ...prev, pbx_customer_account: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="Customer Account"
+                  />
+                </div>
+              </div>
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  onClick={savePbxSettings}
+                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                >
+                  Speichern
+                </button>
+                <button
+                  type="button"
+                  onClick={refreshPbxDebug}
+                  className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600"
+                >
+                  Status neu laden
+                </button>
+                {pbxLoadStatus === "error" && (
+                  <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+                )}
+                {pbxStatus === "saved" && (
+                  <span className="text-sm text-emerald-600">Gespeichert</span>
+                )}
+                {pbxStatus === "error" && (
+                  <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+                )}
+              </div>
+              <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
+                <button
+                  type="button"
+                  onClick={() => setPbxDebugOpen((current) => !current)}
+                  className="w-full flex items-center justify-between uppercase tracking-[0.3em] text-[10px] text-sand-500"
+                >
+                  <span>Anlagen API Debug</span>
+                  <span>{pbxDebugOpen ? "–" : "+"}</span>
+                </button>
+                {pbxDebugOpen ? (
+                  <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <div>
+                      <span className="text-sand-500">Letzter Check:</span>{" "}
+                      {pbxDebugInfo.lastCheckAt || "n/a"}
+                    </div>
+                    <div>
+                      <span className="text-sand-500">Status:</span>{" "}
+                      {pbxDebugInfo.lastCheckOk === null
+                        ? "unbekannt"
+                        : pbxDebugInfo.lastCheckOk
+                        ? "ok"
+                        : "fehlgeschlagen"}
+                    </div>
+                    <div>
+                      <span className="text-sand-500">Status Code:</span>{" "}
+                      {pbxDebugInfo.statusCode ?? "n/a"}
+                    </div>
+                    <div>
+                      <span className="text-sand-500">Base URL:</span>{" "}
+                      {pbxDebugInfo.baseUrl || "n/a"}
+                    </div>
+                    <div>
+                      <span className="text-sand-500">Customer Account:</span>{" "}
+                      {pbxDebugInfo.customerAccount || "n/a"}
+                    </div>
+                    <div>
+                      <span className="text-sand-500">Request Path:</span>{" "}
+                      {pbxDebugInfo.requestPath || "n/a"}
+                    </div>
+                    <div>
+                      <span className="text-sand-500">Request URL:</span>{" "}
+                      {pbxDebugInfo.requestUrl || "n/a"}
+                    </div>
+                    <div>
+                      <span className="text-sand-500">Beispielanzahl:</span>{" "}
+                      {pbxDebugInfo.sampleCount ?? "n/a"}
+                    </div>
+                    <div className="md:col-span-2">
+                      <span className="text-sand-500">Letzter Fehler:</span>{" "}
+                      {pbxDebugInfo.lastError || "n/a"}
+                    </div>
+                    <div className="md:col-span-2">
+                      <span className="text-sand-500">Response Preview:</span>{" "}
+                      {pbxDebugInfo.responsePreview || "n/a"}
+                    </div>
+                    <div className="md:col-span-2">
+                      <span className="text-sand-500">Version Status:</span>{" "}
+                      {pbxDebugInfo.versionOk === null
+                        ? "n/a"
+                        : pbxDebugInfo.versionOk
+                        ? "ok"
+                        : "fehlgeschlagen"}
+                      {pbxDebugInfo.versionStatusCode !== null
+                        ? ` (${pbxDebugInfo.versionStatusCode})`
+                        : ""}
+                    </div>
+                    <div className="md:col-span-2">
+                      <span className="text-sand-500">Version Preview:</span>{" "}
+                      {pbxDebugInfo.versionPreview || pbxDebugInfo.versionError || "n/a"}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setCtiOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
               <Settings size={18} />
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">NFON CTI</p>
             </div>
@@ -909,9 +1174,12 @@ export default function SettingsView() {
                   ? "Zugangsdaten fehlen"
                   : "getrennt"}
               </span>
+              <span className="text-sm text-sand-500">{ctiOpen ? "–" : "+"}</span>
             </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          </button>
+          {ctiOpen ? (
+            <>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="text-xs text-sand-500">Base URL</label>
               <input
@@ -1143,6 +1411,8 @@ export default function SettingsView() {
               </div>
             ) : null}
           </div>
+            </>
+          ) : null}
         </div>
 
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
@@ -1153,7 +1423,7 @@ export default function SettingsView() {
           >
             <div className="flex items-center gap-2">
               <Settings size={18} />
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Debug</p>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Datenbank-Settings</p>
             </div>
             <span className="text-sm text-sand-500">{debugTablesOpen ? "–" : "+"}</span>
           </button>

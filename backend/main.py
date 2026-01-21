@@ -269,6 +269,13 @@ class OfferBlockStore(Base):
     data_json = Column(String, default="{}")
     updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
+class AiPromptSettings(Base):
+    __tablename__ = "ai_prompt_settings"
+
+    id = Column(Integer, primary_key=True)
+    data_json = Column(String, default="{}")
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
 class PbxPhonebookEntry(Base):
     __tablename__ = "pbx_phonebook_entries"
 
@@ -787,6 +794,12 @@ class OfferBlocksUpdate(BaseModel):
     calcBlocks: Optional[List[Dict[str, Any]]] = None
 
 
+class AiPromptsUpdate(BaseModel):
+    action_prompt: Optional[str] = None
+    offer_base_prompt: Optional[str] = None
+    offer_mode_instructions: Optional[Dict[str, str]] = None
+
+
 class OfferCustomerConfirm(BaseModel):
     name: Optional[str] = ""
     email: Optional[str] = ""
@@ -1122,6 +1135,96 @@ def serialize_offer_settings(settings: OfferSettings) -> Dict[str, Any]:
         "id": settings.id,
         "offer_number_format": settings.offer_number_format,
     }
+
+def _default_ai_prompts() -> Dict[str, Any]:
+    return {
+        "action_prompt": (
+            "Du bist ein Assistent fuer IT-Kundenberichte. "
+            "Erzeuge aus dem Text eine konkrete Massnahme als JSON. "
+            "Antworte ausschliesslich mit JSON und den Schluesseln: "
+            "title, system, why_text, impact, duration, cost, priority. "
+            "Nutze deutsche Begriffe und einfache, klare Sprache, "
+            "die Kunden ohne IT-Kenntnisse verstehen. "
+            "Alle Felder muessen befuellt sein (keine leeren Strings). "
+            "Wenn Informationen fehlen, setze plausible Standardwerte. "
+            "Fuelle fehlende Details aktiv auf, statt den Text nur zu wiederholen. "
+            "Die Antwort darf etwas ausfuehrlicher sein: "
+            "why_text 1-2 Saetze, title kurz und klar, system konkret. "
+            "priority ist Dringend, Planbar oder Hinweis.\n\n"
+            "Heuristiken: "
+            "Systeme: Server, Client, Netzwerk, Firewall, Backup, M365/Exchange, WLAN, Storage, Drucker, Allgemein. "
+            "Leite system anhand des Texts ab, sonst \"Allgemein\". "
+            "Impact abschaetzen: "
+            "Updates/Reboots/Firewall/Netzwerk -> \"Kurzunterbrechung\" oder \"Wartungsfenster\"; "
+            "Pruefungen/Monitoring/Reports -> \"Keine Unterbrechung\". "
+            "Dauer immer in 0,25h Schritten (z. B. \"0,5-1,0 h\" oder \"0,75 h\"). "
+            "Dauer fuer Updates: \"0,5-1,0 h\" (sonst \"0,5 h\"). "
+            "Kosten: 120 EUR pro Stunde; rechne passend zur Dauer. "
+            "Gib Kosten immer als zwei Werte mit Euro (z. B. \"60-120 €\").\n\n"
+            "Beispiel fuer Kurztext 'test': "
+            "{\"title\":\"Kurze Systempruefung\","
+            "\"system\":\"Allgemein\","
+            "\"why_text\":\"Kurzer Schnellcheck, um Auffaelligkeiten zu erkennen.\","
+            "\"impact\":\"Keine Unterbrechung\","
+            "\"duration\":\"0,25 h\","
+            "\"cost\":\"30-30 €\","
+            "\"priority\":\"Planbar\"}\n\n"
+            "Text: {text}"
+        ),
+        "offer_base_prompt": (
+            "Du bist ein Assistent fuer Angebots-Texte. "
+            "Schreibe auf Deutsch, sachlich und klar. "
+            "Nutze die Informationen im Kontext. "
+            "Wenn bereits Text vorhanden ist, verbessere und ergaenze ihn, "
+            "ohne den Inhalt zu wiederholen. "
+            "Gib nur den Text zurueck, keine Markdown- oder JSON-Formatierung.\n\n"
+            "Aufgabe: {instruction}\n\n"
+            "Kontext:\n{context}\n\n"
+            "Bereits vorhandener Text:\n{current_text}\n"
+        ),
+        "offer_mode_instructions": {
+            "cover_intro": "Schreibe einen kurzen Deckblatt-Introtext (2-4 Saetze).",
+            "overview": "Schreibe einen kurzen Ueberblick fuer den Kunden (2-4 Saetze oder kurze Stichpunkte).",
+            "calculation": "Schreibe kurze Hinweise zur Kalkulation (1-3 Saetze).",
+            "position_text": "Schreibe einen klaren Positionstext fuer eine Dienstleistung (3-6 Saetze).",
+            "device_description": "Schreibe eine kurze Produktbeschreibung fuer Material (3-6 Saetze).",
+        },
+    }
+
+
+def _get_ai_prompt_settings(db) -> AiPromptSettings:
+    store = db.query(AiPromptSettings).first()
+    if not store:
+        store = AiPromptSettings(data_json=json.dumps(_default_ai_prompts()))
+        db.add(store)
+        db.commit()
+        db.refresh(store)
+    return store
+
+
+def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
+    data: Dict[str, Any] = {}
+    if store.data_json:
+        try:
+            parsed = json.loads(store.data_json)
+            if isinstance(parsed, dict):
+                data = parsed
+        except ValueError:
+            data = {}
+    defaults = _default_ai_prompts()
+    return {
+        "action_prompt": data.get("action_prompt", defaults["action_prompt"]),
+        "offer_base_prompt": data.get("offer_base_prompt", defaults["offer_base_prompt"]),
+        "offer_mode_instructions": data.get("offer_mode_instructions", defaults["offer_mode_instructions"]),
+        "updated_at": _offer_iso_timestamp(store.updated_at),
+    }
+
+
+def _render_prompt(template: str, values: Dict[str, str]) -> str:
+    text = template or ""
+    for key, value in values.items():
+        text = text.replace(f"{{{key}}}", value)
+    return text
 
 def _get_offer_block_store(db) -> OfferBlockStore:
     store = db.query(OfferBlockStore).first()
@@ -2249,39 +2352,11 @@ def generate_action(data: ActionAiRequest):
     if not text:
         raise HTTPException(400, "Text required")
 
-    prompt = (
-        "Du bist ein Assistent fuer IT-Kundenberichte. "
-        "Erzeuge aus dem Text eine konkrete Massnahme als JSON. "
-        "Antworte ausschliesslich mit JSON und den Schluesseln: "
-        "title, system, why_text, impact, duration, cost, priority. "
-        "Nutze deutsche Begriffe und einfache, klare Sprache, "
-        "die Kunden ohne IT-Kenntnisse verstehen. "
-        "Alle Felder muessen befuellt sein (keine leeren Strings). "
-        "Wenn Informationen fehlen, setze plausible Standardwerte. "
-        "Fuelle fehlende Details aktiv auf, statt den Text nur zu wiederholen. "
-        "Die Antwort darf etwas ausfuehrlicher sein: "
-        "why_text 1-2 Saetze, title kurz und klar, system konkret. "
-        "priority ist Dringend, Planbar oder Hinweis.\n\n"
-        "Heuristiken: "
-        "Systeme: Server, Client, Netzwerk, Firewall, Backup, M365/Exchange, WLAN, Storage, Drucker, Allgemein. "
-        "Leite system anhand des Texts ab, sonst \"Allgemein\". "
-        "Impact abschaetzen: "
-        "Updates/Reboots/Firewall/Netzwerk -> \"Kurzunterbrechung\" oder \"Wartungsfenster\"; "
-        "Pruefungen/Monitoring/Reports -> \"Keine Unterbrechung\". "
-        "Dauer immer in 0,25h Schritten (z. B. \"0,5-1,0 h\" oder \"0,75 h\"). "
-        "Dauer fuer Updates: \"0,5-1,0 h\" (sonst \"0,5 h\"). "
-        "Kosten: 120 EUR pro Stunde; rechne passend zur Dauer. "
-        "Gib Kosten immer als zwei Werte mit Euro (z. B. \"60-120 €\").\n\n"
-        "Beispiel fuer Kurztext 'test': "
-        "{\"title\":\"Kurze Systempruefung\","
-        "\"system\":\"Allgemein\","
-        "\"why_text\":\"Kurzer Schnellcheck, um Auffaelligkeiten zu erkennen.\","
-        "\"impact\":\"Keine Unterbrechung\","
-        "\"duration\":\"0,25 h\","
-        "\"cost\":\"30-30 €\","
-        "\"priority\":\"Planbar\"}\n\n"
-        f"Text: {text}"
-    )
+    with SessionLocal() as db:
+        prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
+    prompt = _render_prompt(prompts["action_prompt"], {"text": text})
+    if "{text}" not in prompts["action_prompt"] and "Text:" not in prompt:
+        prompt = f"{prompt}\n\nText: {text}"
 
     try:
         res = requests.post(
@@ -2313,25 +2388,17 @@ def generate_offer_text(data: OfferAiRequest):
     if not mode:
         raise HTTPException(400, "Mode required")
 
-    mode_instructions = {
-        "cover_intro": "Schreibe einen kurzen Deckblatt-Introtext (2-4 Saetze).",
-        "overview": "Schreibe einen kurzen Ueberblick fuer den Kunden (2-4 Saetze oder kurze Stichpunkte).",
-        "calculation": "Schreibe kurze Hinweise zur Kalkulation (1-3 Saetze).",
-        "position_text": "Schreibe einen klaren Positionstext fuer eine Dienstleistung (3-6 Saetze).",
-        "device_description": "Schreibe eine kurze Produktbeschreibung fuer Material (3-6 Saetze).",
-    }
+    with SessionLocal() as db:
+        prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
+    mode_instructions = prompts.get("offer_mode_instructions") or {}
     instruction = mode_instructions.get(mode, "Schreibe einen kurzen, passenden Text.")
-
-    prompt = (
-        "Du bist ein Assistent fuer Angebots-Texte. "
-        "Schreibe auf Deutsch, sachlich und klar. "
-        "Nutze die Informationen im Kontext. "
-        "Wenn bereits Text vorhanden ist, verbessere und ergaenze ihn, "
-        "ohne den Inhalt zu wiederholen. "
-        "Gib nur den Text zurueck, keine Markdown- oder JSON-Formatierung.\n\n"
-        f"Aufgabe: {instruction}\n\n"
-        f"Kontext:\n{context if context else 'n/a'}\n\n"
-        f"Bereits vorhandener Text:\n{current_text if current_text else 'n/a'}\n"
+    prompt = _render_prompt(
+        prompts["offer_base_prompt"],
+        {
+            "instruction": instruction,
+            "context": context if context else "n/a",
+            "current_text": current_text if current_text else "n/a",
+        },
     )
 
     try:
@@ -2625,6 +2692,28 @@ def update_offer_blocks(data: OfferBlocksUpdate):
         db.commit()
         db.refresh(store)
         return serialize_offer_blocks(store)
+
+@app.get("/api/ai_prompts")
+def get_ai_prompts():
+    with SessionLocal() as db:
+        store = _get_ai_prompt_settings(db)
+        return serialize_ai_prompts(store)
+
+@app.put("/api/ai_prompts")
+def update_ai_prompts(data: AiPromptsUpdate):
+    with SessionLocal() as db:
+        store = _get_ai_prompt_settings(db)
+        current = serialize_ai_prompts(store)
+        payload = {
+            "action_prompt": data.action_prompt or current["action_prompt"],
+            "offer_base_prompt": data.offer_base_prompt or current["offer_base_prompt"],
+            "offer_mode_instructions": data.offer_mode_instructions or current["offer_mode_instructions"],
+        }
+        store.data_json = json.dumps(payload)
+        store.updated_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(store)
+        return serialize_ai_prompts(store)
 
 
 @app.get("/api/beacon/health")
