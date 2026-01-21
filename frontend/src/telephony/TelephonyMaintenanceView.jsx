@@ -19,30 +19,50 @@ export default function TelephonyMaintenanceView() {
   const [mode, setMode] = useState("local");
   const [remoteError, setRemoteError] = useState("");
 
-  const loadEntries = () => {
+  const saveStatusWithReset = (nextStatus) => {
+    setStatus(nextStatus);
+    setTimeout(() => setStatus("idle"), 2000);
+  };
+
+  const endpointFor = (entryId) =>
+    `${API}${mode === "remote" ? "/remote" : ""}${entryId ? `/${entryId}` : ""}`;
+
+  const requestJson = async (url, options) => {
+    const res = await fetch(url, options);
+    if (!res.ok) throw new Error("request_failed");
+    return res.json();
+  };
+
+  const requestOk = async (url, options) => {
+    const res = await fetch(url, options);
+    if (!res.ok) throw new Error("request_failed");
+    return res;
+  };
+
+  const loadEntries = async () => {
     setStatus("loading");
-    fetch(`${API}/remote?_pagesize=100`)
-      .then((res) => {
-        if (!res.ok) throw new Error("remote_failed");
-        return res.json();
-      })
-      .then((data) => {
-        setEntries(Array.isArray(data) ? data : []);
-        setMode("remote");
-        setRemoteError("");
-        setStatus("ready");
-      })
-      .catch(() => {
-        fetch(API)
-          .then((res) => (res.ok ? res.json() : []))
-          .then((data) => {
-            setEntries(Array.isArray(data) ? data : []);
-            setMode("local");
-            setRemoteError("NFON Zugriff nicht konfiguriert oder fehlgeschlagen.");
-            setStatus("ready");
-          })
-          .catch(() => setStatus("error"));
-      });
+    try {
+      const res = await fetch(`${API}/remote?_pagesize=100`);
+      if (!res.ok) throw new Error("remote_failed");
+      const data = await res.json();
+      setEntries(Array.isArray(data) ? data : []);
+      setMode("remote");
+      setRemoteError("");
+      setStatus("ready");
+      return;
+    } catch (error) {
+      // fall through to local
+    }
+    try {
+      const res = await fetch(API);
+      const data = res.ok ? await res.json() : [];
+      setEntries(Array.isArray(data) ? data : []);
+      setMode("local");
+      setRemoteError("NFON Zugriff nicht konfiguriert oder fehlgeschlagen.");
+      setStatus("ready");
+    } catch (error) {
+      setStatus("error");
+    }
   };
 
   useEffect(() => {
@@ -65,27 +85,23 @@ export default function TelephonyMaintenanceView() {
     }
     setStatus("saving");
     try {
-      const payload = mode === "remote"
-        ? { name: draft.name, number: draft.number, is_global: true }
-        : { ...draft, is_global: true };
-      const res = await fetch(mode === "remote" ? `${API}/remote` : API, {
+      const payload = { name: draft.name, number: draft.number, is_global: true };
+      const data = await requestJson(endpointFor(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error("save_failed");
-      const data = await res.json();
       if (mode === "remote") {
-        loadEntries();
+        await loadEntries();
+        saveStatusWithReset("saved");
       } else {
         setEntries((prev) => [data, ...prev]);
+        saveStatusWithReset("saved");
       }
       setDraft(emptyDraft);
-      setStatus("saved");
     } catch (error) {
-      setStatus("error");
+      saveStatusWithReset("error");
     }
-    setTimeout(() => setStatus("idle"), 2000);
   };
 
   const entryKeyFor = (entry, index) =>
@@ -136,37 +152,29 @@ export default function TelephonyMaintenanceView() {
             number: field === "number" ? nextValue : entry.number || ""
           }
         : { [field]: nextValue, is_global: true };
-      const res = await fetch(`${API}${isRemote ? `/remote/${entry.id}` : `/${entry.id}`}`, {
+      const data = await requestJson(endpointFor(entry.id), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      if (!res.ok) throw new Error("save_failed");
-      const data = await res.json();
       setEntries((prev) => prev.map((item) => (item.id === data.id ? data : item)));
-      setStatus("saved");
+      saveStatusWithReset("saved");
     } catch (error) {
-      setStatus("error");
+      saveStatusWithReset("error");
     }
     setEditingCell({ key: null, field: null });
-    setTimeout(() => setStatus("idle"), 2000);
   };
 
   const deleteEntry = async (entryId) => {
     if (!window.confirm("Eintrag wirklich entfernen?")) return;
     setStatus("saving");
     try {
-      const res = await fetch(
-        `${API}${mode === "remote" ? `/remote/${entryId}` : `/${entryId}`}`,
-        { method: "DELETE" }
-      );
-      if (!res.ok) throw new Error("delete_failed");
+      await requestOk(endpointFor(entryId), { method: "DELETE" });
       setEntries((prev) => prev.filter((entry) => entry.id !== entryId));
-      setStatus("saved");
+      saveStatusWithReset("saved");
     } catch (error) {
-      setStatus("error");
+      saveStatusWithReset("error");
     }
-    setTimeout(() => setStatus("idle"), 2000);
   };
 
   return (

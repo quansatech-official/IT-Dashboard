@@ -16,7 +16,7 @@ import hashlib
 import hmac
 import base64
 import requests
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 import logging
 
 # ================= DATABASE =================
@@ -1150,9 +1150,25 @@ def _normalize_phonebook_entry(item: Dict[str, Any]) -> Optional[Dict[str, Any]]
                 name = value
             elif key == "displayNumber" and value:
                 number = value
+            elif not (item.get("id") or item.get("phoneBookId") or item.get("identifier")):
+                if key in {"phoneBookId", "id", "uuid", "identifier"} and value:
+                    item["id"] = value
     name = name or item.get("displayName") or item.get("name") or ""
     number = number or item.get("displayNumber") or item.get("number") or item.get("phoneNumber") or ""
     remote_id = item.get("id") or item.get("phoneBookId") or item.get("identifier") or ""
+    if not remote_id:
+        href = item.get("href")
+        if not href and isinstance(item.get("links"), list):
+            for link in item["links"]:
+                if isinstance(link, dict) and link.get("href"):
+                    href = link.get("href")
+                    break
+        if href:
+            path = urlparse(href).path
+            if path:
+                candidate = path.rstrip("/").split("/")[-1]
+                if candidate:
+                    remote_id = candidate
     return {
         "id": remote_id or item.get("uuid") or item.get("key") or "",
         "name": name,
@@ -1189,6 +1205,21 @@ def _get_pbx_credentials(session: SessionLocal) -> Tuple[str, str, str, str]:
     if not base_url or not api_key_id or not api_key_secret or not customer_account:
         raise HTTPException(400, "PBX API credentials missing")
     return base_url, api_key_id, api_key_secret, customer_account
+
+def _nfon_phonebook_path(customer_account: str, entry_id: Optional[str] = None, query: str = "") -> str:
+    base_path = f"/api/customers/{customer_account}/phone-books"
+    if entry_id:
+        safe_id = quote(str(entry_id), safe="")
+        return f"{base_path}/{safe_id}{query}"
+    return f"{base_path}{query}"
+
+def _nfon_phonebook_body(name: Optional[str], number: Optional[str]) -> Dict[str, Any]:
+    return {
+        "data": [
+            {"name": "displayName", "value": name or ""},
+            {"name": "displayNumber", "value": number or ""},
+        ]
+    }
 
 def _build_nfon_string_to_sign(
     method: str,
@@ -1944,7 +1975,7 @@ def list_remote_pbx_phonebook(pagesize: int = 100, offset: int = 0, q: Optional[
     if q:
         query.append(f"_q={q}")
     query_string = f"?{'&'.join(query)}" if query else ""
-    path = f"/api/customers/{customer_account}/phone-books{query_string}"
+    path = _nfon_phonebook_path(customer_account, query=query_string)
     payload = _nfon_request("GET", base_url, api_key_id, api_key_secret, path)
     return _extract_phonebook_entries(payload)
 
@@ -1953,13 +1984,8 @@ def list_remote_pbx_phonebook(pagesize: int = 100, offset: int = 0, q: Optional[
 def create_remote_pbx_phonebook(data: PbxPhonebookCreate):
     with SessionLocal() as db:
         base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
-    body = {
-        "data": [
-            {"name": "displayName", "value": data.name or ""},
-            {"name": "displayNumber", "value": data.number or ""},
-        ]
-    }
-    path = f"/api/customers/{customer_account}/phone-books"
+    body = _nfon_phonebook_body(data.name, data.number)
+    path = _nfon_phonebook_path(customer_account)
     payload = _nfon_request("POST", base_url, api_key_id, api_key_secret, path, body_obj=body)
     entries = _extract_phonebook_entries(payload)
     if entries:
@@ -1970,14 +1996,8 @@ def create_remote_pbx_phonebook(data: PbxPhonebookCreate):
 def update_remote_pbx_phonebook(entry_id: str, data: PbxPhonebookUpdate):
     with SessionLocal() as db:
         base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
-    body = {
-        "data": [
-            {"name": "displayName", "value": data.name or ""},
-            {"name": "displayNumber", "value": data.number or ""},
-        ]
-    }
-    safe_id = quote(str(entry_id), safe="")
-    path = f"/api/customers/{customer_account}/phone-books/{safe_id}"
+    body = _nfon_phonebook_body(data.name, data.number)
+    path = _nfon_phonebook_path(customer_account, entry_id=entry_id)
     try:
         payload = _nfon_request("PUT", base_url, api_key_id, api_key_secret, path, body_obj=body)
     except HTTPException as exc:
@@ -1997,8 +2017,7 @@ def update_remote_pbx_phonebook(entry_id: str, data: PbxPhonebookUpdate):
 def delete_remote_pbx_phonebook(entry_id: str):
     with SessionLocal() as db:
         base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
-    safe_id = quote(str(entry_id), safe="")
-    path = f"/api/customers/{customer_account}/phone-books/{safe_id}"
+    path = _nfon_phonebook_path(customer_account, entry_id=entry_id)
     _nfon_request("DELETE", base_url, api_key_id, api_key_secret, path)
     return {"status": "deleted"}
 

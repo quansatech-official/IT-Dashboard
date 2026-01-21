@@ -336,13 +336,14 @@ export default function CallListView({
               <th className="text-left py-2">Dauer</th>
               <th className="text-left py-2">Status</th>
               <th className="text-left py-2">Name</th>
+              <th className="text-left py-2">Quelle</th>
               <th className="text-right py-2">Aktion</th>
             </tr>
           </thead>
           <tbody>
             {filteredCalls.length === 0 ? (
               <tr>
-                <td colSpan={9} className="py-6 text-center text-sand-500">
+                <td colSpan={10} className="py-6 text-center text-sand-500">
                   {onlyMissed
                     ? "Keine verpassten Anrufe vorhanden."
                     : "Noch keine Telefonie-Events geladen."}
@@ -387,7 +388,6 @@ export default function CallListView({
                         resolvedNames[resolveKey(call)] ||
                         pbxEntryForCall(call)?.name ||
                         "-"}
-                        {renderNameSource(call)}
                       </span>
                       <div className="flex items-center gap-2">
                         {assignNumber(call) && !pbxEntryForCall(call) && onAddToPbx ? (
@@ -425,6 +425,7 @@ export default function CallListView({
                       </div>
                     </div>
                   </td>
+                  <td className="py-3">{renderNameSource(call)}</td>
                   <td className="py-3 text-right">
                     {callbackNumber(call) ? (
                       <button
