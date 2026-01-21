@@ -55,10 +55,6 @@ async def list_sources() -> List[Dict[str, Any]]:
             "source": "also",
             "available": also_ready,
         },
-        {
-            "source": "amazon",
-            "available": False,
-        },
     ]
 
 
