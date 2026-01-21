@@ -1285,8 +1285,10 @@ def _build_offer_beacon_url(base_url: str, guid: str) -> str:
         return ""
     if "{guid}" in base:
         return base.replace("{guid}", guid)
-    separator = "&" if "?" in base else "?"
-    return f"{base}{separator}guid={guid}"
+    if base.endswith("/open"):
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}guid={guid}"
+    return f"{base}/open?guid={guid}"
 
 
 def _build_report_beacon_url(base_url: str, guid: str) -> str:
@@ -3036,12 +3038,9 @@ def send_offer(data: OfferSendRequest):
         html = data.html or ""
         if settings.beacon_base_url:
             tracking_guid = str(uuid.uuid4())
-            if "{guid}" in settings.beacon_base_url:
-                pixel_url = settings.beacon_base_url.replace("{guid}", tracking_guid)
-            else:
-                separator = "&" if "?" in settings.beacon_base_url else "?"
-                pixel_url = f"{settings.beacon_base_url}{separator}guid={tracking_guid}"
-            html += f'<img src="{pixel_url}" alt="" width="1" height="1" style="display:none;" />'
+            pixel_url = _build_offer_beacon_url(settings.beacon_base_url, tracking_guid)
+            if pixel_url:
+                html += f'<img src="{pixel_url}" alt="" width="1" height="1" style="display:none;" />'
 
         import smtplib
         from email.message import EmailMessage
