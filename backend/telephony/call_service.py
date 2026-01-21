@@ -219,9 +219,14 @@ class TelephonyCallStore:
         if answered is None:
             if state in {"answer", "caller-answer"}:
                 call.answered = True
-            elif state in {"hangup", "end"} and call.answered is False and call.duration == 0:
-                call.answered = False
-            if call.duration and call.duration > 0:
+            elif state in {"hangup", "end"}:
+                if call.duration == 0:
+                    call.answered = False
+                elif call.duration and call.duration > 0 and call.answered is False:
+                    call.answered = False
+            if call.duration and call.duration > 0 and call.answered is False:
+                pass
+            elif call.duration and call.duration > 0:
                 call.answered = True
         else:
             call.answered = answered

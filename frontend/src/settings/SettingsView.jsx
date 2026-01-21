@@ -4,7 +4,6 @@ import { telephonyService } from "../telephony/telephonyService";
 
 const API = "/api";
 const STORAGE_KEY = "qt_smtp_settings_cache";
-const defaultOfferFormat = "AN-XXXX";
 const DEBUG_TABLE_LABELS = {
   day_tasks: "Aufgaben",
   day_task_groups: "Aufgabengruppen"
@@ -61,14 +60,6 @@ const loadCachedSmtp = () => {
   }
 };
 
-const makeOfferNumber = (format, index) => {
-  const template = (format || defaultOfferFormat).trim() || defaultOfferFormat;
-  const match = template.match(/X+/);
-  if (!match) return template;
-  const width = match[0].length;
-  const number = String(index).padStart(width, "0");
-  return template.replace(match[0], number);
-};
 
 export default function SettingsView() {
   const [smtp, setSmtp] = useState(loadCachedSmtp);
@@ -116,10 +107,14 @@ export default function SettingsView() {
   });
   const [tables, setTables] = useState([]);
   const [debugStatus, setDebugStatus] = useState("idle");
+  const [debugTablesOpen, setDebugTablesOpen] = useState(false);
+  const [beaconCheckStatus, setBeaconCheckStatus] = useState("idle");
+  const [beaconHealth, setBeaconHealth] = useState({
+    checkedAt: "",
+    offers: { ok: null, status_code: null, error: "", url: "" },
+    reports: { ok: null, status_code: null, error: "", url: "" }
+  });
   const [clearingTable, setClearingTable] = useState("");
-  const [offerNumberFormat, setOfferNumberFormat] = useState(defaultOfferFormat);
-  const [offerLoadStatus, setOfferLoadStatus] = useState("loading");
-  const [offerStatus, setOfferStatus] = useState("idle");
   const beaconDisplay =
     smtp.beacon_base_url && smtp.beacon_base_url.trim()
       ? smtp.beacon_base_url.trim()
@@ -242,26 +237,6 @@ export default function SettingsView() {
     };
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    fetch(`${API}/offer_settings`)
-      .then((res) => {
-        if (!res.ok) throw new Error("load_failed");
-        return res.json();
-      })
-      .then((data) => {
-        if (!active) return;
-        setOfferNumberFormat(data?.offer_number_format || defaultOfferFormat);
-        setOfferLoadStatus("ready");
-      })
-      .catch(() => {
-        if (!active) return;
-        setOfferLoadStatus("error");
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (ctiLoadStatus !== "ready") return;
@@ -326,26 +301,24 @@ export default function SettingsView() {
     setTimeout(() => setStatus("idle"), 2000);
   };
 
-  const saveOfferSettings = async () => {
-    setOfferStatus("saving");
-    const safeFormat = (offerNumberFormat || defaultOfferFormat).trim() || defaultOfferFormat;
+  const refreshBeaconHealth = async () => {
+    setBeaconCheckStatus("loading");
     try {
-      const res = await fetch(`${API}/offer_settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          offer_number_format: safeFormat
-        })
-      });
-      if (!res.ok) throw new Error("save_failed");
+      const res = await fetch(`${API}/beacon/health`);
+      if (!res.ok) throw new Error("health_failed");
       const data = await res.json();
-      setOfferNumberFormat(data?.offer_number_format || safeFormat);
-      setOfferStatus("saved");
+      setBeaconHealth({
+        checkedAt: data?.checked_at || "",
+        offers: data?.offers || { ok: false, status_code: null, error: "", url: "" },
+        reports: data?.reports || { ok: false, status_code: null, error: "", url: "" }
+      });
+      setBeaconCheckStatus("ready");
     } catch (error) {
-      setOfferStatus("error");
+      setBeaconCheckStatus("error");
     }
-    setTimeout(() => setOfferStatus("idle"), 2000);
+    setTimeout(() => setBeaconCheckStatus("idle"), 2000);
   };
+
 
   const refreshCtiDebug = async () => {
     const [isHealthy, stats, latestCalls] = await Promise.all([
@@ -613,23 +586,6 @@ export default function SettingsView() {
                 placeholder="reports@example.com"
               />
             </div>
-            <div className="md:col-span-2">
-              <label className="text-xs text-sand-500">Beacon Base URL</label>
-              <input
-                value={smtp.beacon_base_url}
-                onChange={(event) =>
-                  setSmtp((prev) => ({ ...prev, beacon_base_url: event.target.value }))
-                }
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder="https://beacon.example.com"
-              />
-              <div className="mt-2 text-xs text-sand-500">
-                Aktuell: <span className="text-sand-700">{beaconDisplay}</span>
-              </div>
-              <p className="mt-2 text-xs text-sand-400">
-                Optional: externe Basis-URL oder Template mit {"{guid}"}.
-              </p>
-            </div>
             <label className="flex items-center gap-2 text-sm text-sand-700">
               <input
                 type="checkbox"
@@ -665,6 +621,102 @@ export default function SettingsView() {
             {status === "error" && (
               <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
             )}
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <div className="flex items-center gap-2 text-sand-700 mb-4">
+            <Settings size={18} />
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Beacon</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2">
+              <label className="text-xs text-sand-500">Beacon Base URL</label>
+              <input
+                value={smtp.beacon_base_url}
+                onChange={(event) =>
+                  setSmtp((prev) => ({ ...prev, beacon_base_url: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder="https://beacon.example.com"
+              />
+              <div className="mt-2 text-xs text-sand-500">
+                Aktuell: <span className="text-sand-700">{beaconDisplay}</span>
+              </div>
+              <p className="mt-2 text-xs text-sand-400">
+                Optional: externe Basis-URL oder Template mit {"{guid}"}.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-sand-600">
+            <div className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+              <span>Angebote</span>
+              <span
+                className={`inline-flex items-center gap-2 ${
+                  beaconHealth.offers.ok === null
+                    ? "text-sand-500"
+                    : beaconHealth.offers.ok
+                    ? "text-emerald-700"
+                    : "text-rose-600"
+                }`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    beaconHealth.offers.ok === null
+                      ? "bg-sand-400"
+                      : beaconHealth.offers.ok
+                      ? "bg-emerald-500"
+                      : "bg-rose-500"
+                  }`}
+                />
+                {beaconHealth.offers.ok === null
+                  ? "unbekannt"
+                  : beaconHealth.offers.ok
+                  ? "erreichbar"
+                  : "nicht erreichbar"}
+              </span>
+            </div>
+            <div className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+              <span>Kundenberichte</span>
+              <span
+                className={`inline-flex items-center gap-2 ${
+                  beaconHealth.reports.ok === null
+                    ? "text-sand-500"
+                    : beaconHealth.reports.ok
+                    ? "text-emerald-700"
+                    : "text-rose-600"
+                }`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    beaconHealth.reports.ok === null
+                      ? "bg-sand-400"
+                      : beaconHealth.reports.ok
+                      ? "bg-emerald-500"
+                      : "bg-rose-500"
+                  }`}
+                />
+                {beaconHealth.reports.ok === null
+                  ? "unbekannt"
+                  : beaconHealth.reports.ok
+                  ? "erreichbar"
+                  : "nicht erreichbar"}
+              </span>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+            <button
+              onClick={refreshBeaconHealth}
+              className="rounded-full border border-sand-200 bg-white px-3 py-2 uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+            >
+              Beacon testen
+            </button>
+            {beaconCheckStatus === "error" && (
+              <span className="text-rose-600">Test fehlgeschlagen</span>
+            )}
+            {beaconHealth.checkedAt ? (
+              <span className="text-sand-500">Letzter Check: {beaconHealth.checkedAt}</span>
+            ) : null}
           </div>
         </div>
 
@@ -1094,86 +1146,59 @@ export default function SettingsView() {
         </div>
 
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <div className="flex items-center gap-2 text-sand-700 mb-4">
-            <Settings size={18} />
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Angebote</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="text-xs text-sand-500">Angebotsnummer Format</label>
-              <input
-                value={offerNumberFormat}
-                onChange={(event) => setOfferNumberFormat(event.target.value)}
-                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                placeholder={defaultOfferFormat}
-              />
-              <p className="mt-2 text-xs text-sand-500">
-                Beispiel: {makeOfferNumber(offerNumberFormat, 1)}
-              </p>
+          <button
+            type="button"
+            onClick={() => setDebugTablesOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Debug</p>
             </div>
-          </div>
-          <div className="mt-6 flex items-center gap-3">
-            <button
-              onClick={saveOfferSettings}
-              className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-            >
-              Speichern
-            </button>
-            {offerLoadStatus === "error" && (
-              <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
-            )}
-            {offerStatus === "saved" && (
-              <span className="text-sm text-emerald-600">Gespeichert</span>
-            )}
-            {offerStatus === "error" && (
-              <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <div className="flex items-center gap-2 text-sand-700 mb-4">
-            <Settings size={18} />
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Debug</p>
-          </div>
-          <div className="text-xs text-sand-500 mb-3">
-            Datenbanktabellen (nur freigegebene Tabellen koennen geleert werden).
-          </div>
-          <div className="space-y-2">
-            {tables.length ? (
-              tables.map((table) => (
-                <div
-                  key={table}
-                  className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-700"
-                >
-                  <div>
-                    <div className="text-xs uppercase tracking-wide text-sand-500">{table}</div>
-                    {DEBUG_TABLE_LABELS[table] ? (
-                      <div className="text-sm">{DEBUG_TABLE_LABELS[table]}</div>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => clearTable(table)}
-                    disabled={!DEBUG_CLEARABLE_TABLES.has(table) || clearingTable === table}
-                    className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
-                      DEBUG_CLEARABLE_TABLES.has(table)
-                        ? "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
-                        : "border-sand-200 bg-white text-sand-300 cursor-not-allowed"
-                    }`}
-                  >
-                    {clearingTable === table ? "Leert..." : "Leeren"}
-                  </button>
-                </div>
-              ))
-            ) : (
-              <div className="text-xs text-sand-500">Keine Tabellen gefunden.</div>
-            )}
-          </div>
-          <div className="mt-3 text-xs text-sand-500">
-            {debugStatus === "cleared" && "Tabelle geleert."}
-            {debugStatus === "error" && "Leeren fehlgeschlagen."}
-          </div>
+            <span className="text-sm text-sand-500">{debugTablesOpen ? "–" : "+"}</span>
+          </button>
+          {debugTablesOpen ? (
+            <>
+              <div className="mt-4 text-xs text-sand-500 mb-3">
+                Datenbanktabellen (nur freigegebene Tabellen koennen geleert werden).
+              </div>
+              <div className="space-y-2">
+                {tables.length ? (
+                  tables.map((table) => (
+                    <div
+                      key={table}
+                      className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-700"
+                    >
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-sand-500">{table}</div>
+                        {DEBUG_TABLE_LABELS[table] ? (
+                          <div className="text-sm">{DEBUG_TABLE_LABELS[table]}</div>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => clearTable(table)}
+                        disabled={!DEBUG_CLEARABLE_TABLES.has(table) || clearingTable === table}
+                        className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                          DEBUG_CLEARABLE_TABLES.has(table)
+                            ? "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                            : "border-sand-200 bg-white text-sand-300 cursor-not-allowed"
+                        }`}
+                      >
+                        {clearingTable === table ? "Leert..." : "Leeren"}
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-xs text-sand-500">Keine Tabellen gefunden.</div>
+                )}
+              </div>
+              <div className="mt-3 text-xs text-sand-500">
+                {debugStatus === "cleared" && "Tabelle geleert."}
+                {debugStatus === "error" && "Leeren fehlgeschlagen."}
+              </div>
+            </>
+          ) : null}
         </div>
       </main>
     </div>

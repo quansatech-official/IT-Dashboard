@@ -396,17 +396,31 @@ const formatUnitQuantity = (quantity, unit) => {
   return `${Number(quantity || 0)} ${label}`;
 };
 
+const buildItemTitle = (item) =>
+  item.title ||
+  (item.product || item.manufacturer || item.model
+    ? getDeviceProduct(item)
+    : "Position");
+
+const buildItemText = (item) =>
+  (item.aiDraft || getActiveVersion(item)?.text || item.description || "").trim();
+
+const buildItemUnit = (item, fallback) => item.unit || fallback;
+
 const buildSevDeskPayload = (offer) => ({
   offer_reference: offer.reference,
-  items: [...offer.lineItems, ...offer.deviceItems].map((item) => ({
-    title:
-      item.title ||
-      (item.product || item.manufacturer || item.model
-        ? getDeviceProduct(item)
-        : "Position"),
-    quantity: Number(item.quantity || 1),
-    price: Number(item.price || 0)
-  }))
+  items: [...offer.lineItems, ...offer.deviceItems].map((item) => {
+    const isDevice = Boolean(item.manufacturer || item.model || item.product);
+    const unit = buildItemUnit(item, isDevice ? "piece" : "hours");
+    return {
+      title: buildItemTitle(item),
+      quantity: Number(item.quantity || 1),
+      unit,
+      unit_label: formatUnitLabel(unit),
+      position_text: buildItemText(item),
+      price: Number(item.price || 0)
+    };
+  })
 });
 
 const internalNoteOptions = [
@@ -518,6 +532,21 @@ const sanitizeOffersForSave = (offers) =>
   }));
 
 const sanitizeOfferForSave = (offer) => sanitizeOffersForSave([offer])[0];
+
+const normalizeServerOffer = (payload) => {
+  if (!payload || typeof payload !== "object") return null;
+  const next = { ...payload };
+  if (!next.id) {
+    next.id = uid();
+  }
+  if (!next.serverId) {
+    next.serverId = payload.serverId ?? payload.id ?? null;
+  }
+  if (!next.status) {
+    next.status = "Entwurf";
+  }
+  return next;
+};
 
 const buildPreviewPositions = (offer) => {
   if (!offer) return [];
@@ -648,7 +677,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             }}
           >
             <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
-              <img src="/QTLogo.jpg" alt="QT" className="h-24 w-auto mb-8" />
+              <img src="/QTLogo.jpg" alt="QT" className="h-28 w-auto mb-8" />
               <h2 className="text-4xl font-display text-sand-900">Angebot</h2>
               {offer.coverHeadline ? (
                 <p className="mt-4 text-lg text-sand-700">{offer.coverHeadline}</p>
@@ -693,7 +722,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         >
           <div className="flex items-center justify-between border-b border-sand-200 pb-4">
             <div className="flex items-center gap-2">
-              <img src="/QTLogo.jpg" alt="QT" className="h-6 w-auto" />
+              <img src="/QTLogo.jpg" alt="QT" className="h-8 w-auto" />
               <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                 Angebot
               </span>
@@ -714,7 +743,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   </p>
                 ))}
               </div>
-              <div>
+              <div className="text-right">
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                   Empfänger
                 </p>
@@ -1087,6 +1116,7 @@ export default function OffersView() {
   const [customers, setCustomers] = useState([]);
   const [offerNumberFormat, setOfferNumberFormat] = useState(defaultOfferFormat);
   const [offerSettingsLoaded, setOfferSettingsLoaded] = useState(false);
+  const [blocksLoaded, setBlocksLoaded] = useState(false);
   const [previewOfferId, setPreviewOfferId] = useState("");
   const [previewMode, setPreviewMode] = useState("offer");
   const [exportOfferId, setExportOfferId] = useState("");
@@ -1190,6 +1220,66 @@ export default function OffersView() {
     } catch (error) {
       // ignore load errors
     }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/offer_blocks")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active) return;
+        if (data?.serviceBlocks?.length) {
+          setServiceBlocks(data.serviceBlocks);
+        }
+        if (data?.deviceBlocks?.length) {
+          setDeviceBlocks(data.deviceBlocks);
+        }
+        if (data?.calcBlocks?.length) {
+          setCalcBlocks(data.calcBlocks);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setBlocksLoaded(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!blocksLoaded) return;
+    const timer = setTimeout(() => {
+      fetch("/api/offer_blocks", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceBlocks,
+          deviceBlocks,
+          calcBlocks
+        })
+      }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [blocksLoaded, serviceBlocks, deviceBlocks, calcBlocks]);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/offers")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        if (!active) return;
+        if (!Array.isArray(data) || !data.length) return;
+        const next = data.map(normalizeServerOffer).filter(Boolean);
+        if (!next.length) return;
+        setOffers(next);
+        setActiveId(next[0]?.id || "");
+        setMainTab("new");
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -2095,15 +2185,6 @@ export default function OffersView() {
                     >
                       <Save size={12} /> Speichern
                     </button>
-                    <button
-                      type="button"
-                      onClick={sendOfferEmail}
-                      disabled={!sendTo || sendStatus === "sending"}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Send size={12} />
-                      {sendStatus === "sending" ? "Sende..." : "Senden"}
-                    </button>
                     {saveStatus === "saved" && (
                       <span className="text-xs text-emerald-600">Gespeichert</span>
                     )}
@@ -2120,8 +2201,8 @@ export default function OffersView() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
-                  <div className="rounded-xl border border-sand-200 bg-sand-100 p-3">
+                <div className="mt-4 grid gap-3 md:grid-cols-3 items-stretch">
+                  <div className="rounded-xl border border-sand-200 bg-sand-100 p-3 h-full">
                     <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
                       Referenz
                     </p>
@@ -2132,13 +2213,13 @@ export default function OffersView() {
                       Erstellt {formatDate(activeOffer.createdAt)}
                     </p>
                   </div>
-                  <div className="rounded-xl border border-sand-200 bg-sand-100 p-3">
+                  <div className="rounded-xl border border-sand-200 bg-sand-100 p-3 h-full flex flex-col">
                     <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
                       Kunde
                     </p>
-                    <p className="mt-2 text-sm font-semibold text-sand-900">
-                      {activeOffer.customer || "Noch offen"}
-                    </p>
+                      <p className="mt-2 text-sm font-semibold text-sand-900">
+                        {activeOffer.customer || "Noch offen"}
+                      </p>
                     {activeOffer.recipientCompany ? (
                       <p className="mt-1 text-xs text-sand-500">
                         {activeOffer.recipientCompany}
@@ -2165,98 +2246,118 @@ export default function OffersView() {
                       </p>
                     ) : null}
                   </div>
+                  <div className="rounded-xl border border-sand-200 bg-white p-3 h-full">
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                      Versand
+                    </p>
+                    <div className="mt-3 space-y-3">
+                      <Field label="Empfänger E-Mail">
+                        <input
+                          className={inputClass}
+                          value={sendTo}
+                          onChange={(event) => setSendTo(event.target.value)}
+                          placeholder="kunde@example.com"
+                        />
+                      </Field>
+                      <Field label="Betreff">
+                        <input
+                          className={inputClass}
+                          value={sendSubject}
+                          onChange={(event) => setSendSubject(event.target.value)}
+                          placeholder={`Angebot ${activeOffer.reference || ""}`}
+                        />
+                      </Field>
+                      <button
+                        type="button"
+                        onClick={sendOfferEmail}
+                        disabled={!sendTo || sendStatus === "sending"}
+                        className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Send size={12} />
+                        {sendStatus === "sending" ? "Sende..." : "Senden"}
+                      </button>
+                      {sendStatus === "sent" && (
+                        <span className="text-xs text-emerald-600">Gesendet</span>
+                      )}
+                      {sendStatus === "error" && (
+                        <span className="text-xs text-rose-600">Versand fehlgeschlagen</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-3">
-                  <Field label="Kunde">
-                    <input
-                      className={inputClass}
-                      value={activeOffer.customer}
-                      onChange={(event) =>
-                        updateOffer(activeOffer.id, (offer) => ({
-                          ...offer,
-                          customer: event.target.value
-                        }))
-                      }
-                      placeholder="Kunde eingeben"
-                      list="offer-customers"
-                    />
-                  </Field>
-                  <Field label="Status">
-                    <SelectField
-                      value={activeOffer.status}
-                      onChange={(event) =>
-                        updateOffer(activeOffer.id, (offer) => ({
-                          ...offer,
-                          status: event.target.value
-                        }))
-                      }
-                    >
-                      {statusOptions.map((status) => (
-                        <option key={status} value={status}>
-                          {status}
-                        </option>
-                      ))}
-                    </SelectField>
-                  </Field>
-                  <Field label="MwSt Modus">
-                    <SelectField
-                      value={activeOffer.vatMode || "standard"}
-                      onChange={(event) =>
-                        updateOffer(activeOffer.id, (offer) => ({
-                          ...offer,
-                          vatMode: event.target.value
-                        }))
-                      }
-                    >
-                      {VAT_MODE_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </SelectField>
-                  </Field>
+                <div className="mt-4">
+                  <div className="rounded-2xl border border-sand-200 bg-sand-50/60 p-4">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <Field label="Kunde">
+                        <input
+                          className={inputClass}
+                          value={activeOffer.customer}
+                          onChange={(event) =>
+                            updateOffer(activeOffer.id, (offer) => ({
+                              ...offer,
+                              customer: event.target.value
+                            }))
+                          }
+                          placeholder="Kunde eingeben"
+                          list="offer-customers"
+                        />
+                      </Field>
+                      <Field label="Status">
+                        <SelectField
+                          value={activeOffer.status}
+                          onChange={(event) =>
+                            updateOffer(activeOffer.id, (offer) => ({
+                              ...offer,
+                              status: event.target.value
+                            }))
+                          }
+                        >
+                          {statusOptions.map((status) => (
+                            <option key={status} value={status}>
+                              {status}
+                            </option>
+                          ))}
+                        </SelectField>
+                      </Field>
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,220px)_140px]">
+                      <Field label="MwSt Modus">
+                        <SelectField
+                          value={activeOffer.vatMode || "standard"}
+                          onChange={(event) =>
+                            updateOffer(activeOffer.id, (offer) => ({
+                              ...offer,
+                              vatMode: event.target.value
+                            }))
+                          }
+                        >
+                          {VAT_MODE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </SelectField>
+                      </Field>
+                      <Field label="MwSt Satz (%)">
+                        <input
+                          className={inputClass}
+                          type="number"
+                          value={activeOffer.vatRate ?? DEFAULT_VAT_RATE}
+                          onChange={(event) =>
+                            updateOffer(activeOffer.id, (offer) => ({
+                              ...offer,
+                              vatRate: Number(event.target.value)
+                            }))
+                          }
+                          disabled={activeOffer.vatMode !== "standard"}
+                        />
+                      </Field>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="mt-3 grid gap-3 md:grid-cols-4">
-                  <Field label="MwSt Satz (%)">
-                    <input
-                      className={inputClass}
-                      type="number"
-                      value={activeOffer.vatRate ?? DEFAULT_VAT_RATE}
-                      onChange={(event) =>
-                        updateOffer(activeOffer.id, (offer) => ({
-                          ...offer,
-                          vatRate: Number(event.target.value)
-                        }))
-                      }
-                    disabled={activeOffer.vatMode !== "standard"}
-                  />
-                </Field>
-                <Field label="Empfänger E-Mail">
-                  <input
-                      className={inputClass}
-                      value={sendTo}
-                      onChange={(event) => setSendTo(event.target.value)}
-                      placeholder="kunde@example.com"
-                    />
-                  </Field>
-                  <Field label="Betreff">
-                    <input
-                      className={inputClass}
-                      value={sendSubject}
-                      onChange={(event) => setSendSubject(event.target.value)}
-                      placeholder={`Angebot ${activeOffer.reference || ""}`}
-                    />
-                  </Field>
-                  {sendStatus === "sent" && (
-                    <span className="text-xs text-emerald-600">Gesendet</span>
-                  )}
-                  {sendStatus === "error" && (
-                    <span className="text-xs text-rose-600">Versand fehlgeschlagen</span>
-                  )}
-                </div>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="mt-3 space-y-3">
                   <Field label="Anrede">
                     <input
                       className={inputClass}
@@ -3512,9 +3613,23 @@ export default function OffersView() {
                 </span>
               ) : null}
             </div>
-            <div ref={previewWrapperRef} className="w-full overflow-hidden">
-              <OfferPreview offer={activeOffer} scale={previewScale} />
-            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (!activeOffer) return;
+                setPreviewOfferId(activeOffer.id);
+                setPreviewMode("offer");
+              }}
+              className="w-full overflow-hidden text-left"
+              title={activeOffer ? "Vorschau vergrößern" : ""}
+            >
+              <div
+                ref={previewWrapperRef}
+                className={`w-full overflow-hidden ${activeOffer ? "cursor-zoom-in" : ""}`}
+              >
+                <OfferPreview offer={activeOffer} scale={previewScale} />
+              </div>
+            </button>
           </section>
         </aside>
       </div>

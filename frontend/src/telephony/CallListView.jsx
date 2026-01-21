@@ -381,65 +381,63 @@ export default function CallListView({
                     </span>
                   </td>
                   <td className="py-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="flex items-center gap-2">
-                        {call.customerName ||
-                        customerNameForCall(call) ||
-                        resolvedNames[resolveKey(call)] ||
-                        pbxEntryForCall(call)?.name ||
-                        "-"}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        {assignNumber(call) && !pbxEntryForCall(call) && onAddToPbx ? (
-                          <button
-                            onClick={() =>
-                              handleAddToPbx({
-                                name:
-                                  call.customerName ||
-                                  customerNameForCall(call) ||
-                                  resolvedNames[resolveKey(call)] ||
-                                  "",
-                                number: assignNumber(call)
-                              })
-                            }
-                            disabled={!pbxApiActive}
-                            className={`rounded-full border p-1 text-sand-600 ${
-                              pbxApiActive
-                                ? "border-sand-300 bg-white hover:bg-sand-100"
-                                : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
-                            }`}
-                            title="In Anlagen-Telefonbuch übernehmen"
-                          >
-                            <BookPlus size={14} />
-                          </button>
-                        ) : null}
-                        {assignNumber(call) && !call.customerName && !customerNameForCall(call) ? (
-                          <button
-                            onClick={() => setAssignTarget(call)}
-                            className="rounded-full border border-amber-200 bg-amber-50 p-1 text-amber-700 hover:bg-amber-100"
-                            title="In Kundenstamm übernehmen"
-                          >
-                            <ArrowDownLeft size={14} />
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
+                    <span className="flex items-center gap-2">
+                      {call.customerName ||
+                      customerNameForCall(call) ||
+                      resolvedNames[resolveKey(call)] ||
+                      pbxEntryForCall(call)?.name ||
+                      "-"}
+                    </span>
                   </td>
                   <td className="py-3">{renderNameSource(call)}</td>
                   <td className="py-3 text-right">
-                    {callbackNumber(call) ? (
-                      <button
-                        onClick={() => {
-                          setCallbackTarget(call);
-                          setSelectedExtension(extensionOptions[0]?.extension_number || "");
-                          setCallbackStatus("");
-                        }}
-                        className="rounded-full border border-sand-300 bg-white p-1 text-sand-600 hover:bg-sand-100"
-                        title="Rückruf"
-                      >
-                        <PhoneOutgoing size={14} />
-                      </button>
-                    ) : null}
+                    <div className="flex items-center justify-end gap-2">
+                      {assignNumber(call) && !pbxEntryForCall(call) && onAddToPbx ? (
+                        <button
+                          onClick={() =>
+                            handleAddToPbx({
+                              name:
+                                call.customerName ||
+                                customerNameForCall(call) ||
+                                resolvedNames[resolveKey(call)] ||
+                                "",
+                              number: assignNumber(call)
+                            })
+                          }
+                          disabled={!pbxApiActive}
+                          className={`rounded-full border p-1 text-sand-600 ${
+                            pbxApiActive
+                              ? "border-sand-300 bg-white hover:bg-sand-100"
+                              : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
+                          }`}
+                          title="In Anlagen-Telefonbuch übernehmen"
+                        >
+                          <BookPlus size={14} />
+                        </button>
+                      ) : null}
+                      {assignNumber(call) && !call.customerName && !customerNameForCall(call) ? (
+                        <button
+                          onClick={() => setAssignTarget(call)}
+                          className="rounded-full border border-amber-200 bg-amber-50 p-1 text-amber-700 hover:bg-amber-100"
+                          title="In Kundenstamm übernehmen"
+                        >
+                          <ArrowDownLeft size={14} />
+                        </button>
+                      ) : null}
+                      {callbackNumber(call) ? (
+                        <button
+                          onClick={() => {
+                            setCallbackTarget(call);
+                            setSelectedExtension(extensionOptions[0]?.extension_number || "");
+                            setCallbackStatus("");
+                          }}
+                          className="rounded-full border border-sand-300 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                          title="Rückruf"
+                        >
+                          <PhoneOutgoing size={14} />
+                        </button>
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))

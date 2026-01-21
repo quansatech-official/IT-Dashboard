@@ -17,6 +17,7 @@ import hmac
 import base64
 import requests
 from urllib.parse import quote, urlparse
+from datetime import datetime, timezone
 import logging
 
 # ================= DATABASE =================
@@ -260,6 +261,13 @@ class OfferSettings(Base):
 
     id = Column(Integer, primary_key=True)
     offer_number_format = Column(String, default="AN-XXXX")
+
+class OfferBlockStore(Base):
+    __tablename__ = "offer_block_store"
+
+    id = Column(Integer, primary_key=True)
+    data_json = Column(String, default="{}")
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 class PbxPhonebookEntry(Base):
     __tablename__ = "pbx_phonebook_entries"
@@ -773,6 +781,12 @@ class OfferSaveResponse(BaseModel):
     confirm_url: str
 
 
+class OfferBlocksUpdate(BaseModel):
+    serviceBlocks: Optional[List[Dict[str, Any]]] = None
+    deviceBlocks: Optional[List[Dict[str, Any]]] = None
+    calcBlocks: Optional[List[Dict[str, Any]]] = None
+
+
 class OfferCustomerConfirm(BaseModel):
     name: Optional[str] = ""
     email: Optional[str] = ""
@@ -1109,6 +1123,96 @@ def serialize_offer_settings(settings: OfferSettings) -> Dict[str, Any]:
         "offer_number_format": settings.offer_number_format,
     }
 
+def _get_offer_block_store(db) -> OfferBlockStore:
+    store = db.query(OfferBlockStore).first()
+    if not store:
+        store = OfferBlockStore(data_json="{}")
+        db.add(store)
+        db.commit()
+        db.refresh(store)
+    return store
+
+def serialize_offer_blocks(store: OfferBlockStore) -> Dict[str, Any]:
+    data: Dict[str, Any] = {}
+    if store.data_json:
+        try:
+            parsed = json.loads(store.data_json)
+            if isinstance(parsed, dict):
+                data = parsed
+        except ValueError:
+            data = {}
+    return {
+        "serviceBlocks": data.get("serviceBlocks", []),
+        "deviceBlocks": data.get("deviceBlocks", []),
+        "calcBlocks": data.get("calcBlocks", []),
+        "updatedAt": _offer_iso_timestamp(store.updated_at),
+    }
+
+
+def _build_offer_beacon_url(base_url: str, guid: str) -> str:
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if "{guid}" in base:
+        return base.replace("{guid}", guid)
+    separator = "&" if "?" in base else "?"
+    return f"{base}{separator}guid={guid}"
+
+
+def _build_report_beacon_url(base_url: str, guid: str) -> str:
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if "{guid}" in base:
+        return base.replace("{guid}", guid)
+    if base.endswith("/api/reports/open"):
+        separator = "&" if "?" in base else "?"
+        return f"{base}{separator}guid={guid}"
+    return f"{base}/api/reports/open?guid={guid}"
+
+
+def _probe_beacon(url: str) -> Dict[str, Any]:
+    if not url:
+        return {"ok": False, "status_code": None, "error": "Beacon URL not configured", "url": ""}
+    try:
+        response = requests.get(url, timeout=8)
+    except requests.RequestException as exc:
+        return {"ok": False, "status_code": None, "error": str(exc), "url": url}
+    preview = (response.text or "")[:200]
+    return {
+        "ok": response.ok,
+        "status_code": response.status_code,
+        "error": "" if response.ok else preview,
+        "url": url,
+    }
+
+
+def _offer_iso_timestamp(ms: int) -> str:
+    if not ms:
+        return ""
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def serialize_offer(offer: Offer) -> Dict[str, Any]:
+    data: Dict[str, Any] = {}
+    if offer.data_json:
+        try:
+            parsed = json.loads(offer.data_json)
+            if isinstance(parsed, dict):
+                data = parsed
+        except ValueError:
+            data = {}
+    if not data.get("id"):
+        data["id"] = str(offer.id)
+    data["serverId"] = offer.id
+    data["confirmGuid"] = offer.guid or data.get("confirmGuid") or ""
+    data["reference"] = offer.reference or data.get("reference") or ""
+    data["customer"] = offer.customer or data.get("customer") or ""
+    data["status"] = offer.status or data.get("status") or ""
+    if not data.get("createdAt"):
+        data["createdAt"] = _offer_iso_timestamp(offer.created_at)
+    return data
+
 def serialize_pbx_phonebook_entry(entry: PbxPhonebookEntry) -> Dict[str, Any]:
     return {
         "id": entry.id,
@@ -1213,13 +1317,20 @@ def _nfon_phonebook_path(customer_account: str, entry_id: Optional[str] = None, 
         return f"{base_path}/{safe_id}{query}"
     return f"{base_path}{query}"
 
-def _nfon_phonebook_body(name: Optional[str], number: Optional[str]) -> Dict[str, Any]:
-    return {
+def _nfon_phonebook_body(
+    name: Optional[str],
+    number: Optional[str],
+    is_global: Optional[bool] = None,
+) -> Dict[str, Any]:
+    body = {
         "data": [
             {"name": "displayName", "value": name or ""},
             {"name": "displayNumber", "value": number or ""},
         ]
     }
+    if is_global is not None:
+        body["isGlobal"] = bool(is_global)
+    return body
 
 def _build_nfon_string_to_sign(
     method: str,
@@ -1977,14 +2088,24 @@ def list_remote_pbx_phonebook(pagesize: int = 100, offset: int = 0, q: Optional[
     query_string = f"?{'&'.join(query)}" if query else ""
     path = _nfon_phonebook_path(customer_account, query=query_string)
     payload = _nfon_request("GET", base_url, api_key_id, api_key_secret, path)
-    return _extract_phonebook_entries(payload)
+    entries = _extract_phonebook_entries(payload)
+    for entry in entries:
+        if entry.get("id") and not entry.get("is_global"):
+            try:
+                patch_body = _nfon_phonebook_body(entry.get("name"), entry.get("number"), is_global=True)
+                entry_path = _nfon_phonebook_path(customer_account, entry_id=entry["id"])
+                _nfon_request("PATCH", base_url, api_key_id, api_key_secret, entry_path, body_obj=patch_body)
+                entry["is_global"] = True
+            except HTTPException:
+                pass
+    return entries
 
 
 @app.post("/api/pbx_phonebook/remote")
 def create_remote_pbx_phonebook(data: PbxPhonebookCreate):
     with SessionLocal() as db:
         base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
-    body = _nfon_phonebook_body(data.name, data.number)
+    body = _nfon_phonebook_body(data.name, data.number, is_global=True)
     path = _nfon_phonebook_path(customer_account)
     payload = _nfon_request("POST", base_url, api_key_id, api_key_secret, path, body_obj=body)
     entries = _extract_phonebook_entries(payload)
@@ -1996,7 +2117,7 @@ def create_remote_pbx_phonebook(data: PbxPhonebookCreate):
 def update_remote_pbx_phonebook(entry_id: str, data: PbxPhonebookUpdate):
     with SessionLocal() as db:
         base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
-    body = _nfon_phonebook_body(data.name, data.number)
+    body = _nfon_phonebook_body(data.name, data.number, is_global=True)
     path = _nfon_phonebook_path(customer_account, entry_id=entry_id)
     try:
         payload = _nfon_request("PUT", base_url, api_key_id, api_key_secret, path, body_obj=body)
@@ -2482,6 +2603,49 @@ def update_offer_settings(data: OfferSettingsUpdate):
         db.commit()
         db.refresh(settings)
         return serialize_offer_settings(settings)
+
+@app.get("/api/offer_blocks")
+def get_offer_blocks():
+    with SessionLocal() as db:
+        store = _get_offer_block_store(db)
+        return serialize_offer_blocks(store)
+
+@app.put("/api/offer_blocks")
+def update_offer_blocks(data: OfferBlocksUpdate):
+    with SessionLocal() as db:
+        store = _get_offer_block_store(db)
+        current = serialize_offer_blocks(store)
+        payload = {
+            "serviceBlocks": data.serviceBlocks if data.serviceBlocks is not None else current["serviceBlocks"],
+            "deviceBlocks": data.deviceBlocks if data.deviceBlocks is not None else current["deviceBlocks"],
+            "calcBlocks": data.calcBlocks if data.calcBlocks is not None else current["calcBlocks"],
+        }
+        store.data_json = json.dumps(payload)
+        store.updated_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(store)
+        return serialize_offer_blocks(store)
+
+
+@app.get("/api/beacon/health")
+def beacon_health():
+    with SessionLocal() as db:
+        settings = _get_smtp_settings(db)
+    guid = str(uuid.uuid4())
+    offer_url = _build_offer_beacon_url(settings.beacon_base_url, guid)
+    report_url = _build_report_beacon_url(settings.beacon_base_url, guid)
+    return {
+        "checked_at": _offer_iso_timestamp(int(time.time() * 1000)),
+        "offers": _probe_beacon(offer_url),
+        "reports": _probe_beacon(report_url),
+    }
+
+
+@app.get("/api/offers")
+def list_offers():
+    with SessionLocal() as db:
+        offers = db.query(Offer).order_by(Offer.created_at.desc()).all()
+        return [serialize_offer(offer) for offer in offers]
 
 
 @app.post("/api/offers", response_model=OfferSaveResponse)
