@@ -1189,6 +1189,22 @@ def _get_pbx_credentials(session: SessionLocal) -> Tuple[str, str, str, str]:
         raise HTTPException(400, "PBX API credentials missing")
     return base_url, api_key_id, api_key_secret, customer_account
 
+def _build_nfon_string_to_sign(
+    method: str,
+    date: str,
+    path: str,
+    content_md5: str = "",
+    content_type: str = "",
+) -> str:
+    parts = [method]
+    if content_md5:
+        parts.append(content_md5)
+    if content_type:
+        parts.append(content_type)
+    parts.append(date)
+    parts.append(path)
+    return "\n".join(parts)
+
 def _nfon_request(
     method: str,
     base_url: str,
@@ -1201,7 +1217,7 @@ def _nfon_request(
     content_md5 = hashlib.md5(body.encode("utf-8")).hexdigest() if body else ""
     date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
     content_type = "application/json" if body else ""
-    string_to_sign = f"{method}\\n{content_md5}\\n{content_type}\\n{date}\\n{path}"
+    string_to_sign = _build_nfon_string_to_sign(method, date, path, content_md5, content_type)
     signature = hmac.new(api_key_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1)
     signature_b64 = base64.b64encode(signature.digest()).decode("utf-8")
     headers = {
@@ -1971,7 +1987,7 @@ def pbx_phonebook_health():
     request_url = f"{base_url}{path}"
     try:
         date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
-        string_to_sign = f"GET\n\n\n{date}\n{path}"
+        string_to_sign = _build_nfon_string_to_sign("GET", date, path)
         signature = hmac.new(api_key_secret.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1)
         signature_b64 = base64.b64encode(signature.digest()).decode("utf-8")
         headers = {
@@ -1993,7 +2009,7 @@ def pbx_phonebook_health():
         version_preview = ""
         try:
             version_date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
-            version_string_to_sign = f"GET\n\n\n{version_date}\n{version_path}"
+            version_string_to_sign = _build_nfon_string_to_sign("GET", version_date, version_path)
             version_signature = hmac.new(
                 api_key_secret.encode("utf-8"),
                 version_string_to_sign.encode("utf-8"),
