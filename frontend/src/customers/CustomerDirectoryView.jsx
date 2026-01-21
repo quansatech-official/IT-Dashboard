@@ -857,11 +857,17 @@ export default function CustomerDirectoryView() {
     const number = String(phone?.number || "").trim();
     if (!number) return;
     try {
-      await telephonyService.createPbxPhonebookEntry({
+      const result = await telephonyService.createPbxPhonebookEntry(
+        {
         name: activeCustomer.name || "",
         number,
         is_global: false
-      });
+        },
+        { allowFallback: !pbxApiActive }
+      );
+      if (!result) {
+        throw new Error("pbx_add_failed");
+      }
       setToast("Telefonbuch uebernommen.");
     } catch (error) {
       setToast("Telefonbuch-Uebernahme fehlgeschlagen.");

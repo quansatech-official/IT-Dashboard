@@ -136,7 +136,8 @@ export const telephonyService = {
       return [];
     }
   },
-  createPbxPhonebookEntry: async ({ name, number, is_global = false }) => {
+  createPbxPhonebookEntry: async ({ name, number, is_global = false }, options = {}) => {
+    const { allowFallback = true } = options || {};
     try {
       const response = await fetch(`/api/pbx_phonebook/remote`, {
         method: "POST",
@@ -144,6 +145,10 @@ export const telephonyService = {
         body: JSON.stringify({ name, number, is_global })
       });
       if (response.ok) return await response.json();
+      const errorText = await response.text();
+      if (!allowFallback) {
+        throw new Error(errorText || "remote_failed");
+      }
       const fallback = await fetch(`/api/pbx_phonebook`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

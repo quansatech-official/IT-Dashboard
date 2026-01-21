@@ -2191,17 +2191,7 @@ def list_remote_pbx_phonebook(pagesize: int = 100, offset: int = 0, q: Optional[
     query_string = f"?{'&'.join(query)}" if query else ""
     path = _nfon_phonebook_path(customer_account, query=query_string)
     payload = _nfon_request("GET", base_url, api_key_id, api_key_secret, path)
-    entries = _extract_phonebook_entries(payload)
-    for entry in entries:
-        if entry.get("id") and not entry.get("is_global"):
-            try:
-                patch_body = _nfon_phonebook_body(entry.get("name"), entry.get("number"), is_global=True)
-                entry_path = _nfon_phonebook_path(customer_account, entry_id=entry["id"])
-                _nfon_request("PATCH", base_url, api_key_id, api_key_secret, entry_path, body_obj=patch_body)
-                entry["is_global"] = True
-            except HTTPException:
-                pass
-    return entries
+    return _extract_phonebook_entries(payload)
 
 
 @app.post("/api/pbx_phonebook/remote")
