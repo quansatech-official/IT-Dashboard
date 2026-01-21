@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, PhoneOutgoing, BookPlus } from "lucide-react";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  PhoneOutgoing,
+  BookPlus,
+  Users,
+  Phone,
+  Cloud
+} from "lucide-react";
 
 const formatTime = (timestamp) => {
   if (!timestamp) return "-";
@@ -253,6 +261,33 @@ export default function CallListView({
     return key ? customerMatches.get(key) : "";
   };
 
+  const nameSourceForCall = (call) => {
+    if (call.customerName || customerNameForCall(call)) {
+      return { label: "Kundenstamm", Icon: Users };
+    }
+    if (resolvedNames[resolveKey(call)]) {
+      return { label: "API", Icon: Cloud };
+    }
+    if (pbxEntryForCall(call)?.name) {
+      return { label: "Anlagentelefonbuch", Icon: Phone };
+    }
+    return null;
+  };
+
+  const renderNameSource = (call) => {
+    const source = nameSourceForCall(call);
+    if (!source) return null;
+    const Icon = source.Icon;
+    return (
+      <span
+        className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1 text-sand-500"
+        title={`Name aus ${source.label}`}
+      >
+        <Icon size={12} />
+      </span>
+    );
+  };
+
   const handleAddToPbx = async (payload) => {
     if (!onAddToPbx) return;
     try {
@@ -346,12 +381,13 @@ export default function CallListView({
                   </td>
                   <td className="py-3">
                     <div className="flex items-center justify-between gap-2">
-                      <span>
+                      <span className="flex items-center gap-2">
                         {call.customerName ||
                         customerNameForCall(call) ||
                         resolvedNames[resolveKey(call)] ||
                         pbxEntryForCall(call)?.name ||
                         "-"}
+                        {renderNameSource(call)}
                       </span>
                       <div className="flex items-center gap-2">
                         {assignNumber(call) && !pbxEntryForCall(call) && onAddToPbx ? (

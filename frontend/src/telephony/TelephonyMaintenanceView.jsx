@@ -14,7 +14,7 @@ export default function TelephonyMaintenanceView() {
   const [status, setStatus] = useState("idle");
   const [filter, setFilter] = useState("");
   const [draft, setDraft] = useState(emptyDraft);
-  const [editingCell, setEditingCell] = useState({ id: null, field: null });
+  const [editingCell, setEditingCell] = useState({ key: null, field: null });
   const [editValue, setEditValue] = useState("");
   const [mode, setMode] = useState("local");
   const [remoteError, setRemoteError] = useState("");
@@ -88,7 +88,10 @@ export default function TelephonyMaintenanceView() {
     setTimeout(() => setStatus("idle"), 2000);
   };
 
-  const startCellEdit = (entry, field) => {
+  const entryKeyFor = (entry, index) =>
+    entry.id || `${entry.name || "entry"}-${entry.number || "number"}-${index}`;
+
+  const startCellEdit = (entry, field, index) => {
     if (field === "is_global") {
       return;
     }
@@ -96,7 +99,7 @@ export default function TelephonyMaintenanceView() {
       setRemoteError("Nur Name und Rufnummer sind im NFON-Import editierbar.");
       return;
     }
-    setEditingCell({ id: entry.id, field });
+    setEditingCell({ key: entryKeyFor(entry, index), field });
     if (field === "is_global") {
       setEditValue(Boolean(entry.is_global));
     } else {
@@ -105,17 +108,23 @@ export default function TelephonyMaintenanceView() {
   };
 
   const commitCellEdit = async (overrideValue) => {
-    if (!editingCell.id) return;
-    const entry = entries.find((item) => item.id === editingCell.id);
+    if (!editingCell.key) return;
+    const entryIndex = entries.findIndex((item, index) => entryKeyFor(item, index) === editingCell.key);
+    const entry = entryIndex >= 0 ? entries[entryIndex] : null;
     if (!entry) {
-      setEditingCell({ id: null, field: null });
+      setEditingCell({ key: null, field: null });
+      return;
+    }
+    if (!entry.id) {
+      setRemoteError("Eintrag ohne ID kann nicht bearbeitet werden.");
+      setEditingCell({ key: null, field: null });
       return;
     }
     const field = editingCell.field;
     const nextValue =
       overrideValue !== undefined ? overrideValue : field === "is_global" ? Boolean(editValue) : editValue;
     if ((entry[field] || "") === nextValue || (field === "is_global" && Boolean(entry.is_global) === nextValue)) {
-      setEditingCell({ id: null, field: null });
+      setEditingCell({ key: null, field: null });
       return;
     }
     setStatus("saving");
@@ -127,7 +136,7 @@ export default function TelephonyMaintenanceView() {
             number: field === "number" ? nextValue : entry.number || ""
           }
         : { [field]: nextValue, is_global: true };
-      const res = await fetch(`${API}${isRemote ? `/remote/${editingCell.id}` : `/${editingCell.id}`}`, {
+      const res = await fetch(`${API}${isRemote ? `/remote/${entry.id}` : `/${entry.id}`}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -139,7 +148,7 @@ export default function TelephonyMaintenanceView() {
     } catch (error) {
       setStatus("error");
     }
-    setEditingCell({ id: null, field: null });
+    setEditingCell({ key: null, field: null });
     setTimeout(() => setStatus("idle"), 2000);
   };
 
@@ -238,16 +247,17 @@ export default function TelephonyMaintenanceView() {
               </thead>
               <tbody className="divide-y divide-sand-100">
                 {filteredEntries.length ? (
-                  filteredEntries.map((entry) => {
+                  filteredEntries.map((entry, index) => {
+                    const entryKey = entryKeyFor(entry, index);
                     const isNameEditing =
-                      editingCell.id === entry.id && editingCell.field === "name";
+                      editingCell.key === entryKey && editingCell.field === "name";
                     const isNumberEditing =
-                      editingCell.id === entry.id && editingCell.field === "number";
+                      editingCell.key === entryKey && editingCell.field === "number";
                     return (
-                      <tr key={entry.id} className="hover:bg-sand-50/70">
+                      <tr key={entryKey} className="hover:bg-sand-50/70">
                         <td
                           className="px-4 py-3 text-sand-900"
-                          onClick={() => startCellEdit(entry, "name")}
+                          onClick={() => startCellEdit(entry, "name", index)}
                         >
                           {isNameEditing ? (
                             <input
@@ -258,7 +268,7 @@ export default function TelephonyMaintenanceView() {
                               onBlur={() => commitCellEdit()}
                               onKeyDown={(event) => {
                                 if (event.key === "Enter") commitCellEdit();
-                                if (event.key === "Escape") setEditingCell({ id: null, field: null });
+                                if (event.key === "Escape") setEditingCell({ key: null, field: null });
                               }}
                               className="w-full rounded-md border border-sand-200 bg-white px-2 py-1 text-xs"
                             />
@@ -270,7 +280,7 @@ export default function TelephonyMaintenanceView() {
                         </td>
                         <td
                           className="px-4 py-3 text-sand-900"
-                          onClick={() => startCellEdit(entry, "number")}
+                          onClick={() => startCellEdit(entry, "number", index)}
                         >
                           {isNumberEditing ? (
                             <input
@@ -281,7 +291,7 @@ export default function TelephonyMaintenanceView() {
                               onBlur={() => commitCellEdit()}
                               onKeyDown={(event) => {
                                 if (event.key === "Enter") commitCellEdit();
-                                if (event.key === "Escape") setEditingCell({ id: null, field: null });
+                                if (event.key === "Escape") setEditingCell({ key: null, field: null });
                               }}
                               className="w-full rounded-md border border-sand-200 bg-white px-2 py-1 text-xs"
                             />
@@ -302,7 +312,7 @@ export default function TelephonyMaintenanceView() {
                           <button
                             type="button"
                             onClick={() => deleteEntry(entry.id)}
-                            disabled={mode === "remote"}
+                            disabled={!entry.id}
                             className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-40"
                             title="Entfernen"
                           >
