@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import base64
 import requests
+from urllib.parse import quote
 import logging
 
 # ================= DATABASE =================
@@ -1964,6 +1965,42 @@ def create_remote_pbx_phonebook(data: PbxPhonebookCreate):
     if entries:
         return entries[0]
     return {"name": data.name or "", "number": data.number or ""}
+
+@app.patch("/api/pbx_phonebook/remote/{entry_id}")
+def update_remote_pbx_phonebook(entry_id: str, data: PbxPhonebookUpdate):
+    with SessionLocal() as db:
+        base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
+    body = {
+        "data": [
+            {"name": "displayName", "value": data.name or ""},
+            {"name": "displayNumber", "value": data.number or ""},
+        ]
+    }
+    safe_id = quote(str(entry_id), safe="")
+    path = f"/api/customers/{customer_account}/phone-books/{safe_id}"
+    try:
+        payload = _nfon_request("PUT", base_url, api_key_id, api_key_secret, path, body_obj=body)
+    except HTTPException as exc:
+        if exc.status_code in {404, 405}:
+            payload = _nfon_request("PATCH", base_url, api_key_id, api_key_secret, path, body_obj=body)
+        else:
+            raise
+    entries = _extract_phonebook_entries(payload)
+    if entries:
+        return entries[0]
+    normalized = _normalize_phonebook_entry(payload if isinstance(payload, dict) else {})
+    if normalized:
+        return normalized
+    return {"id": entry_id, "name": data.name or "", "number": data.number or ""}
+
+@app.delete("/api/pbx_phonebook/remote/{entry_id}")
+def delete_remote_pbx_phonebook(entry_id: str):
+    with SessionLocal() as db:
+        base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
+    safe_id = quote(str(entry_id), safe="")
+    path = f"/api/customers/{customer_account}/phone-books/{safe_id}"
+    _nfon_request("DELETE", base_url, api_key_id, api_key_secret, path)
+    return {"status": "deleted"}
 
 
 @app.get("/api/pbx_phonebook/health")

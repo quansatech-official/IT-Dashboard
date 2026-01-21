@@ -6,8 +6,7 @@ const API = "/api/pbx_phonebook";
 const emptyDraft = {
   name: "",
   number: "",
-  is_global: true,
-  note: ""
+  is_global: true
 };
 
 export default function TelephonyMaintenanceView() {
@@ -66,14 +65,13 @@ export default function TelephonyMaintenanceView() {
     }
     setStatus("saving");
     try {
+      const payload = mode === "remote"
+        ? { name: draft.name, number: draft.number, is_global: true }
+        : { ...draft, is_global: true };
       const res = await fetch(mode === "remote" ? `${API}/remote` : API, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          mode === "remote"
-            ? { name: draft.name, number: draft.number }
-            : draft
-        )
+        body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error("save_failed");
       const data = await res.json();
@@ -91,8 +89,11 @@ export default function TelephonyMaintenanceView() {
   };
 
   const startCellEdit = (entry, field) => {
-    if (mode === "remote") {
-      setRemoteError("Bearbeiten ist fuer NFON-Import aktuell nicht verfuegbar.");
+    if (field === "is_global") {
+      return;
+    }
+    if (mode === "remote" && !["name", "number"].includes(field)) {
+      setRemoteError("Nur Name und Rufnummer sind im NFON-Import editierbar.");
       return;
     }
     setEditingCell({ id: entry.id, field });
@@ -105,10 +106,6 @@ export default function TelephonyMaintenanceView() {
 
   const commitCellEdit = async (overrideValue) => {
     if (!editingCell.id) return;
-    if (mode === "remote") {
-      setRemoteError("Bearbeiten ist fuer NFON-Import aktuell nicht verfuegbar.");
-      return;
-    }
     const entry = entries.find((item) => item.id === editingCell.id);
     if (!entry) {
       setEditingCell({ id: null, field: null });
@@ -123,10 +120,17 @@ export default function TelephonyMaintenanceView() {
     }
     setStatus("saving");
     try {
-      const res = await fetch(`${API}/${editingCell.id}`, {
+      const isRemote = mode === "remote";
+      const payload = isRemote
+        ? {
+            name: field === "name" ? nextValue : entry.name || "",
+            number: field === "number" ? nextValue : entry.number || ""
+          }
+        : { [field]: nextValue, is_global: true };
+      const res = await fetch(`${API}${isRemote ? `/remote/${editingCell.id}` : `/${editingCell.id}`}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [field]: nextValue })
+        body: JSON.stringify(payload)
       });
       if (!res.ok) throw new Error("save_failed");
       const data = await res.json();
@@ -141,13 +145,12 @@ export default function TelephonyMaintenanceView() {
 
   const deleteEntry = async (entryId) => {
     if (!window.confirm("Eintrag wirklich entfernen?")) return;
-    if (mode === "remote") {
-      setRemoteError("Loeschen ist fuer NFON-Import aktuell nicht verfuegbar.");
-      return;
-    }
     setStatus("saving");
     try {
-      const res = await fetch(`${API}/${entryId}`, { method: "DELETE" });
+      const res = await fetch(
+        `${API}${mode === "remote" ? `/remote/${entryId}` : `/${entryId}`}`,
+        { method: "DELETE" }
+      );
       if (!res.ok) throw new Error("delete_failed");
       setEntries((prev) => prev.filter((entry) => entry.id !== entryId));
       setStatus("saved");
@@ -160,7 +163,7 @@ export default function TelephonyMaintenanceView() {
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-3">
+        <div className="max-w-6xl mx-auto px-4 py-2 flex items-center gap-3">
           <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
             <Wrench size={18} />
           </div>
@@ -171,9 +174,9 @@ export default function TelephonyMaintenanceView() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
-        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <div className="flex items-center justify-between gap-3 mb-4">
+      <main className="max-w-6xl mx-auto px-4 py-4 space-y-4">
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-4">
+          <div className="flex items-center justify-between gap-3 mb-3">
             <div className="flex items-center gap-2 text-sand-700">
               <Settings size={18} />
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Telefonbuch</p>
@@ -186,10 +189,10 @@ export default function TelephonyMaintenanceView() {
             />
           </div>
           {remoteError ? (
-            <p className="mb-3 text-xs text-rose-600">{remoteError}</p>
+            <p className="mb-2 text-xs text-rose-600">{remoteError}</p>
           ) : null}
 
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-2 md:grid-cols-4">
             <input
               className="rounded-2xl border border-sand-200 px-3 py-2 text-xs"
               placeholder="Name"
@@ -205,11 +208,8 @@ export default function TelephonyMaintenanceView() {
             <label className="flex items-center gap-2 text-xs text-sand-600">
               <input
                 type="checkbox"
-                checked={draft.is_global}
-                onChange={(event) =>
-                  setDraft((prev) => ({ ...prev, is_global: event.target.checked }))
-                }
-                disabled={mode === "remote"}
+                checked
+                disabled
               />
               Global
             </label>
@@ -233,7 +233,6 @@ export default function TelephonyMaintenanceView() {
                   <th className="px-4 py-3 text-left">Name</th>
                   <th className="px-4 py-3 text-left">Rufnummer</th>
                   <th className="px-4 py-3 text-left">Global</th>
-                  <th className="px-4 py-3 text-left">Notiz</th>
                   <th className="px-4 py-3 text-right">Aktionen</th>
                 </tr>
               </thead>
@@ -244,10 +243,6 @@ export default function TelephonyMaintenanceView() {
                       editingCell.id === entry.id && editingCell.field === "name";
                     const isNumberEditing =
                       editingCell.id === entry.id && editingCell.field === "number";
-                    const isGlobalEditing =
-                      editingCell.id === entry.id && editingCell.field === "is_global";
-                    const isNoteEditing =
-                      editingCell.id === entry.id && editingCell.field === "note";
                     return (
                       <tr key={entry.id} className="hover:bg-sand-50/70">
                         <td
@@ -298,54 +293,10 @@ export default function TelephonyMaintenanceView() {
                         </td>
                         <td
                           className="px-4 py-3 text-sand-900"
-                          onClick={() => startCellEdit(entry, "is_global")}
                         >
-                          {isGlobalEditing ? (
-                            <label className="inline-flex items-center gap-2 text-xs text-sand-700">
-                              <input
-                                type="checkbox"
-                                checked={Boolean(editValue)}
-                                onMouseDown={(event) => event.stopPropagation()}
-                                onChange={(event) => {
-                                  const checked = event.target.checked;
-                                  setEditValue(checked);
-                                  commitCellEdit(checked);
-                                }}
-                                onBlur={() => commitCellEdit()}
-                              />
-                              Global
-                            </label>
-                          ) : entry.is_global ? (
-                            <span className="cursor-pointer rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-500">
-                              Global
-                            </span>
-                          ) : (
-                            <span className="cursor-pointer text-sand-400">—</span>
-                          )}
-                        </td>
-                        <td
-                          className="px-4 py-3 text-sand-700"
-                          onClick={() => startCellEdit(entry, "note")}
-                        >
-                          {isNoteEditing ? (
-                            <input
-                              autoFocus
-                              value={editValue}
-                              onChange={(event) => setEditValue(event.target.value)}
-                              onMouseDown={(event) => event.stopPropagation()}
-                              onBlur={() => commitCellEdit()}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") commitCellEdit();
-                                if (event.key === "Escape") setEditingCell({ id: null, field: null });
-                              }}
-                              className="w-full rounded-md border border-sand-200 bg-white px-2 py-1 text-xs"
-                              placeholder="Notiz"
-                            />
-                          ) : (
-                            <span className="cursor-pointer">
-                              {entry.note || <span className="text-sand-400">—</span>}
-                            </span>
-                          )}
+                          <span className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-500">
+                            Global
+                          </span>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <button
@@ -364,7 +315,7 @@ export default function TelephonyMaintenanceView() {
                 ) : (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={4}
                       className="px-4 py-6 text-center text-sm text-sand-500"
                     >
                       {status === "loading" ? "Telefonbuch wird geladen..." : "Noch keine Eintraege."}
