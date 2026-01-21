@@ -34,6 +34,30 @@ services:
     ports:
       - "${BACKEND_PORT:-9873}:8000"
 
+  marketplace-import-service:
+    build:
+      context: ./marketplace-import-service
+    container_name: it-dashboard-marketplace-import
+    restart: unless-stopped
+    environment:
+      TD_SYNNEX_BASE_URL: ${TD_SYNNEX_BASE_URL:-https://api.streamone.com}
+      TD_SYNNEX_TOKEN_URL: ${TD_SYNNEX_TOKEN_URL:-https://api.streamone.com/oauth/token}
+      TD_SYNNEX_CLIENT_ID: ${TD_SYNNEX_CLIENT_ID:-}
+      TD_SYNNEX_CLIENT_SECRET: ${TD_SYNNEX_CLIENT_SECRET:-}
+      TD_SYNNEX_ACCOUNT_ID: ${TD_SYNNEX_ACCOUNT_ID:-}
+      ALSO_SFTP_HOST: ${ALSO_SFTP_HOST:-}
+      ALSO_SFTP_PORT: ${ALSO_SFTP_PORT:-22}
+      ALSO_SFTP_USER: ${ALSO_SFTP_USER:-}
+      ALSO_SFTP_PASSWORD: ${ALSO_SFTP_PASSWORD:-}
+      ALSO_SFTP_KEY_PATH: ${ALSO_SFTP_KEY_PATH:-}
+      ALSO_SFTP_DIR: ${ALSO_SFTP_DIR:-}
+      ALSO_FEED_DB_PATH: ${ALSO_FEED_DB_PATH:-/data/also_feed.db}
+      REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-20}
+    ports:
+      - "${MARKETPLACE_IMPORT_PORT:-9876}:8000"
+    volumes:
+      - marketplace-import-data:/data
+
   telephony:
     build:
       context: ./backend
@@ -115,3 +139,4 @@ services:
 volumes:
   dashboard-db:
   ollama-data:
+  marketplace-import-data:

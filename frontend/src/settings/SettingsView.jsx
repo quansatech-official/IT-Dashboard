@@ -44,6 +44,22 @@ const defaultPbx = {
   has_pbx_api_key_secret: false
 };
 
+const defaultMarketplace = {
+  td_synnex_base_url: "https://api.streamone.com",
+  td_synnex_token_url: "https://api.streamone.com/oauth/token",
+  td_synnex_client_id: "",
+  td_synnex_client_secret: "",
+  td_synnex_account_id: "",
+  has_td_synnex_client_secret: false,
+  also_sftp_host: "",
+  also_sftp_port: "22",
+  also_sftp_user: "",
+  also_sftp_password: "",
+  also_sftp_key_path: "",
+  also_sftp_dir: "",
+  has_also_sftp_password: false
+};
+
 const loadCachedSmtp = () => {
   if (typeof window === "undefined") return defaultSmtp;
   try {
@@ -89,6 +105,30 @@ export default function SettingsView() {
   const [pbxLoadStatus, setPbxLoadStatus] = useState("loading");
   const [pbxApiStatus, setPbxApiStatus] = useState("idle");
   const [pbxDebugOpen, setPbxDebugOpen] = useState(false);
+  const [marketplace, setMarketplace] = useState(defaultMarketplace);
+  const [marketplaceStatus, setMarketplaceStatus] = useState("idle");
+  const [marketplaceLoadStatus, setMarketplaceLoadStatus] = useState("loading");
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  const [marketplaceDebugStatus, setMarketplaceDebugStatus] = useState("idle");
+  const [marketplaceDebugInfo, setMarketplaceDebugInfo] = useState({
+    lastCheckAt: "",
+    sources: [],
+    error: ""
+  });
+  const [marketplaceSourceDebug, setMarketplaceSourceDebug] = useState({});
+  const [alsoStatus, setAlsoStatus] = useState({
+    status: "idle",
+    lastCheckAt: "",
+    connected: null,
+    latestFile: "",
+    latestSize: 0,
+    lastImportedAt: "",
+    lastImportedCount: 0,
+    lastSkippedCount: 0,
+    lastErrorCount: 0,
+    lastFilename: "",
+    error: ""
+  });
   const [pbxDebugInfo, setPbxDebugInfo] = useState({
     lastCheckAt: "",
     lastCheckOk: null,
@@ -231,11 +271,29 @@ export default function SettingsView() {
           pbx_api_key_secret: "",
           has_pbx_api_key_secret: Boolean(data?.has_pbx_api_key_secret)
         }));
+        setMarketplace((prev) => ({
+          ...prev,
+          td_synnex_base_url: data?.td_synnex_base_url || defaultMarketplace.td_synnex_base_url,
+          td_synnex_token_url: data?.td_synnex_token_url || defaultMarketplace.td_synnex_token_url,
+          td_synnex_client_id: data?.td_synnex_client_id || "",
+          td_synnex_account_id: data?.td_synnex_account_id || "",
+          td_synnex_client_secret: "",
+          has_td_synnex_client_secret: Boolean(data?.has_td_synnex_client_secret),
+          also_sftp_host: data?.also_sftp_host || "",
+          also_sftp_port: data?.also_sftp_port || defaultMarketplace.also_sftp_port,
+          also_sftp_user: data?.also_sftp_user || "",
+          also_sftp_key_path: data?.also_sftp_key_path || "",
+          also_sftp_dir: data?.also_sftp_dir || "",
+          also_sftp_password: "",
+          has_also_sftp_password: Boolean(data?.has_also_sftp_password)
+        }));
         setPbxLoadStatus("ready");
+        setMarketplaceLoadStatus("ready");
       })
       .catch(() => {
         if (!active) return;
         setPbxLoadStatus("error");
+        setMarketplaceLoadStatus("error");
       });
     return () => {
       active = false;
@@ -246,6 +304,12 @@ export default function SettingsView() {
     if (pbxLoadStatus !== "ready") return;
     refreshPbxDebug();
   }, [pbxLoadStatus]);
+
+  useEffect(() => {
+    if (!marketplaceOpen) return;
+    refreshMarketplaceDebug();
+    refreshAlsoStatus();
+  }, [marketplaceOpen]);
 
   useEffect(() => {
     let active = true;
@@ -564,6 +628,146 @@ export default function SettingsView() {
       setPbxStatus("error");
     }
     setTimeout(() => setPbxStatus("idle"), 2000);
+  };
+
+  const saveMarketplaceSettings = async () => {
+    setMarketplaceStatus("saving");
+    try {
+      const res = await fetch(`${API}/integrations`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          td_synnex_base_url: marketplace.td_synnex_base_url,
+          td_synnex_token_url: marketplace.td_synnex_token_url,
+          td_synnex_client_id: marketplace.td_synnex_client_id,
+          td_synnex_client_secret: marketplace.td_synnex_client_secret,
+          td_synnex_account_id: marketplace.td_synnex_account_id,
+          also_sftp_host: marketplace.also_sftp_host,
+          also_sftp_port: marketplace.also_sftp_port,
+          also_sftp_user: marketplace.also_sftp_user,
+          also_sftp_password: marketplace.also_sftp_password,
+          also_sftp_key_path: marketplace.also_sftp_key_path,
+          also_sftp_dir: marketplace.also_sftp_dir
+        })
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      setMarketplace((prev) => ({
+        ...prev,
+        td_synnex_base_url: data?.td_synnex_base_url || defaultMarketplace.td_synnex_base_url,
+        td_synnex_token_url: data?.td_synnex_token_url || defaultMarketplace.td_synnex_token_url,
+        td_synnex_client_id: data?.td_synnex_client_id || "",
+        td_synnex_account_id: data?.td_synnex_account_id || "",
+        td_synnex_client_secret: "",
+        has_td_synnex_client_secret: Boolean(data?.has_td_synnex_client_secret),
+        also_sftp_host: data?.also_sftp_host || "",
+        also_sftp_port: data?.also_sftp_port || defaultMarketplace.also_sftp_port,
+        also_sftp_user: data?.also_sftp_user || "",
+        also_sftp_key_path: data?.also_sftp_key_path || "",
+        also_sftp_dir: data?.also_sftp_dir || "",
+        also_sftp_password: "",
+        has_also_sftp_password: Boolean(data?.has_also_sftp_password)
+      }));
+      setMarketplaceStatus("saved");
+    } catch (error) {
+      setMarketplaceStatus("error");
+    }
+    setTimeout(() => setMarketplaceStatus("idle"), 2000);
+  };
+
+  const refreshMarketplaceDebug = async () => {
+    setMarketplaceDebugStatus("loading");
+    try {
+      const res = await fetch(`${API}/marketplace/sources`);
+      if (!res.ok) throw new Error("debug_failed");
+      const data = await res.json();
+      setMarketplaceDebugInfo({
+        lastCheckAt: new Date().toISOString(),
+        sources: Array.isArray(data) ? data : [],
+        error: ""
+      });
+      setMarketplaceDebugStatus("ready");
+    } catch (error) {
+      setMarketplaceDebugInfo({
+        lastCheckAt: new Date().toISOString(),
+        sources: [],
+        error: error?.message ? String(error.message) : "Fehler"
+      });
+      setMarketplaceDebugStatus("error");
+    }
+    setTimeout(() => setMarketplaceDebugStatus("idle"), 2000);
+  };
+
+  const refreshMarketplaceSourceDebug = async (source) => {
+    setMarketplaceSourceDebug((prev) => ({
+      ...prev,
+      [source]: { status: "loading", lastCheckAt: new Date().toISOString(), available: null, error: "" }
+    }));
+    try {
+      const res = await fetch(`${API}/marketplace/debug/${source}`);
+      if (!res.ok) throw new Error("debug_failed");
+      const data = await res.json();
+      setMarketplaceSourceDebug((prev) => ({
+        ...prev,
+        [source]: {
+          status: "ready",
+          lastCheckAt: new Date().toISOString(),
+          available: Boolean(data?.available),
+          error: data?.error || ""
+        }
+      }));
+    } catch (error) {
+      setMarketplaceSourceDebug((prev) => ({
+        ...prev,
+        [source]: {
+          status: "error",
+          lastCheckAt: new Date().toISOString(),
+          available: false,
+          error: error?.message ? String(error.message) : "Fehler"
+        }
+      }));
+    }
+  };
+
+  const refreshAlsoStatus = async () => {
+    setAlsoStatus((prev) => ({
+      ...prev,
+      status: "loading",
+      lastCheckAt: new Date().toISOString(),
+      error: ""
+    }));
+    try {
+      const res = await fetch(`${API}/marketplace/also/status`);
+      if (!res.ok) throw new Error("status_failed");
+      const data = await res.json();
+      setAlsoStatus({
+        status: "ready",
+        lastCheckAt: new Date().toISOString(),
+        connected: Boolean(data?.connected),
+        latestFile: data?.latest_file || "",
+        latestSize: Number(data?.latest_size || 0),
+        lastImportedAt: data?.last_imported_at || "",
+        lastImportedCount: Number(data?.last_imported_count || 0),
+        lastSkippedCount: Number(data?.last_skipped_count || 0),
+        lastErrorCount: Number(data?.last_error_count || 0),
+        lastFilename: data?.last_filename || "",
+        error: data?.error || ""
+      });
+    } catch (error) {
+      setAlsoStatus({
+        status: "error",
+        lastCheckAt: new Date().toISOString(),
+        connected: false,
+        latestFile: "",
+        latestSize: 0,
+        lastImportedAt: "",
+        lastImportedCount: 0,
+        lastSkippedCount: 0,
+        lastErrorCount: 0,
+        lastFilename: "",
+        error: error?.message ? String(error.message) : "Fehler"
+      });
+    }
   };
 
   const refreshPbxDebug = async () => {
@@ -1413,6 +1617,347 @@ export default function SettingsView() {
                       {pbxDebugInfo.versionPreview || pbxDebugInfo.versionError || "n/a"}
                     </div>
                   </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setMarketplaceOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                Marketplace Import
+              </p>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-sand-600">
+              <span className="text-sm text-sand-500">{marketplaceOpen ? "–" : "+"}</span>
+            </div>
+          </button>
+          {marketplaceOpen ? (
+            <>
+              <p className="mt-4 text-xs text-sand-500 mb-4">
+                Zugangsdaten und Endpunkte fuer Marketplace-Importe.
+              </p>
+              <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                    TD SYNNEX (StreamOne)
+                  </p>
+                  <span className="text-xs text-sand-500">
+                    {marketplace.td_synnex_client_id ? "konfiguriert" : "offen"}
+                  </span>
+                </div>
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-sand-500">Base URL</label>
+                    <input
+                      value={marketplace.td_synnex_base_url}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          td_synnex_base_url: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="https://api.streamone.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Token URL</label>
+                    <input
+                      value={marketplace.td_synnex_token_url}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          td_synnex_token_url: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="https://api.streamone.com/oauth/token"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Client ID</label>
+                    <input
+                      value={marketplace.td_synnex_client_id}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          td_synnex_client_id: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Client ID"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Client Secret</label>
+                    <input
+                      type="password"
+                      value={marketplace.td_synnex_client_secret}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          td_synnex_client_secret: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder={
+                        marketplace.has_td_synnex_client_secret ? "Gespeichert" : "••••••••"
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Account ID</label>
+                    <input
+                      value={marketplace.td_synnex_account_id}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          td_synnex_account_id: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Account ID"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">ALSO SFTP</p>
+                  <span className="text-xs text-sand-500">
+                    {marketplace.also_sftp_host ? "konfiguriert" : "offen"}
+                  </span>
+                </div>
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-sand-500">Host</label>
+                    <input
+                      value={marketplace.also_sftp_host}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          also_sftp_host: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="sftp.also.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Port</label>
+                    <input
+                      value={marketplace.also_sftp_port}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          also_sftp_port: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="22"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Benutzer</label>
+                    <input
+                      value={marketplace.also_sftp_user}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          also_sftp_user: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Username"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Passwort</label>
+                    <input
+                      type="password"
+                      value={marketplace.also_sftp_password}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          also_sftp_password: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder={
+                        marketplace.has_also_sftp_password ? "Gespeichert" : "••••••••"
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Key Path (optional)</label>
+                    <input
+                      value={marketplace.also_sftp_key_path}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          also_sftp_key_path: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="/run/secrets/also_sftp.key"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Verzeichnis</label>
+                    <input
+                      value={marketplace.also_sftp_dir}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          also_sftp_dir: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="/prices"
+                    />
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-sand-600">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch(`${API}/marketplace/sync/also`, { method: "POST" });
+                      refreshMarketplaceSourceDebug("also");
+                    }}
+                    className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide text-sand-600"
+                  >
+                    ALSO Sync
+                  </button>
+                  <button
+                    type="button"
+                    onClick={refreshAlsoStatus}
+                    className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide text-sand-600"
+                  >
+                    Status prüfen
+                  </button>
+                  <span>
+                    {alsoStatus.connected === null
+                      ? "Status: n/a"
+                      : alsoStatus.connected
+                      ? "SFTP verbunden"
+                      : "SFTP offline"}
+                  </span>
+                  {alsoStatus.latestFile ? (
+                    <span>Datei: {alsoStatus.latestFile}</span>
+                  ) : null}
+                  {alsoStatus.latestSize ? (
+                    <span>Größe: {Math.round(alsoStatus.latestSize / 1024)} KB</span>
+                  ) : null}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-sand-600">
+                  {alsoStatus.lastImportedAt ? (
+                    <span>Letzter Import: {alsoStatus.lastImportedAt}</span>
+                  ) : null}
+                  {alsoStatus.lastFilename ? (
+                    <span>Import-Datei: {alsoStatus.lastFilename}</span>
+                  ) : null}
+                  <span>
+                    Importiert: {alsoStatus.lastImportedCount} · Übersprungen:{" "}
+                    {alsoStatus.lastSkippedCount} · Fehler: {alsoStatus.lastErrorCount}
+                  </span>
+                </div>
+                {alsoStatus.error ? (
+                  <div className="mt-2 text-xs text-rose-600">{alsoStatus.error}</div>
+                ) : null}
+                <p className="mt-3 text-xs text-sand-500">
+                  Hinweis: Der Import ersetzt die ALSO-Tabelle komplett; SKU ist eindeutig,
+                  dadurch keine Duplikate.
+                </p>
+              </div>
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  onClick={saveMarketplaceSettings}
+                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                >
+                  Speichern
+                </button>
+                <button
+                  type="button"
+                  onClick={refreshMarketplaceDebug}
+                  className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600"
+                >
+                  Status neu laden
+                </button>
+                {marketplaceLoadStatus === "error" && (
+                  <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+                )}
+                {marketplaceStatus === "saved" && (
+                  <span className="text-sm text-emerald-600">Gespeichert</span>
+                )}
+                {marketplaceStatus === "error" && (
+                  <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+                )}
+                {marketplaceDebugStatus === "error" && (
+                  <span className="text-sm text-rose-600">Debug fehlgeschlagen</span>
+                )}
+              </div>
+
+              <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                    Debug Container
+                  </p>
+                  <span className="text-sand-500">
+                    {marketplaceDebugInfo.lastCheckAt || "n/a"}
+                  </span>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {["td_synnex", "also", "amazon"].map((source) => {
+                    const info = marketplaceDebugInfo.sources.find(
+                      (entry) => entry?.source === source
+                    );
+                    const debug = marketplaceSourceDebug[source];
+                    const ok =
+                      typeof debug?.available === "boolean"
+                        ? debug.available
+                        : Boolean(info?.available);
+                    return (
+                      <div
+                        key={source}
+                        className="rounded-xl border border-sand-200 bg-white px-3 py-3"
+                      >
+                        <div className="flex items-center justify-between text-[11px] uppercase tracking-[0.2em] text-sand-500">
+                          <span>Debug {source}</span>
+                          <span className={ok ? "text-emerald-600" : "text-rose-500"}>
+                            {ok ? "bereit" : "offline"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-sand-600">
+                          {ok ? "Adapter aktiv" : "Adapter nicht verfügbar"}
+                        </p>
+                        <div className="mt-2 flex items-center justify-between text-xs text-sand-500">
+                          <span>{debug?.lastCheckAt || "n/a"}</span>
+                          <button
+                            type="button"
+                            onClick={() => refreshMarketplaceSourceDebug(source)}
+                            className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                          >
+                            {debug?.status === "loading" ? "..." : "Test"}
+                          </button>
+                        </div>
+                        {debug?.error ? (
+                          <div className="mt-2 text-xs text-rose-600">{debug.error}</div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+                {marketplaceDebugInfo.error ? (
+                  <div className="mt-3 text-rose-600">{marketplaceDebugInfo.error}</div>
                 ) : null}
               </div>
             </>

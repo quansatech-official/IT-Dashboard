@@ -242,6 +242,18 @@ class IntegrationSettings(Base):
     pbx_api_key_id = Column(String, default="")
     pbx_api_key_secret = Column(String, default="")
     pbx_customer_account = Column(String, default="")
+    marketplace_import_url = Column(String, default="")
+    td_synnex_base_url = Column(String, default="")
+    td_synnex_token_url = Column(String, default="")
+    td_synnex_client_id = Column(String, default="")
+    td_synnex_client_secret = Column(String, default="")
+    td_synnex_account_id = Column(String, default="")
+    also_sftp_host = Column(String, default="")
+    also_sftp_port = Column(String, default="")
+    also_sftp_user = Column(String, default="")
+    also_sftp_password = Column(String, default="")
+    also_sftp_key_path = Column(String, default="")
+    also_sftp_dir = Column(String, default="")
 
 
 class SmtpSettings(Base):
@@ -324,6 +336,30 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_api_key_secret VARCHAR DEFAULT ''")
     if "pbx_customer_account" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_customer_account VARCHAR DEFAULT ''")
+    if "marketplace_import_url" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN marketplace_import_url VARCHAR DEFAULT ''")
+    if "td_synnex_base_url" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN td_synnex_base_url VARCHAR DEFAULT ''")
+    if "td_synnex_token_url" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN td_synnex_token_url VARCHAR DEFAULT ''")
+    if "td_synnex_client_id" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN td_synnex_client_id VARCHAR DEFAULT ''")
+    if "td_synnex_client_secret" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN td_synnex_client_secret VARCHAR DEFAULT ''")
+    if "td_synnex_account_id" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN td_synnex_account_id VARCHAR DEFAULT ''")
+    if "also_sftp_host" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_host VARCHAR DEFAULT ''")
+    if "also_sftp_port" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_port VARCHAR DEFAULT ''")
+    if "also_sftp_user" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_user VARCHAR DEFAULT ''")
+    if "also_sftp_password" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_password VARCHAR DEFAULT ''")
+    if "also_sftp_key_path" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_key_path VARCHAR DEFAULT ''")
+    if "also_sftp_dir" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_dir VARCHAR DEFAULT ''")
     if statements:
         with engine.begin() as connection:
             for statement in statements:
@@ -763,6 +799,18 @@ class IntegrationSettingsUpdate(BaseModel):
     pbx_api_key_id: Optional[str] = None
     pbx_api_key_secret: Optional[str] = None
     pbx_customer_account: Optional[str] = None
+    marketplace_import_url: Optional[str] = None
+    td_synnex_base_url: Optional[str] = None
+    td_synnex_token_url: Optional[str] = None
+    td_synnex_client_id: Optional[str] = None
+    td_synnex_client_secret: Optional[str] = None
+    td_synnex_account_id: Optional[str] = None
+    also_sftp_host: Optional[str] = None
+    also_sftp_port: Optional[str] = None
+    also_sftp_user: Optional[str] = None
+    also_sftp_password: Optional[str] = None
+    also_sftp_key_path: Optional[str] = None
+    also_sftp_dir: Optional[str] = None
 
 
 class SmtpSettingsUpdate(BaseModel):
@@ -1139,6 +1187,18 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "pbx_api_key_id": settings.pbx_api_key_id,
         "pbx_customer_account": settings.pbx_customer_account,
         "has_pbx_api_key_secret": bool(settings.pbx_api_key_secret),
+        "marketplace_import_url": settings.marketplace_import_url,
+        "td_synnex_base_url": settings.td_synnex_base_url,
+        "td_synnex_token_url": settings.td_synnex_token_url,
+        "td_synnex_client_id": settings.td_synnex_client_id,
+        "td_synnex_account_id": settings.td_synnex_account_id,
+        "has_td_synnex_client_secret": bool(settings.td_synnex_client_secret),
+        "also_sftp_host": settings.also_sftp_host,
+        "also_sftp_port": settings.also_sftp_port,
+        "also_sftp_user": settings.also_sftp_user,
+        "also_sftp_key_path": settings.also_sftp_key_path,
+        "also_sftp_dir": settings.also_sftp_dir,
+        "has_also_sftp_password": bool(settings.also_sftp_password),
     }
 
 
@@ -1389,6 +1449,17 @@ def _get_settings(db) -> IntegrationSettings:
         db.commit()
         db.refresh(settings)
     return settings
+
+def _get_marketplace_import_url(db) -> str:
+    settings = _get_settings(db)
+    url = (settings.marketplace_import_url or "").strip()
+    if not url:
+        url = os.environ.get("MARKETPLACE_IMPORT_URL", "").strip()
+    if not url:
+        url = "http://marketplace-import-service:8000"
+    if not url:
+        raise HTTPException(400, "Marketplace import URL not configured")
+    return url.rstrip("/")
 
 def _normalize_phonebook_entry(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(item, dict):
@@ -2166,7 +2237,14 @@ def update_integrations(data: IntegrationSettingsUpdate):
             db.add(settings)
             db.flush()
 
-        sensitive_fields = {"rmm_password", "pbx_password", "pbx_refresh_token", "pbx_api_key_secret"}
+        sensitive_fields = {
+            "rmm_password",
+            "pbx_password",
+            "pbx_refresh_token",
+            "pbx_api_key_secret",
+            "td_synnex_client_secret",
+            "also_sftp_password",
+        }
         for field, value in data.dict(exclude_unset=True).items():
             if field in sensitive_fields and value in (None, ""):
                 continue
@@ -2174,6 +2252,106 @@ def update_integrations(data: IntegrationSettingsUpdate):
 
         db.commit()
         return serialize_integration_settings(settings)
+
+
+@app.get("/api/marketplace/sources")
+def marketplace_sources():
+    with SessionLocal() as db:
+        base_url = _get_marketplace_import_url(db)
+    try:
+        response = requests.get(f"{base_url}/import/sources", timeout=20)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import error: {exc}") from exc
+    return response.json()
+
+
+@app.get("/api/marketplace/search")
+def marketplace_search(
+    source: str,
+    query: str,
+    sku: Optional[str] = None,
+    manufacturer_sku: Optional[str] = None,
+):
+    with SessionLocal() as db:
+        base_url = _get_marketplace_import_url(db)
+    params = {"source": source, "query": query}
+    if sku:
+        params["sku"] = sku
+    if manufacturer_sku:
+        params["manufacturer_sku"] = manufacturer_sku
+    try:
+        response = requests.get(f"{base_url}/import/search", params=params, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import error: {exc}") from exc
+    return response.json()
+
+
+@app.get("/api/marketplace/item/{sku}")
+def marketplace_item(sku: str, source: str):
+    with SessionLocal() as db:
+        base_url = _get_marketplace_import_url(db)
+    try:
+        response = requests.get(
+            f"{base_url}/import/item/{quote(sku)}",
+            params={"source": source},
+            timeout=30,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import error: {exc}") from exc
+    return response.json()
+
+
+@app.get("/api/marketplace/debug/{source}")
+def marketplace_debug(source: str):
+    with SessionLocal() as db:
+        base_url = _get_marketplace_import_url(db)
+    try:
+        response = requests.get(f"{base_url}/import/sources", timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import error: {exc}") from exc
+    sources = payload if isinstance(payload, list) else []
+    entry = next((item for item in sources if item.get("source") == source), None)
+    if not entry:
+        return {"source": source, "available": False, "error": "source not returned"}
+    return {"source": entry.get("source"), "available": bool(entry.get("available")), "error": ""}
+
+
+@app.post("/api/marketplace/sync/also")
+def marketplace_sync_also():
+    with SessionLocal() as db:
+        settings = _get_settings(db)
+        base_url = _get_marketplace_import_url(db)
+        payload = {
+            "host": settings.also_sftp_host,
+            "port": settings.also_sftp_port,
+            "user": settings.also_sftp_user,
+            "password": settings.also_sftp_password,
+            "key_path": settings.also_sftp_key_path,
+            "dir": settings.also_sftp_dir,
+        }
+    try:
+        response = requests.post(f"{base_url}/import/also/config", json=payload, timeout=20)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import sync error: {exc}") from exc
+    return {"status": "ok"}
+
+
+@app.get("/api/marketplace/also/status")
+def marketplace_also_status():
+    with SessionLocal() as db:
+        base_url = _get_marketplace_import_url(db)
+    try:
+        response = requests.get(f"{base_url}/import/also/status", timeout=20)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import status error: {exc}") from exc
+    return response.json()
 
 # ============ PBX PHONEBOOK ============
 @app.get("/api/pbx_phonebook")

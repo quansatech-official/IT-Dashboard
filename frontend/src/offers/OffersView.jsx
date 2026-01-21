@@ -1358,6 +1358,13 @@ export default function OffersView() {
   const autosaveTimer = useRef(null);
   const serverSaveTimer = useRef(null);
   const [detailDraft, setDetailDraft] = useState("");
+  const [importerOpen, setImporterOpen] = useState(false);
+  const [importSources, setImportSources] = useState([]);
+  const [importSource, setImportSource] = useState("");
+  const [importQuery, setImportQuery] = useState("");
+  const [importResults, setImportResults] = useState([]);
+  const [importStatus, setImportStatus] = useState("idle");
+  const [importError, setImportError] = useState("");
 
   const activeOffer = offers.find((offer) => offer.id === activeId) || null;
   const previewOffer = offers.find((offer) => offer.id === previewOfferId) || null;
@@ -1439,6 +1446,30 @@ export default function OffersView() {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!importerOpen) return;
+    let active = true;
+    setImportStatus("loading");
+    setImportError("");
+    fetch("/api/marketplace/sources")
+      .then((res) => (res && res.ok ? res.json() : []))
+      .then((data) => {
+        if (!active) return;
+        const sources = Array.isArray(data) ? data : [];
+        setImportSources(sources);
+        setImportSource((prev) => prev || "all");
+        setImportStatus("idle");
+      })
+      .catch((error) => {
+        if (!active) return;
+        setImportError(error?.message || "Import-Service nicht erreichbar.");
+        setImportStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [importerOpen]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2387,6 +2418,58 @@ export default function OffersView() {
     setPayloadTimestamp(new Date().toISOString());
   };
 
+  const runImporterSearch = async () => {
+    if (!importQuery) return;
+    setImportStatus("loading");
+    setImportError("");
+    try {
+      if (importSource === "all") {
+        const activeSources = importSources
+          .filter((entry) => entry?.source)
+          .map((entry) => entry.source);
+        const results = await Promise.all(
+          activeSources.map(async (source) => {
+            const params = new URLSearchParams({
+              source,
+              query: importQuery
+            });
+            const res = await fetch(`/api/marketplace/search?${params.toString()}`);
+            if (!res.ok) return [];
+            const data = await res.json();
+            return Array.isArray(data) ? data : [];
+          })
+        );
+        setImportResults(results.flat());
+      } else {
+        const params = new URLSearchParams({
+          source: importSource,
+          query: importQuery
+        });
+        const res = await fetch(`/api/marketplace/search?${params.toString()}`);
+        if (!res.ok) throw new Error("Import-Suche fehlgeschlagen.");
+        const data = await res.json();
+        setImportResults(Array.isArray(data) ? data : []);
+      }
+      setImportStatus("idle");
+    } catch (error) {
+      setImportError(error?.message || "Import-Suche fehlgeschlagen.");
+      setImportStatus("error");
+    }
+  };
+
+  const addImportedItem = (item) => {
+    if (!activeOffer || !item) return;
+    const price = Number(item.recommendedVK ?? item.ekMin ?? item.ekMax ?? 0);
+    addDeviceItem({
+      title: item.title || item.sku || "Material",
+      product: item.title || item.sku || "Material",
+      description: item.shortDescription || "",
+      price,
+      quantity: 1
+    });
+    setImporterOpen(false);
+  };
+
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
@@ -2919,7 +3002,7 @@ export default function OffersView() {
                 </div>
 
                 <div className="mt-4 space-y-3">
-                    <div className="grid gap-3 md:grid-cols-3">
+                    <div className="grid gap-3 md:grid-cols-4">
                       <div className="bg-white border border-sand-200 rounded-2xl p-3 shadow-sm flex flex-col gap-2">
                         <div className="flex items-center gap-2 text-sand-700">
                           <Plus size={16} />
@@ -3010,6 +3093,25 @@ export default function OffersView() {
                           className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           <Plus size={14} /> Hinzufügen
+                        </button>
+                      </div>
+
+                      <div className="bg-white border border-sand-200 rounded-2xl p-3 shadow-sm flex flex-col gap-2">
+                        <div className="flex items-center gap-2 text-sand-700">
+                          <Sparkles size={16} />
+                          <p className="text-xs uppercase tracking-wide text-sand-600">
+                            Materialimporter
+                          </p>
+                        </div>
+                        <p className="text-sm text-sand-600">
+                          Import aus Marketplace-APIs übernehmen.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setImporterOpen(true)}
+                          className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                        >
+                          <Plus size={14} /> Öffnen
                         </button>
                       </div>
                     </div>
@@ -4765,6 +4867,135 @@ export default function OffersView() {
             </div>
           </div>
           <OfferPreview offer={previewOffer} scale={0.9} mode={previewMode} />
+        </div>
+      </div>
+    ) : null}
+    {importerOpen ? (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-3xl bg-white p-6 shadow-soft">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                Materialimporter
+              </p>
+              <h3 className="text-lg font-display text-sand-900">
+                Marketplace durchsuchen
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setImporterOpen(false)}
+              className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+              title="Schließen"
+            >
+              <X size={14} />
+            </button>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-[0.6fr_1fr_auto] items-end">
+            <Field label="Marketplace">
+              <SelectField
+                value={importSource}
+                onChange={(event) => setImportSource(event.target.value)}
+              >
+                <option value="all">Alle Marketplaces</option>
+                {importSources.map((source) => (
+                  <option key={source.source} value={source.source}>
+                    {source.source}
+                    {source.available ? "" : " (nicht aktiv)"}
+                  </option>
+                ))}
+              </SelectField>
+            </Field>
+            <Field label="Suche">
+              <input
+                className={inputClass}
+                value={importQuery}
+                onChange={(event) => setImportQuery(event.target.value)}
+                placeholder="Gerät, SKU oder Hersteller..."
+              />
+            </Field>
+            <button
+              type="button"
+              onClick={runImporterSearch}
+              disabled={!importQuery || importStatus === "loading"}
+              className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {importStatus === "loading" ? "Suche..." : "Suchen"}
+            </button>
+          </div>
+          {importSources.length ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-sand-600">
+              {importSources.map((source) => (
+                <span
+                  key={`${source.source}-chip`}
+                  className={`rounded-full border px-3 py-1 uppercase tracking-[0.2em] ${
+                    source.available
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-sand-200 bg-white text-sand-500"
+                  }`}
+                >
+                  {source.source}
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          {importError ? (
+            <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600">
+              {importError}
+            </div>
+          ) : null}
+
+          <div className="mt-4 space-y-2">
+            {importResults.length ? (
+              importResults.map((item) => (
+                <div
+                  key={`${item.source}-${item.sku}`}
+                  className="rounded-2xl border border-sand-200 bg-white px-3 py-3 text-sm text-sand-700 flex flex-col gap-2 md:flex-row md:items-center md:justify-between"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-sand-900">
+                      {item.title || item.sku}
+                    </p>
+                    <p className="text-xs text-sand-500">
+                      {item.source ? `${item.source.toUpperCase()} · ` : ""}SKU {item.sku}
+                      {item.currency ? ` · ${item.currency}` : ""}
+                    </p>
+                    {item.shortDescription ? (
+                      <p className="mt-1 text-xs text-sand-600 line-clamp-2">
+                        {item.shortDescription}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="text-right text-xs text-sand-500">
+                      <p>VK {formatMoney(item.recommendedVK ?? 0)}</p>
+                      <p>
+                        EK {formatMoney(item.ekMin ?? 0)}
+                        {item.ekMax && item.ekMax !== item.ekMin
+                          ? ` - ${formatMoney(item.ekMax)}`
+                          : ""}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => addImportedItem(item)}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                    >
+                      In Angebot übernehmen
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-4 text-sm text-sand-500">
+                {importStatus === "loading"
+                  ? "Suche läuft..."
+                  : "Noch keine Ergebnisse."}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     ) : null}
