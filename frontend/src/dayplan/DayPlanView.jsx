@@ -79,6 +79,8 @@ export default function DayPlanView() {
   const [editingCustomerId, setEditingCustomerId] = useState(null);
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
   const [customerFilter, setCustomerFilter] = useState("");
+  const [doneFilter, setDoneFilter] = useState("");
+  const [billedFilter, setBilledFilter] = useState("");
   const [detailOpenId, setDetailOpenId] = useState(null);
   const [detailEdits, setDetailEdits] = useState({});
   const [collapsedTimers, setCollapsedTimers] = useState(() => {
@@ -443,6 +445,20 @@ export default function DayPlanView() {
     return Array.from(new Set([base, noH])).filter(Boolean);
   };
 
+  const matchesTask = (task, needle) => {
+    if (!needle) return true;
+    const title = normalizeText(task?.title || "");
+    const details = normalizeText(task?.details || "");
+    const customer = normalizeText(task?.customer || "");
+    const number = normalizeText(task?.customer_number || "");
+    return (
+      (title && title.includes(needle)) ||
+      (details && details.includes(needle)) ||
+      (customer && customer.includes(needle)) ||
+      (number && number.includes(needle))
+    );
+  };
+
   const filteredTasks = useMemo(() => {
     const needle = normalizeText(customerFilter);
     if (!needle) return tasks;
@@ -494,6 +510,12 @@ export default function DayPlanView() {
     [grouped.done]
   );
 
+  const filteredDoneTasks = useMemo(() => {
+    const needle = normalizeText(doneFilter);
+    if (!needle) return doneTasks;
+    return doneTasks.filter((task) => matchesTask(task, needle));
+  }, [doneTasks, doneFilter]);
+
   const billedTasks = useMemo(
     () =>
       grouped.done
@@ -501,6 +523,12 @@ export default function DayPlanView() {
         .sort((a, b) => (b.created_at || 0) - (a.created_at || 0)),
     [grouped.done]
   );
+
+  const filteredBilledTasks = useMemo(() => {
+    const needle = normalizeText(billedFilter);
+    if (!needle) return billedTasks;
+    return billedTasks.filter((task) => matchesTask(task, needle));
+  }, [billedTasks, billedFilter]);
 
   const msToHHMMSS = (ms = 0) => {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -1287,15 +1315,39 @@ export default function DayPlanView() {
               <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">Erledigt</h2>
               <p className="text-xs text-sand-400 mt-1">Ziehe Aufgaben hierher</p>
             </div>
-            <span className="text-xs text-sand-500">{doneTasks.length}</span>
+            <div className="flex items-center gap-2">
+              <div className="relative w-full md:w-52">
+                <input
+                  value={doneFilter}
+                  onChange={(event) => setDoneFilter(event.target.value)}
+                  placeholder="Suche..."
+                  className="w-full rounded-full border border-amber-200 bg-white px-4 py-2 pr-9 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
+                />
+                {doneFilter.trim() ? (
+                  <button
+                    type="button"
+                    onClick={() => setDoneFilter("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-sand-200 bg-white p-1 text-sand-400 hover:bg-sand-100"
+                    title="Filter löschen"
+                  >
+                    <X size={12} />
+                  </button>
+                ) : null}
+              </div>
+              <span className="text-xs text-sand-500">
+                {doneFilter.trim()
+                  ? `${filteredDoneTasks.length} / ${doneTasks.length}`
+                  : doneTasks.length}
+              </span>
+            </div>
           </div>
           <div
             className="space-y-2 max-h-[45vh] overflow-auto pr-1"
             onDragOver={(event) => event.preventDefault()}
             onDrop={handleDoneDrop}
           >
-            {doneTasks.length ? (
-              doneTasks.map((task) => renderTaskCard(task))
+            {filteredDoneTasks.length ? (
+              filteredDoneTasks.map((task) => renderTaskCard(task))
             ) : (
               <div className="text-xs text-sand-400">Noch keine erledigten Aufgaben.</div>
             )}
@@ -1308,11 +1360,35 @@ export default function DayPlanView() {
               <h2 className="text-sm uppercase tracking-[0.3em] text-amber-700">Fakturiert</h2>
               <p className="text-xs text-amber-600 mt-1">Automatisch via Faktura-Button</p>
             </div>
-            <span className="text-xs text-amber-700">{billedTasks.length}</span>
+            <div className="flex items-center gap-2">
+              <div className="relative w-full md:w-52">
+                <input
+                  value={billedFilter}
+                  onChange={(event) => setBilledFilter(event.target.value)}
+                  placeholder="Suche..."
+                  className="w-full rounded-full border border-amber-200 bg-white px-4 py-2 pr-9 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
+                />
+                {billedFilter.trim() ? (
+                  <button
+                    type="button"
+                    onClick={() => setBilledFilter("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-sand-200 bg-white p-1 text-sand-400 hover:bg-sand-100"
+                    title="Filter löschen"
+                  >
+                    <X size={12} />
+                  </button>
+                ) : null}
+              </div>
+              <span className="text-xs text-amber-700">
+                {billedFilter.trim()
+                  ? `${filteredBilledTasks.length} / ${billedTasks.length}`
+                  : billedTasks.length}
+              </span>
+            </div>
           </div>
           <div className="space-y-2 max-h-[45vh] overflow-auto pr-1">
-            {billedTasks.length ? (
-              billedTasks.map((task) => renderTaskCard(task))
+            {filteredBilledTasks.length ? (
+              filteredBilledTasks.map((task) => renderTaskCard(task))
             ) : (
               <div className="text-xs text-amber-600">Noch keine fakturierten Aufgaben.</div>
             )}

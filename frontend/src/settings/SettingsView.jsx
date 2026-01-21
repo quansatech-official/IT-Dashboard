@@ -113,6 +113,16 @@ export default function SettingsView() {
   const [beaconDebugOpen, setBeaconDebugOpen] = useState(false);
   const [beaconSaveStatus, setBeaconSaveStatus] = useState("idle");
   const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
+  const [apiTestOpen, setApiTestOpen] = useState(false);
+  const [apiTestPath, setApiTestPath] = useState("/api/telephony/calls");
+  const [apiTestStatus, setApiTestStatus] = useState("idle");
+  const [apiTestInfo, setApiTestInfo] = useState({
+    url: "",
+    statusCode: null,
+    ok: null,
+    preview: "",
+    error: ""
+  });
   const [pbxOpen, setPbxOpen] = useState(false);
   const [ctiOpen, setCtiOpen] = useState(false);
   const [beaconCheckStatus, setBeaconCheckStatus] = useState("idle");
@@ -620,6 +630,44 @@ export default function SettingsView() {
     return value;
   };
 
+  const buildApiTestUrl = (value) => {
+    const trimmed = String(value || "").trim();
+    if (!trimmed) return "";
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
+    const normalized = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+    if (normalized.startsWith("/api/") || normalized === "/api") return normalized;
+    return `${API}${normalized}`;
+  };
+
+  const runApiTest = async () => {
+    const url = buildApiTestUrl(apiTestPath);
+    if (!url) return;
+    setApiTestStatus("loading");
+    try {
+      const res = await fetch(url);
+      const text = await res.text();
+      const preview = text.slice(0, 800);
+      setApiTestInfo({
+        url,
+        statusCode: res.status,
+        ok: res.ok,
+        preview,
+        error: res.ok ? "" : preview
+      });
+      setApiTestStatus("ready");
+    } catch (error) {
+      setApiTestInfo({
+        url,
+        statusCode: null,
+        ok: false,
+        preview: "",
+        error: error?.message ? String(error.message) : "Request failed"
+      });
+      setApiTestStatus("error");
+    }
+    setTimeout(() => setApiTestStatus("idle"), 2000);
+  };
+
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
@@ -1117,6 +1165,75 @@ export default function SettingsView() {
                 {aiPromptsStatus === "error" && (
                   <span className="text-rose-600">Speichern fehlgeschlagen</span>
                 )}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setApiTestOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">API Test</p>
+            </div>
+            <span className="text-sm text-sand-500">{apiTestOpen ? "–" : "+"}</span>
+          </button>
+          {apiTestOpen ? (
+            <>
+              <div className="mt-4">
+                <label className="text-xs text-sand-500">Endpoint</label>
+                <input
+                  value={apiTestPath}
+                  onChange={(event) => setApiTestPath(event.target.value)}
+                  className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                  placeholder="/api/telephony/calls"
+                />
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                <button
+                  type="button"
+                  onClick={runApiTest}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-2 uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                >
+                  Endpoint testen
+                </button>
+                {apiTestStatus === "error" && (
+                  <span className="text-rose-600">Test fehlgeschlagen</span>
+                )}
+                {apiTestStatus === "ready" && (
+                  <span className="text-emerald-600">Antwort erhalten</span>
+                )}
+              </div>
+              <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-700">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <div>
+                    <span className="text-sand-500">URL:</span> {apiTestInfo.url || "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Status Code:</span>{" "}
+                    {apiTestInfo.statusCode ?? "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Status:</span>{" "}
+                    {apiTestInfo.ok === null
+                      ? "unbekannt"
+                      : apiTestInfo.ok
+                      ? "ok"
+                      : "fehlgeschlagen"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Fehler:</span>{" "}
+                    {apiTestInfo.error || "n/a"}
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-sand-500">Response Preview:</span>{" "}
+                    {apiTestInfo.preview || "n/a"}
+                  </div>
+                </div>
               </div>
             </>
           ) : null}

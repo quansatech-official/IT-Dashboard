@@ -85,7 +85,7 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
       const nextLabel = name ? `${name} · ${safeNumber}` : safeNumber;
       const uniqueId =
         call.uuid ||
-        `${call.startTime || ""}-${call.endTime || ""}-${call.direction || ""}-${safeNumber}`;
+        `${call.startTime || ""}-${call.direction || ""}-${call.extension || ""}-${normalized}`;
       const callDuration = durationSeconds(call);
       const seen = seenByNumber.get(normalized) || new Set();
       if (!seen.has(uniqueId)) {
