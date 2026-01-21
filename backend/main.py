@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import base64
 import requests
+import logging
 
 # ================= DATABASE =================
 DATABASE_URL = os.environ.get("DATABASE_URL") or (
@@ -30,6 +31,12 @@ ROUTE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+logger = logging.getLogger("it_dashboard")
 
 # ================= MODELS ===================
 class Customer(Base):
@@ -1113,6 +1120,15 @@ def serialize_pbx_phonebook_entry(entry: PbxPhonebookEntry) -> Dict[str, Any]:
         "created_at": entry.created_at,
     }
 
+def _get_settings(db) -> IntegrationSettings:
+    settings = db.query(IntegrationSettings).first()
+    if not settings:
+        settings = IntegrationSettings()
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
+
 def _normalize_phonebook_entry(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(item, dict):
         return None
@@ -1195,15 +1211,46 @@ def _nfon_request(
     if body:
         headers["Content-Type"] = content_type
         headers["Content-MD5"] = content_md5
-    response = requests.request(
-        method,
-        f"{base_url}{path}",
-        headers=headers,
-        data=body if body else None,
-        timeout=20,
-    )
+    request_url = f"{base_url}{path}"
+    try:
+        response = requests.request(
+            method,
+            request_url,
+            headers=headers,
+            data=body if body else None,
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        logger.exception("NFON request failed: %s %s", method, request_url)
+        raise HTTPException(
+            502,
+            {
+                "error": "NFON request failed",
+                "message": str(exc),
+                "request_url": request_url,
+                "request_path": path,
+                "method": method,
+            },
+        )
     if not response.ok:
-        raise HTTPException(response.status_code, response.text)
+        response_preview = (response.text or "")[:800]
+        logger.error(
+            "NFON API error: %s %s -> %s %s",
+            method,
+            request_url,
+            response.status_code,
+            response_preview,
+        )
+        raise HTTPException(
+            response.status_code,
+            {
+                "error": "NFON API error",
+                "status_code": response.status_code,
+                "request_url": request_url,
+                "request_path": path,
+                "response_preview": response_preview,
+            },
+        )
     try:
         return response.json()
     except ValueError:
