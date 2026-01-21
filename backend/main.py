@@ -1425,10 +1425,11 @@ def _nfon_phonebook_body(
     number: Optional[str],
     is_global: Optional[bool] = None,
 ) -> Dict[str, Any]:
+    normalized_number = _normalize_phone_for_store(number) if number else ""
     body = {
         "data": [
             {"name": "displayName", "value": name or ""},
-            {"name": "displayNumber", "value": number or ""},
+            {"name": "displayNumber", "value": normalized_number},
         ]
     }
     if is_global is not None:
