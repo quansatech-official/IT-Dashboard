@@ -396,6 +396,8 @@ const formatUnitQuantity = (quantity, unit) => {
   return `${Number(quantity || 0)} ${label}`;
 };
 
+const parseNumberInput = (value) => (value === "" ? "" : Number(value));
+
 const buildItemTitle = (item) =>
   item.title ||
   (item.product || item.manufacturer || item.model
@@ -1885,10 +1887,16 @@ export default function OffersView() {
       if (!res.ok) throw new Error("send_failed");
       const responsePayload = await res.json();
       if (responsePayload?.tracking_guid) {
-        updateOffer(activeOffer.id, (offer) => ({
-          ...offer,
+        const nextOffer = {
+          ...activeOffer,
           trackingGuid: responsePayload.tracking_guid
-        }));
+        };
+        updateOffer(activeOffer.id, () => nextOffer);
+        try {
+          await persistOfferForCustomer(nextOffer);
+        } catch (error) {
+          // Ignore tracking persist errors.
+        }
       }
       setSendStatus("sent");
     } catch (error) {
@@ -1919,6 +1927,19 @@ export default function OffersView() {
         })
       });
       if (!res.ok) throw new Error("send_failed");
+      const responsePayload = await res.json();
+      if (responsePayload?.tracking_guid) {
+        const nextOffer = {
+          ...offer,
+          trackingGuid: responsePayload.tracking_guid
+        };
+        updateOffer(offer.id, () => nextOffer);
+        try {
+          await persistOfferForCustomer(nextOffer);
+        } catch (error) {
+          // Ignore tracking persist errors.
+        }
+      }
       setSendStatus("sent");
     } catch (error) {
       setSendStatus("error");
@@ -2785,7 +2806,7 @@ export default function OffersView() {
                                       />
                                     </Field>
                                     <div className="grid gap-2 md:grid-cols-3">
-                                    <Field label="Preis">
+                                    <Field label="Preis (netto)">
                                       <div className="relative">
                                         <input
                                           className={priceInputClass}
@@ -2793,7 +2814,7 @@ export default function OffersView() {
                                           value={item.price}
                                           onChange={(event) =>
                                             updateLineItem(activeOffer.id, item.id, {
-                                              price: Number(event.target.value)
+                                              price: parseNumberInput(event.target.value)
                                             })
                                           }
                                         />
@@ -2809,7 +2830,7 @@ export default function OffersView() {
                                         value={item.quantity}
                                         onChange={(event) =>
                                           updateLineItem(activeOffer.id, item.id, {
-                                              quantity: Number(event.target.value)
+                                              quantity: parseNumberInput(event.target.value)
                                             })
                                           }
                                         />
@@ -3104,7 +3125,7 @@ export default function OffersView() {
                                         placeholder="Produkt"
                                       />
                                     </Field>
-                                    <Field label="Preis">
+                                    <Field label="Preis (netto)">
                                       <div className="relative">
                                         <input
                                           className={priceInputClass}
@@ -3112,7 +3133,7 @@ export default function OffersView() {
                                           value={item.price}
                                           onChange={(event) =>
                                             updateDeviceItem(activeOffer.id, item.id, {
-                                              price: Number(event.target.value)
+                                              price: parseNumberInput(event.target.value)
                                             })
                                           }
                                         />
@@ -3122,13 +3143,13 @@ export default function OffersView() {
                                       </div>
                                     </Field>
                                     <Field label="Menge">
-                                      <input
-                                        className={quantityInputClass}
-                                        type="number"
-                                        value={item.quantity}
-                                        onChange={(event) =>
-                                          updateDeviceItem(activeOffer.id, item.id, {
-                                            quantity: Number(event.target.value)
+                                    <input
+                                      className={quantityInputClass}
+                                      type="number"
+                                      value={item.quantity}
+                                      onChange={(event) =>
+                                        updateDeviceItem(activeOffer.id, item.id, {
+                                            quantity: parseNumberInput(event.target.value)
                                           })
                                         }
                                       />
@@ -4071,15 +4092,15 @@ export default function OffersView() {
                             />
                           </Field>
                           <div className="grid gap-2 md:grid-cols-3">
-                            <Field label="Preis">
+                            <Field label="Preis (netto)">
                               <div className="relative">
                                 <input
                                   className={priceInputClass}
                                   type="number"
-                                  value={block.price || 0}
+                                  value={block.price ?? ""}
                                   onChange={(event) =>
                                     updateServiceBlock(block.id, {
-                                      price: Number(event.target.value)
+                                      price: parseNumberInput(event.target.value)
                                     })
                                   }
                                 />
@@ -4092,10 +4113,10 @@ export default function OffersView() {
                               <input
                                 className={quantityInputClass}
                                 type="number"
-                                value={block.quantity || 1}
+                                value={block.quantity ?? ""}
                                 onChange={(event) =>
                                   updateServiceBlock(block.id, {
-                                    quantity: Number(event.target.value)
+                                    quantity: parseNumberInput(event.target.value)
                                   })
                                 }
                               />
@@ -4265,15 +4286,15 @@ export default function OffersView() {
                             placeholder={getDeviceProduct(block) || "Produkt"}
                           />
                         </Field>
-                        <Field label="Preis">
+                        <Field label="Preis (netto)">
                           <div className="relative">
                             <input
                               className={priceInputClass}
                               type="number"
-                              value={block.price || 0}
+                              value={block.price ?? ""}
                               onChange={(event) =>
                                 updateDeviceBlock(block.id, {
-                                  price: Number(event.target.value)
+                                  price: parseNumberInput(event.target.value)
                                 })
                               }
                             />
@@ -4286,10 +4307,10 @@ export default function OffersView() {
                           <input
                             className={quantityInputClass}
                             type="number"
-                            value={block.quantity || 1}
+                            value={block.quantity ?? ""}
                             onChange={(event) =>
                               updateDeviceBlock(block.id, {
-                                quantity: Number(event.target.value)
+                                quantity: parseNumberInput(event.target.value)
                               })
                             }
                           />

@@ -32,9 +32,9 @@ const loadBeaconBaseUrl = () => {
 
 const normalizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "");
 
-const buildBeaconUrl = (guid) => {
+const buildBeaconUrl = (guid, baseOverride = "") => {
   if (!ENABLE_OPEN_BEACON || !guid) return "";
-  const baseUrl = normalizeBaseUrl(loadBeaconBaseUrl() || DEFAULT_BEACON_BASE_URL);
+  const baseUrl = normalizeBaseUrl(baseOverride || loadBeaconBaseUrl() || DEFAULT_BEACON_BASE_URL);
   if (baseUrl.includes("{guid}")) {
     return baseUrl.replace("{guid}", encodeURIComponent(guid));
   }
@@ -278,6 +278,7 @@ export default function ReportView() {
     title: "",
     html: ""
   });
+  const [beaconBaseUrl, setBeaconBaseUrl] = useState(loadBeaconBaseUrl);
   const [freeText, setFreeText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPdfExporting, setIsPdfExporting] = useState(false);
@@ -344,6 +345,36 @@ export default function ReportView() {
     const timer = setTimeout(() => setToast(""), 1800);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    let active = true;
+    const loadBeaconSettings = async () => {
+      try {
+        const res = await fetch("/api/smtp_settings");
+        if (!res.ok) return;
+        const data = await res.json();
+        const next = String(data?.beacon_base_url || "").trim();
+        if (!active) return;
+        setBeaconBaseUrl(next);
+        try {
+          const raw = window.localStorage.getItem(SMTP_STORAGE_KEY);
+          const cached = raw ? JSON.parse(raw) : {};
+          window.localStorage.setItem(
+            SMTP_STORAGE_KEY,
+            JSON.stringify({ ...cached, beacon_base_url: next })
+          );
+        } catch (error) {
+          // ignore cache errors
+        }
+      } catch (error) {
+        // ignore fetch errors
+      }
+    };
+    loadBeaconSettings();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     setCustomerInput(report.customer || "");
@@ -1006,7 +1037,7 @@ export default function ReportView() {
     }
     try {
       const subject = `IT-Kundenbericht – ${data.customer} (${data.period || "ohne Zeitraum"})`;
-      const beaconUrl = buildBeaconUrl(data.guid);
+      const beaconUrl = buildBeaconUrl(data.guid, beaconBaseUrl);
       const htmlBody = renderReportHTML(data, { mode: "email", beaconUrl }).replace(
         /src="\/QTLogo\.jpg"/g,
         'src="cid:qtlogo"'
@@ -1129,7 +1160,7 @@ export default function ReportView() {
     const recipient = prompt("Empfänger E-Mail-Adresse");
     if (!recipient) return;
     const normalized = normalizeReport(data);
-    const beaconUrl = buildBeaconUrl(normalized.guid);
+    const beaconUrl = buildBeaconUrl(normalized.guid, beaconBaseUrl);
     const html = renderReportHTML(normalized, { mode: "email", beaconUrl }).replace(
       /src="\/QTLogo\.jpg"/g,
       `src="${window.location.origin}/QTLogo.jpg"`

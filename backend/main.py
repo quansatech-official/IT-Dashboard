@@ -221,6 +221,9 @@ class Offer(Base):
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     confirmed_at = Column(BigInteger, default=0)
+    opened_at = Column(BigInteger, default=0)
+    opened_count = Column(Integer, default=0)
+    tracking_guid = Column(String, default="")
     customer_name = Column(String, default="")
     customer_email = Column(String, default="")
     customer_note = Column(String, default="")
@@ -413,6 +416,30 @@ def _ensure_report_opened_columns() -> None:
 
 
 _ensure_report_opened_columns()
+
+
+def _ensure_offer_opened_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("offers"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("offers")}
+    statements = []
+    if "guid" not in columns:
+        statements.append("ALTER TABLE offers ADD COLUMN guid VARCHAR")
+    if "opened_at" not in columns:
+        statements.append("ALTER TABLE offers ADD COLUMN opened_at BIGINT DEFAULT 0")
+    if "opened_count" not in columns:
+        statements.append("ALTER TABLE offers ADD COLUMN opened_count INTEGER DEFAULT 0")
+    if "tracking_guid" not in columns:
+        statements.append("ALTER TABLE offers ADD COLUMN tracking_guid VARCHAR DEFAULT ''")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_offer_opened_columns()
 
 
 def _ensure_report_catalog_group_column() -> None:
@@ -1277,16 +1304,34 @@ def _build_report_beacon_url(base_url: str, guid: str) -> str:
 def _probe_beacon(url: str) -> Dict[str, Any]:
     if not url:
         return {"ok": False, "status_code": None, "error": "Beacon URL not configured", "url": ""}
+    started = time.perf_counter()
     try:
         response = requests.get(url, timeout=8, headers={"User-Agent": "qtbeacon"})
     except requests.RequestException as exc:
-        return {"ok": False, "status_code": None, "error": str(exc), "url": url}
-    preview = (response.text or "")[:200]
+        return {
+            "ok": False,
+            "status_code": None,
+            "error": str(exc),
+            "url": url,
+            "debug": {"duration_ms": int((time.perf_counter() - started) * 1000)},
+        }
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    content_type = (response.headers.get("content-type") or "").lower()
+    preview = ""
+    if content_type.startswith("text/") or "json" in content_type or "html" in content_type:
+        preview = (response.text or "")[:300]
     return {
         "ok": response.ok,
         "status_code": response.status_code,
         "error": "" if response.ok else preview,
         "url": url,
+        "debug": {
+            "duration_ms": duration_ms,
+            "content_type": content_type,
+            "reason": response.reason,
+            "url": response.url,
+            "preview": preview,
+        },
     }
 
 
@@ -1309,9 +1354,15 @@ def serialize_offer(offer: Offer) -> Dict[str, Any]:
         data["id"] = str(offer.id)
     data["serverId"] = offer.id
     data["confirmGuid"] = offer.guid or data.get("confirmGuid") or ""
+    if offer.tracking_guid and not data.get("trackingGuid"):
+        data["trackingGuid"] = offer.tracking_guid
     data["reference"] = offer.reference or data.get("reference") or ""
     data["customer"] = offer.customer or data.get("customer") or ""
     data["status"] = offer.status or data.get("status") or ""
+    if offer.opened_at and not data.get("openedAt"):
+        data["openedAt"] = _offer_iso_timestamp(offer.opened_at)
+    if offer.opened_count and not data.get("openedCount"):
+        data["openedCount"] = offer.opened_count
     if not data.get("createdAt"):
         data["createdAt"] = _offer_iso_timestamp(offer.created_at)
     return data
@@ -2623,6 +2674,26 @@ def report_open(guid: str):
     return Response(content=pixel, media_type="image/gif")
 
 
+@app.get("/api/offers/open")
+def offer_open(guid: str):
+    with SessionLocal() as db:
+        offer = (
+            db.query(Offer)
+            .filter(or_(Offer.tracking_guid == guid, Offer.guid == guid))
+            .first()
+        )
+        if offer:
+            offer.opened_at = int(time.time() * 1000)
+            offer.opened_count = (offer.opened_count or 0) + 1
+            db.commit()
+    pixel = (
+        b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
+        b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
+        b"\x00\x02\x02D\x01\x00;"
+    )
+    return Response(content=pixel, media_type="image/gif")
+
+
 @app.get("/api/smtp_settings")
 def get_smtp_settings():
     with SessionLocal() as db:
@@ -2732,14 +2803,17 @@ def list_offers():
 def create_offer(data: OfferSaveRequest, request: Request):
     with SessionLocal() as db:
         now_ms = int(time.time() * 1000)
+        payload = data.data or {}
+        tracking_guid = str(payload.get("trackingGuid") or "")
         offer = Offer(
             guid=str(uuid.uuid4()),
             reference=data.reference or "",
             customer=data.customer or "",
             status=data.status or "offen",
-            data_json=json.dumps(data.data or {}),
+            data_json=json.dumps(payload),
             created_at=now_ms,
             updated_at=now_ms,
+            tracking_guid=tracking_guid,
         )
         db.add(offer)
         db.commit()
@@ -2757,12 +2831,16 @@ def update_offer(offer_id: int, data: OfferSaveRequest, request: Request):
         offer = db.query(Offer).get(offer_id)
         if not offer:
             raise HTTPException(404, "Offer not found")
+        payload = data.data or {}
+        tracking_guid = str(payload.get("trackingGuid") or "").strip()
         offer.reference = data.reference or offer.reference
         offer.customer = data.customer or offer.customer
         if data.status is not None:
             offer.status = data.status or offer.status
-        offer.data_json = json.dumps(data.data or {})
+        offer.data_json = json.dumps(payload)
         offer.updated_at = int(time.time() * 1000)
+        if tracking_guid:
+            offer.tracking_guid = tracking_guid
         db.commit()
         db.refresh(offer)
         return OfferSaveResponse(

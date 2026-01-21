@@ -110,6 +110,7 @@ export default function SettingsView() {
   const [debugTablesOpen, setDebugTablesOpen] = useState(false);
   const [smtpOpen, setSmtpOpen] = useState(false);
   const [beaconOpen, setBeaconOpen] = useState(false);
+  const [beaconDebugOpen, setBeaconDebugOpen] = useState(false);
   const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
   const [pbxOpen, setPbxOpen] = useState(false);
   const [ctiOpen, setCtiOpen] = useState(false);
@@ -583,6 +584,11 @@ export default function SettingsView() {
     }
   };
 
+  const formatBeaconDebugValue = (value) => {
+    if (value === null || value === undefined || value === "") return "n/a";
+    return value;
+  };
+
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
@@ -813,6 +819,106 @@ export default function SettingsView() {
                 )}
                 {beaconHealth.checkedAt ? (
                   <span className="text-sand-500">Letzter Check: {beaconHealth.checkedAt}</span>
+                ) : null}
+              </div>
+              <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
+                <button
+                  type="button"
+                  onClick={() => setBeaconDebugOpen((current) => !current)}
+                  className="w-full flex items-center justify-between uppercase tracking-[0.3em] text-[10px] text-sand-500"
+                >
+                  <span>Beacon Debug</span>
+                  <span>{beaconDebugOpen ? "–" : "+"}</span>
+                </button>
+                {beaconDebugOpen ? (
+                  <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                        Angebote
+                      </p>
+                      <div className="mt-2 grid grid-cols-1 gap-2">
+                        <div>
+                          <span className="text-sand-500">Status:</span>{" "}
+                          {beaconHealth.offers.ok === null
+                            ? "unbekannt"
+                            : beaconHealth.offers.ok
+                            ? "ok"
+                            : "fehlgeschlagen"}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Status Code:</span>{" "}
+                          {beaconHealth.offers.status_code ?? "n/a"}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">URL:</span>{" "}
+                          {beaconHealth.offers.url || "n/a"}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Fehler:</span>{" "}
+                          {beaconHealth.offers.error || "n/a"}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Dauer (ms):</span>{" "}
+                          {formatBeaconDebugValue(beaconHealth.offers?.debug?.duration_ms)}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Content-Type:</span>{" "}
+                          {formatBeaconDebugValue(beaconHealth.offers?.debug?.content_type)}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Reason:</span>{" "}
+                          {formatBeaconDebugValue(beaconHealth.offers?.debug?.reason)}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Preview:</span>{" "}
+                          {formatBeaconDebugValue(beaconHealth.offers?.debug?.preview)}
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                        Kundenberichte
+                      </p>
+                      <div className="mt-2 grid grid-cols-1 gap-2">
+                        <div>
+                          <span className="text-sand-500">Status:</span>{" "}
+                          {beaconHealth.reports.ok === null
+                            ? "unbekannt"
+                            : beaconHealth.reports.ok
+                            ? "ok"
+                            : "fehlgeschlagen"}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Status Code:</span>{" "}
+                          {beaconHealth.reports.status_code ?? "n/a"}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">URL:</span>{" "}
+                          {beaconHealth.reports.url || "n/a"}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Fehler:</span>{" "}
+                          {beaconHealth.reports.error || "n/a"}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Dauer (ms):</span>{" "}
+                          {formatBeaconDebugValue(beaconHealth.reports?.debug?.duration_ms)}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Content-Type:</span>{" "}
+                          {formatBeaconDebugValue(beaconHealth.reports?.debug?.content_type)}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Reason:</span>{" "}
+                          {formatBeaconDebugValue(beaconHealth.reports?.debug?.reason)}
+                        </div>
+                        <div>
+                          <span className="text-sand-500">Preview:</span>{" "}
+                          {formatBeaconDebugValue(beaconHealth.reports?.debug?.preview)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 ) : null}
               </div>
             </>
