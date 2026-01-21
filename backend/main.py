@@ -2007,9 +2007,14 @@ def update_remote_pbx_phonebook(entry_id: str, data: PbxPhonebookUpdate):
             raise
     entries = _extract_phonebook_entries(payload)
     if entries:
-        return entries[0]
+        entry = entries[0]
+        if not entry.get("id"):
+            entry["id"] = entry_id
+        return entry
     normalized = _normalize_phonebook_entry(payload if isinstance(payload, dict) else {})
     if normalized:
+        if not normalized.get("id"):
+            normalized["id"] = entry_id
         return normalized
     return {"id": entry_id, "name": data.name or "", "number": data.number or ""}
 

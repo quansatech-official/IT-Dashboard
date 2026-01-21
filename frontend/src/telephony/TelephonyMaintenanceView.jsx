@@ -157,8 +157,13 @@ export default function TelephonyMaintenanceView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      setEntries((prev) => prev.map((item) => (item.id === data.id ? data : item)));
-      saveStatusWithReset("saved");
+      if (isRemote) {
+        await loadEntries();
+        saveStatusWithReset("saved");
+      } else {
+        setEntries((prev) => prev.map((item) => (item.id === data.id ? data : item)));
+        saveStatusWithReset("saved");
+      }
     } catch (error) {
       saveStatusWithReset("error");
     }
