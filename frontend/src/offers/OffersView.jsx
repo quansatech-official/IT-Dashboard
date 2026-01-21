@@ -1357,6 +1357,7 @@ export default function OffersView() {
   const [previewScale, setPreviewScale] = useState(0.75);
   const autosaveTimer = useRef(null);
   const serverSaveTimer = useRef(null);
+  const serverSaveInFlightRef = useRef({});
   const [detailDraft, setDetailDraft] = useState("");
   const [importerOpen, setImporterOpen] = useState(false);
   const [importSources, setImportSources] = useState([]);
@@ -1404,6 +1405,8 @@ export default function OffersView() {
 
   const persistOfferToServer = async (offer, withStatus) => {
     if (!offer || isOfferEmpty(offer)) return null;
+    if (serverSaveInFlightRef.current[offer.id]) return null;
+    serverSaveInFlightRef.current[offer.id] = true;
     try {
       const saved = await persistOfferForCustomer(offer);
       if (withStatus) {
@@ -1417,6 +1420,8 @@ export default function OffersView() {
         setTimeout(() => setSaveStatus("idle"), 2000);
       }
       return null;
+    } finally {
+      delete serverSaveInFlightRef.current[offer.id];
     }
   };
 
@@ -1791,6 +1796,14 @@ export default function OffersView() {
     setOffers((prev) =>
       prev.map((offer) => (offer.id === offerId ? updater(offer) : offer))
     );
+  };
+
+  const updateOfferStatus = (offerId, status) => {
+    const offer = offers.find((entry) => entry.id === offerId);
+    if (!offer) return;
+    const nextOffer = { ...offer, status };
+    updateOffer(offerId, () => nextOffer);
+    persistOfferToServer(nextOffer, false);
   };
 
   const updateLineItem = (offerId, itemId, patch) => {
@@ -4107,10 +4120,7 @@ export default function OffersView() {
                         <button
                           type="button"
                           onClick={() =>
-                            updateOffer(offer.id, (entry) => ({
-                              ...entry,
-                              status: "angenommen"
-                            }))
+                            updateOfferStatus(offer.id, "angenommen")
                           }
                           className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-600 hover:bg-emerald-50"
                           title="Akzeptieren"
@@ -4120,15 +4130,20 @@ export default function OffersView() {
                         <button
                           type="button"
                           onClick={() =>
-                            updateOffer(offer.id, (entry) => ({
-                              ...entry,
-                              status: "abgelehnt"
-                            }))
+                            updateOfferStatus(offer.id, "abgelehnt")
                           }
                           className="rounded-full border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
                           title="Ablehnen"
                         >
                           <X size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteArchivedOffer(offer)}
+                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                          title="Löschen"
+                        >
+                          <Trash2 size={14} />
                         </button>
                         <button
                           type="button"
@@ -4305,10 +4320,7 @@ export default function OffersView() {
                           <button
                             type="button"
                             onClick={() =>
-                              updateOffer(offer.id, (entry) => ({
-                                ...entry,
-                                status: "Entwurf"
-                              }))
+                              updateOfferStatus(offer.id, "Entwurf")
                             }
                             className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-600 hover:bg-emerald-50"
                           >
@@ -4403,10 +4415,7 @@ export default function OffersView() {
                           <button
                             type="button"
                             onClick={() =>
-                              updateOffer(offer.id, (entry) => ({
-                                ...entry,
-                                status: "Entwurf"
-                              }))
+                              updateOfferStatus(offer.id, "Entwurf")
                             }
                             className="rounded-full border border-rose-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600 hover:bg-rose-50"
                           >

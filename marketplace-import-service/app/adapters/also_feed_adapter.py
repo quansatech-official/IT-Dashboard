@@ -2,6 +2,8 @@ import csv
 import io
 import logging
 import os
+import stat
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Tuple
@@ -49,11 +51,12 @@ class AlsoFeedAdapter:
         override = load_also_config()
         directory = override.get("dir") or settings.also_sftp_dir or "."
         entries = sftp.listdir_attr(directory)
-        candidates = [
-            entry
-            for entry in entries
-            if entry.filename.lower().endswith((".csv", ".txt"))
-        ]
+        candidates = []
+        for entry in entries:
+            if stat.S_ISDIR(entry.st_mode):
+                continue
+            if entry.filename.lower().endswith((".csv", ".txt", ".zip")):
+                candidates.append(entry)
         if not candidates:
             raise ValueError("No price files found")
         latest = max(candidates, key=lambda item: item.st_mtime)
@@ -61,7 +64,26 @@ class AlsoFeedAdapter:
         logger.info("Fetching ALSO price file: %s", path)
         with sftp.open(path, "rb") as handle:
             data = handle.read()
+        if latest.filename.lower().endswith(".zip"):
+            inner_name, inner_data = self._extract_zip_payload(data)
+            return f"{latest.filename}:{inner_name}", inner_data
         return latest.filename, data
+
+    @staticmethod
+    def _extract_zip_payload(data: bytes) -> Tuple[str, bytes]:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            candidates = [
+                info
+                for info in archive.infolist()
+                if not info.is_dir()
+                and info.filename.lower().endswith((".csv", ".txt"))
+            ]
+            if not candidates:
+                raise ValueError("Zip contains no CSV/TXT files")
+            latest = max(candidates, key=lambda info: info.date_time)
+            with archive.open(latest) as handle:
+                content = handle.read()
+            return latest.filename, content
 
     def parse_price_file(self, content: bytes) -> Iterable[NormalizedItem]:
         text = content.decode("latin-1", errors="replace")
