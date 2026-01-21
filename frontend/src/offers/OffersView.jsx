@@ -42,6 +42,11 @@ const unitOptions = [
   { value: "piece", label: "Stück" },
   { value: "day", label: "Tag" }
 ];
+const billingCycleOptions = [
+  { value: "once", label: "Einmalig" },
+  { value: "monthly", label: "Monatlich" },
+  { value: "yearly", label: "Jährlich" }
+];
 
 const initialServiceBlocks = [
   {
@@ -171,10 +176,57 @@ const formatMoney = (value) => {
 };
 
 const formatLineTotal = (price, quantity) =>
-  formatMoney(Number(price || 0) * Number(quantity || 1));
+  formatMoney(Number(price || 0) * Number(quantity || 0));
+
+const normalizeBillingCycle = (value) => {
+  if (value === "monthly" || value === "yearly") return value;
+  return "once";
+};
+
+const formatBillingCycleLabel = (value) => {
+  const normalized = normalizeBillingCycle(value);
+  if (normalized === "monthly") return "Monatlich";
+  if (normalized === "yearly") return "Jährlich";
+  return "Einmalig";
+};
+
+const getCostTotalsByCycle = (offer) => {
+  const totals = { once: 0, monthly: 0, yearly: 0 };
+  if (!offer) return totals;
+  const allItems = [...(offer.lineItems || []), ...(offer.deviceItems || [])];
+  allItems.forEach((item) => {
+    const cycle = normalizeBillingCycle(item.billingCycle);
+    totals[cycle] += Number(item.price || 0) * Number(item.quantity || 0);
+  });
+  return totals;
+};
+
+const isOfferEmpty = (offer) => {
+  if (!offer) return true;
+  const hasPositions =
+    (offer.lineItems || []).length > 0 || (offer.deviceItems || []).length > 0;
+  const hasAttachments = (offer.attachments || []).length > 0;
+  const hasCustomerDetails = [
+    offer.customer,
+    offer.recipientName,
+    offer.recipientCompany,
+    offer.recipientStreet,
+    offer.recipientPostalCity,
+    offer.recipientCountry,
+    offer.customerNumber,
+    offer.orderNumber
+  ].some((value) => String(value || "").trim());
+  const hasTextBlocks = [
+    offer.overviewText,
+    offer.calculationText,
+    offer.detailHtml
+  ].some((value) => String(value || "").trim());
+  return !(hasPositions || hasAttachments || hasCustomerDetails || hasTextBlocks);
+};
 
 const getDeviceProduct = (item) =>
   item.product ||
+  item.title ||
   [item.manufacturer, item.model].filter(Boolean).join(" · ") ||
   "Material";
 
@@ -275,7 +327,7 @@ const buildLineItemContext = (offer, item) => {
   const customer = offer?.customer || "Kunde offen";
   const title = item?.title || "Leistung";
   const keywords = Array.isArray(item?.keywords) ? item.keywords.filter(Boolean) : [];
-  const unitLine = formatUnitQuantity(item?.quantity || 1, item?.unit);
+  const unitLine = formatUnitQuantity(item?.quantity ?? "", item?.unit);
   return [
     `Kunde: ${customer}`,
     `Position: ${title}`,
@@ -289,7 +341,7 @@ const buildLineItemContext = (offer, item) => {
 const buildDeviceContext = (offer, item) => {
   const customer = offer?.customer || "Kunde offen";
   const product = getDeviceProduct(item) || "Material";
-  const unitLine = `${Number(item?.quantity || 1)} Stk`;
+  const unitLine = formatUnitQuantity(item?.quantity ?? "", "piece");
   return [
     `Kunde: ${customer}`,
     `Produkt: ${product}`,
@@ -393,10 +445,29 @@ const formatUnitLabel = (unit) => {
 const formatUnitQuantity = (quantity, unit) => {
   const label = formatUnitLabel(unit);
   if (label === "pauschal") return "pauschal";
+  if (quantity === "" || quantity === null || typeof quantity === "undefined") {
+    return "";
+  }
+  if (Number(quantity) === 0) return "";
   return `${Number(quantity || 0)} ${label}`;
 };
 
 const parseNumberInput = (value) => (value === "" ? "" : Number(value));
+
+const normalizeQuantityInput = (value, fallback = 1) => {
+  if (value === "" || value === null || typeof value === "undefined") return "";
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) return fallback;
+  return numeric;
+};
+
+const formatPieceQuantity = (quantity) => {
+  if (quantity === "" || quantity === null || typeof quantity === "undefined") {
+    return "";
+  }
+  if (Number(quantity) === 0) return "";
+  return `${Number(quantity || 0)}x`;
+};
 
 const buildItemTitle = (item) =>
   item.title ||
@@ -416,7 +487,7 @@ const buildSevDeskPayload = (offer) => ({
     const unit = buildItemUnit(item, isDevice ? "piece" : "hours");
     return {
       title: buildItemTitle(item),
-      quantity: Number(item.quantity || 1),
+      quantity: Number(item.quantity || 0),
       unit,
       unit_label: formatUnitLabel(unit),
       position_text: buildItemText(item),
@@ -455,9 +526,10 @@ const buildLineItemFromBlock = (block = {}) => ({
   complexity: block.complexity || "niedrig",
   securityRelevant: Boolean(block.securityRelevant),
   price: Number(block.price || 0),
-  quantity: Number(block.quantity || 1),
+  quantity: normalizeQuantityInput(block.quantity, 1),
   unit: block.unit || "hours",
   researchHours: Number(block.researchHours || 0),
+  billingCycle: block.billingCycle || "once",
   aiVersions: [],
   activeAiVersionId: null,
   aiDraft: "",
@@ -468,12 +540,14 @@ const buildDeviceItemFromBlock = (block = {}) => ({
   id: uid(),
   product:
     block.product ||
+    block.title ||
     [block.manufacturer, block.model].filter(Boolean).join(" · "),
   manufacturer: block.manufacturer || "",
   model: block.model || block.modelFamily || "",
   description: block.description || "",
   price: Number(block.price || 0),
-  quantity: Number(block.quantity || 1),
+  quantity: normalizeQuantityInput(block.quantity, 1),
+  billingCycle: block.billingCycle || "once",
   images: [],
   internalNotes: []
 });
@@ -560,6 +634,7 @@ const buildPreviewPositions = (offer) => {
       quantity: item.quantity,
       price: item.price,
       unit: item.unit || "hours",
+      billingCycle: item.billingCycle || "once",
       text: item.aiDraft || activeVersion?.text || "",
       images: [],
       category: "service"
@@ -571,6 +646,7 @@ const buildPreviewPositions = (offer) => {
     quantity: item.quantity,
     price: item.price,
     unit: "piece",
+    billingCycle: item.billingCycle || "once",
     text: item.description || "",
     images: item.images || [],
     category: "device"
@@ -587,7 +663,9 @@ const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer") => {
       (item, index) => `
       <tr>
         <td style="padding:6px 8px;border-bottom:1px solid #eee;">${index + 1}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${item.title}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${item.title} (${formatBillingCycleLabel(
+          item.billingCycle
+        )})</td>
         <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">${formatUnitQuantity(
           item.quantity,
           item.unit
@@ -642,11 +720,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   }
   const previewPositions = buildPreviewPositions(offer);
   const serviceTotal = (offer.lineItems || []).reduce(
-    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
     0
   );
   const deviceTotal = (offer.deviceItems || []).reduce(
-    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
     0
   );
   const totalNet = serviceTotal + deviceTotal;
@@ -654,29 +732,56 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const recipientName = offer.recipientName || offer.customer || "Kunde offen";
   const recipientCompany = (offer.recipientCompany || "").trim();
   const totalGross = totalNet + totalVat;
+  const costTotals = getCostTotalsByCycle(offer);
   const hasPositionText = previewPositions.some((item) => item.text);
   const hasProductPhotos = previewPositions.some((item) => item.images?.length);
+  const isExport = Boolean(containerRef);
+  const forceTotalsPageBreak = isExport && previewPositions.length > 10;
+  const rowsPerPage = isExport ? 10 : Number.POSITIVE_INFINITY;
+  const previewRowsPerPage = 10;
+  const pageSize = isExport ? previewPositions.length : previewRowsPerPage;
+  const pagedPositions = [];
+  for (let i = 0; i < previewPositions.length; i += pageSize) {
+    const chunk = previewPositions
+      .slice(i, i + pageSize)
+      .map((item, index) => ({ ...item, overallIndex: i + index }));
+    pagedPositions.push(chunk);
+  }
+  if (!pagedPositions.length) {
+    pagedPositions.push([]);
+  }
+  const shouldInsertBreak = (index) =>
+    isExport &&
+    (index + 1) % rowsPerPage === 0 &&
+    index + 1 < previewPositions.length;
   const a4WidthPx = 210 * 3.7795275591;
   const a4HeightPx = 297 * 3.7795275591;
 
   return (
-    <div ref={containerRef} className="space-y-6 overflow-auto">
+    <div
+      ref={containerRef}
+      className={isExport ? "space-y-6" : "space-y-6 overflow-auto"}
+    >
       {offer.coverEnabled ? (
         <div
           className="mx-auto"
           style={{
             width: `${a4WidthPx * scale}px`,
-            height: `${a4HeightPx * scale}px`
+            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+            minHeight: `${a4HeightPx * scale}px`
           }}
         >
           <div
             className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-            style={{
-              width: `${a4WidthPx}px`,
-              height: `${a4HeightPx}px`,
-              transform: `scale(${scale})`,
-              transformOrigin: "top left"
-            }}
+              style={{
+                width: `${a4WidthPx}px`,
+                height: isExport ? "auto" : `${a4HeightPx}px`,
+                minHeight: `${a4HeightPx}px`,
+                transform: `scale(${scale})`,
+                transformOrigin: "top left",
+                ...(isExport ? { transform: "none" } : {}),
+                pageBreakAfter: isExport ? "always" : "auto"
+              }}
           >
             <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
               <img src="/QTLogo.jpg" alt="QT" className="h-28 w-auto mb-8" />
@@ -706,239 +811,355 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         </div>
       ) : null}
 
-      <div
-        className="mx-auto"
-        style={{
-          width: `${a4WidthPx * scale}px`,
-          height: `${a4HeightPx * scale}px`
-        }}
-      >
-        <div
-          className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-          style={{
-            width: `${a4WidthPx}px`,
-            height: `${a4HeightPx}px`,
-            transform: `scale(${scale})`,
-            transformOrigin: "top left"
-          }}
-        >
-          <div className="flex items-center justify-between border-b border-sand-200 pb-4">
-            <div className="flex items-center gap-2">
-              <img src="/QTLogo.jpg" alt="QT" className="h-8 w-auto" />
-              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                Angebot
-              </span>
-            </div>
-            <span className="text-xs text-sand-500">{offer.reference}</span>
-          </div>
-          <div className="mt-4 flex-1 space-y-6">
-            <div className="grid gap-4 md:grid-cols-2 text-xs text-sand-600">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Absender
-                </p>
-                {splitSenderLines(
-                  offer.senderLine || "Quansatech GmbH - Steyrtalstraße 88 - 4523 Neuzeug"
-                ).map((line) => (
-                  <p key={line} className="mt-1 text-sm font-semibold text-sand-900">
-                    {line}
-                  </p>
-                ))}
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Empfänger
-                </p>
-                <p className="mt-1 text-sm font-semibold text-sand-900">
-                  {recipientName}
-                </p>
-                {recipientCompany && recipientCompany !== recipientName.trim() ? (
-                  <p>{recipientCompany}</p>
-                ) : null}
-                {offer.recipientStreet ? <p>{offer.recipientStreet}</p> : null}
-                {offer.recipientPostalCity ? <p>{offer.recipientPostalCity}</p> : null}
-                {offer.recipientCountry ? <p>{offer.recipientCountry}</p> : null}
-                {offer.customerNumber ? <p>Kundennummer {offer.customerNumber}</p> : null}
-                <p>Angebots-Nr. {offer.orderNumber || offer.reference || "-"}</p>
-                <p>Datum: {formatDate(offer.createdAt) || "-"}</p>
-              </div>
-            </div>
-
-            <div className="space-y-2 text-sm text-sand-700">
-              <p className="text-base font-semibold text-sand-900">
-                {mode === "confirmation" ? "Auftragsbestätigung" : "Angebot"}{" "}
-                {offer.reference || "-"}
-              </p>
-              <p>{offer.salutation || "Sehr geehrte Damen und Herren,"}</p>
-              <p>{offer.introText || "Vielen Dank für Ihre Anfrage."}</p>
-            </div>
-
-            {offer.overviewText ? (
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Übersicht
-                </p>
-                <p className="mt-2 text-sm text-sand-700 whitespace-pre-line">
-                  {offer.overviewText}
-                </p>
-              </div>
-            ) : null}
-
-            {previewPositions.length ? (
-              <div>
-                <div className="mt-2 rounded-xl border border-sand-200">
-                  <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                    <span>Pos</span>
-                    <span>Leistung</span>
-                    <span className="text-right">Menge</span>
-                    <span className="text-right">{formatVatLabel(offer)}</span>
-                    <span className="text-right">Netto</span>
-                  </div>
-                  {previewPositions.some((item) => item.category === "service") ? (
-                    <>
-                      <div className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                        Leistungen
-                      </div>
-                      {previewPositions
-                        .filter((item) => item.category === "service")
-                        .map((item, index) => (
-                          <div key={item.id} className="border-b border-sand-100">
-                            <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 px-3 py-2 text-xs text-sand-700">
-                              <span>Pos. {index + 1}</span>
-                              <div>
-                                <p className="font-semibold text-sand-800">{item.title}</p>
-                                {item.text ? (
-                                  <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
-                                    {item.text}
-                                  </p>
-                                ) : null}
-                              </div>
-                              <span className="text-right">
-                                {formatUnitQuantity(item.quantity, item.unit)}
-                              </span>
-                              <span className="text-right">
-                                {formatMoney(
-                                  calcVat(
-                                    Number(item.price || 0) * Number(item.quantity || 1),
-                                    offer
-                                  )
-                                )}
-                              </span>
-                              <span className="text-right">
-                                {formatLineTotal(item.price, item.quantity)}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700">
-                        <span />
-                        <span>Zwischensumme Leistungen</span>
-                        <span />
-                        <span className="text-right">
-                          {formatMoney(calcVat(serviceTotal, offer))}
-                        </span>
-                        <span className="text-right">{formatMoney(serviceTotal)}</span>
-                      </div>
-                    </>
-                  ) : null}
-                  {previewPositions.some((item) => item.category === "device") ? (
-                    <>
-                      <div className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                        Material
-                      </div>
-                      {previewPositions
-                        .filter((item) => item.category === "device")
-                        .map((item, index) => (
-                          <div key={item.id} className="border-b border-sand-100">
-                            <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 px-3 py-2 text-xs text-sand-700">
-                              <span>Pos. {index + 1 + offer.lineItems.length}</span>
-                              <div>
-                                <p className="font-semibold text-sand-800">{item.title}</p>
-                                {item.text ? (
-                                  <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
-                                    {item.text}
-                                  </p>
-                                ) : null}
-                              </div>
-                              <span className="text-right">{item.quantity}x</span>
-                              <span className="text-right">
-                                {formatMoney(
-                                  calcVat(
-                                    Number(item.price || 0) * Number(item.quantity || 1),
-                                    offer
-                                  )
-                                )}
-                              </span>
-                              <span className="text-right">
-                                {formatLineTotal(item.price, item.quantity)}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700">
-                        <span />
-                        <span>Zwischensumme Material</span>
-                        <span />
-                        <span className="text-right">
-                          {formatMoney(calcVat(deviceTotal, offer))}
-                        </span>
-                        <span className="text-right">{formatMoney(deviceTotal)}</span>
-                      </div>
-                    </>
-                  ) : null}
+      {pagedPositions.map((pagePositions, pageIndex) => {
+        const pageServicePositions = pagePositions.filter(
+          (item) => item.category === "service"
+        );
+        const pageDevicePositions = pagePositions.filter(
+          (item) => item.category === "device"
+        );
+        const showTotals = pageIndex === pagedPositions.length - 1;
+        return (
+          <div
+            key={`page-${pageIndex}`}
+            className="mx-auto"
+            style={{
+              width: `${a4WidthPx * scale}px`,
+              height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+              minHeight: `${a4HeightPx * scale}px`
+            }}
+          >
+            <div
+              className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+              style={{
+                width: `${a4WidthPx}px`,
+                height: isExport ? "auto" : `${a4HeightPx}px`,
+                minHeight: `${a4HeightPx}px`,
+                paddingBottom: isExport ? "48px" : undefined,
+                transform: isExport ? "none" : `scale(${scale})`,
+                transformOrigin: "top left",
+                pageBreakAfter:
+                  isExport && pageIndex < pagedPositions.length - 1 ? "always" : "auto"
+              }}
+            >
+              <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+                <div className="flex items-center gap-2">
+                  <img src="/QTLogo.jpg" alt="QT" className="h-8 w-auto" />
+                  <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    Angebot
+                  </span>
                 </div>
-                {offer.calculationText ? (
-                  <p className="mt-2 text-xs text-sand-600 whitespace-pre-line">
-                    {offer.calculationText}
-                  </p>
-                ) : null}
-                <div className="mt-3 space-y-2 text-sm text-sand-700">
-                  <div className="flex items-center justify-between">
-                    <span>Summe Leistungen (netto)</span>
-                    <span>{formatMoney(serviceTotal)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span>Summe Material (netto)</span>
-                    <span>{formatMoney(deviceTotal)}</span>
-                  </div>
-                  <div className="flex items-center justify-between font-semibold text-sand-900">
-                    <span>Gesamt netto</span>
-                    <span>{formatMoney(totalNet)}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span>{formatVatLabel(offer)}</span>
-                    <span>{formatMoney(totalVat)}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-base font-semibold text-sand-900">
-                    <span>Gesamt brutto</span>
-                    <span>{formatMoney(totalGross)}</span>
-                  </div>
-                </div>
+                <span className="text-xs text-sand-500">{offer.reference}</span>
               </div>
-            ) : null}
-
-            {(offer.attachments || []).length ? (
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Beilagen
-                </p>
-                <div className="mt-2 space-y-2 text-xs text-sand-600">
-                  {offer.attachments.map((item) => (
-                    <div key={item.id}>
-                      <p className="font-semibold text-sand-800">
-                        {item.title || item.fileName || "Beilage"}
+              <div className="mt-4 flex-1 space-y-6">
+                {pageIndex === 0 ? (
+                  <div className="grid gap-4 md:grid-cols-2 text-xs text-sand-600">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                        Absender
                       </p>
+                      {splitSenderLines(
+                        offer.senderLine ||
+                          "Quansatech GmbH - Steyrtalstraße 88 - 4523 Neuzeug"
+                      ).map((line) => (
+                        <p key={line} className="mt-1 text-sm font-semibold text-sand-900">
+                          {line}
+                        </p>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                        Empfänger
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">
+                        {recipientName}
+                      </p>
+                      {recipientCompany && recipientCompany !== recipientName.trim() ? (
+                        <p>{recipientCompany}</p>
+                      ) : null}
+                      {offer.recipientStreet ? <p>{offer.recipientStreet}</p> : null}
+                      {offer.recipientPostalCity ? (
+                        <p>{offer.recipientPostalCity}</p>
+                      ) : null}
+                      {offer.recipientCountry ? <p>{offer.recipientCountry}</p> : null}
+                      {offer.customerNumber ? (
+                        <p>Kundennummer {offer.customerNumber}</p>
+                      ) : null}
+                      <p>Angebots-Nr. {offer.orderNumber || offer.reference || "-"}</p>
+                      <p>Datum: {formatDate(offer.createdAt) || "-"}</p>
+                    </div>
+                  </div>
+                ) : null}
+
+                {pageIndex === 0 ? (
+                  <div className="space-y-2 text-sm text-sand-700">
+                    <p className="text-base font-semibold text-sand-900">
+                      {mode === "confirmation" ? "Auftragsbestätigung" : "Angebot"}{" "}
+                      {offer.reference || "-"}
+                    </p>
+                    <p>{offer.salutation || "Sehr geehrte Damen und Herren,"}</p>
+                    <p>{offer.introText || "Vielen Dank für Ihre Anfrage."}</p>
+                  </div>
+                ) : null}
+
+                {pageIndex === 0 && offer.overviewText ? (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      Übersicht
+                    </p>
+                    <p className="mt-2 text-sm text-sand-700 whitespace-pre-line">
+                      {offer.overviewText}
+                    </p>
+                  </div>
+                ) : null}
+
+                {pagePositions.length ? (
+                  <div>
+                    <div className="mt-2 rounded-xl border border-sand-200">
+                      <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                        <span>Pos</span>
+                        <span>Leistung</span>
+                        <span className="text-right">Menge</span>
+                        <span className="text-right">{formatVatLabel(offer)}</span>
+                        <span className="text-right">Netto</span>
+                      </div>
+                      {pageServicePositions.length ? (
+                        <>
+                          <div className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                            Leistungen
+                          </div>
+                          {pageServicePositions.map((item) => (
+                            <div key={item.id}>
+                              <div
+                                className="border-b border-sand-100"
+                                style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
+                              >
+                                <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 px-3 py-2 text-xs text-sand-700">
+                                  <span>Pos. {item.overallIndex + 1}</span>
+                                  <div>
+                                    <p className="font-semibold text-sand-800">{item.title}</p>
+                                    {item.text ? (
+                                      <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
+                                        {item.text}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                  <div className="text-right">
+                                    <div>{formatUnitQuantity(item.quantity, item.unit)}</div>
+                                    <div className="text-[9px] uppercase tracking-[0.18em] text-sand-300">
+                                      {formatBillingCycleLabel(item.billingCycle)}
+                                    </div>
+                                  </div>
+                                  <span className="text-right">
+                                    {formatMoney(
+                                      calcVat(
+                                        Number(item.price || 0) * Number(item.quantity || 0),
+                                        offer
+                                      )
+                                    )}
+                                  </span>
+                                  <span className="text-right">
+                                    {formatLineTotal(item.price, item.quantity)}
+                                  </span>
+                                </div>
+                              </div>
+                              {shouldInsertBreak(item.overallIndex) ? (
+                                <div className="html2pdf__page-break" />
+                              ) : null}
+                            </div>
+                          ))}
+                          {showTotals ? (
+                            <div
+                              className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
+                              style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
+                            >
+                              <span />
+                              <span>Zwischensumme Leistungen</span>
+                              <span />
+                              <span className="text-right">
+                                {formatMoney(calcVat(serviceTotal, offer))}
+                              </span>
+                              <span className="text-right">{formatMoney(serviceTotal)}</span>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {pageDevicePositions.length ? (
+                        <>
+                          <div className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                            Material
+                          </div>
+                          {pageDevicePositions.map((item) => (
+                            <div key={item.id}>
+                              <div
+                                className="border-b border-sand-100"
+                                style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
+                              >
+                                <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 px-3 py-2 text-xs text-sand-700">
+                                  <span>Pos. {item.overallIndex + 1}</span>
+                                  <div>
+                                    <p className="font-semibold text-sand-800">{item.title}</p>
+                                    {item.text ? (
+                                      <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
+                                        {item.text}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                  <div className="text-right">
+                                    <div>{formatPieceQuantity(item.quantity)}</div>
+                                    <div className="text-[9px] uppercase tracking-[0.18em] text-sand-300">
+                                      {formatBillingCycleLabel(item.billingCycle)}
+                                    </div>
+                                  </div>
+                                  <span className="text-right">
+                                    {formatMoney(
+                                      calcVat(
+                                        Number(item.price || 0) * Number(item.quantity || 0),
+                                        offer
+                                      )
+                                    )}
+                                  </span>
+                                  <span className="text-right">
+                                    {formatLineTotal(item.price, item.quantity)}
+                                  </span>
+                                </div>
+                              </div>
+                              {shouldInsertBreak(item.overallIndex) ? (
+                                <div className="html2pdf__page-break" />
+                              ) : null}
+                            </div>
+                          ))}
+                          {showTotals ? (
+                            <div
+                              className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
+                              style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
+                            >
+                              <span />
+                              <span>Zwischensumme Material</span>
+                              <span />
+                              <span className="text-right">
+                                {formatMoney(calcVat(deviceTotal, offer))}
+                              </span>
+                              <span className="text-right">{formatMoney(deviceTotal)}</span>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+                    {showTotals ? (
+                      <>
+                        {forceTotalsPageBreak ? (
+                          <div className="html2pdf__page-break" />
+                        ) : null}
+                        <div
+                          className="mt-2"
+                          style={{
+                            breakInside: "avoid",
+                            pageBreakInside: "avoid",
+                            breakBefore: forceTotalsPageBreak ? "page" : "auto",
+                            pageBreakBefore: forceTotalsPageBreak ? "always" : "auto"
+                          }}
+                        >
+                          {offer.calculationText ? (
+                            <p className="text-xs text-sand-600 whitespace-pre-line">
+                              {offer.calculationText}
+                            </p>
+                          ) : null}
+                          <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-4 text-sm text-sand-700 space-y-4">
+                            <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr]">
+                              <div className="space-y-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-sand-600">
+                                  Netto nach Bereich
+                                </p>
+                                <div className="flex items-center justify-between">
+                                  <span>Leistungen</span>
+                                  <span className="font-semibold text-sand-900">
+                                    {formatMoney(serviceTotal)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between">
+                                  <span>Material</span>
+                                  <span className="font-semibold text-sand-900">
+                                    {formatMoney(deviceTotal)}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="hidden md:block w-px bg-sand-200" aria-hidden="true" />
+                              <div className="space-y-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-sand-600">
+                                  Laufende Kosten
+                                </p>
+                                {costTotals.monthly ? (
+                                  <div className="flex items-center justify-between">
+                                    <span>Monatlich</span>
+                                    <span className="font-semibold text-sand-900">
+                                      {formatMoney(costTotals.monthly)}
+                                    </span>
+                                  </div>
+                                ) : null}
+                                {costTotals.yearly ? (
+                                  <div className="flex items-center justify-between">
+                                    <span>Jährlich</span>
+                                    <span className="font-semibold text-sand-900">
+                                      {formatMoney(costTotals.yearly)}
+                                    </span>
+                                  </div>
+                                ) : null}
+                                {costTotals.once ? (
+                                  <div className="flex items-center justify-between">
+                                    <span>Einmalig</span>
+                                    <span className="font-semibold text-sand-900">
+                                      {formatMoney(costTotals.once)}
+                                    </span>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className="border-t border-sand-200 pt-3 space-y-2">
+                              <div className="flex items-center justify-between font-semibold text-sand-900">
+                                <span>Gesamt netto</span>
+                                <span>{formatMoney(totalNet)}</span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <span>{formatVatLabel(offer)}</span>
+                                <span>{formatMoney(totalVat)}</span>
+                              </div>
+                              <div className="flex items-center justify-between text-base font-semibold text-sand-900">
+                                <span>Gesamt brutto</span>
+                                <span>{formatMoney(totalGross)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {showTotals && (offer.attachments || []).length ? (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      Beilagen
+                    </p>
+                    <div className="mt-2 space-y-2 text-xs text-sand-600">
+                      {offer.attachments.map((item) => (
+                        <div key={item.id}>
+                          <p className="font-semibold text-sand-800">
+                            {item.title || item.fileName || "Beilage"}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
+              <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+                Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+              </div>
+            </div>
           </div>
-          <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
-            Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
-          </div>
-        </div>
-      </div>
+        );
+      })}
 
       {hasProductPhotos ? (
         <div
@@ -1097,6 +1318,7 @@ function SelectField({ value, onChange, disabled, children }) {
 export default function OffersView() {
   const [offers, setOffers] = useState(initialOffers);
   const [activeId, setActiveId] = useState("");
+  const [starterCreated, setStarterCreated] = useState(false);
   const [detailOpen, setDetailOpen] = useState({});
   const [payloadPreview, setPayloadPreview] = useState(null);
   const [payloadTimestamp, setPayloadTimestamp] = useState("");
@@ -1131,8 +1353,10 @@ export default function OffersView() {
   const [aiLoading, setAiLoading] = useState({});
   const previewWrapperRef = useRef(null);
   const exportRef = useRef(null);
+  const offersFetchedRef = useRef(false);
   const [previewScale, setPreviewScale] = useState(0.75);
   const autosaveTimer = useRef(null);
+  const serverSaveTimer = useRef(null);
   const [detailDraft, setDetailDraft] = useState("");
 
   const activeOffer = offers.find((offer) => offer.id === activeId) || null;
@@ -1171,6 +1395,24 @@ export default function OffersView() {
     }
   };
 
+  const persistOfferToServer = async (offer, withStatus) => {
+    if (!offer || isOfferEmpty(offer)) return null;
+    try {
+      const saved = await persistOfferForCustomer(offer);
+      if (withStatus) {
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus("idle"), 2000);
+      }
+      return saved;
+    } catch (error) {
+      if (withStatus) {
+        setSaveStatus("error");
+        setTimeout(() => setSaveStatus("idle"), 2000);
+      }
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (!previewWrapperRef.current) return;
     const element = previewWrapperRef.current;
@@ -1204,12 +1446,6 @@ export default function OffersView() {
       const raw = window.localStorage.getItem(AUTOSAVE_KEY);
       if (!raw) return;
       const stored = JSON.parse(raw);
-      if (Array.isArray(stored?.offers)) {
-        setOffers(stored.offers);
-      }
-      if (stored?.activeId) {
-        setActiveId(stored.activeId);
-      }
       if (Array.isArray(stored?.serviceBlocks) && stored.serviceBlocks.length) {
         setServiceBlocks(stored.serviceBlocks);
       }
@@ -1266,30 +1502,30 @@ export default function OffersView() {
   }, [blocksLoaded, serviceBlocks, deviceBlocks, calcBlocks]);
 
   useEffect(() => {
+    if (offersFetchedRef.current) return;
+    offersFetchedRef.current = true;
     let active = true;
     fetch("/api/offers")
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (!active) return;
-        if (!Array.isArray(data) || !data.length) return;
-        const next = data.map(normalizeServerOffer).filter(Boolean);
-        if (!next.length) return;
+        const next = Array.isArray(data) ? data.map(normalizeServerOffer).filter(Boolean) : [];
         setOffers(next);
-        setActiveId(next[0]?.id || "");
-        setMainTab("new");
       })
       .catch(() => {});
     return () => {
       active = false;
     };
-  }, []);
+  }, [offerNumberFormat, offerSettingsLoaded, starterCreated]);
 
   useEffect(() => {
-    if (offers.length || !offerSettingsLoaded) return;
-    const starter = createEmptyOffer(1, offerNumberFormat);
-    setOffers([starter]);
+    if (starterCreated || !offerSettingsLoaded) return;
+    const starter = createEmptyOffer(offers.length + 1 || 1, offerNumberFormat);
+    setOffers((prev) => [starter, ...prev]);
     setActiveId(starter.id);
-  }, [offers.length, offerNumberFormat, offerSettingsLoaded]);
+    setStarterCreated(true);
+    setMainTab("new");
+  }, [offerNumberFormat, offerSettingsLoaded, starterCreated]);
 
   useEffect(() => {
     let active = true;
@@ -1395,6 +1631,21 @@ export default function OffersView() {
   }, [offers, activeId, serviceBlocks, deviceBlocks, calcBlocks]);
 
   useEffect(() => {
+    if (!activeOffer || isOfferEmpty(activeOffer)) return;
+    if (serverSaveTimer.current) {
+      clearTimeout(serverSaveTimer.current);
+    }
+    serverSaveTimer.current = setTimeout(() => {
+      persistOfferToServer(activeOffer, false);
+    }, 1000);
+    return () => {
+      if (serverSaveTimer.current) {
+        clearTimeout(serverSaveTimer.current);
+      }
+    };
+  }, [activeOffer]);
+
+  useEffect(() => {
     if (!exportOfferId) return;
     const offer = offers.find((item) => item.id === exportOfferId);
     if (!offer || !exportRef.current) return;
@@ -1408,7 +1659,8 @@ export default function OffersView() {
       filename: `${filenameBase}.pdf`,
       image: { type: "jpeg", quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
+      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+      pagebreak: { mode: ["css", "legacy", "avoid-all"] }
     };
     html2pdf()
       .set(options)
@@ -1455,7 +1707,7 @@ export default function OffersView() {
     () =>
       activeOffer
         ? activeOffer.lineItems.reduce(
-            (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
             0
           )
         : 0,
@@ -1466,10 +1718,15 @@ export default function OffersView() {
     () =>
       activeOffer
         ? activeOffer.deviceItems.reduce(
-            (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
             0
           )
         : 0,
+    [activeOffer]
+  );
+
+  const costTotals = useMemo(
+    () => (activeOffer ? getCostTotalsByCycle(activeOffer) : { once: 0, monthly: 0, yearly: 0 }),
     [activeOffer]
   );
 
@@ -1822,11 +2079,11 @@ export default function OffersView() {
 
   const getOfferTotal = (offer) => {
     const serviceTotal = (offer.lineItems || []).reduce(
-      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
       0
     );
     const deviceTotal = (offer.deviceItems || []).reduce(
-      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
       0
     );
     return serviceTotal + deviceTotal;
@@ -1979,7 +2236,8 @@ export default function OffersView() {
         quantity: 1,
         unit: "hours",
         researchHours: 0,
-        keywords: []
+        keywords: [],
+        billingCycle: "once"
       }
     ]);
   };
@@ -1993,8 +2251,10 @@ export default function OffersView() {
         product: "",
         manufacturer: "",
         model: "",
+        description: "",
         price: 0,
-        quantity: 1
+        quantity: 1,
+        billingCycle: "once"
       }
     ]);
   };
@@ -2057,10 +2317,11 @@ export default function OffersView() {
         complexity: item.complexity || "mittel",
         securityRelevant: Boolean(item.securityRelevant),
         price: Number(item.price || 0),
-        quantity: Number(item.quantity || 1),
+        quantity: normalizeQuantityInput(item.quantity, 1),
         unit: item.unit || "hours",
         researchHours: Number(item.researchHours || 0),
-        keywords: item.keywords || []
+        keywords: item.keywords || [],
+        billingCycle: item.billingCycle || "once"
       },
       ...prev
     ]);
@@ -2075,8 +2336,10 @@ export default function OffersView() {
         product: getDeviceProduct(item),
         manufacturer: item.manufacturer || "",
         model: item.model || "",
+        description: item.description || "",
         price: Number(item.price || 0),
-        quantity: Number(item.quantity || 1)
+        quantity: normalizeQuantityInput(item.quantity, 1),
+        billingCycle: item.billingCycle || "once"
       },
       ...prev
     ]);
@@ -2199,9 +2462,18 @@ export default function OffersView() {
                     <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
                       Gesamt {formatMoney(totals.total)}
                     </span>
+                    <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                      Einmal {formatMoney(costTotals.once)}
+                    </span>
+                    <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                      Laufend {formatMoney(costTotals.monthly)} / {formatMoney(costTotals.yearly)}
+                    </span>
                     <button
                       type="button"
-                      onClick={() => persistToStorage(true)}
+                      onClick={() => {
+                        persistToStorage(false);
+                        persistOfferToServer(activeOffer, true);
+                      }}
                       className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                     >
                       <Save size={12} /> Speichern
@@ -2727,7 +2999,7 @@ export default function OffersView() {
                         >
                           {deviceBlocks.map((block) => (
                             <option key={block.id} value={block.id}>
-                              {block.title}
+                              {block.product || block.title || "Material"}
                             </option>
                           ))}
                         </SelectField>
@@ -2770,7 +3042,8 @@ export default function OffersView() {
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-sand-500">
                                   <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-1">
-                                    {formatMoney(item.price)} · {formatUnitQuantity(item.quantity, item.unit)}
+                                    {formatMoney(item.price)} · {formatUnitQuantity(item.quantity, item.unit)} ·{" "}
+                                    {formatBillingCycleLabel(item.billingCycle)}
                                   </span>
                                   <button
                                     type="button"
@@ -2805,7 +3078,7 @@ export default function OffersView() {
                                         placeholder="Kurz & fakturierbar"
                                       />
                                     </Field>
-                                    <div className="grid gap-2 md:grid-cols-3">
+                                    <div className="grid gap-2 md:grid-cols-4">
                                     <Field label="Preis (netto)">
                                       <div className="relative">
                                         <input
@@ -2828,13 +3101,14 @@ export default function OffersView() {
                                         className={quantityInputClass}
                                         type="number"
                                         value={item.quantity}
+                                        disabled={item.unit === "flat"}
                                         onChange={(event) =>
                                           updateLineItem(activeOffer.id, item.id, {
                                               quantity: parseNumberInput(event.target.value)
                                             })
                                           }
                                         />
-                                      </Field>
+                                    </Field>
                                     <Field label="Einheit">
                                       <SelectField
                                         value={item.unit || "hours"}
@@ -2847,6 +3121,22 @@ export default function OffersView() {
                                         {unitOptions.map((unit) => (
                                           <option key={unit.value} value={unit.value}>
                                             {unit.label}
+                                          </option>
+                                        ))}
+                                      </SelectField>
+                                    </Field>
+                                    <Field label="Abrechnung">
+                                      <SelectField
+                                        value={item.billingCycle || "once"}
+                                        onChange={(event) =>
+                                          updateLineItem(activeOffer.id, item.id, {
+                                            billingCycle: event.target.value
+                                          })
+                                        }
+                                      >
+                                        {billingCycleOptions.map((option) => (
+                                          <option key={option.value} value={option.value}>
+                                            {option.label}
                                           </option>
                                         ))}
                                       </SelectField>
@@ -3081,7 +3371,8 @@ export default function OffersView() {
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2">
                                   <span className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-sand-500">
-                                    {formatLineTotal(item.price, item.quantity)} · {item.quantity}x
+                                    {formatLineTotal(item.price, item.quantity)} · {item.quantity}x ·{" "}
+                                    {formatBillingCycleLabel(item.billingCycle)}
                                   </span>
                                   <button
                                     type="button"
@@ -3112,7 +3403,7 @@ export default function OffersView() {
 
                               {showDetails ? (
                                 <>
-                                  <div className="mt-3 grid gap-3 md:grid-cols-3">
+                                  <div className="mt-3 grid gap-3 md:grid-cols-4">
                                     <Field label="Produkt">
                                       <input
                                         className={inputClass}
@@ -3153,6 +3444,22 @@ export default function OffersView() {
                                           })
                                         }
                                       />
+                                    </Field>
+                                    <Field label="Abrechnung">
+                                      <SelectField
+                                        value={item.billingCycle || "once"}
+                                        onChange={(event) =>
+                                          updateDeviceItem(activeOffer.id, item.id, {
+                                            billingCycle: event.target.value
+                                          })
+                                        }
+                                      >
+                                        {billingCycleOptions.map((option) => (
+                                          <option key={option.value} value={option.value}>
+                                            {option.label}
+                                          </option>
+                                        ))}
+                                      </SelectField>
                                     </Field>
                                   </div>
                                   <div className="mt-3">
@@ -3646,7 +3953,9 @@ export default function OffersView() {
             >
               <div
                 ref={previewWrapperRef}
-                className={`w-full overflow-hidden ${activeOffer ? "cursor-zoom-in" : ""}`}
+                className={`w-full max-h-[70vh] overflow-auto ${
+                  activeOffer ? "cursor-zoom-in" : ""
+                }`}
               >
                 <OfferPreview offer={activeOffer} scale={previewScale} />
               </div>
@@ -4057,7 +4366,7 @@ export default function OffersView() {
                         </p>
                         <p className="mt-1 text-xs text-sand-500">
                           {formatMoney(block.price || 0)} ·{" "}
-                          {formatUnitQuantity(block.quantity || 1, block.unit)}
+                          {formatUnitQuantity(block.quantity ?? "", block.unit)}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -4114,6 +4423,7 @@ export default function OffersView() {
                                 className={quantityInputClass}
                                 type="number"
                                 value={block.quantity ?? ""}
+                                disabled={block.unit === "flat"}
                                 onChange={(event) =>
                                   updateServiceBlock(block.id, {
                                     quantity: parseNumberInput(event.target.value)
@@ -4240,7 +4550,7 @@ export default function OffersView() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-xs font-semibold text-sand-900">
-                          {block.title || "Materialbaustein"}
+                          {block.product || block.title || "Materialbaustein"}
                         </p>
                         <p className="mt-1 text-xs text-sand-500">
                           {getDeviceProduct(block)}
@@ -4266,22 +4576,15 @@ export default function OffersView() {
                     </div>
                     {isOpen ? (
                       <div className="mt-3 grid gap-2 md:grid-cols-2">
-                        <Field label="Titel">
-                          <input
-                            className={inputClass}
-                            value={block.title || ""}
-                            onChange={(event) =>
-                              updateDeviceBlock(block.id, { title: event.target.value })
-                            }
-                            placeholder="Titel"
-                          />
-                        </Field>
                         <Field label="Produkt">
                           <input
                             className={inputClass}
-                            value={block.product ?? ""}
+                            value={block.product ?? block.title ?? ""}
                             onChange={(event) =>
-                              updateDeviceBlock(block.id, { product: event.target.value })
+                              updateDeviceBlock(block.id, {
+                                product: event.target.value,
+                                title: event.target.value
+                              })
                             }
                             placeholder={getDeviceProduct(block) || "Produkt"}
                           />
@@ -4315,6 +4618,20 @@ export default function OffersView() {
                             }
                           />
                         </Field>
+                        <div className="md:col-span-2">
+                          <Field label="Produktbeschreibung">
+                            <textarea
+                              className={noteTextareaClass}
+                              value={block.description || ""}
+                              onChange={(event) =>
+                                updateDeviceBlock(block.id, {
+                                  description: event.target.value
+                                })
+                              }
+                              placeholder="Kurzbeschreibung zum Material"
+                            />
+                          </Field>
+                        </div>
                       </div>
                     ) : null}
                   </div>
