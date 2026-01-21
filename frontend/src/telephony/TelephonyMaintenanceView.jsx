@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Save, Settings, Trash2, Wrench } from "lucide-react";
+import { Plus, Settings, Trash2, Wrench } from "lucide-react";
 
 const API = "/api/pbx_phonebook";
 
@@ -15,8 +15,8 @@ export default function TelephonyMaintenanceView() {
   const [status, setStatus] = useState("idle");
   const [filter, setFilter] = useState("");
   const [draft, setDraft] = useState(emptyDraft);
-  const [editId, setEditId] = useState(null);
-  const [editDraft, setEditDraft] = useState(emptyDraft);
+  const [editingCell, setEditingCell] = useState({ id: null, field: null });
+  const [editValue, setEditValue] = useState("");
   const [mode, setMode] = useState("local");
   const [remoteError, setRemoteError] = useState("");
 
@@ -90,37 +90,52 @@ export default function TelephonyMaintenanceView() {
     setTimeout(() => setStatus("idle"), 2000);
   };
 
-  const startEdit = (entry) => {
-    setEditId(entry.id);
-    setEditDraft({
-      name: entry.name || "",
-      number: entry.number || "",
-      is_global: Boolean(entry.is_global),
-      note: entry.note || ""
-    });
-  };
-
-  const saveEdit = async () => {
-    if (!editId) return;
+  const startCellEdit = (entry, field) => {
     if (mode === "remote") {
       setRemoteError("Bearbeiten ist fuer NFON-Import aktuell nicht verfuegbar.");
       return;
     }
+    setEditingCell({ id: entry.id, field });
+    if (field === "is_global") {
+      setEditValue(Boolean(entry.is_global));
+    } else {
+      setEditValue(entry[field] || "");
+    }
+  };
+
+  const commitCellEdit = async (overrideValue) => {
+    if (!editingCell.id) return;
+    if (mode === "remote") {
+      setRemoteError("Bearbeiten ist fuer NFON-Import aktuell nicht verfuegbar.");
+      return;
+    }
+    const entry = entries.find((item) => item.id === editingCell.id);
+    if (!entry) {
+      setEditingCell({ id: null, field: null });
+      return;
+    }
+    const field = editingCell.field;
+    const nextValue =
+      overrideValue !== undefined ? overrideValue : field === "is_global" ? Boolean(editValue) : editValue;
+    if ((entry[field] || "") === nextValue || (field === "is_global" && Boolean(entry.is_global) === nextValue)) {
+      setEditingCell({ id: null, field: null });
+      return;
+    }
     setStatus("saving");
     try {
-      const res = await fetch(`${API}/${editId}`, {
+      const res = await fetch(`${API}/${editingCell.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editDraft)
+        body: JSON.stringify({ [field]: nextValue })
       });
       if (!res.ok) throw new Error("save_failed");
       const data = await res.json();
-      setEntries((prev) => prev.map((entry) => (entry.id === data.id ? data : entry)));
-      setEditId(null);
+      setEntries((prev) => prev.map((item) => (item.id === data.id ? data : item)));
       setStatus("saved");
     } catch (error) {
       setStatus("error");
     }
+    setEditingCell({ id: null, field: null });
     setTimeout(() => setStatus("idle"), 2000);
   };
 
@@ -211,112 +226,153 @@ export default function TelephonyMaintenanceView() {
             </div>
           </div>
 
-          <div className="mt-4 space-y-2">
-            {filteredEntries.length ? (
-              filteredEntries.map((entry) => (
-                <div
-                  key={entry.id}
-                  className="rounded-2xl border border-sand-200 bg-sand-50 p-3"
-                >
-                  {editId === entry.id ? (
-                    <div className="grid gap-3 md:grid-cols-4">
-                      <input
-                        className="rounded-2xl border border-sand-200 px-3 py-2 text-xs"
-                        value={editDraft.name}
-                        onChange={(event) =>
-                          setEditDraft((prev) => ({ ...prev, name: event.target.value }))
-                        }
-                      />
-                      <input
-                        className="rounded-2xl border border-sand-200 px-3 py-2 text-xs"
-                        value={editDraft.number}
-                        onChange={(event) =>
-                          setEditDraft((prev) => ({ ...prev, number: event.target.value }))
-                        }
-                      />
-                      <label className="flex items-center gap-2 text-xs text-sand-600">
-                        <input
-                          type="checkbox"
-                          checked={editDraft.is_global}
-                          onChange={(event) =>
-                            setEditDraft((prev) => ({
-                              ...prev,
-                              is_global: event.target.checked
-                            }))
-                          }
-                        />
-                        Global
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={saveEdit}
-                          className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-2 text-xs uppercase tracking-wide text-white"
+          <div className="mt-4 overflow-hidden rounded-2xl border border-sand-200 bg-white">
+            <table className="w-full text-xs">
+              <thead className="bg-sand-50 text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                <tr>
+                  <th className="px-4 py-3 text-left">Name</th>
+                  <th className="px-4 py-3 text-left">Rufnummer</th>
+                  <th className="px-4 py-3 text-left">Global</th>
+                  <th className="px-4 py-3 text-left">Notiz</th>
+                  <th className="px-4 py-3 text-right">Aktionen</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-sand-100">
+                {filteredEntries.length ? (
+                  filteredEntries.map((entry) => {
+                    const isNameEditing =
+                      editingCell.id === entry.id && editingCell.field === "name";
+                    const isNumberEditing =
+                      editingCell.id === entry.id && editingCell.field === "number";
+                    const isGlobalEditing =
+                      editingCell.id === entry.id && editingCell.field === "is_global";
+                    const isNoteEditing =
+                      editingCell.id === entry.id && editingCell.field === "note";
+                    return (
+                      <tr key={entry.id} className="hover:bg-sand-50/70">
+                        <td
+                          className="px-4 py-3 text-sand-900"
+                          onClick={() => startCellEdit(entry, "name")}
                         >
-                          <Save size={12} /> Speichern
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditId(null)}
-                          className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600"
+                          {isNameEditing ? (
+                            <input
+                              autoFocus
+                              value={editValue}
+                              onChange={(event) => setEditValue(event.target.value)}
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onBlur={() => commitCellEdit()}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") commitCellEdit();
+                                if (event.key === "Escape") setEditingCell({ id: null, field: null });
+                              }}
+                              className="w-full rounded-md border border-sand-200 bg-white px-2 py-1 text-xs"
+                            />
+                          ) : (
+                            <span className="cursor-pointer">
+                              {entry.name || <span className="text-sand-400">Unbenannt</span>}
+                            </span>
+                          )}
+                        </td>
+                        <td
+                          className="px-4 py-3 text-sand-900"
+                          onClick={() => startCellEdit(entry, "number")}
                         >
-                          Abbrechen
-                        </button>
-                      </div>
-                      <textarea
-                        className="md:col-span-5 rounded-2xl border border-sand-200 px-3 py-2 text-xs"
-                        value={editDraft.note}
-                        onChange={(event) =>
-                          setEditDraft((prev) => ({ ...prev, note: event.target.value }))
-                        }
-                        placeholder="Notiz"
-                      />
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-sand-900">
-                          {entry.name || "Unbenannt"}
-                        </p>
-                        <div className="text-xs text-sand-500">
-                          {[entry.number].filter(Boolean).join(" · ")}
-                        </div>
-                        {entry.is_global ? (
-                          <span className="mt-2 inline-flex rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-500">
-                            Global
-                          </span>
-                        ) : null}
-                        {entry.note ? (
-                          <p className="mt-2 text-xs text-sand-500">{entry.note}</p>
-                        ) : null}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => startEdit(entry)}
-                          disabled={mode === "remote"}
-                          className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600"
+                          {isNumberEditing ? (
+                            <input
+                              autoFocus
+                              value={editValue}
+                              onChange={(event) => setEditValue(event.target.value)}
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onBlur={() => commitCellEdit()}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") commitCellEdit();
+                                if (event.key === "Escape") setEditingCell({ id: null, field: null });
+                              }}
+                              className="w-full rounded-md border border-sand-200 bg-white px-2 py-1 text-xs"
+                            />
+                          ) : (
+                            <span className="cursor-pointer text-sand-700">
+                              {entry.number || <span className="text-sand-400">—</span>}
+                            </span>
+                          )}
+                        </td>
+                        <td
+                          className="px-4 py-3 text-sand-900"
+                          onClick={() => startCellEdit(entry, "is_global")}
                         >
-                          Bearbeiten
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteEntry(entry.id)}
-                          className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
-                          title="Entfernen"
+                          {isGlobalEditing ? (
+                            <label className="inline-flex items-center gap-2 text-xs text-sand-700">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(editValue)}
+                                onMouseDown={(event) => event.stopPropagation()}
+                                onChange={(event) => {
+                                  const checked = event.target.checked;
+                                  setEditValue(checked);
+                                  commitCellEdit(checked);
+                                }}
+                                onBlur={() => commitCellEdit()}
+                              />
+                              Global
+                            </label>
+                          ) : entry.is_global ? (
+                            <span className="cursor-pointer rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-500">
+                              Global
+                            </span>
+                          ) : (
+                            <span className="cursor-pointer text-sand-400">—</span>
+                          )}
+                        </td>
+                        <td
+                          className="px-4 py-3 text-sand-700"
+                          onClick={() => startCellEdit(entry, "note")}
                         >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))
-            ) : (
-              <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-4 text-sm text-sand-500">
-                {status === "loading" ? "Telefonbuch wird geladen..." : "Noch keine Eintraege."}
-              </div>
-            )}
+                          {isNoteEditing ? (
+                            <input
+                              autoFocus
+                              value={editValue}
+                              onChange={(event) => setEditValue(event.target.value)}
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onBlur={() => commitCellEdit()}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") commitCellEdit();
+                                if (event.key === "Escape") setEditingCell({ id: null, field: null });
+                              }}
+                              className="w-full rounded-md border border-sand-200 bg-white px-2 py-1 text-xs"
+                              placeholder="Notiz"
+                            />
+                          ) : (
+                            <span className="cursor-pointer">
+                              {entry.note || <span className="text-sand-400">—</span>}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => deleteEntry(entry.id)}
+                            disabled={mode === "remote"}
+                            className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-40"
+                            title="Entfernen"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td
+                      colSpan={5}
+                      className="px-4 py-6 text-center text-sm text-sand-500"
+                    >
+                      {status === "loading" ? "Telefonbuch wird geladen..." : "Noch keine Eintraege."}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       </main>

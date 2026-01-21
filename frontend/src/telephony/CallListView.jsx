@@ -90,10 +90,17 @@ export default function CallListView({
   const [assignQuery, setAssignQuery] = useState("");
   const [assignStatus, setAssignStatus] = useState("");
   const [assignBusy, setAssignBusy] = useState(false);
+  const [toast, setToast] = useState("");
 
   useEffect(() => {
     if (page > totalPages) setPage(1);
   }, [page, totalPages]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(""), 1800);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const filteredCalls = useMemo(() => {
     if (!onlyMissed) return calls;
@@ -246,8 +253,24 @@ export default function CallListView({
     return key ? customerMatches.get(key) : "";
   };
 
+  const handleAddToPbx = async (payload) => {
+    if (!onAddToPbx) return;
+    try {
+      await Promise.resolve(onAddToPbx(payload));
+      setToast("Telefonbuch uebernommen.");
+    } catch (error) {
+      setToast("Telefonbuch-Uebernahme fehlgeschlagen.");
+    }
+  };
+
   return (
-    <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
+    <>
+      {toast ? (
+        <div className="fixed top-5 right-6 z-50 bg-sand-900 text-white text-xs uppercase tracking-wide px-4 py-2 rounded-full shadow-soft">
+          {toast}
+        </div>
+      ) : null}
+      <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
       <div className="flex items-center justify-between mb-4">
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Live Calls</p>
@@ -334,7 +357,7 @@ export default function CallListView({
                         {assignNumber(call) && !pbxEntryForCall(call) && onAddToPbx ? (
                           <button
                             onClick={() =>
-                              onAddToPbx({
+                              handleAddToPbx({
                                 name:
                                   call.customerName ||
                                   customerNameForCall(call) ||
@@ -582,6 +605,7 @@ export default function CallListView({
           </div>
         </div>
       ) : null}
-    </div>
+      </div>
+    </>
   );
 }

@@ -93,6 +93,7 @@ export default function CustomerDirectoryView() {
   const [deliveryStatus, setDeliveryStatus] = useState("idle");
   const [settingsTab, setSettingsTab] = useState("details");
   const [pbxApiActive, setPbxApiActive] = useState(false);
+  const [toast, setToast] = useState("");
   const [previewModal, setPreviewModal] = useState({
     open: false,
     title: "",
@@ -129,6 +130,12 @@ export default function CustomerDirectoryView() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(""), 1800);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     let active = true;
@@ -849,15 +856,25 @@ export default function CustomerDirectoryView() {
     if (!activeCustomer) return;
     const number = String(phone?.number || "").trim();
     if (!number) return;
-    await telephonyService.createPbxPhonebookEntry({
-      name: activeCustomer.name || "",
-      number,
-      is_global: false
-    });
+    try {
+      await telephonyService.createPbxPhonebookEntry({
+        name: activeCustomer.name || "",
+        number,
+        is_global: false
+      });
+      setToast("Telefonbuch uebernommen.");
+    } catch (error) {
+      setToast("Telefonbuch-Uebernahme fehlgeschlagen.");
+    }
   };
 
   return (
     <div className="min-h-screen bg-sand-50">
+      {toast ? (
+        <div className="fixed top-5 right-6 z-50 bg-sand-900 text-white text-xs uppercase tracking-wide px-4 py-2 rounded-full shadow-soft">
+          {toast}
+        </div>
+      ) : null}
       {previewModal.open ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
           <div className="w-full max-w-5xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
