@@ -161,9 +161,7 @@ export default function App() {
               {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
               {theme === "dark" ? "Tag" : "Nacht"}
             </button>
-            <div className="text-xs text-sand-500">
-              Schnellzugriff für Aufgaben, Notizen und Kundenberichte.
-            </div>
+            <div className="text-xs text-sand-500">Version 1.1.0</div>
           </div>
         </aside>
 
