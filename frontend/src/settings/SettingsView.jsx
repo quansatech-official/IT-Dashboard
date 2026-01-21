@@ -111,6 +111,7 @@ export default function SettingsView() {
   const [smtpOpen, setSmtpOpen] = useState(false);
   const [beaconOpen, setBeaconOpen] = useState(false);
   const [beaconDebugOpen, setBeaconDebugOpen] = useState(false);
+  const [beaconSaveStatus, setBeaconSaveStatus] = useState("idle");
   const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
   const [pbxOpen, setPbxOpen] = useState(false);
   const [ctiOpen, setCtiOpen] = useState(false);
@@ -349,6 +350,36 @@ export default function SettingsView() {
       setStatus("error");
     }
     setTimeout(() => setStatus("idle"), 2000);
+  };
+
+  const saveBeacon = async () => {
+    setBeaconSaveStatus("saving");
+    try {
+      const res = await fetch(`${API}/smtp_settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ beacon_base_url: smtp.beacon_base_url })
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      const next = {
+        ...smtp,
+        beacon_base_url: data?.beacon_base_url || smtp.beacon_base_url
+      };
+      setSmtp(next);
+      try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        const cached = raw ? JSON.parse(raw) : {};
+        const { password, ...cacheable } = { ...cached, beacon_base_url: next.beacon_base_url };
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheable));
+      } catch (error) {
+        // Ignore cache write errors.
+      }
+      setBeaconSaveStatus("saved");
+    } catch (error) {
+      setBeaconSaveStatus("error");
+    }
+    setTimeout(() => setBeaconSaveStatus("idle"), 2000);
   };
 
   const refreshBeaconHealth = async () => {
@@ -749,6 +780,21 @@ export default function SettingsView() {
                   <p className="mt-2 text-xs text-sand-400">
                     Optional: externe Basis-URL oder Template mit {"{guid}"}.
                   </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                    <button
+                      type="button"
+                      onClick={saveBeacon}
+                      className="rounded-full border border-sand-200 bg-white px-3 py-2 uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                    >
+                      Beacon speichern
+                    </button>
+                    {beaconSaveStatus === "saved" && (
+                      <span className="text-emerald-600">Gespeichert</span>
+                    )}
+                    {beaconSaveStatus === "error" && (
+                      <span className="text-rose-600">Speichern fehlgeschlagen</span>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-sand-600">
