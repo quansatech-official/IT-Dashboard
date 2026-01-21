@@ -1268,10 +1268,10 @@ def _build_report_beacon_url(base_url: str, guid: str) -> str:
         return ""
     if "{guid}" in base:
         return base.replace("{guid}", guid)
-    if base.endswith("/api/reports/open"):
+    if base.endswith("/open"):
         separator = "&" if "?" in base else "?"
         return f"{base}{separator}guid={guid}"
-    return f"{base}/api/reports/open?guid={guid}"
+    return f"{base}/open?guid={guid}"
 
 
 def _probe_beacon(url: str) -> Dict[str, Any]:

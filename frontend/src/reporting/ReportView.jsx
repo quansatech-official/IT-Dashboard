@@ -40,12 +40,12 @@ const buildBeaconUrl = (guid) => {
   }
   if (baseUrl) {
     const separator = baseUrl.includes("?") ? "&" : "?";
-    if (baseUrl.endsWith("/api/reports/open")) {
+    if (baseUrl.endsWith("/open")) {
       return `${baseUrl}${separator}guid=${encodeURIComponent(guid)}`;
     }
-    return `${baseUrl}/api/reports/open?guid=${encodeURIComponent(guid)}`;
+    return `${baseUrl}/open?guid=${encodeURIComponent(guid)}`;
   }
-  return `${window.location.origin}/api/reports/open?guid=${encodeURIComponent(guid)}`;
+  return `${window.location.origin}/open?guid=${encodeURIComponent(guid)}`;
 };
 
 function CustomerCombobox({ groups, value, onChange }) {
