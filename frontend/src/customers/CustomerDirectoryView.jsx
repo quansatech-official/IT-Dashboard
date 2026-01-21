@@ -93,6 +93,7 @@ export default function CustomerDirectoryView() {
   const [deliveryStatus, setDeliveryStatus] = useState("idle");
   const [settingsTab, setSettingsTab] = useState("details");
   const [pbxApiActive, setPbxApiActive] = useState(false);
+  const [pbxEntries, setPbxEntries] = useState([]);
   const [toast, setToast] = useState("");
   const [previewModal, setPreviewModal] = useState({
     open: false,
@@ -130,6 +131,30 @@ export default function CustomerDirectoryView() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    telephonyService.fetchPbxPhonebook().then((data) => {
+      if (!active) return;
+      setPbxEntries(Array.isArray(data) ? data : []);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const normalizeDigits = (value) => String(value || "").replace(/\D/g, "");
+
+  const pbxMatches = useMemo(() => {
+    const map = new Map();
+    pbxEntries.forEach((entry) => {
+      const key = normalizeDigits(entry?.number);
+      if (key) {
+        map.set(key, entry);
+      }
+    });
+    return map;
+  }, [pbxEntries]);
 
   useEffect(() => {
     if (!toast) return;
@@ -1297,19 +1322,21 @@ export default function CustomerDirectoryView() {
                           placeholder="+49 40 123456"
                           className="rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                         />
-                        <button
-                          type="button"
-                          onClick={() => addPhoneToPbx(phone)}
-                          disabled={!pbxApiActive}
-                          className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs text-sand-600 ${
-                            pbxApiActive
-                              ? "border-sand-200 bg-white hover:bg-sand-100"
-                              : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
-                          }`}
-                          title="Ins Anlagen-Telefonbuch übernehmen"
-                        >
-                          <BookPlus size={12} />
-                        </button>
+                        {pbxMatches.has(normalizeDigits(phone.number)) ? null : (
+                          <button
+                            type="button"
+                            onClick={() => addPhoneToPbx(phone)}
+                            disabled={!pbxApiActive}
+                            className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs text-sand-600 ${
+                              pbxApiActive
+                                ? "border-sand-200 bg-white hover:bg-sand-100"
+                                : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
+                            }`}
+                            title="Ins Anlagen-Telefonbuch übernehmen"
+                          >
+                            <BookPlus size={12} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => removePhone(phone.id)}

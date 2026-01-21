@@ -1278,7 +1278,7 @@ def _probe_beacon(url: str) -> Dict[str, Any]:
     if not url:
         return {"ok": False, "status_code": None, "error": "Beacon URL not configured", "url": ""}
     try:
-        response = requests.get(url, timeout=8)
+        response = requests.get(url, timeout=8, headers={"User-Agent": "qtbeacon"})
     except requests.RequestException as exc:
         return {"ok": False, "status_code": None, "error": str(exc), "url": url}
     preview = (response.text or "")[:200]
