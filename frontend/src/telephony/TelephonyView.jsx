@@ -108,13 +108,9 @@ export default function TelephonyView() {
   }, []);
 
   const handleAddToPbx = async (payload) => {
-    const result = await telephonyService.createPbxPhonebookEntry(payload, {
-      allowFallback: !pbxApiActive
-    });
-    if (pbxApiActive) {
-      const fresh = await telephonyService.fetchPbxPhonebook();
-      setPbxEntries(Array.isArray(fresh) ? fresh : []);
-    }
+    const result = await telephonyService.createPbxPhonebookEntry(payload);
+    const fresh = await telephonyService.fetchPbxPhonebook();
+    setPbxEntries(Array.isArray(fresh) ? fresh : []);
     if (!result) {
       throw new Error("pbx_add_failed");
     }

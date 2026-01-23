@@ -73,7 +73,8 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
     const recent = Array.isArray(calls) ? calls.slice(0, 100) : [];
     recent.forEach((call) => {
       const direction = call.direction?.toLowerCase() || "";
-      const rawNumber = direction.includes("out") ? call.to || call.from : call.from || call.to;
+      if (direction.includes("out")) return;
+      const rawNumber = call.from || call.to;
       const normalized = normalizeNumber(rawNumber);
       if (!normalized) return;
       const safeNumber = rawNumber ? String(rawNumber) : normalized;

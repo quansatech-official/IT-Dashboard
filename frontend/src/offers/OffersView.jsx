@@ -5,6 +5,7 @@ import {
   ChevronUp,
   Eye,
   FileDown,
+  FilePlus,
   Image,
   Link,
   Plus,
@@ -17,6 +18,7 @@ import {
   Trash2,
   X
 } from "lucide-react";
+import EmailComposerModal from "../components/EmailComposerModal";
 import html2pdf from "html2pdf.js";
 
 const inputClass =
@@ -212,7 +214,6 @@ const isOfferEmpty = (offer) => {
     offer.recipientCompany,
     offer.recipientStreet,
     offer.recipientPostalCity,
-    offer.recipientCountry,
     offer.customerNumber,
     offer.orderNumber
   ].some((value) => String(value || "").trim());
@@ -223,6 +224,9 @@ const isOfferEmpty = (offer) => {
   ].some((value) => String(value || "").trim());
   return !(hasPositions || hasAttachments || hasCustomerDetails || hasTextBlocks);
 };
+
+const isOfferAccepted = (offer) =>
+  (offer?.status || "").toString().trim().toLowerCase() === "angenommen";
 
 const getDeviceProduct = (item) =>
   item.product ||
@@ -322,6 +326,12 @@ const buildOfferContext = (offer) => {
   const list = positions.length ? positions.map((title) => `- ${title}`).join("\n") : "n/a";
   return `Kunde: ${customer}\nReferenz: ${reference}\nPositionen:\n${list}`;
 };
+
+const stripHtml = (value) =>
+  String(value || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 const buildLineItemContext = (offer, item) => {
   const customer = offer?.customer || "Kunde offen";
@@ -468,33 +478,6 @@ const formatPieceQuantity = (quantity) => {
   if (Number(quantity) === 0) return "";
   return `${Number(quantity || 0)}x`;
 };
-
-const buildItemTitle = (item) =>
-  item.title ||
-  (item.product || item.manufacturer || item.model
-    ? getDeviceProduct(item)
-    : "Position");
-
-const buildItemText = (item) =>
-  (item.aiDraft || getActiveVersion(item)?.text || item.description || "").trim();
-
-const buildItemUnit = (item, fallback) => item.unit || fallback;
-
-const buildSevDeskPayload = (offer) => ({
-  offer_reference: offer.reference,
-  items: [...offer.lineItems, ...offer.deviceItems].map((item) => {
-    const isDevice = Boolean(item.manufacturer || item.model || item.product);
-    const unit = buildItemUnit(item, isDevice ? "piece" : "hours");
-    return {
-      title: buildItemTitle(item),
-      quantity: Number(item.quantity || 0),
-      unit,
-      unit_label: formatUnitLabel(unit),
-      position_text: buildItemText(item),
-      price: Number(item.price || 0)
-    };
-  })
-});
 
 const internalNoteOptions = [
   { value: "", label: "Kein Vermerk" },
@@ -1269,6 +1252,117 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   );
 }
 
+function HandoverModal({
+  open,
+  offer,
+  summary,
+  text,
+  aiLoading,
+  onClose,
+  onConfirm,
+  onTextChange,
+  onGenerateAi
+}) {
+  if (!open || !offer || !summary) return null;
+  const trackingText = offer.trackingGuid
+    ? `Tracking aktiv (ID ${offer.trackingGuid}).`
+    : "Tracking wird beim Versand aktiviert, sofern Beacon konfiguriert ist.";
+  const statusLabel = summary.accepted ? "Angebot angenommen" : "Angebot nicht angenommen";
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
+      <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+        <div className="flex items-center justify-between border-b border-sand-100 px-6 py-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Pre-Check</p>
+            <h3 className="text-lg font-display text-sand-900">Übergabe an Faktura</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 bg-white p-2 text-sand-500 hover:bg-sand-50"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="px-6 py-4">
+          <div className="grid gap-2 text-xs text-sand-600 md:grid-cols-3">
+            <div>
+              <p className="font-semibold text-sand-900">{statusLabel}</p>
+              {!summary.accepted && (
+                <p className="text-rose-600">Das Angebot muss angenommen sein, bevor die Übergabe erfolgt.</p>
+              )}
+            </div>
+            <div>
+              <p className="font-semibold text-sand-900">{summary.positions} Positionen</p>
+              <p>Zeilen inkl. Gerätepositionen</p>
+            </div>
+            <div>
+              <p className="font-semibold text-sand-900">
+                {summary.serverId ? `Server ID ${summary.serverId}` : "Noch nicht synchronisiert"}
+              </p>
+              <p className="text-sand-500">Serverdaten</p>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-3 gap-3 text-[11px] text-sand-500">
+            <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sand-600">
+              <p className="text-[10px] uppercase tracking-[0.3em]">Netto</p>
+              <p className="text-sand-900">{formatMoney(summary.totalNet)}</p>
+            </div>
+            <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sand-600">
+              <p className="text-[10px] uppercase tracking-[0.3em]">MwSt</p>
+              <p className="text-sand-900">{formatMoney(summary.totalVat)}</p>
+            </div>
+            <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sand-600">
+              <p className="text-[10px] uppercase tracking-[0.3em]">Brutto</p>
+              <p className="text-sand-900">{formatMoney(summary.totalGross)}</p>
+            </div>
+          </div>
+        </div>
+        <div className="border-t border-sand-100 px-6 py-4">
+          <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+            Positionstext für Aufgaben (Plaintext)
+            <textarea
+              className="mt-2 w-full min-h-[140px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+              value={text}
+              onChange={(event) => onTextChange(event.target.value)}
+              placeholder="Beschreiben Sie die erwarteten Aufgaben, Ergebnisse oder Hinweise."
+            />
+          </label>
+          <div className="mt-2 flex items-center justify-between text-[11px] text-sand-500">
+            <button
+              type="button"
+              onClick={onGenerateAi}
+              disabled={aiLoading}
+              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait"
+            >
+              <Sparkles size={12} />
+              {aiLoading ? "KI generiert..." : "KI-Text generieren"}
+            </button>
+            <p className="text-sand-400">{trackingText}</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-3 border-t border-sand-100 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 px-4 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+          >
+            Abbrechen
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={aiLoading || !summary.accepted}
+            className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Übergabe an Faktura starten
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const extractDropUrl = (event) => {
   const dataTransfer = event?.dataTransfer;
   if (!dataTransfer || typeof dataTransfer.getData !== "function") return "";
@@ -1321,8 +1415,6 @@ export default function OffersView() {
   const [activeId, setActiveId] = useState("");
   const [starterCreated, setStarterCreated] = useState(false);
   const [detailOpen, setDetailOpen] = useState({});
-  const [payloadPreview, setPayloadPreview] = useState(null);
-  const [payloadTimestamp, setPayloadTimestamp] = useState("");
   const [positionType, setPositionType] = useState(
     positionTypes[0]?.value || "Dienstleistung"
   );
@@ -1349,6 +1441,16 @@ export default function OffersView() {
   const [sendTo, setSendTo] = useState("");
   const [sendSubject, setSendSubject] = useState("");
   const [sendStatus, setSendStatus] = useState("idle");
+  const [offerEmailBody, setOfferEmailBody] = useState("");
+  const [offerEmailModalOpen, setOfferEmailModalOpen] = useState(false);
+  const [handoverModal, setHandoverModal] = useState({
+    open: false,
+    offerId: "",
+    text: "",
+    aiLoading: false,
+    summary: null
+  });
+  const [sevdeskStatus, setSevdeskStatus] = useState({});
   const [expandedOffers, setExpandedOffers] = useState({});
   const [confirmationMenuOfferId, setConfirmationMenuOfferId] = useState("");
   const [aiLoading, setAiLoading] = useState({});
@@ -1371,6 +1473,12 @@ export default function OffersView() {
   const activeOffer = offers.find((offer) => offer.id === activeId) || null;
   const previewOffer = offers.find((offer) => offer.id === previewOfferId) || null;
   const exportOffer = offers.find((offer) => offer.id === exportOfferId) || null;
+  const activeSevdeskKey = activeOffer ? activeOffer.serverId || activeOffer.id : null;
+  const activeSevdeskState = activeSevdeskKey ? sevdeskStatus[activeSevdeskKey] : null;
+  const offerTrackingText = activeOffer?.trackingGuid
+    ? `Tracking aktiv (ID ${activeOffer.trackingGuid}).`
+    : "Tracking wird beim Versand aktiviert, sofern Beacon konfiguriert ist.";
+  const offerDefaultSubject = `Angebot ${activeOffer?.reference || ""}`.trim();
   const customersByName = useMemo(() => {
     const map = new Map();
     customers.forEach((customer) => {
@@ -2196,7 +2304,19 @@ export default function OffersView() {
     return saved;
   };
 
-  const sendOfferEmail = async () => {
+  const openOfferEmailComposer = () => {
+    if (!activeOffer) return;
+    const defaultText = `Angebot ${activeOffer.reference || ""}`.trim();
+    setSendSubject((prev) => prev || defaultText);
+    setOfferEmailBody((prev) => prev || defaultText);
+    setOfferEmailModalOpen(true);
+  };
+
+  const closeOfferEmailComposer = () => {
+    setOfferEmailModalOpen(false);
+  };
+
+  const handleOfferEmailSend = async () => {
     if (!activeOffer || !sendTo) return;
     setSendStatus("sending");
     try {
@@ -2207,18 +2327,21 @@ export default function OffersView() {
       } catch (error) {
         confirmUrl = "";
       }
+      const html = buildOfferEmailHtml(activeOffer, confirmUrl, "offer");
+      const baseText =
+        (offerEmailBody || `Angebot ${activeOffer.reference || ""}`).trim() ||
+        `Angebot ${activeOffer.reference || ""}`;
+      const text = confirmUrl
+        ? `${baseText}\nBestätigungslink: ${confirmUrl}`
+        : baseText;
       const res = await fetch("/api/offers/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to: sendTo,
-          subject:
-            sendSubject ||
-            `Angebot ${activeOffer.reference || ""}`.trim(),
-          html: buildOfferEmailHtml(activeOffer, confirmUrl, "offer"),
-          text: `Angebot ${activeOffer.reference || ""}${
-            confirmUrl ? `\nBestätigungslink: ${confirmUrl}` : ""
-          }`
+          subject: sendSubject || `Angebot ${activeOffer.reference || ""}`.trim(),
+          html,
+          text
         })
       });
       if (!res.ok) throw new Error("send_failed");
@@ -2236,6 +2359,7 @@ export default function OffersView() {
         }
       }
       setSendStatus("sent");
+      closeOfferEmailComposer();
     } catch (error) {
       setSendStatus("error");
     }
@@ -2282,6 +2406,157 @@ export default function OffersView() {
       setSendStatus("error");
     }
     setTimeout(() => setSendStatus("idle"), 3000);
+  };
+
+  const parseApiResponse = async (res) => {
+    const text = await res.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      return { raw: text };
+    }
+  };
+
+  const createSevdeskDraft = async (offerId) => {
+    setSevdeskStatus((prev) => ({
+      ...prev,
+      [offerId]: { status: "sending", message: "" }
+    }));
+    try {
+      const res = await fetch(`/api/sevdesk/offers/${offerId}/draft`, { method: "POST" });
+      const data = await parseApiResponse(res);
+      if (!res.ok || !data?.ok) {
+        const detail = data?.detail || data?.error || data?.message || data?.raw || "Fehler";
+        throw new Error(detail);
+      }
+      setSevdeskStatus((prev) => ({
+        ...prev,
+        [offerId]: { status: "sent", message: "Rechnungsentwurf erstellt" }
+      }));
+    } catch (error) {
+      setSevdeskStatus((prev) => ({
+        ...prev,
+        [offerId]: {
+          status: "error",
+          message: error?.message ? String(error.message) : "Fehler"
+        }
+      }));
+    }
+    setTimeout(() => {
+      setSevdeskStatus((prev) => {
+        const next = { ...prev };
+        delete next[offerId];
+        return next;
+      });
+    }, 4000);
+  };
+
+  const createSevdeskDraftForOffer = async (offer) => {
+    if (!offer) return;
+    if (!isOfferAccepted(offer)) {
+      setSevdeskStatus((prev) => ({
+        ...prev,
+        [offer.serverId || offer.id]: { status: "error", message: "Angebot nicht akzeptiert" }
+      }));
+      return;
+    }
+    let serverId = offer.serverId || offer.id;
+    if (!offer.serverId) {
+      try {
+        const saved = await persistOfferForCustomer(offer);
+        serverId = saved?.id || serverId;
+      } catch (error) {
+        setSevdeskStatus((prev) => ({
+          ...prev,
+          [serverId]: {
+            status: "error",
+            message: "Angebot konnte nicht gespeichert werden"
+          }
+        }));
+        return;
+      }
+    }
+    createSevdeskDraft(serverId);
+  };
+
+  const getHandoverSummary = (offer) => {
+    if (!offer) return null;
+    const serviceTotal = (offer.lineItems || []).reduce(
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+      0
+    );
+    const deviceTotal = (offer.deviceItems || []).reduce(
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+      0
+    );
+    const net = serviceTotal + deviceTotal;
+    const vat = calcVat(net, offer);
+    return {
+      positions: (offer.lineItems || []).length + (offer.deviceItems || []).length,
+      totalNet: net,
+      totalVat: vat,
+      totalGross: net + vat,
+      accepted: isOfferAccepted(offer),
+      serverId: offer.serverId || ""
+    };
+  };
+
+  const getHandoverDefaultText = (offer) => {
+    if (!offer) return "";
+    const fromDetail = stripHtml(offer.detailHtml);
+    if (fromDetail) return fromDetail;
+    return offer.introText || `Details zur Übergabe von Angebot ${offer.reference || ""}.`;
+  };
+
+  const openHandoverModal = (offer) => {
+    if (!offer) return;
+    setHandoverModal({
+      open: true,
+      offerId: offer.id,
+      text: offer.handoverNote || getHandoverDefaultText(offer),
+      aiLoading: false,
+      summary: getHandoverSummary(offer)
+    });
+  };
+
+  const closeHandoverModal = () => {
+    setHandoverModal((prev) => ({ ...prev, open: false }));
+  };
+
+  const handleHandoverTextChange = (value) => {
+    setHandoverModal((prev) => ({ ...prev, text: value }));
+  };
+
+  const handleHandoverAi = async () => {
+    const offer = offers.find((entry) => entry.id === handoverModal.offerId);
+    if (!offer) return;
+    const currentText = handoverModal.text;
+    setHandoverModal((prev) => ({ ...prev, aiLoading: true }));
+    try {
+      const aiText = await requestOfferAiText({
+        mode: "handover",
+        currentText,
+        context: buildOfferContext(offer),
+        fallback: () =>
+          generateAiText({
+            title: offer.reference || "Leistung",
+            keywords: []
+          })
+      });
+      if (aiText) {
+        setHandoverModal((prev) => ({ ...prev, text: aiText }));
+      }
+    } finally {
+      setHandoverModal((prev) => ({ ...prev, aiLoading: false }));
+    }
+  };
+
+  const handleHandoverConfirm = () => {
+    const offer = offers.find((entry) => entry.id === handoverModal.offerId);
+    if (!offer) return;
+    closeHandoverModal();
+    createSevdeskDraftForOffer(offer);
   };
 
   const addLineItem = (block) => {
@@ -2459,12 +2734,6 @@ export default function OffersView() {
       activeAiVersionId: newVersion.id,
       aiDraft: text
     });
-  };
-
-  const handleSevDesk = () => {
-    if (!activeOffer) return;
-    setPayloadPreview(buildSevDeskPayload(activeOffer));
-    setPayloadTimestamp(new Date().toISOString());
   };
 
   const runImporterSearch = async () => {
@@ -2675,31 +2944,21 @@ export default function OffersView() {
                     <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
                       Versand
                     </p>
-                    <div className="mt-3 space-y-3">
-                      <Field label="Empfänger E-Mail">
-                        <input
-                          className={inputClass}
-                          value={sendTo}
-                          onChange={(event) => setSendTo(event.target.value)}
-                          placeholder="kunde@example.com"
-                        />
-                      </Field>
-                      <Field label="Betreff">
-                        <input
-                          className={inputClass}
-                          value={sendSubject}
-                          onChange={(event) => setSendSubject(event.target.value)}
-                          placeholder={`Angebot ${activeOffer.reference || ""}`}
-                        />
-                      </Field>
+                    <div className="mt-3 space-y-2">
+                      <p className="text-[11px] text-sand-500">
+                        Empfänger: {sendTo || "Noch nicht gesetzt"}
+                      </p>
+                      <p className="text-[11px] text-sand-500">
+                        Betreff:{" "}
+                        {sendSubject || `Angebot ${activeOffer.reference || ""}`.trim()}
+                      </p>
                       <button
                         type="button"
-                        onClick={sendOfferEmail}
-                        disabled={!sendTo || sendStatus === "sending"}
-                        className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                        onClick={openOfferEmailComposer}
+                        className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90"
                       >
                         <Send size={12} />
-                        {sendStatus === "sending" ? "Sende..." : "Senden"}
+                        E-Mail senden
                       </button>
                       {sendStatus === "sent" && (
                         <span className="text-xs text-emerald-600">Gesendet</span>
@@ -4040,34 +4299,40 @@ export default function OffersView() {
                       Übergabe & Abrechnung
                     </h2>
                     <p className="text-sm text-sand-600">
-                      Es werden nur Kurzpositionstitel, Menge, Preis und Referenz-ID
-                      übergeben.
+                      Rechnungsentwürfe werden manuell aus akzeptierten Angeboten erstellt.
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={handleSevDesk}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90"
+                    onClick={() => openHandoverModal(activeOffer)}
+                    disabled={
+                      !activeOffer ||
+                      !isOfferAccepted(activeOffer) ||
+                      activeSevdeskState?.status === "sending"
+                    }
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:opacity-50"
                   >
-                    Rechnungsentwurf in sevDesk erzeugen
+                    Rechnungsentwurf in sevdesk erzeugen
                   </button>
                 </div>
-
-                {payloadPreview ? (
-                  <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-100 p-4 text-xs text-sand-700">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="uppercase tracking-[0.3em] text-sand-500">Preview</span>
-                      <span>{formatDate(payloadTimestamp)}</span>
-                    </div>
-                    <pre className="mt-3 whitespace-pre-wrap">
-                      {JSON.stringify(payloadPreview, null, 2)}
-                    </pre>
-                  </div>
-                ) : (
-                  <div className="mt-4 rounded-2xl border border-dashed border-sand-200 bg-sand-100 p-4 text-sm text-sand-500">
-                    Noch keine Übergabe erzeugt.
-                  </div>
-                )}
+                <div className="mt-4 rounded-2xl border border-dashed border-sand-200 bg-sand-100 p-4 text-sm text-sand-500">
+                  {activeOffer ? (
+                    isOfferAccepted(activeOffer) ? (
+                      <span>Bereit fuer den Rechnungsentwurf.</span>
+                    ) : (
+                      <span>Akzeptiere das Angebot, um einen Rechnungsentwurf zu erstellen.</span>
+                    )
+                  ) : (
+                    <span>Kein Angebot ausgewählt.</span>
+                  )}
+                  {activeSevdeskState ? (
+                    <span className="ml-2">
+                      {activeSevdeskState.status === "sending" && "Erstelle Rechnungsentwurf..."}
+                      {activeSevdeskState.status === "sent" && activeSevdeskState.message}
+                      {activeSevdeskState.status === "error" && activeSevdeskState.message}
+                    </span>
+                  ) : null}
+                </div>
               </section>
             </>
           ) : (
@@ -4264,6 +4529,15 @@ export default function OffersView() {
                         </button>
                         <button
                           type="button"
+                          onClick={() => openHandoverModal(offer)}
+                          disabled={sevdeskStatus[offer.serverId || offer.id]?.status === "sending"}
+                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50 disabled:opacity-50"
+                          title="Rechnungsentwurf in sevdesk"
+                        >
+                          <FilePlus size={14} />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => duplicateOffer(offer)}
                           className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
                           title="Duplizieren"
@@ -4359,6 +4633,23 @@ export default function OffersView() {
                             Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
                           </span>
                         </div>
+                        {sevdeskStatus[offer.serverId || offer.id] ? (
+                          <div className="mt-2 text-xs">
+                            {sevdeskStatus[offer.serverId || offer.id].status === "sending" && (
+                              <span className="text-emerald-700">Erstelle Rechnungsentwurf...</span>
+                            )}
+                            {sevdeskStatus[offer.serverId || offer.id].status === "sent" && (
+                              <span className="text-emerald-700">
+                                {sevdeskStatus[offer.serverId || offer.id].message}
+                              </span>
+                            )}
+                            {sevdeskStatus[offer.serverId || offer.id].status === "error" && (
+                              <span className="text-rose-600">
+                                {sevdeskStatus[offer.serverId || offer.id].message}
+                              </span>
+                            )}
+                          </div>
+                        ) : null}
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <button
                             type="button"
@@ -5057,7 +5348,34 @@ export default function OffersView() {
       </div>
     ) : null}
   </main>
-      <datalist id="offer-customers">
+  <EmailComposerModal
+    open={offerEmailModalOpen}
+    title="Angebot per E-Mail senden"
+    recipient={sendTo}
+    subject={sendSubject || offerDefaultSubject}
+    body={offerEmailBody}
+    helperText="Der Plaintext wird gesendet, das HTML wird automatisch erstellt."
+    trackingText={offerTrackingText}
+    isSending={sendStatus === "sending"}
+    onClose={closeOfferEmailComposer}
+    onSend={handleOfferEmailSend}
+    onRecipientChange={setSendTo}
+    onSubjectChange={setSendSubject}
+    onBodyChange={setOfferEmailBody}
+    sendLabel="Senden"
+  />
+  <HandoverModal
+    open={handoverModal.open}
+    offer={offers.find((item) => item.id === handoverModal.offerId)}
+    summary={handoverModal.summary}
+    text={handoverModal.text}
+    aiLoading={handoverModal.aiLoading}
+    onClose={closeHandoverModal}
+    onConfirm={handleHandoverConfirm}
+    onTextChange={handleHandoverTextChange}
+    onGenerateAi={handleHandoverAi}
+  />
+  <datalist id="offer-customers">
         {customerNames.map((name) => (
           <option key={name} value={name} />
         ))}

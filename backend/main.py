@@ -20,6 +20,7 @@ from urllib.parse import quote, urlparse
 from datetime import datetime, timezone
 import logging
 
+from sevdesk_service import SevdeskClient, SevdeskConfig, SevdeskError
 # ================= DATABASE =================
 DATABASE_URL = os.environ.get("DATABASE_URL") or (
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
@@ -254,6 +255,23 @@ class IntegrationSettings(Base):
     also_sftp_password = Column(String, default="")
     also_sftp_key_path = Column(String, default="")
     also_sftp_dir = Column(String, default="")
+    sevdesk_base_url = Column(String, default="")
+    sevdesk_api_token = Column(String, default="")
+    sevdesk_contact_person_id = Column(String, default="")
+    sevdesk_address_country_id = Column(String, default="")
+    sevdesk_tax_type = Column(String, default="default")
+    sevdesk_tax_rule_id = Column(String, default="1")
+    sevdesk_tax_text = Column(String, default="zzgl. Umsatzsteuer")
+    sevdesk_currency = Column(String, default="EUR")
+    sevdesk_invoice_type = Column(String, default="RE")
+    sevdesk_default_tax_rate = Column(String, default="19")
+    sevdesk_unity_id = Column(String, default="")
+    sevdesk_service_unity_id = Column(String, default="")
+    sevdesk_device_unity_id = Column(String, default="")
+    sevdesk_hourly_rate_eur = Column(String, default="")
+    icecat_username = Column(String, default="")
+    icecat_password = Column(String, default="")
+    icecat_enabled = Column(Boolean, default=False)
 
 
 class SmtpSettings(Base):
@@ -360,6 +378,40 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_key_path VARCHAR DEFAULT ''")
     if "also_sftp_dir" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_dir VARCHAR DEFAULT ''")
+    if "sevdesk_base_url" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_base_url VARCHAR DEFAULT ''")
+    if "sevdesk_api_token" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_api_token VARCHAR DEFAULT ''")
+    if "sevdesk_contact_person_id" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_contact_person_id VARCHAR DEFAULT ''")
+    if "sevdesk_address_country_id" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_address_country_id VARCHAR DEFAULT ''")
+    if "sevdesk_tax_type" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_tax_type VARCHAR DEFAULT 'default'")
+    if "sevdesk_tax_rule_id" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_tax_rule_id VARCHAR DEFAULT '1'")
+    if "sevdesk_tax_text" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_tax_text VARCHAR DEFAULT 'zzgl. Umsatzsteuer'")
+    if "sevdesk_currency" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_currency VARCHAR DEFAULT 'EUR'")
+    if "sevdesk_invoice_type" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_invoice_type VARCHAR DEFAULT 'RE'")
+    if "sevdesk_default_tax_rate" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_default_tax_rate VARCHAR DEFAULT '19'")
+    if "sevdesk_unity_id" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_unity_id VARCHAR DEFAULT ''")
+    if "sevdesk_service_unity_id" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_service_unity_id VARCHAR DEFAULT ''")
+    if "sevdesk_device_unity_id" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_device_unity_id VARCHAR DEFAULT ''")
+    if "sevdesk_hourly_rate_eur" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_hourly_rate_eur VARCHAR DEFAULT ''")
+    if "icecat_username" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN icecat_username VARCHAR DEFAULT ''")
+    if "icecat_password" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN icecat_password VARCHAR DEFAULT ''")
+    if "icecat_enabled" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN icecat_enabled BOOLEAN DEFAULT FALSE")
     if statements:
         with engine.begin() as connection:
             for statement in statements:
@@ -811,6 +863,23 @@ class IntegrationSettingsUpdate(BaseModel):
     also_sftp_password: Optional[str] = None
     also_sftp_key_path: Optional[str] = None
     also_sftp_dir: Optional[str] = None
+    sevdesk_base_url: Optional[str] = None
+    sevdesk_api_token: Optional[str] = None
+    sevdesk_contact_person_id: Optional[str] = None
+    sevdesk_address_country_id: Optional[str] = None
+    sevdesk_tax_type: Optional[str] = None
+    sevdesk_tax_rule_id: Optional[str] = None
+    sevdesk_tax_text: Optional[str] = None
+    sevdesk_currency: Optional[str] = None
+    sevdesk_invoice_type: Optional[str] = None
+    sevdesk_default_tax_rate: Optional[str] = None
+    sevdesk_unity_id: Optional[str] = None
+    sevdesk_service_unity_id: Optional[str] = None
+    sevdesk_device_unity_id: Optional[str] = None
+    sevdesk_hourly_rate_eur: Optional[str] = None
+    icecat_username: Optional[str] = None
+    icecat_password: Optional[str] = None
+    icecat_enabled: Optional[bool] = None
 
 
 class SmtpSettingsUpdate(BaseModel):
@@ -880,6 +949,11 @@ class OfferCustomerConfirm(BaseModel):
     email: Optional[str] = ""
     note: Optional[str] = ""
 
+
+class SevdeskTaskSyncRequest(BaseModel):
+    task_ids: Optional[List[int]] = None
+    customer_number: Optional[str] = None
+
 class PbxPhonebookCreate(BaseModel):
     name: Optional[str] = ""
     number: Optional[str] = ""
@@ -945,6 +1019,159 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "completed_at": t.completed_at,
         "created_at": t.created_at,
     }
+
+
+def _parse_float(value: Optional[str], default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_int(value: Optional[str]) -> Optional[int]:
+    try:
+        parsed = int(str(value))
+        return parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_sevdesk_config(
+    settings: IntegrationSettings, metrics: Optional[CustomerMetricsSettings] = None
+) -> SevdeskConfig:
+    base_url = (settings.sevdesk_base_url or "").strip() or "https://my.sevdesk.de/api/v1"
+    tax_rate = _parse_float(settings.sevdesk_default_tax_rate, default=19.0)
+    unity_id = _parse_int(settings.sevdesk_unity_id) or 0
+    service_unity_id = _parse_int(settings.sevdesk_service_unity_id)
+    device_unity_id = _parse_int(settings.sevdesk_device_unity_id)
+    hourly_rate = _parse_float(settings.sevdesk_hourly_rate_eur, default=0.0)
+    if metrics and _parse_float(metrics.hourly_rate_eur, default=0.0) > 0:
+        hourly_rate = _parse_float(metrics.hourly_rate_eur, default=hourly_rate)
+
+    return SevdeskConfig(
+        base_url=base_url,
+        api_token=(settings.sevdesk_api_token or "").strip(),
+        contact_person_id=_parse_int(settings.sevdesk_contact_person_id) or 0,
+        address_country_id=_parse_int(settings.sevdesk_address_country_id) or 0,
+        tax_type=(settings.sevdesk_tax_type or "default").strip() or "default",
+        tax_rule_id=_parse_int(settings.sevdesk_tax_rule_id) or 1,
+        tax_text=(settings.sevdesk_tax_text or "zzgl. Umsatzsteuer").strip(),
+        currency=(settings.sevdesk_currency or "EUR").strip() or "EUR",
+        invoice_type=(settings.sevdesk_invoice_type or "RE").strip() or "RE",
+        default_tax_rate=tax_rate,
+        unity_id=unity_id,
+        service_unity_id=service_unity_id,
+        device_unity_id=device_unity_id,
+        hourly_rate_eur=hourly_rate,
+    )
+
+
+def _require_sevdesk_config(
+    settings: IntegrationSettings, metrics: Optional[CustomerMetricsSettings] = None
+) -> SevdeskConfig:
+    config = _build_sevdesk_config(settings, metrics)
+    missing = []
+    if not config.api_token:
+        missing.append("sevdesk_api_token")
+    if not config.contact_person_id:
+        missing.append("sevdesk_contact_person_id")
+    if not config.address_country_id:
+        missing.append("sevdesk_address_country_id")
+    if not config.tax_rule_id:
+        missing.append("sevdesk_tax_rule_id")
+    if not config.unity_id and not config.service_unity_id and not config.device_unity_id:
+        missing.append("sevdesk_unity_id")
+    if missing:
+        raise HTTPException(400, f"Sevdesk settings missing: {', '.join(missing)}")
+    return config
+
+
+def _ollama_generate_text(prompt: str) -> str:
+    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
+    try:
+        response = requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json=payload,
+            timeout=45,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning("Ollama request failed: %s", exc)
+        return ""
+    data = response.json()
+    return (data.get("response") or "").strip()
+
+
+def _offer_item_text(item: Dict[str, Any]) -> str:
+    text = (item.get("aiDraft") or item.get("description") or "").strip()
+    if text:
+        return text
+    versions = item.get("aiVersions") or []
+    active_id = item.get("activeAiVersionId")
+    if active_id:
+        for version in versions:
+            if version.get("id") == active_id:
+                return (version.get("text") or "").strip()
+    if versions:
+        return (versions[0].get("text") or "").strip()
+    return ""
+
+
+def _offer_items_to_sevdesk_positions(offer_payload: Dict[str, Any], config: SevdeskConfig) -> List[Dict[str, Any]]:
+    items = (offer_payload.get("lineItems") or []) + (offer_payload.get("deviceItems") or [])
+    vat_mode = (offer_payload.get("vatMode") or "").strip()
+    vat_rate = _parse_float(offer_payload.get("vatRate"), default=config.default_tax_rate)
+    if vat_mode in ("reverse_charge", "intra_community"):
+        vat_rate = 0.0
+    positions = []
+    for item in items:
+        quantity = _parse_float(item.get("quantity"), default=0.0)
+        if quantity <= 0:
+            continue
+        is_device = bool(item.get("manufacturer") or item.get("model") or item.get("product"))
+        unity_id = config.unity_id
+        if is_device and config.device_unity_id:
+            unity_id = config.device_unity_id
+        elif not is_device and config.service_unity_id:
+            unity_id = config.service_unity_id
+        name = (
+            item.get("title")
+            or item.get("product")
+            or item.get("manufacturer")
+            or item.get("model")
+            or "Position"
+        )
+        positions.append(
+            {
+                "quantity": quantity,
+                "price": _parse_float(item.get("price"), default=0.0),
+                "name": name,
+                "text": _offer_item_text(item),
+                "tax_rate": vat_rate,
+                "unity_id": unity_id,
+            }
+        )
+    return positions
+
+
+def _summarize_tasks_for_invoice(tasks: List[DayTask]) -> str:
+    lines = []
+    for task in tasks:
+        details = (task.details or "").strip()
+        if details:
+            lines.append(f"- {task.title}: {details}")
+        else:
+            lines.append(f"- {task.title}")
+    prompt = (
+        "Fasse die folgenden erledigten Aufgaben zu einer kompakten Rechnungsposition zusammen. "
+        "Schreibe auf Deutsch, sachlich und kundenfreundlich. "
+        "Kein Markdown, keine Aufzaehlungszeichen, maximal 3 Saetze.\n\n"
+        f"{chr(10).join(lines)}"
+    )
+    summary = _ollama_generate_text(prompt)
+    if summary:
+        return summary
+    return " ".join(line.lstrip("- ").strip() for line in lines)
 
 
 def serialize_day_task_group(g: DayTaskGroup) -> Dict[str, Any]:
@@ -1199,6 +1426,23 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "also_sftp_key_path": settings.also_sftp_key_path,
         "also_sftp_dir": settings.also_sftp_dir,
         "has_also_sftp_password": bool(settings.also_sftp_password),
+        "sevdesk_base_url": settings.sevdesk_base_url,
+        "sevdesk_contact_person_id": settings.sevdesk_contact_person_id,
+        "sevdesk_address_country_id": settings.sevdesk_address_country_id,
+        "sevdesk_tax_type": settings.sevdesk_tax_type,
+        "sevdesk_tax_rule_id": settings.sevdesk_tax_rule_id,
+        "sevdesk_tax_text": settings.sevdesk_tax_text,
+        "sevdesk_currency": settings.sevdesk_currency,
+        "sevdesk_invoice_type": settings.sevdesk_invoice_type,
+        "sevdesk_default_tax_rate": settings.sevdesk_default_tax_rate,
+        "sevdesk_unity_id": settings.sevdesk_unity_id,
+        "sevdesk_service_unity_id": settings.sevdesk_service_unity_id,
+        "sevdesk_device_unity_id": settings.sevdesk_device_unity_id,
+        "sevdesk_hourly_rate_eur": settings.sevdesk_hourly_rate_eur,
+        "has_sevdesk_api_token": bool(settings.sevdesk_api_token),
+        "icecat_username": settings.icecat_username,
+        "icecat_enabled": bool(settings.icecat_enabled),
+        "has_icecat_password": bool(settings.icecat_password),
     }
 
 
@@ -2244,6 +2488,8 @@ def update_integrations(data: IntegrationSettingsUpdate):
             "pbx_api_key_secret",
             "td_synnex_client_secret",
             "also_sftp_password",
+            "sevdesk_api_token",
+            "icecat_password",
         }
         for field, value in data.dict(exclude_unset=True).items():
             if field in sensitive_fields and value in (None, ""):
@@ -2252,6 +2498,181 @@ def update_integrations(data: IntegrationSettingsUpdate):
 
         db.commit()
         return serialize_integration_settings(settings)
+
+
+@app.get("/api/integrations/icecat")
+def get_icecat_settings():
+    with SessionLocal() as db:
+        settings = _get_settings(db)
+        return {
+            "username": settings.icecat_username,
+            "password": settings.icecat_password,
+            "enabled": bool(settings.icecat_enabled),
+        }
+
+
+@app.get("/api/sevdesk/health")
+def sevdesk_health():
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        config = _build_sevdesk_config(settings)
+
+    if not config.api_token:
+        return {"connected": False, "error": "Missing sevdesk_api_token"}
+
+    client = SevdeskClient(config)
+    try:
+        payload = client.request("GET", "/Tools/bookkeepingSystemVersion")
+    except SevdeskError as exc:
+        return {"connected": False, "error": str(exc)}
+    return {"connected": True, "payload": payload}
+
+
+@app.post("/api/sevdesk/offers/{offer_id}/draft")
+def sevdesk_offer_to_invoice(offer_id: int):
+    with SessionLocal() as db:
+        offer = db.query(Offer).get(offer_id)
+        if not offer:
+            raise HTTPException(404, "Offer not found")
+        if (offer.status or "").strip().lower() != "angenommen":
+            raise HTTPException(400, "Offer not accepted")
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        config = _require_sevdesk_config(settings)
+
+    offer_payload = {}
+    if offer.data_json:
+        try:
+            offer_payload = json.loads(offer.data_json)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(400, f"Invalid offer payload: {exc}") from exc
+
+    customer_number = (offer_payload.get("customerNumber") or "").strip()
+    if not customer_number:
+        raise HTTPException(400, "Offer missing customerNumber")
+
+    client = SevdeskClient(config)
+    try:
+        contact = client.get_contact_by_customer_number(customer_number)
+        if not contact:
+            raise HTTPException(404, f"Sevdesk contact not found for {customer_number}")
+        contact_id = int(contact.get("id"))
+        positions = _offer_items_to_sevdesk_positions(offer_payload, config)
+        if not positions:
+            raise HTTPException(400, "Offer has no positions to export")
+        if any((pos.get("unity_id") or 0) <= 0 for pos in positions):
+            raise HTTPException(400, "Sevdesk unity id missing for offer positions")
+
+        draft = client.find_draft_invoice(contact_id)
+        header = (offer.reference or offer_payload.get("reference") or "").strip() or "Rechnung"
+        if draft:
+            invoice_id = int(draft.get("id"))
+            invoice_snapshot = client.get_invoice(invoice_id) or draft
+            invoice_payload = client.build_invoice_payload(
+                contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot
+            )
+        else:
+            invoice_payload = client.build_invoice_payload(contact_id, header=header)
+        response = client.save_invoice(invoice_payload, client.build_positions(positions))
+    except SevdeskError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    return {"ok": True, "invoice": response}
+
+
+@app.post("/api/sevdesk/tasks/sync")
+def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        metrics = db.query(CustomerMetricsSettings).first()
+        config = _require_sevdesk_config(settings, metrics)
+
+        query = db.query(DayTask).filter(DayTask.erledigt.is_(True))
+        if payload.task_ids:
+            query = query.filter(DayTask.id.in_(payload.task_ids))
+        else:
+            query = query.filter(DayTask.aberechnet.is_(False))
+        if payload.customer_number:
+            query = query.filter(DayTask.customer_number == payload.customer_number)
+        tasks = query.order_by(DayTask.customer_number.asc()).all()
+
+        if not tasks:
+            return {"ok": True, "message": "No tasks to sync", "synced": []}
+
+        client = SevdeskClient(config)
+        results = []
+        tasks_by_customer: Dict[str, List[DayTask]] = {}
+        for task in tasks:
+            customer_number = (task.customer_number or "").strip()
+            if not customer_number:
+                continue
+            tasks_by_customer.setdefault(customer_number, []).append(task)
+
+        for customer_number, customer_tasks in tasks_by_customer.items():
+            try:
+                contact = client.get_contact_by_customer_number(customer_number)
+                if not contact:
+                    results.append(
+                        {"customer_number": customer_number, "ok": False, "error": "Contact not found"}
+                    )
+                    continue
+                contact_id = int(contact.get("id"))
+                total_ms = sum(task.elapsed or 0 for task in customer_tasks)
+                total_hours = round(total_ms / 3_600_000, 2)
+                if total_hours <= 0:
+                    total_hours = float(len(customer_tasks))
+
+                unity_id = config.service_unity_id or config.unity_id
+                if not unity_id:
+                    results.append(
+                        {"customer_number": customer_number, "ok": False, "error": "Missing unity id"}
+                    )
+                    continue
+
+                text = _summarize_tasks_for_invoice(customer_tasks)
+                positions = [
+                    {
+                        "quantity": total_hours,
+                        "price": config.hourly_rate_eur or 0.0,
+                        "name": "Erledigte Aufgaben",
+                        "text": text,
+                        "tax_rate": config.default_tax_rate,
+                        "unity_id": unity_id,
+                    }
+                ]
+
+                draft = client.find_draft_invoice(contact_id)
+                if draft:
+                    invoice_id = int(draft.get("id"))
+                    invoice_snapshot = client.get_invoice(invoice_id) or draft
+                    invoice_payload = client.build_invoice_payload(
+                        contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot
+                    )
+                else:
+                    invoice_payload = client.build_invoice_payload(
+                        contact_id, header="Leistungsnachweis"
+                    )
+                response = client.save_invoice(invoice_payload, client.build_positions(positions))
+
+                for task in customer_tasks:
+                    task.aberechnet = True
+                db.commit()
+                results.append({"customer_number": customer_number, "ok": True, "invoice": response})
+            except SevdeskError as exc:
+                results.append({"customer_number": customer_number, "ok": False, "error": str(exc)})
+
+        return {"ok": True, "synced": results}
 
 
 @app.get("/api/marketplace/sources")

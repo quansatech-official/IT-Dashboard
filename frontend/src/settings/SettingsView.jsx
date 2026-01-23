@@ -60,6 +60,31 @@ const defaultMarketplace = {
   has_also_sftp_password: false
 };
 
+const defaultIcecat = {
+  icecat_username: "",
+  icecat_password: "",
+  icecat_enabled: false,
+  has_icecat_password: false
+};
+
+const defaultSevdesk = {
+  sevdesk_base_url: "https://my.sevdesk.de/api/v1",
+  sevdesk_api_token: "",
+  sevdesk_contact_person_id: "",
+  sevdesk_address_country_id: "",
+  sevdesk_tax_type: "default",
+  sevdesk_tax_rule_id: "1",
+  sevdesk_tax_text: "zzgl. Umsatzsteuer",
+  sevdesk_currency: "EUR",
+  sevdesk_invoice_type: "RE",
+  sevdesk_default_tax_rate: "19",
+  sevdesk_unity_id: "",
+  sevdesk_service_unity_id: "",
+  sevdesk_device_unity_id: "",
+  sevdesk_hourly_rate_eur: "",
+  has_sevdesk_api_token: false
+};
+
 const loadCachedSmtp = () => {
   if (typeof window === "undefined") return defaultSmtp;
   try {
@@ -110,6 +135,18 @@ export default function SettingsView() {
   const [marketplaceLoadStatus, setMarketplaceLoadStatus] = useState("loading");
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [marketplaceDebugStatus, setMarketplaceDebugStatus] = useState("idle");
+  const [icecat, setIcecat] = useState(defaultIcecat);
+  const [icecatStatus, setIcecatStatus] = useState("idle");
+  const [icecatLoadStatus, setIcecatLoadStatus] = useState("loading");
+  const [icecatOpen, setIcecatOpen] = useState(false);
+  const [sevdesk, setSevdesk] = useState(defaultSevdesk);
+  const [sevdeskStatus, setSevdeskStatus] = useState("idle");
+  const [sevdeskLoadStatus, setSevdeskLoadStatus] = useState("loading");
+  const [sevdeskOpen, setSevdeskOpen] = useState(false);
+  const [sevdeskHealth, setSevdeskHealth] = useState({
+    connected: null,
+    error: ""
+  });
   const [marketplaceDebugInfo, setMarketplaceDebugInfo] = useState({
     lastCheckAt: "",
     sources: [],
@@ -287,13 +324,42 @@ export default function SettingsView() {
           also_sftp_password: "",
           has_also_sftp_password: Boolean(data?.has_also_sftp_password)
         }));
+        setIcecat((prev) => ({
+          ...prev,
+          icecat_username: data?.icecat_username || "",
+          icecat_password: "",
+          icecat_enabled: Boolean(data?.icecat_enabled),
+          has_icecat_password: Boolean(data?.has_icecat_password)
+        }));
+        setSevdesk((prev) => ({
+          ...prev,
+          sevdesk_base_url: data?.sevdesk_base_url || defaultSevdesk.sevdesk_base_url,
+          sevdesk_api_token: "",
+          sevdesk_contact_person_id: data?.sevdesk_contact_person_id || "",
+          sevdesk_address_country_id: data?.sevdesk_address_country_id || "",
+          sevdesk_tax_type: data?.sevdesk_tax_type || defaultSevdesk.sevdesk_tax_type,
+          sevdesk_tax_rule_id: data?.sevdesk_tax_rule_id || defaultSevdesk.sevdesk_tax_rule_id,
+          sevdesk_tax_text: data?.sevdesk_tax_text || defaultSevdesk.sevdesk_tax_text,
+          sevdesk_currency: data?.sevdesk_currency || defaultSevdesk.sevdesk_currency,
+          sevdesk_invoice_type: data?.sevdesk_invoice_type || defaultSevdesk.sevdesk_invoice_type,
+          sevdesk_default_tax_rate: data?.sevdesk_default_tax_rate || defaultSevdesk.sevdesk_default_tax_rate,
+          sevdesk_unity_id: data?.sevdesk_unity_id || "",
+          sevdesk_service_unity_id: data?.sevdesk_service_unity_id || "",
+          sevdesk_device_unity_id: data?.sevdesk_device_unity_id || "",
+          sevdesk_hourly_rate_eur: data?.sevdesk_hourly_rate_eur || "",
+          has_sevdesk_api_token: Boolean(data?.has_sevdesk_api_token)
+        }));
         setPbxLoadStatus("ready");
         setMarketplaceLoadStatus("ready");
+        setIcecatLoadStatus("ready");
+        setSevdeskLoadStatus("ready");
       })
       .catch(() => {
         if (!active) return;
         setPbxLoadStatus("error");
         setMarketplaceLoadStatus("error");
+        setIcecatLoadStatus("error");
+        setSevdeskLoadStatus("error");
       });
     return () => {
       active = false;
@@ -304,6 +370,11 @@ export default function SettingsView() {
     if (pbxLoadStatus !== "ready") return;
     refreshPbxDebug();
   }, [pbxLoadStatus]);
+
+  useEffect(() => {
+    if (sevdeskLoadStatus !== "ready") return;
+    refreshSevdeskHealth();
+  }, [sevdeskLoadStatus]);
 
   useEffect(() => {
     if (!marketplaceOpen) return;
@@ -630,6 +701,57 @@ export default function SettingsView() {
     setTimeout(() => setPbxStatus("idle"), 2000);
   };
 
+  const saveSevdeskSettings = async () => {
+    setSevdeskStatus("saving");
+    try {
+      const res = await fetch(`${API}/integrations`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sevdesk_base_url: sevdesk.sevdesk_base_url,
+          sevdesk_api_token: sevdesk.sevdesk_api_token,
+          sevdesk_contact_person_id: sevdesk.sevdesk_contact_person_id,
+          sevdesk_address_country_id: sevdesk.sevdesk_address_country_id,
+          sevdesk_tax_type: sevdesk.sevdesk_tax_type,
+          sevdesk_tax_rule_id: sevdesk.sevdesk_tax_rule_id,
+          sevdesk_tax_text: sevdesk.sevdesk_tax_text,
+          sevdesk_currency: sevdesk.sevdesk_currency,
+          sevdesk_invoice_type: sevdesk.sevdesk_invoice_type,
+          sevdesk_default_tax_rate: sevdesk.sevdesk_default_tax_rate,
+          sevdesk_unity_id: sevdesk.sevdesk_unity_id,
+          sevdesk_service_unity_id: sevdesk.sevdesk_service_unity_id,
+          sevdesk_device_unity_id: sevdesk.sevdesk_device_unity_id,
+          sevdesk_hourly_rate_eur: sevdesk.sevdesk_hourly_rate_eur
+        })
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      setSevdesk((prev) => ({
+        ...prev,
+        sevdesk_base_url: data?.sevdesk_base_url || defaultSevdesk.sevdesk_base_url,
+        sevdesk_api_token: "",
+        sevdesk_contact_person_id: data?.sevdesk_contact_person_id || "",
+        sevdesk_address_country_id: data?.sevdesk_address_country_id || "",
+        sevdesk_tax_type: data?.sevdesk_tax_type || defaultSevdesk.sevdesk_tax_type,
+        sevdesk_tax_rule_id: data?.sevdesk_tax_rule_id || defaultSevdesk.sevdesk_tax_rule_id,
+        sevdesk_tax_text: data?.sevdesk_tax_text || defaultSevdesk.sevdesk_tax_text,
+        sevdesk_currency: data?.sevdesk_currency || defaultSevdesk.sevdesk_currency,
+        sevdesk_invoice_type: data?.sevdesk_invoice_type || defaultSevdesk.sevdesk_invoice_type,
+        sevdesk_default_tax_rate: data?.sevdesk_default_tax_rate || defaultSevdesk.sevdesk_default_tax_rate,
+        sevdesk_unity_id: data?.sevdesk_unity_id || "",
+        sevdesk_service_unity_id: data?.sevdesk_service_unity_id || "",
+        sevdesk_device_unity_id: data?.sevdesk_device_unity_id || "",
+        sevdesk_hourly_rate_eur: data?.sevdesk_hourly_rate_eur || "",
+        has_sevdesk_api_token: Boolean(data?.has_sevdesk_api_token)
+      }));
+      setSevdeskStatus("saved");
+      refreshSevdeskHealth();
+    } catch (error) {
+      setSevdeskStatus("error");
+    }
+    setTimeout(() => setSevdeskStatus("idle"), 2000);
+  };
+
   const saveMarketplaceSettings = async () => {
     setMarketplaceStatus("saving");
     try {
@@ -673,6 +795,34 @@ export default function SettingsView() {
       setMarketplaceStatus("error");
     }
     setTimeout(() => setMarketplaceStatus("idle"), 2000);
+  };
+
+  const saveIcecatSettings = async () => {
+    setIcecatStatus("saving");
+    try {
+      const res = await fetch(`${API}/integrations`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          icecat_username: icecat.icecat_username,
+          icecat_password: icecat.icecat_password,
+          icecat_enabled: icecat.icecat_enabled
+        })
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      setIcecat((prev) => ({
+        ...prev,
+        icecat_username: data?.icecat_username || "",
+        icecat_password: "",
+        icecat_enabled: Boolean(data?.icecat_enabled),
+        has_icecat_password: Boolean(data?.has_icecat_password)
+      }));
+      setIcecatStatus("saved");
+    } catch (error) {
+      setIcecatStatus("error");
+    }
+    setTimeout(() => setIcecatStatus("idle"), 2000);
   };
 
   const refreshMarketplaceDebug = async () => {
@@ -825,6 +975,31 @@ export default function SettingsView() {
         versionOk: null,
         versionError: "",
         versionPreview: ""
+      });
+    }
+  };
+
+  const refreshSevdeskHealth = async () => {
+    setSevdeskHealth((prev) => ({
+      ...prev,
+      connected: null,
+      error: ""
+    }));
+    try {
+      const res = await fetch(`${API}/sevdesk/health`);
+      const data = await res.json();
+      if (!res.ok || !data?.connected) {
+        setSevdeskHealth({
+          connected: false,
+          error: data?.error || "Verbindung fehlgeschlagen"
+        });
+        return;
+      }
+      setSevdeskHealth({ connected: true, error: "" });
+    } catch (error) {
+      setSevdeskHealth({
+        connected: false,
+        error: error?.message ? String(error.message) : "Fehler"
       });
     }
   };
@@ -1618,6 +1793,301 @@ export default function SettingsView() {
                     </div>
                   </div>
                 ) : null}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setSevdeskOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Faktura API (sevdesk)</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-sand-600">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  sevdeskHealth.connected ? "bg-emerald-500" : "bg-rose-500"
+                }`}
+              />
+              <span>
+                API{" "}
+                {sevdeskHealth.connected === null
+                  ? "unbekannt"
+                  : sevdeskHealth.connected
+                  ? "aktiv"
+                  : "getrennt"}
+              </span>
+              <span className="text-sm text-sand-500">{sevdeskOpen ? "–" : "+"}</span>
+            </div>
+          </button>
+          {sevdeskOpen ? (
+            <>
+              <p className="mt-4 text-xs text-sand-500 mb-4">
+                Einstellungen fuer die Rechnungsentwurf-Integration mit sevdesk.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs text-sand-500">Base URL</label>
+                  <input
+                    value={sevdesk.sevdesk_base_url}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_base_url: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="https://my.sevdesk.de/api/v1"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">API Token</label>
+                  <input
+                    type="password"
+                    value={sevdesk.sevdesk_api_token}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_api_token: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={sevdesk.has_sevdesk_api_token ? "Gespeichert" : "••••••••"}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Kontaktperson ID</label>
+                  <input
+                    value={sevdesk.sevdesk_contact_person_id}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_contact_person_id: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="SevUser ID"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Land ID (Adresse)</label>
+                  <input
+                    value={sevdesk.sevdesk_address_country_id}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_address_country_id: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="StaticCountry ID"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Steuerart (taxType)</label>
+                  <input
+                    value={sevdesk.sevdesk_tax_type}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_tax_type: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="default"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Steuerregel ID (taxRule)</label>
+                  <input
+                    value={sevdesk.sevdesk_tax_rule_id}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_tax_rule_id: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="1"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-xs text-sand-500">Steuertext</label>
+                  <input
+                    value={sevdesk.sevdesk_tax_text}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_tax_text: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="zzgl. Umsatzsteuer"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Waehrung</label>
+                  <input
+                    value={sevdesk.sevdesk_currency}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_currency: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="EUR"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Rechnungstyp</label>
+                  <input
+                    value={sevdesk.sevdesk_invoice_type}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_invoice_type: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="RE"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Default Steuer (Rate)</label>
+                  <input
+                    value={sevdesk.sevdesk_default_tax_rate}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_default_tax_rate: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="19"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Unity ID (Fallback)</label>
+                  <input
+                    value={sevdesk.sevdesk_unity_id}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_unity_id: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="Unity ID"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Unity ID (Service)</label>
+                  <input
+                    value={sevdesk.sevdesk_service_unity_id}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_service_unity_id: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="Unity ID"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Unity ID (Material)</label>
+                  <input
+                    value={sevdesk.sevdesk_device_unity_id}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_device_unity_id: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="Unity ID"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Stundensatz EUR</label>
+                  <input
+                    value={sevdesk.sevdesk_hourly_rate_eur}
+                    onChange={(event) =>
+                      setSevdesk((prev) => ({ ...prev, sevdesk_hourly_rate_eur: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="120"
+                  />
+                </div>
+              </div>
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  onClick={saveSevdeskSettings}
+                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                >
+                  Speichern
+                </button>
+                <button
+                  type="button"
+                  onClick={refreshSevdeskHealth}
+                  className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600"
+                >
+                  Status neu laden
+                </button>
+                {sevdeskLoadStatus === "error" && (
+                  <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+                )}
+                {sevdeskStatus === "saved" && (
+                  <span className="text-sm text-emerald-600">Gespeichert</span>
+                )}
+                {sevdeskStatus === "error" && (
+                  <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+                )}
+              </div>
+              {sevdeskHealth.error ? (
+                <div className="mt-3 text-xs text-rose-600">{sevdeskHealth.error}</div>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setIcecatOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                Icecat Alternative
+              </p>
+            </div>
+            <span className="text-sm text-sand-500">{icecatOpen ? "–" : "+"}</span>
+          </button>
+          {icecatOpen ? (
+            <>
+              <p className="mt-4 text-xs text-sand-500 mb-4">
+                Alternative Produktbeschreibungen und Bilder via Icecat.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs text-sand-500">Benutzername</label>
+                  <input
+                    value={icecat.icecat_username}
+                    onChange={(event) =>
+                      setIcecat((prev) => ({ ...prev, icecat_username: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="icecat-user"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Passwort</label>
+                  <input
+                    type="password"
+                    value={icecat.icecat_password}
+                    onChange={(event) =>
+                      setIcecat((prev) => ({ ...prev, icecat_password: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={icecat.has_icecat_password ? "Gespeichert" : "••••••••"}
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm text-sand-700 md:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={icecat.icecat_enabled}
+                    onChange={(event) =>
+                      setIcecat((prev) => ({ ...prev, icecat_enabled: event.target.checked }))
+                    }
+                  />
+                  Icecat aktiv
+                </label>
+              </div>
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  onClick={saveIcecatSettings}
+                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                >
+                  Speichern
+                </button>
+                {icecatLoadStatus === "error" && (
+                  <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+                )}
+                {icecatStatus === "saved" && (
+                  <span className="text-sm text-emerald-600">Gespeichert</span>
+                )}
+                {icecatStatus === "error" && (
+                  <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+                )}
               </div>
             </>
           ) : null}

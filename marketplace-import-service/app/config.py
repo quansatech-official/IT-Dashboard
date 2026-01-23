@@ -19,6 +19,7 @@ class Settings:
     also_sftp_dir = _get_env("ALSO_SFTP_DIR", "")
     also_feed_db_path = _get_env("ALSO_FEED_DB_PATH", "/data/also_feed.db")
     also_config_path = _get_env("ALSO_CONFIG_PATH", "/data/also_config.json")
+    workbench_base_url = _get_env("WORKBENCH_BASE_URL", "http://backend:8000")
 
     request_timeout_seconds = float(_get_env("REQUEST_TIMEOUT_SECONDS", "20"))
 

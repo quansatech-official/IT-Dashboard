@@ -4,6 +4,7 @@ import html2pdf from "html2pdf.js";
 import ActionCard from "./components/ActionCard";
 import ArchivePanel from "./components/ArchivePanel";
 import CatalogManager from "./components/CatalogManager";
+import EmailComposerModal from "../components/EmailComposerModal";
 import CustomerActionManager from "./components/CustomerActionManager";
 import StatusPicker from "./components/StatusPicker";
 import {
@@ -293,6 +294,32 @@ export default function ReportView() {
       ...prev,
       ...patch
     }));
+
+  const [reportEmailComposer, setReportEmailComposer] = useState({
+    open: false,
+    to: "",
+    subject: "",
+    body: "",
+    html: "",
+    reportId: null,
+    trackingText: "",
+    isSending: false
+  });
+
+  const updateReportEmailComposer = (patch) =>
+    setReportEmailComposer((prev) => ({ ...prev, ...patch }));
+
+  const closeReportEmailComposer = () =>
+    setReportEmailComposer((prev) => ({ ...prev, open: false }));
+
+  const handleReportRecipientChange = (value) =>
+    updateReportEmailComposer({ to: value });
+
+  const handleReportSubjectChange = (value) =>
+    updateReportEmailComposer({ subject: value });
+
+  const handleReportBodyChange = (value) =>
+    updateReportEmailComposer({ body: value });
 
   const previewHtml = useMemo(() => renderReportHTML(report), [report]);
   const suggestedCustomers = useMemo(() => {
@@ -1133,6 +1160,40 @@ export default function ReportView() {
     });
   };
 
+  const applyReportSentUpdate = (itemId, updated) => {
+    const sentAt = updated.sent_at || 0;
+    const openedAt = updated.opened_at || 0;
+    const openedCount = updated.opened_count || 0;
+    const sentInfo = buildSentInfo({
+      sentAt,
+      sentVia: updated.sent_via || "",
+      openedAt,
+      openedCount
+    });
+    const sentAtText = sentAt ? new Date(sentAt).toLocaleString("de-DE") : "";
+    const openedAtText = openedAt ? new Date(openedAt).toLocaleString("de-DE") : "";
+    setArchiveItems((prev) =>
+      prev.map((group) => ({
+        ...group,
+        reports: group.reports.map((reportItem) =>
+          reportItem.id === itemId
+            ? {
+                ...reportItem,
+                sentAt,
+                sentVia: updated.sent_via || "",
+                sentTo: updated.sent_to || "",
+                openedAt,
+                openedCount,
+                sentInfo,
+                sentAtText,
+                openedAtText
+              }
+            : reportItem
+        )
+      }))
+    );
+  };
+
   const editArchivedReport = async (item) => {
     const data = await fetchArchivedReport(item);
     if (!data) return;
@@ -1157,58 +1218,58 @@ export default function ReportView() {
   const sendArchivedReport = async (item) => {
     const data = await fetchArchivedReport(item);
     if (!data) return;
-    const recipient = prompt("Empfänger E-Mail-Adresse");
-    if (!recipient) return;
     const normalized = normalizeReport(data);
+    const subject = `IT-Kundenbericht – ${normalized.customer} (${normalized.period || "ohne Zeitraum"})`;
     const beaconUrl = buildBeaconUrl(normalized.guid, beaconBaseUrl);
     const html = renderReportHTML(normalized, { mode: "email", beaconUrl }).replace(
       /src="\/QTLogo\.jpg"/g,
       `src="${window.location.origin}/QTLogo.jpg"`
     );
     const text = buildPlainText(normalized);
-    const subject = `IT-Kundenbericht – ${normalized.customer} (${normalized.period || "ohne Zeitraum"})`;
+    const trackingText = beaconUrl
+      ? `Tracking Beacon: ${beaconUrl}`
+      : "Tracking nicht aktiviert (Beacon URL fehlt).";
+    setReportEmailComposer({
+      open: true,
+      to: "",
+      subject,
+      body: text,
+      html,
+      reportId: item.id,
+      trackingText,
+      isSending: false
+    });
+  };
+
+  const handleReportEmailSend = async () => {
+    const { reportId, to, subject, body, html } = reportEmailComposer;
+    if (!reportId) return;
+    if (!to?.trim()) {
+      setToast("Bitte Empfänger-E-Mail-Adresse angeben.");
+      return;
+    }
+    updateReportEmailComposer({ isSending: true });
     try {
-      const res = await fetch(`/api/reports/${item.id}/send`, {
+      const res = await fetch(`/api/reports/${reportId}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to: recipient, subject, html, text })
+        body: JSON.stringify({ to, subject, html, text: body })
       });
       if (!res.ok) throw new Error("send_failed");
       const updated = await res.json();
-      const sentAtText = updated.sent_at
-        ? new Date(updated.sent_at).toLocaleString("de-DE")
-        : "";
-      const openedAtText = updated.opened_at
-        ? new Date(updated.opened_at).toLocaleString("de-DE")
-        : "";
-      setArchiveItems((prev) =>
-        prev.map((group) => ({
-          ...group,
-          reports: group.reports.map((reportItem) =>
-            reportItem.id === item.id
-              ? {
-                  ...reportItem,
-                  sentAt: updated.sent_at || 0,
-                  sentVia: updated.sent_via || "",
-                  sentTo: updated.sent_to || "",
-                  openedAt: updated.opened_at || 0,
-                  openedCount: updated.opened_count || 0,
-                  sentInfo: buildSentInfo({
-                    sentAt: updated.sent_at || 0,
-                    sentVia: updated.sent_via || "",
-                    openedAt: updated.opened_at || 0,
-                    openedCount: updated.opened_count || 0
-                  }),
-                  sentAtText,
-                  openedAtText
-                }
-              : reportItem
-          )
-        }))
-      );
+      applyReportSentUpdate(reportId, updated);
       setToast("E-Mail gesendet.");
+      setReportEmailComposer((prev) => ({
+        ...prev,
+        open: false,
+        isSending: false
+      }));
     } catch (error) {
       setToast("SMTP Versand fehlgeschlagen.");
+      setReportEmailComposer((prev) => ({
+        ...prev,
+        isSending: false
+      }));
     }
   };
 
@@ -1709,6 +1770,22 @@ export default function ReportView() {
           </div>
         </main>
       )}
+      <EmailComposerModal
+        open={reportEmailComposer.open}
+        title="IT-Kundenbericht per E-Mail senden"
+        recipient={reportEmailComposer.to}
+        subject={reportEmailComposer.subject}
+        body={reportEmailComposer.body}
+        helperText="Der Plaintext wird gesendet, das HTML wird automatisch erstellt."
+        trackingText={reportEmailComposer.trackingText}
+        isSending={reportEmailComposer.isSending}
+        onClose={closeReportEmailComposer}
+        onSend={handleReportEmailSend}
+        onRecipientChange={handleReportRecipientChange}
+        onSubjectChange={handleReportSubjectChange}
+        onBodyChange={handleReportBodyChange}
+        sendLabel="Senden"
+      />
     </div>
   );
 }

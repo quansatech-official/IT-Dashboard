@@ -1,16 +1,21 @@
 from typing import Any, Dict, List, Optional
+import logging
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from app.adapters import get_adapters
 from app.adapters.also_feed_adapter import AlsoFeedAdapter
+from app.adapters.icecat_adapter import IcecatAdapter
 from app.config import settings
+from app.models.alternative_content import AlternativeProductContent
 from app.models.normalized_item import NormalizedItem
 from app.utils.also_feed_config import persist_also_config
+from app.utils.settings_service import WorkbenchSettingsService
 import os
 
 app = FastAPI(title="Marketplace Import Service")
+logger = logging.getLogger(__name__)
 
 
 class ParseRequest(BaseModel):
@@ -29,6 +34,10 @@ class AlsoConfigRequest(BaseModel):
 
 adapters = get_adapters()
 also_feed_adapter = AlsoFeedAdapter()
+settings_service = WorkbenchSettingsService(
+    settings.workbench_base_url, settings.request_timeout_seconds
+)
+icecat_adapter = IcecatAdapter(settings_service, settings.request_timeout_seconds)
 
 
 def _get_adapter(source: str):
@@ -95,6 +104,27 @@ async def parse_item(request: ParseRequest) -> NormalizedItem:
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     raise HTTPException(status_code=400, detail="Parse not supported for source")
+
+
+@app.get("/import/alternative/icecat", response_model=Optional[AlternativeProductContent])
+async def get_icecat_alternative(
+    ean: Optional[str] = None,
+    brand: Optional[str] = None,
+    mpn: Optional[str] = None,
+    manufacturer: Optional[str] = None,
+    manufacturer_sku: Optional[str] = None,
+) -> Optional[AlternativeProductContent]:
+    brand_value = brand or manufacturer
+    mpn_value = mpn or manufacturer_sku
+    if not ean and not (brand_value and mpn_value):
+        raise HTTPException(status_code=400, detail="Missing ean or brand+mpn")
+    try:
+        if ean:
+            return await icecat_adapter.fetch_by_ean(ean)
+        return await icecat_adapter.fetch_by_mpn(brand_value or "", mpn_value or "")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Icecat lookup failed: %s", exc)
+        return None
 
 
 @app.post("/import/also/run")
