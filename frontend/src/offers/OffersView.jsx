@@ -1831,6 +1831,12 @@ export default function OffersView() {
     lastCheckAt: "",
     error: ""
   });
+  const [icecatApiStatus, setIcecatApiStatus] = useState({
+    status: "idle",
+    enabled: false,
+    hasToken: false,
+    error: ""
+  });
 
   const activeOffer = offers.find((offer) => offer.id === activeId) || null;
   const previewOffer = offers.find((offer) => offer.id === previewOfferId) || null;
@@ -1982,6 +1988,27 @@ export default function OffersView() {
           error: error?.message || "Import-Service nicht erreichbar."
         });
         setImportStatus("error");
+      });
+    setIcecatApiStatus({ status: "loading", enabled: false, hasToken: false, error: "" });
+    fetch("/api/integrations")
+      .then((res) => (res && res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active) return;
+        setIcecatApiStatus({
+          status: "ready",
+          enabled: Boolean(data?.icecat_enabled),
+          hasToken: Boolean(data?.has_icecat_api_token),
+          error: ""
+        });
+      })
+      .catch((error) => {
+        if (!active) return;
+        setIcecatApiStatus({
+          status: "error",
+          enabled: false,
+          hasToken: false,
+          error: error?.message || "Icecat Status nicht verfügbar."
+        });
       });
     return () => {
       active = false;
@@ -5007,55 +5034,6 @@ export default function OffersView() {
             </button>
           </div>
 
-          <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-600">
-            <div className="flex items-center justify-between">
-              <span className="uppercase tracking-[0.2em] text-sand-500">
-                Schnittstellenstatus
-              </span>
-              <span className="text-[10px] text-sand-400">
-                {importSourcesStatus.lastCheckAt
-                  ? `Stand: ${new Date(importSourcesStatus.lastCheckAt).toLocaleString("de-DE")}`
-                  : "Stand: n/a"}
-              </span>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <span
-                className={`rounded-full border px-3 py-1 uppercase tracking-[0.2em] ${
-                  importSourcesStatus.status === "ready" && !importSourcesStatus.error
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : importSourcesStatus.status === "loading"
-                    ? "border-sand-200 bg-white text-sand-500"
-                    : "border-rose-200 bg-rose-50 text-rose-700"
-                }`}
-              >
-                {importSourcesStatus.status === "loading"
-                  ? "Service prüft…"
-                  : importSourcesStatus.status === "ready" && !importSourcesStatus.error
-                  ? "Service OK"
-                  : "Service offline"}
-              </span>
-              {importSources.length ? (
-                importSources.map((source) => (
-                  <span
-                    key={`${source.source}-status`}
-                    className={`rounded-full border px-3 py-1 uppercase tracking-[0.2em] ${
-                      source.available
-                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                        : "border-sand-200 bg-white text-sand-500"
-                    }`}
-                  >
-                    {source.source}
-                  </span>
-                ))
-              ) : (
-                <span className="text-sand-500">Keine Quellen gefunden.</span>
-              )}
-            </div>
-            {importSourcesStatus.error ? (
-              <div className="mt-2 text-rose-600">{importSourcesStatus.error}</div>
-            ) : null}
-          </div>
-
           <div className="grid gap-3 md:grid-cols-[0.6fr_1fr_auto] items-end">
             <Field label="Marketplace">
               <SelectField
@@ -5159,6 +5137,36 @@ export default function OffersView() {
                   : "Noch keine Ergebnisse."}
               </div>
             )}
+          </div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-[10px] uppercase tracking-[0.2em] text-sand-500">
+            <div className="flex flex-wrap items-center gap-2">
+              <span>
+                {importSourcesStatus.status === "loading"
+                  ? "Import-Service prüft…"
+                  : importSourcesStatus.status === "ready" && !importSourcesStatus.error
+                  ? "Import-Service OK"
+                  : "Import-Service offline"}
+              </span>
+              <span>•</span>
+              <span>
+                {icecatApiStatus.status === "loading"
+                  ? "Icecat API prüft…"
+                  : icecatApiStatus.enabled && icecatApiStatus.hasToken
+                  ? "Icecat API aktiv"
+                  : "Icecat API offen"}
+              </span>
+            </div>
+            <span>
+              {importSourcesStatus.lastCheckAt
+                ? `Stand: ${new Date(importSourcesStatus.lastCheckAt).toLocaleString("de-DE")}`
+                : "Stand: n/a"}
+            </span>
+            {importSourcesStatus.error ? (
+              <span className="text-rose-600">{importSourcesStatus.error}</span>
+            ) : null}
+            {icecatApiStatus.error ? (
+              <span className="text-rose-600">{icecatApiStatus.error}</span>
+            ) : null}
           </div>
         </div>
       </div>

@@ -94,14 +94,43 @@ class AlsoFeedAdapter:
         sample = stream.read(2048)
         stream.seek(0)
         try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=";\t,")
+            dialect = csv.Sniffer().sniff(sample, delimiters=";\t,|")
         except csv.Error:
             dialect = csv.excel
             dialect.delimiter = ";"
-        reader = csv.DictReader(stream, dialect=dialect)
+        reader = csv.reader(stream, dialect=dialect)
+        first_row = next(reader, None)
+        if not first_row:
+            return
+        if self._looks_like_header(first_row):
+            dict_reader = csv.DictReader(stream, fieldnames=first_row, dialect=dialect)
+            for row in dict_reader:
+                try:
+                    item = self.map_to_normalized_item(row)
+                    if not item.sku:
+                        logger.warning("Skipping row without SKU")
+                        continue
+                    yield item
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Skipping invalid row: %s", exc)
+                    continue
+            return
+
+        # No header present: map by column positions
+        rows = [first_row]
+        for row in rows:
+            try:
+                item = self.map_to_normalized_item(self._map_row_by_index(row))
+                if not item.sku:
+                    logger.warning("Skipping row without SKU")
+                    continue
+                yield item
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Skipping invalid row: %s", exc)
+                continue
         for row in reader:
             try:
-                item = self.map_to_normalized_item(row)
+                item = self.map_to_normalized_item(self._map_row_by_index(row))
                 if not item.sku:
                     logger.warning("Skipping row without SKU")
                     continue
@@ -110,20 +139,85 @@ class AlsoFeedAdapter:
                 logger.warning("Skipping invalid row: %s", exc)
                 continue
 
-    def map_to_normalized_item(self, row: dict) -> NormalizedItem:
-        def get(key: str) -> str:
-            return str(row.get(key, "")).strip()
+    @staticmethod
+    def _looks_like_header(row: List[str]) -> bool:
+        expected = {
+            "ArtikelNr",
+            "Hersteller",
+            "HerstellerArtNr",
+            "Bezeichnung",
+            "Bestand",
+            "HEK",
+            "Listpreis",
+            "Produktkategorie",
+            "Produktfamilie",
+            "Produktgruppe",
+            "EAN",
+            "EOL",
+            "Gewicht",
+            "prodid",
+            "manufacturerpartnumber",
+            "manufacturername",
+            "description",
+            "availablequantity",
+            "netprice",
+        }
+        return any(
+            cell.strip().replace(" ", "").lower() in expected
+            for cell in row
+            if isinstance(cell, str)
+        )
 
-        sku = get("ArtikelNr")
-        manufacturer = get("Hersteller")
-        manufacturer_part = get("HerstellerArtNr")
+    @staticmethod
+    def _map_row_by_index(row: List[str]) -> Dict[str, str]:
+        def get(idx: int) -> str:
+            if idx < 0 or idx >= len(row):
+                return ""
+            return str(row[idx]).strip()
+
+        return {
+            "ArtikelNr": get(0),
+            "HerstellerArtNr": get(1),
+            "Hersteller": get(2),
+            "EAN": get(3),
+            "Bezeichnung": get(4),
+            "Bestand": get(5),
+            "HEK": get(6),
+            "Listpreis": get(7),
+            "Produktkategorie": get(8),
+            "Produktfamilie": get(9),
+            "Produktgruppe": get(10),
+            "EOL": get(11),
+            "Gewicht": get(12),
+        }
+
+    def map_to_normalized_item(self, row: dict) -> NormalizedItem:
+        def get_any(*keys: str) -> str:
+            for key in keys:
+                value = row.get(key)
+                if value not in (None, ""):
+                    return str(value).strip()
+            normalized = {
+                str(k).strip().lower().replace(" ", ""): k for k in row.keys()
+            }
+            for key in keys:
+                lookup = key.strip().lower().replace(" ", "")
+                if lookup in normalized:
+                    value = row.get(normalized[lookup])
+                    if value not in (None, ""):
+                        return str(value).strip()
+            return ""
+
+        sku = get_any("ArtikelNr", "ProdID", "ProductID", "SKU")
+        manufacturer = get_any("Hersteller", "ManufacturerName", "Manufacturer")
+        manufacturer_part = get_any("HerstellerArtNr", "ManufacturerPartNumber", "MPN")
         short_description = " ".join(
             value
             for value in [
                 manufacturer,
                 manufacturer_part,
-                get("Produktfamilie"),
-                get("Produktgruppe"),
+                get_any("Produktfamilie", "ProductFamily"),
+                get_any("Produktgruppe", "ProductGroup"),
             ]
             if value
         )
@@ -132,16 +226,16 @@ class AlsoFeedAdapter:
             sku=sku,
             manufacturerPartNumber=manufacturer_part,
             manufacturer=manufacturer,
-            ean=get("EAN"),
-            title=get("Bezeichnung"),
-            stock=self._parse_int(get("Bestand")),
-            ek=self._parse_decimal(get("HEK")),
-            recommendedVK=self._parse_decimal(get("Listpreis")),
-            category=get("Produktkategorie"),
-            family=get("Produktfamilie"),
-            group=get("Produktgruppe"),
-            eol=self._parse_bool(get("EOL")),
-            weight=self._parse_decimal(get("Gewicht")),
+            ean=get_any("EAN"),
+            title=get_any("Bezeichnung", "Description", "Title"),
+            stock=self._parse_int(get_any("Bestand", "AvailableQuantity", "Stock")),
+            ek=self._parse_decimal(get_any("HEK", "NetPrice", "PriceNet")),
+            recommendedVK=self._parse_decimal(get_any("Listpreis", "ListPrice", "PriceList")),
+            category=get_any("Produktkategorie", "ProductCategory", "Category"),
+            family=get_any("Produktfamilie", "ProductFamily"),
+            group=get_any("Produktgruppe", "ProductGroup"),
+            eol=self._parse_bool(get_any("EOL")),
+            weight=self._parse_decimal(get_any("Gewicht", "Weight")),
             shortDescription=short_description,
         )
         if item.ek is not None:
