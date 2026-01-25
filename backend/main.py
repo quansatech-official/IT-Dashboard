@@ -908,11 +908,18 @@ class ReportSendRequest(BaseModel):
     html: str
     text: Optional[str] = None
 
+class EmailAttachment(BaseModel):
+    filename: str
+    content_base64: str
+    content_type: Optional[str] = None
+
+
 class OfferSendRequest(BaseModel):
     to: str
     subject: Optional[str] = None
     html: str
     text: Optional[str] = None
+    attachments: Optional[List[EmailAttachment]] = None
 
 
 class OfferSaveRequest(BaseModel):
@@ -3692,6 +3699,7 @@ def send_offer(data: OfferSendRequest):
                 html += f'<img src="{pixel_url}" alt="" width="1" height="1" style="display:none;" />'
 
         import smtplib
+        import base64
         from email.message import EmailMessage
 
         msg = EmailMessage()
@@ -3700,6 +3708,22 @@ def send_offer(data: OfferSendRequest):
         msg["To"] = data.to
         msg.set_content(data.text or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung.")
         msg.add_alternative(html, subtype="html")
+        for attachment in data.attachments or []:
+            try:
+                content = base64.b64decode(attachment.content_base64 or "")
+            except Exception:  # noqa: BLE001
+                continue
+            content_type = attachment.content_type or "application/octet-stream"
+            if "/" in content_type:
+                maintype, subtype = content_type.split("/", 1)
+            else:
+                maintype, subtype = "application", "octet-stream"
+            msg.add_attachment(
+                content,
+                maintype=maintype,
+                subtype=subtype,
+                filename=attachment.filename or "attachment",
+            )
 
         if settings.use_ssl:
             server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)

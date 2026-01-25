@@ -1792,11 +1792,15 @@ export default function OffersView() {
   const [previewMode, setPreviewMode] = useState("offer");
   const [exportOfferId, setExportOfferId] = useState("");
   const [exportMode, setExportMode] = useState("offer");
+  const [emailExportOfferId, setEmailExportOfferId] = useState("");
+  const [emailExportMode, setEmailExportMode] = useState("offer");
   const [sendTo, setSendTo] = useState("");
   const [sendSubject, setSendSubject] = useState("");
   const [sendStatus, setSendStatus] = useState("idle");
   const [offerEmailBody, setOfferEmailBody] = useState("");
   const [offerEmailModalOpen, setOfferEmailModalOpen] = useState(false);
+  const [emailOfferId, setEmailOfferId] = useState("");
+  const [emailHelperText, setEmailHelperText] = useState("");
   const [handoverModal, setHandoverModal] = useState({
     open: false,
     offerId: "",
@@ -1813,6 +1817,8 @@ export default function OffersView() {
   const documentBuildRef = useRef(null);
   const offerHeaderRef = useRef(null);
   const exportRef = useRef(null);
+  const emailPdfRef = useRef(null);
+  const emailExportPromiseRef = useRef(null);
   const offersFetchedRef = useRef(false);
   const [previewScale, setPreviewScale] = useState(0.7);
   const [previewMaxHeight, setPreviewMaxHeight] = useState("70vh");
@@ -1841,12 +1847,18 @@ export default function OffersView() {
   const activeOffer = offers.find((offer) => offer.id === activeId) || null;
   const previewOffer = offers.find((offer) => offer.id === previewOfferId) || null;
   const exportOffer = offers.find((offer) => offer.id === exportOfferId) || null;
+  const emailExportOffer = offers.find((offer) => offer.id === emailExportOfferId) || null;
+  const emailOffer = offers.find((offer) => offer.id === emailOfferId) || null;
   const activeSevdeskKey = activeOffer ? activeOffer.serverId || activeOffer.id : null;
   const activeSevdeskState = activeSevdeskKey ? sevdeskStatus[activeSevdeskKey] : null;
   const offerTrackingText = activeOffer?.trackingGuid
     ? `Tracking aktiv (ID ${activeOffer.trackingGuid}).`
     : "Tracking wird beim Versand aktiviert, sofern Beacon konfiguriert ist.";
+  const emailTrackingText = emailOffer?.trackingGuid
+    ? `Tracking aktiv (ID ${emailOffer.trackingGuid}).`
+    : "Tracking wird beim Versand aktiviert, sofern Beacon konfiguriert ist.";
   const offerDefaultSubject = `Angebot ${activeOffer?.reference || ""}`.trim();
+  const emailDefaultSubject = `Angebot ${emailOffer?.reference || ""}`.trim();
   const customersByName = useMemo(() => {
     const map = new Map();
     customers.forEach((customer) => {
@@ -2258,6 +2270,39 @@ export default function OffersView() {
         setExportMode("offer");
       });
   }, [exportOfferId, offers, exportMode]);
+
+  useEffect(() => {
+    if (!emailExportOfferId) return;
+    const offer = offers.find((item) => item.id === emailExportOfferId);
+    if (!offer || !emailPdfRef.current) return;
+    const element = emailPdfRef.current;
+    const options = {
+      margin: 0,
+      image: { type: "jpeg", quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true },
+      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+      pagebreak: { mode: ["css", "legacy", "avoid-all"] }
+    };
+    const handlers = emailExportPromiseRef.current;
+    html2pdf()
+      .set(options)
+      .from(element)
+      .toPdf()
+      .get("pdf")
+      .then((pdf) => {
+        const buffer = pdf.output("arraybuffer");
+        const blob = new Blob([buffer], { type: "application/pdf" });
+        handlers?.resolve?.(blob);
+      })
+      .catch((error) => {
+        handlers?.reject?.(error);
+      })
+      .finally(() => {
+        emailExportPromiseRef.current = null;
+        setEmailExportOfferId("");
+        setEmailExportMode("offer");
+      });
+  }, [emailExportOfferId, offers, emailExportMode]);
 
   useEffect(() => {
     let active = true;
@@ -2680,6 +2725,57 @@ export default function OffersView() {
     setExportOfferId(offer.id);
   };
 
+  const generateOfferPdfBlob = (offer, mode = "offer") =>
+    new Promise((resolve, reject) => {
+      if (!offer) {
+        reject(new Error("offer_missing"));
+        return;
+      }
+      emailExportPromiseRef.current = { resolve, reject };
+      setEmailExportMode(mode);
+      setEmailExportOfferId(offer.id);
+    });
+
+  const blobToBase64 = async (blob) => {
+    const buffer = await blob.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.length; i += 1) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  };
+
+  const buildEmailAttachments = async (offer, pdfBlob) => {
+    const attachments = [];
+    const skippedLinks = [];
+    const pdfBase64 = await blobToBase64(pdfBlob);
+    const filenameBase = offer.reference || "angebot";
+    attachments.push({
+      filename: `${filenameBase}.pdf`,
+      content_base64: pdfBase64,
+      content_type: "application/pdf"
+    });
+    const list = offer.attachments || [];
+    for (const item of list) {
+      if (!item?.url) continue;
+      try {
+        const res = await fetch(item.url);
+        if (!res.ok) throw new Error("fetch_failed");
+        const blob = await res.blob();
+        const contentBase64 = await blobToBase64(blob);
+        attachments.push({
+          filename: item.fileName || item.title || "beilage",
+          content_base64: contentBase64,
+          content_type: item.fileType || blob.type || "application/octet-stream"
+        });
+      } catch (error) {
+        if (item.url) skippedLinks.push(item.url);
+      }
+    }
+    return { attachments, skippedLinks };
+  };
+
   const toggleOfferExpanded = (offerId) => {
     setExpandedOffers((prev) => ({
       ...prev,
@@ -2726,56 +2822,81 @@ export default function OffersView() {
     return saved;
   };
 
-  const openOfferEmailComposer = () => {
-    if (!activeOffer) return;
-    if (!activeOffer.serverId) {
+  const openOfferEmailComposerForOffer = (offer) => {
+    if (!offer) return;
+    if (!offer.serverId) {
       setSendStatus("error");
       return;
     }
-    const defaultText = `Angebot ${activeOffer.reference || ""}`.trim();
+    setEmailOfferId(offer.id);
+    const defaultText = `Angebot ${offer.reference || ""}`.trim();
     setSendSubject((prev) => prev || defaultText);
     setOfferEmailBody((prev) => prev || defaultText);
+    const customer = customersByName.get(String(offer.customer || "").toLowerCase());
+    if (!sendTo && customer?.email) {
+      setSendTo(customer.email);
+    }
+    const attachmentCount = (offer.attachments || []).length + 1;
+    setEmailHelperText(`Anhänge: ${attachmentCount} (PDF + Beilagen)`);
     setOfferEmailModalOpen(true);
+  };
+
+  const openOfferEmailComposer = () => {
+    if (!activeOffer) return;
+    openOfferEmailComposerForOffer(activeOffer);
   };
 
   const closeOfferEmailComposer = () => {
     setOfferEmailModalOpen(false);
+    setEmailOfferId("");
+    setEmailHelperText("");
   };
 
   const handleOfferEmailSend = async () => {
-    if (!activeOffer || !sendTo) return;
-    if (!activeOffer.serverId) {
+    const offer = emailOffer || activeOffer;
+    if (!offer || !sendTo) return;
+    if (!offer.serverId) {
       setSendStatus("error");
       return;
     }
     setSendStatus("sending");
     try {
-      const confirmUrl = buildOfferConfirmUrl(activeOffer.confirmGuid);
-      const html = buildOfferEmailHtml(activeOffer, confirmUrl, "offer");
+      const confirmUrl = buildOfferConfirmUrl(offer.confirmGuid);
+      let html = buildOfferEmailHtml(offer, confirmUrl, "offer");
       const baseText =
-        (offerEmailBody || `Angebot ${activeOffer.reference || ""}`).trim() ||
-        `Angebot ${activeOffer.reference || ""}`;
-      const text = confirmUrl
+        (offerEmailBody || `Angebot ${offer.reference || ""}`).trim() ||
+        `Angebot ${offer.reference || ""}`;
+      let text = confirmUrl
         ? `${baseText}\nBestätigungslink: ${confirmUrl}`
         : baseText;
+      const pdfBlob = await generateOfferPdfBlob(offer, "offer");
+      const { attachments, skippedLinks } = await buildEmailAttachments(offer, pdfBlob);
+      if (skippedLinks.length) {
+        const linksText = skippedLinks.map((url) => `- ${url}`).join("\n");
+        text += `\n\nBeilagen-Links:\n${linksText}`;
+        html += `<p style="margin-top:12px;">Beilagen-Links:<br/>${skippedLinks
+          .map((url) => `<a href="${url}">${url}</a>`)
+          .join("<br/>")}</p>`;
+      }
       const res = await fetch("/api/offers/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to: sendTo,
-          subject: sendSubject || `Angebot ${activeOffer.reference || ""}`.trim(),
+          subject: sendSubject || `Angebot ${offer.reference || ""}`.trim(),
           html,
-          text
+          text,
+          attachments
         })
       });
       if (!res.ok) throw new Error("send_failed");
       const responsePayload = await res.json();
       if (responsePayload?.tracking_guid) {
         const nextOffer = {
-          ...activeOffer,
+          ...offer,
           trackingGuid: responsePayload.tracking_guid
         };
-        updateOffer(activeOffer.id, () => nextOffer);
+        updateOffer(offer.id, () => nextOffer);
         try {
           await persistOfferForCustomer(nextOffer);
         } catch (error) {
@@ -4295,6 +4416,19 @@ export default function OffersView() {
                         >
                           <FileDown size={14} />
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => openOfferEmailComposerForOffer(offer)}
+                          disabled={!offer.serverId}
+                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={
+                            offer.serverId
+                              ? "Angebot per E-Mail senden"
+                              : "Bitte zuerst speichern"
+                          }
+                        >
+                          <Send size={14} />
+                        </button>
                       </div>
                     </div>
                     {expandedOffers[offer.id] ? (
@@ -5263,15 +5397,25 @@ export default function OffersView() {
         <OfferPreview offer={exportOffer} scale={1} containerRef={exportRef} mode={exportMode} />
       </div>
     ) : null}
+    {emailExportOffer ? (
+      <div className="fixed -left-[9999px] top-0 opacity-0 pointer-events-none">
+        <OfferPreview
+          offer={emailExportOffer}
+          scale={1}
+          containerRef={emailPdfRef}
+          mode={emailExportMode}
+        />
+      </div>
+    ) : null}
   </main>
   <EmailComposerModal
     open={offerEmailModalOpen}
     title="Angebot per E-Mail senden"
     recipient={sendTo}
-    subject={sendSubject || offerDefaultSubject}
+    subject={sendSubject || emailDefaultSubject || offerDefaultSubject}
     body={offerEmailBody}
-    helperText="Der Plaintext wird gesendet, das HTML wird automatisch erstellt."
-    trackingText={offerTrackingText}
+    helperText={emailHelperText || "Der Plaintext wird gesendet, das HTML wird automatisch erstellt."}
+    trackingText={emailTrackingText}
     isSending={sendStatus === "sending"}
     onClose={closeOfferEmailComposer}
     onSend={handleOfferEmailSend}

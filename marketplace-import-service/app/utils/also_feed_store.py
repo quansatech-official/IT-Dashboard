@@ -55,9 +55,11 @@ class AlsoFeedStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM also_items")
             for item in items:
+                if not item.sku:
+                    continue
                 conn.execute(
                     """
-                    INSERT INTO also_items (
+                    INSERT OR REPLACE INTO also_items (
                         sku,
                         manufacturer_part_number,
                         manufacturer,
