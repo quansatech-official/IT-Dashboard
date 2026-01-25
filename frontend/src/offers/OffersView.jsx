@@ -5140,20 +5140,30 @@ export default function OffersView() {
           </div>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-[10px] uppercase tracking-[0.2em] text-sand-500">
             <div className="flex flex-wrap items-center gap-2">
-              <span>
-                {importSourcesStatus.status === "loading"
-                  ? "Import-Service prüft…"
-                  : importSourcesStatus.status === "ready" && !importSourcesStatus.error
-                  ? "Import-Service OK"
-                  : "Import-Service offline"}
-              </span>
-              <span>•</span>
-              <span>
-                {icecatApiStatus.status === "loading"
-                  ? "Icecat API prüft…"
-                  : icecatApiStatus.enabled && icecatApiStatus.hasToken
-                  ? "Icecat API aktiv"
-                  : "Icecat API offen"}
+              {["td_synnex", "also"].map((source) => {
+                const info = importSources.find((item) => item.source === source);
+                const available = Boolean(info?.available);
+                return (
+                  <span
+                    key={`status-${source}`}
+                    className={`rounded-full border px-2 py-1 ${
+                      available
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-sand-200 bg-white text-sand-500"
+                    }`}
+                  >
+                    {source}
+                  </span>
+                );
+              })}
+              <span
+                className={`rounded-full border px-2 py-1 ${
+                  icecatApiStatus.enabled && icecatApiStatus.hasToken
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-sand-200 bg-white text-sand-500"
+                }`}
+              >
+                icecat
               </span>
             </div>
             <span>
