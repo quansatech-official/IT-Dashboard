@@ -61,10 +61,9 @@ const defaultMarketplace = {
 };
 
 const defaultIcecat = {
-  icecat_username: "",
-  icecat_password: "",
+  icecat_api_token: "",
   icecat_enabled: false,
-  has_icecat_password: false
+  has_icecat_api_token: false
 };
 
 const defaultSevdesk = {
@@ -138,7 +137,6 @@ export default function SettingsView() {
   const [icecat, setIcecat] = useState(defaultIcecat);
   const [icecatStatus, setIcecatStatus] = useState("idle");
   const [icecatLoadStatus, setIcecatLoadStatus] = useState("loading");
-  const [icecatOpen, setIcecatOpen] = useState(false);
   const [sevdesk, setSevdesk] = useState(defaultSevdesk);
   const [sevdeskStatus, setSevdeskStatus] = useState("idle");
   const [sevdeskLoadStatus, setSevdeskLoadStatus] = useState("loading");
@@ -327,10 +325,9 @@ export default function SettingsView() {
         }));
         setIcecat((prev) => ({
           ...prev,
-          icecat_username: data?.icecat_username || "",
-          icecat_password: "",
+          icecat_api_token: "",
           icecat_enabled: Boolean(data?.icecat_enabled),
-          has_icecat_password: Boolean(data?.has_icecat_password)
+          has_icecat_api_token: Boolean(data?.has_icecat_api_token)
         }));
         setSevdesk((prev) => ({
           ...prev,
@@ -805,8 +802,7 @@ export default function SettingsView() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          icecat_username: icecat.icecat_username,
-          icecat_password: icecat.icecat_password,
+          icecat_api_token: icecat.icecat_api_token,
           icecat_enabled: icecat.icecat_enabled
         })
       });
@@ -814,10 +810,9 @@ export default function SettingsView() {
       const data = await res.json();
       setIcecat((prev) => ({
         ...prev,
-        icecat_username: data?.icecat_username || "",
-        icecat_password: "",
+        icecat_api_token: "",
         icecat_enabled: Boolean(data?.icecat_enabled),
-        has_icecat_password: Boolean(data?.has_icecat_password)
+        has_icecat_api_token: Boolean(data?.has_icecat_api_token)
       }));
       setIcecatStatus("saved");
     } catch (error) {
@@ -2035,81 +2030,6 @@ export default function SettingsView() {
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
           <button
             type="button"
-            onClick={() => setIcecatOpen((current) => !current)}
-            className="flex w-full items-center justify-between gap-2 text-sand-700"
-          >
-            <div className="flex items-center gap-2">
-              <Settings size={18} />
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                Icecat Alternative
-              </p>
-            </div>
-            <span className="text-sm text-sand-500">{icecatOpen ? "–" : "+"}</span>
-          </button>
-          {icecatOpen ? (
-            <>
-              <p className="mt-4 text-xs text-sand-500 mb-4">
-                Alternative Produktbeschreibungen und Bilder via Icecat.
-              </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs text-sand-500">Benutzername</label>
-                  <input
-                    value={icecat.icecat_username}
-                    onChange={(event) =>
-                      setIcecat((prev) => ({ ...prev, icecat_username: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="icecat-user"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Passwort</label>
-                  <input
-                    type="password"
-                    value={icecat.icecat_password}
-                    onChange={(event) =>
-                      setIcecat((prev) => ({ ...prev, icecat_password: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder={icecat.has_icecat_password ? "Gespeichert" : "••••••••"}
-                  />
-                </div>
-                <label className="flex items-center gap-2 text-sm text-sand-700 md:col-span-2">
-                  <input
-                    type="checkbox"
-                    checked={icecat.icecat_enabled}
-                    onChange={(event) =>
-                      setIcecat((prev) => ({ ...prev, icecat_enabled: event.target.checked }))
-                    }
-                  />
-                  Icecat aktiv
-                </label>
-              </div>
-              <div className="mt-6 flex items-center gap-3">
-                <button
-                  onClick={saveIcecatSettings}
-                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-                >
-                  Speichern
-                </button>
-                {icecatLoadStatus === "error" && (
-                  <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
-                )}
-                {icecatStatus === "saved" && (
-                  <span className="text-sm text-emerald-600">Gespeichert</span>
-                )}
-                {icecatStatus === "error" && (
-                  <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
-                )}
-              </div>
-            </>
-          ) : null}
-        </div>
-
-        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <button
-            type="button"
             onClick={() => setMarketplaceOpen((current) => !current)}
             className="flex w-full items-center justify-between gap-2 text-sand-700"
           >
@@ -2128,6 +2048,60 @@ export default function SettingsView() {
               <p className="mt-4 text-xs text-sand-500 mb-4">
                 Zugangsdaten und Endpunkte fuer Marketplace-Importe.
               </p>
+              <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                    Icecat
+                  </p>
+                  <span className="text-xs text-sand-500">
+                    {icecat.has_icecat_api_token ? "konfiguriert" : "offen"}
+                  </span>
+                </div>
+                <p className="mt-3 text-xs text-sand-500">
+                  Alternative Produktbeschreibungen und Bilder via Icecat.
+                </p>
+                <div className="mt-4 grid grid-cols-1 gap-4">
+                  <div>
+                    <label className="text-xs text-sand-500">API Token</label>
+                    <input
+                      type="password"
+                      value={icecat.icecat_api_token}
+                      onChange={(event) =>
+                        setIcecat((prev) => ({ ...prev, icecat_api_token: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder={icecat.has_icecat_api_token ? "Gespeichert" : "••••••••"}
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-sand-700 md:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={icecat.icecat_enabled}
+                      onChange={(event) =>
+                        setIcecat((prev) => ({ ...prev, icecat_enabled: event.target.checked }))
+                      }
+                    />
+                    Icecat aktiv
+                  </label>
+                </div>
+                <div className="mt-4 flex items-center gap-3">
+                  <button
+                    onClick={saveIcecatSettings}
+                    className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                  >
+                    Speichern
+                  </button>
+                  {icecatLoadStatus === "error" && (
+                    <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
+                  )}
+                  {icecatStatus === "saved" && (
+                    <span className="text-sm text-emerald-600">Gespeichert</span>
+                  )}
+                  {icecatStatus === "error" && (
+                    <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+                  )}
+                </div>
+              </div>
               <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-4">
                 <div className="flex items-center justify-between">
                   <p className="text-xs uppercase tracking-[0.3em] text-sand-500">

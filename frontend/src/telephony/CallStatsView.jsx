@@ -66,6 +66,35 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
     });
     return map;
   }, [pbxEntries]);
+  const outboundByNumber = useMemo(() => {
+    const map = new Map();
+    const list = Array.isArray(calls) ? calls : [];
+    list.forEach((call) => {
+      const direction = call.direction?.toLowerCase() || "";
+      if (!direction.includes("out")) return;
+      const number = normalizeNumber(call.to || call.from || "");
+      if (!number) return;
+      const ts = call.startTime || 0;
+      const current = map.get(number) || 0;
+      if (ts > current) {
+        map.set(number, ts);
+      }
+    });
+    return map;
+  }, [calls]);
+  const unreturnedCount = useMemo(() => {
+    const list = Array.isArray(calls) ? calls : [];
+    return list.filter((call) => {
+      if (call.answered) return false;
+      const direction = call.direction?.toLowerCase() || "";
+      if (direction.includes("out")) return false;
+      const number = normalizeNumber(call.from || call.to || "");
+      if (!number) return false;
+      const lastOut = outboundByNumber.get(number) || 0;
+      const ts = call.startTime || 0;
+      return !lastOut || lastOut < ts;
+    }).length;
+  }, [calls, outboundByNumber]);
   const topTargets = (() => {
     const counts = new Map();
     const seenByNumber = new Map();
@@ -154,7 +183,12 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
           <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Analytics</p>
           <h2 className="text-lg font-display">Call Statistik</h2>
         </div>
-        <span className="text-[10px] text-sand-500">Zeitraeume</span>
+        <div className="flex items-center gap-2 text-[10px] text-sand-500">
+          <span>Zeitraeume</span>
+          <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-amber-700">
+            Offene Rueckrufe: {unreturnedCount}
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">

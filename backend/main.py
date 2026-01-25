@@ -269,8 +269,7 @@ class IntegrationSettings(Base):
     sevdesk_service_unity_id = Column(String, default="")
     sevdesk_device_unity_id = Column(String, default="")
     sevdesk_hourly_rate_eur = Column(String, default="")
-    icecat_username = Column(String, default="")
-    icecat_password = Column(String, default="")
+    icecat_api_token = Column(String, default="")
     icecat_enabled = Column(Boolean, default=False)
 
 
@@ -406,10 +405,8 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_device_unity_id VARCHAR DEFAULT ''")
     if "sevdesk_hourly_rate_eur" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_hourly_rate_eur VARCHAR DEFAULT ''")
-    if "icecat_username" not in columns:
-        statements.append("ALTER TABLE integration_settings ADD COLUMN icecat_username VARCHAR DEFAULT ''")
-    if "icecat_password" not in columns:
-        statements.append("ALTER TABLE integration_settings ADD COLUMN icecat_password VARCHAR DEFAULT ''")
+    if "icecat_api_token" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN icecat_api_token VARCHAR DEFAULT ''")
     if "icecat_enabled" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN icecat_enabled BOOLEAN DEFAULT FALSE")
     if statements:
@@ -877,8 +874,7 @@ class IntegrationSettingsUpdate(BaseModel):
     sevdesk_service_unity_id: Optional[str] = None
     sevdesk_device_unity_id: Optional[str] = None
     sevdesk_hourly_rate_eur: Optional[str] = None
-    icecat_username: Optional[str] = None
-    icecat_password: Optional[str] = None
+    icecat_api_token: Optional[str] = None
     icecat_enabled: Optional[bool] = None
 
 
@@ -1440,9 +1436,8 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "sevdesk_device_unity_id": settings.sevdesk_device_unity_id,
         "sevdesk_hourly_rate_eur": settings.sevdesk_hourly_rate_eur,
         "has_sevdesk_api_token": bool(settings.sevdesk_api_token),
-        "icecat_username": settings.icecat_username,
         "icecat_enabled": bool(settings.icecat_enabled),
-        "has_icecat_password": bool(settings.icecat_password),
+        "has_icecat_api_token": bool(settings.icecat_api_token),
     }
 
 
@@ -2489,7 +2484,7 @@ def update_integrations(data: IntegrationSettingsUpdate):
             "td_synnex_client_secret",
             "also_sftp_password",
             "sevdesk_api_token",
-            "icecat_password",
+            "icecat_api_token",
         }
         for field, value in data.dict(exclude_unset=True).items():
             if field in sensitive_fields and value in (None, ""):
@@ -2505,8 +2500,7 @@ def get_icecat_settings():
     with SessionLocal() as db:
         settings = _get_settings(db)
         return {
-            "username": settings.icecat_username,
-            "password": settings.icecat_password,
+            "has_api_token": bool(settings.icecat_api_token),
             "enabled": bool(settings.icecat_enabled),
         }
 
