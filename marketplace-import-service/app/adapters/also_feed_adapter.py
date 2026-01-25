@@ -45,16 +45,9 @@ class AlsoFeedAdapter:
     def fetch_latest_price_file(self, sftp: paramiko.SFTPClient) -> Tuple[str, bytes]:
         override = load_also_config()
         directory = override.get("dir") or settings.also_sftp_dir or "."
-        entries = sftp.listdir_attr(directory)
-        candidates = []
-        for entry in entries:
-            if stat.S_ISDIR(entry.st_mode):
-                continue
-            if entry.filename.lower().endswith((".csv", ".txt", ".zip")):
-                candidates.append(entry)
-        if not candidates:
+        latest = self._find_latest_entry(sftp, directory)
+        if not latest:
             raise ValueError("No price files found")
-        latest = max(candidates, key=lambda item: item.st_mtime)
         path = f"{directory.rstrip('/')}/{latest.filename}"
         logger.info("Fetching ALSO price file: %s", path)
         with sftp.open(path, "rb") as handle:
@@ -63,6 +56,21 @@ class AlsoFeedAdapter:
             inner_name, inner_data = self._extract_zip_payload(data)
             return f"{latest.filename}:{inner_name}", inner_data
         return latest.filename, data
+
+    @staticmethod
+    def _find_latest_entry(
+        sftp: paramiko.SFTPClient, directory: str
+    ) -> Optional[paramiko.SFTPAttributes]:
+        entries = sftp.listdir_attr(directory)
+        candidates = []
+        for entry in entries:
+            if stat.S_ISDIR(entry.st_mode):
+                continue
+            if entry.filename.lower().endswith((".csv", ".txt", ".zip")):
+                candidates.append(entry)
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item.st_mtime)
 
     @staticmethod
     def _extract_zip_payload(data: bytes) -> Tuple[str, bytes]:
@@ -180,13 +188,22 @@ class AlsoFeedAdapter:
         sftp = None
         try:
             sftp = self.connect_sftp()
-            filename, data = self.fetch_latest_price_file(sftp)
-            size = len(data) if data else 0
+            override = load_also_config()
+            directory = override.get("dir") or settings.also_sftp_dir or "."
+            latest = self._find_latest_entry(sftp, directory)
+            if not latest:
+                raise ValueError("No price files found")
+            filename = latest.filename
+            size = int(latest.st_size or 0)
+            latest_mtime = datetime.fromtimestamp(latest.st_mtime, tz=timezone.utc).isoformat().replace(
+                "+00:00", "Z"
+            )
             meta = self._store.get_meta()
             return {
                 "connected": True,
                 "latest_file": filename,
                 "latest_size": size,
+                "latest_mtime": latest_mtime,
                 "last_imported_at": meta.get("last_imported_at", ""),
                 "last_imported_count": meta.get("last_imported_count", 0),
                 "last_skipped_count": meta.get("last_skipped_count", 0),
@@ -201,6 +218,7 @@ class AlsoFeedAdapter:
                 "connected": False,
                 "latest_file": "",
                 "latest_size": 0,
+                "latest_mtime": "",
                 "last_imported_at": meta.get("last_imported_at", ""),
                 "last_imported_count": meta.get("last_imported_count", 0),
                 "last_skipped_count": meta.get("last_skipped_count", 0),

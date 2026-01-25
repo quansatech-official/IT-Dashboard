@@ -157,6 +157,7 @@ export default function SettingsView() {
     connected: null,
     latestFile: "",
     latestSize: 0,
+    latestMtime: "",
     lastImportedAt: "",
     lastImportedCount: 0,
     lastSkippedCount: 0,
@@ -164,6 +165,8 @@ export default function SettingsView() {
     lastFilename: "",
     error: ""
   });
+  const [alsoSyncStatus, setAlsoSyncStatus] = useState("idle");
+  const [alsoSyncMessage, setAlsoSyncMessage] = useState("");
   const [pbxDebugInfo, setPbxDebugInfo] = useState({
     lastCheckAt: "",
     lastCheckOk: null,
@@ -902,6 +905,7 @@ export default function SettingsView() {
         connected: Boolean(data?.connected),
         latestFile: data?.latest_file || "",
         latestSize: Number(data?.latest_size || 0),
+        latestMtime: data?.latest_mtime || "",
         lastImportedAt: data?.last_imported_at || "",
         lastImportedCount: Number(data?.last_imported_count || 0),
         lastSkippedCount: Number(data?.last_skipped_count || 0),
@@ -916,6 +920,7 @@ export default function SettingsView() {
         connected: false,
         latestFile: "",
         latestSize: 0,
+        latestMtime: "",
         lastImportedAt: "",
         lastImportedCount: 0,
         lastSkippedCount: 0,
@@ -924,6 +929,34 @@ export default function SettingsView() {
         error: error?.message ? String(error.message) : "Fehler"
       });
     }
+  };
+
+  const runAlsoSync = async () => {
+    if (alsoSyncStatus === "loading") return;
+    setAlsoSyncStatus("loading");
+    setAlsoSyncMessage("");
+    try {
+      const syncRes = await fetch(`${API}/marketplace/sync/also`, { method: "POST" });
+      if (!syncRes.ok) {
+        const text = await syncRes.text();
+        throw new Error(text || "sync_failed");
+      }
+      const runRes = await fetch(`${API}/marketplace/also/run`, { method: "POST" });
+      if (!runRes.ok) {
+        const text = await runRes.text();
+        throw new Error(text || "run_failed");
+      }
+      await refreshAlsoStatus();
+      setAlsoSyncStatus("ready");
+      setAlsoSyncMessage("Import gestartet.");
+    } catch (error) {
+      setAlsoSyncStatus("error");
+      setAlsoSyncMessage(error?.message ? String(error.message) : "Import fehlgeschlagen.");
+    }
+    setTimeout(() => {
+      setAlsoSyncStatus("idle");
+      setAlsoSyncMessage("");
+    }, 4000);
   };
 
   const refreshPbxDebug = async () => {
@@ -2283,14 +2316,28 @@ export default function SettingsView() {
                 <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-sand-600">
                   <button
                     type="button"
-                    onClick={async () => {
-                      await fetch(`${API}/marketplace/sync/also`, { method: "POST" });
-                      refreshMarketplaceSourceDebug("also");
-                    }}
-                    className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide text-sand-600"
+                    onClick={runAlsoSync}
+                    disabled={alsoSyncStatus === "loading"}
+                    className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide text-sand-600 disabled:opacity-50"
                   >
-                    ALSO Sync
+                    {alsoSyncStatus === "loading" ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span className="h-3 w-3 animate-spin rounded-full border border-sand-400 border-t-transparent" />
+                        Import läuft
+                      </span>
+                    ) : (
+                      "ALSO Import starten"
+                    )}
                   </button>
+                  {alsoSyncMessage ? (
+                    <span
+                      className={`text-xs ${
+                        alsoSyncStatus === "error" ? "text-rose-600" : "text-emerald-600"
+                      }`}
+                    >
+                      {alsoSyncMessage}
+                    </span>
+                  ) : null}
                   <button
                     type="button"
                     onClick={refreshAlsoStatus}
@@ -2307,6 +2354,11 @@ export default function SettingsView() {
                   </span>
                   {alsoStatus.latestFile ? (
                     <span>Datei: {alsoStatus.latestFile}</span>
+                  ) : null}
+                  {alsoStatus.latestMtime ? (
+                    <span>
+                      Stand: {new Date(alsoStatus.latestMtime).toLocaleString("de-DE")}
+                    </span>
                   ) : null}
                   {alsoStatus.latestSize ? (
                     <span>Größe: {Math.round(alsoStatus.latestSize / 1024)} KB</span>

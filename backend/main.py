@@ -2752,6 +2752,18 @@ def marketplace_sync_also():
     return {"status": "ok"}
 
 
+@app.post("/api/marketplace/also/run")
+def marketplace_run_also():
+    with SessionLocal() as db:
+        base_url = _get_marketplace_import_url(db)
+    try:
+        response = requests.post(f"{base_url}/import/also/run", timeout=120)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import run error: {exc}") from exc
+    return response.json()
+
+
 @app.get("/api/marketplace/also/status")
 def marketplace_also_status():
     with SessionLocal() as db:
