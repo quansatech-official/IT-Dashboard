@@ -24,11 +24,11 @@ class IcecatAdapter:
 
     async def load_settings(self) -> IcecatSettings:
         settings = await self._settings_service.get("icecat")
-        return settings or IcecatSettings(username="", password="", enabled=False)
+        return settings or IcecatSettings(api_token="", enabled=False)
 
     async def is_enabled(self) -> bool:
         settings = await self.load_settings()
-        return bool(settings.enabled and settings.username and settings.password)
+        return bool(settings.enabled and settings.api_token)
 
     def _cache_get(self, key: str) -> Optional[AlternativeProductContent]:
         entry = self._cache.get(key)
@@ -51,7 +51,7 @@ class IcecatAdapter:
         if cached:
             return cached
         settings = await self.load_settings()
-        if not settings.enabled or not settings.username or not settings.password:
+        if not settings.enabled or not settings.api_token:
             return None
         payload = await self._fetch(settings, {"ean": ean})
         content = self.parse_response(payload)
@@ -67,7 +67,7 @@ class IcecatAdapter:
         if cached:
             return cached
         settings = await self.load_settings()
-        if not settings.enabled or not settings.username or not settings.password:
+        if not settings.enabled or not settings.api_token:
             return None
         payload = await self._fetch(settings, {"brand": brand, "mpn": mpn})
         content = self.parse_response(payload)
@@ -76,15 +76,17 @@ class IcecatAdapter:
         return content
 
     async def _fetch(self, settings: IcecatSettings, params: Dict[str, str]) -> Optional[Dict[str, Any]]:
-        if not settings.username or not settings.password:
+        if not settings.api_token:
             return None
-        headers = {"Accept": "application/json"}
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {settings.api_token}",
+        }
         try:
             async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
                 response = await client.get(
                     ICECAT_BASE_URL,
                     params=params,
-                    auth=(settings.username, settings.password),
                     headers=headers,
                 )
                 if response.status_code == 404:

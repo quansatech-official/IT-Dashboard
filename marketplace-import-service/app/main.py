@@ -10,7 +10,7 @@ from app.adapters.icecat_adapter import IcecatAdapter
 from app.config import settings
 from app.models.alternative_content import AlternativeProductContent
 from app.models.normalized_item import NormalizedItem
-from app.utils.also_feed_config import persist_also_config
+from app.utils.also_feed_config import load_also_config, persist_also_config
 from app.utils.settings_service import WorkbenchSettingsService
 import os
 
@@ -155,3 +155,32 @@ async def update_also_config(request: AlsoConfigRequest) -> Dict[str, Any]:
     }
     persist_also_config(payload)
     return {"status": "ok"}
+
+
+@app.get("/import/also/config")
+async def get_also_config() -> Dict[str, Any]:
+    override = load_also_config()
+    host = override.get("host") or settings.also_sftp_host
+    port = int(override.get("port") or settings.also_sftp_port)
+    user = override.get("user") or settings.also_sftp_user
+    key_path = override.get("key_path") or settings.also_sftp_key_path
+    directory = override.get("dir") or settings.also_sftp_dir or "."
+    return {
+        "override_present": bool(override),
+        "override": {
+            "host": override.get("host"),
+            "port": override.get("port"),
+            "user": override.get("user"),
+            "has_password": bool(override.get("password")),
+            "key_path": override.get("key_path"),
+            "dir": override.get("dir"),
+        },
+        "effective": {
+            "host": host,
+            "port": port,
+            "user": user,
+            "has_password": bool(settings.also_sftp_password),
+            "key_path": key_path,
+            "dir": directory,
+        },
+    }

@@ -13,8 +13,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class IcecatSettings:
-    username: str
-    password: str
+    api_token: str
     enabled: bool
 
 
@@ -43,14 +42,18 @@ class WorkbenchSettingsService:
                 payload = response.json()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Icecat settings fetch failed: %s", exc)
-            settings = IcecatSettings(username="", password="", enabled=False)
+            settings = IcecatSettings(api_token="", enabled=False)
             self._icecat_cache = settings
             self._icecat_cache_expires_at = time.time() + self._cache_ttl_seconds
             return settings
 
         settings = IcecatSettings(
-            username=str(payload.get("username") or ""),
-            password=str(payload.get("password") or ""),
+            api_token=str(
+                payload.get("api_token")
+                or payload.get("icecat_api_token")
+                or payload.get("token")
+                or ""
+            ),
             enabled=bool(payload.get("enabled")),
         )
         self._icecat_cache = settings

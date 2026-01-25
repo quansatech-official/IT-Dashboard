@@ -2500,6 +2500,7 @@ def get_icecat_settings():
     with SessionLocal() as db:
         settings = _get_settings(db)
         return {
+            "api_token": settings.icecat_api_token,
             "has_api_token": bool(settings.icecat_api_token),
             "enabled": bool(settings.icecat_enabled),
         }
