@@ -6,7 +6,7 @@ import stat
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import paramiko
 
