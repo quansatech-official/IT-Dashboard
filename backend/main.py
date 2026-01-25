@@ -2715,6 +2715,37 @@ def marketplace_item(sku: str, source: str):
     return response.json()
 
 
+@app.get("/api/marketplace/alternative/icecat")
+def marketplace_icecat_alternative(
+    ean: Optional[str] = None,
+    brand: Optional[str] = None,
+    mpn: Optional[str] = None,
+    manufacturer: Optional[str] = None,
+    manufacturer_sku: Optional[str] = None,
+):
+    with SessionLocal() as db:
+        base_url = _get_marketplace_import_url(db)
+    params: Dict[str, str] = {}
+    if ean:
+        params["ean"] = ean
+    if brand:
+        params["brand"] = brand
+    if mpn:
+        params["mpn"] = mpn
+    if manufacturer:
+        params["manufacturer"] = manufacturer
+    if manufacturer_sku:
+        params["manufacturer_sku"] = manufacturer_sku
+    try:
+        response = requests.get(
+            f"{base_url}/import/alternative/icecat", params=params, timeout=30
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import error: {exc}") from exc
+    return response.json()
+
+
 @app.get("/api/marketplace/debug/{source}")
 def marketplace_debug(source: str):
     with SessionLocal() as db:

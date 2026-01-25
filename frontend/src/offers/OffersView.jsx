@@ -3177,10 +3177,60 @@ export default function OffersView() {
     setImportStatus("loading");
     setImportError("");
     try {
+      if (importSource === "icecat") {
+        const query = importQuery.trim();
+        const isEan = /^\d{8,14}$/.test(query);
+        const params = new URLSearchParams();
+        if (isEan) {
+          params.set("ean", query);
+        } else if (query.includes(":")) {
+          const [brand, ...rest] = query.split(":");
+          const mpn = rest.join(":").trim();
+          if (brand.trim() && mpn) {
+            params.set("brand", brand.trim());
+            params.set("mpn", mpn);
+          }
+        } else {
+          const parts = query.split(/\s+/).filter(Boolean);
+          if (parts.length >= 2) {
+            params.set("brand", parts[0]);
+            params.set("mpn", parts.slice(1).join(" "));
+          }
+        }
+        if (!params.toString()) {
+          throw new Error("Icecat benötigt EAN oder Brand+MPN.");
+        }
+        const res = await fetch(`/api/marketplace/alternative/icecat?${params.toString()}`);
+        if (!res.ok) throw new Error("Icecat Suche fehlgeschlagen.");
+        const data = await res.json();
+        if (data) {
+          const sku = params.get("ean") || params.get("mpn") || "icecat";
+          setImportResults([
+            {
+              source: "icecat",
+              sku,
+              title: data.title || sku,
+              shortDescription: data.description || "",
+              recommendedVK: null,
+              ekMin: null,
+              ekMax: null,
+              currency: ""
+            }
+          ]);
+        } else {
+          setImportResults([]);
+        }
+        setImportStatus("idle");
+        return;
+      }
       if (importSource === "all") {
         const activeSources = importSources
           .filter((entry) => entry?.source)
           .map((entry) => entry.source);
+        if (!activeSources.length) {
+          throw new Error("Keine Marketplace-Quellen verfügbar.");
+        }
+        const errors = [];
         const results = await Promise.all(
           activeSources.map(async (source) => {
             const params = new URLSearchParams({
@@ -3188,12 +3238,20 @@ export default function OffersView() {
               query: importQuery
             });
             const res = await fetch(`/api/marketplace/search?${params.toString()}`);
-            if (!res.ok) return [];
+            if (!res.ok) {
+              const text = await res.text();
+              errors.push(`${source}: ${text || res.status}`);
+              return [];
+            }
             const data = await res.json();
             return Array.isArray(data) ? data : [];
           })
         );
-        setImportResults(results.flat());
+        const flat = results.flat();
+        setImportResults(flat);
+        if (!flat.length && errors.length) {
+          setImportError(errors.slice(0, 2).join(" · "));
+        }
       } else {
         const params = new URLSearchParams({
           source: importSource,
@@ -5035,18 +5093,24 @@ export default function OffersView() {
           </div>
 
           <div className="grid gap-3 md:grid-cols-[0.6fr_1fr_auto] items-end">
-            <Field label="Marketplace">
+            <Field label="Quelle">
               <SelectField
                 value={importSource}
                 onChange={(event) => setImportSource(event.target.value)}
               >
-                <option value="all">Alle Marketplaces</option>
+                <option value="all">Alle Quellen</option>
                 {importSources.map((source) => (
                   <option key={source.source} value={source.source}>
                     {source.source}
                     {source.available ? "" : " (nicht aktiv)"}
                   </option>
                 ))}
+                <option value="icecat">
+                  icecat
+                  {icecatApiStatus.enabled && icecatApiStatus.hasToken
+                    ? ""
+                    : " (nicht aktiv)"}
+                </option>
               </SelectField>
             </Field>
             <Field label="Suche">
