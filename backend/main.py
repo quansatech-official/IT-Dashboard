@@ -3197,6 +3197,22 @@ def get_reports(customer: Optional[str] = None, customer_id: Optional[int] = Non
         return [serialize_report(r) for r in reports]
 
 
+@app.get("/api/reports/open")
+def report_open(guid: str):
+    with SessionLocal() as db:
+        report = db.query(Report).filter(Report.guid == guid).first()
+        if report:
+            report.opened_at = int(time.time() * 1000)
+            report.opened_count = (report.opened_count or 0) + 1
+            db.commit()
+    pixel = (
+        b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
+        b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
+        b"\x00\x02\x02D\x01\x00;"
+    )
+    return Response(content=pixel, media_type="image/gif")
+
+
 @app.get("/api/reports/{report_id}")
 def get_report(report_id: int):
     with SessionLocal() as db:
@@ -3257,22 +3273,6 @@ def delete_report(report_id: int):
         db.delete(report)
         db.commit()
         return {"status": "deleted"}
-
-
-@app.get("/api/reports/open")
-def report_open(guid: str):
-    with SessionLocal() as db:
-        report = db.query(Report).filter(Report.guid == guid).first()
-        if report:
-            report.opened_at = int(time.time() * 1000)
-            report.opened_count = (report.opened_count or 0) + 1
-            db.commit()
-    pixel = (
-        b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
-        b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
-        b"\x00\x02\x02D\x01\x00;"
-    )
-    return Response(content=pixel, media_type="image/gif")
 
 
 @app.get("/api/offers/open")

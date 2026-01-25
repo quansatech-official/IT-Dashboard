@@ -35,14 +35,23 @@ const statusOptions = ["Entwurf", "gesendet", "angenommen", "abgelehnt"];
 const complexityOptions = ["niedrig", "mittel", "hoch"];
 const positionTypes = [
   { value: "Dienstleistung", label: "Leistung" },
-  { value: "Gerät", label: "Material" },
-  { value: "Sonstiges", label: "Sonstiges" }
+  { value: "Gerät", label: "Material" }
 ];
 const unitOptions = [
   { value: "hours", label: "Stunden" },
-  { value: "flat", label: "Pauschal" },
+  { value: "days", label: "Tage" },
+  { value: "weeks", label: "Wochen" },
+  { value: "month", label: "Monate" },
+  { value: "year", label: "Jahre" },
   { value: "piece", label: "Stück" },
-  { value: "day", label: "Tag" }
+  { value: "flat", label: "Pauschal" },
+  { value: "user", label: "User" },
+  { value: "device", label: "Gerät" },
+  { value: "license", label: "Lizenz" },
+  { value: "km", label: "Kilometer" },
+  { value: "m", label: "Meter" },
+  { value: "gb", label: "GB" },
+  { value: "tb", label: "TB" }
 ];
 const billingCycleOptions = [
   { value: "once", label: "Einmalig" },
@@ -125,7 +134,9 @@ const initialDeviceBlocks = [
     manufacturer: "Sophos",
     model: "XGS",
     dealerLink: "",
-    dealerLinkDate: ""
+    dealerLinkDate: "",
+    images: [],
+    internalNote: ""
   },
   {
     id: "device-backup",
@@ -133,7 +144,9 @@ const initialDeviceBlocks = [
     manufacturer: "Synology",
     model: "RackStation",
     dealerLink: "",
-    dealerLinkDate: ""
+    dealerLinkDate: "",
+    images: [],
+    internalNote: ""
   },
   {
     id: "device-wifi",
@@ -141,7 +154,9 @@ const initialDeviceBlocks = [
     manufacturer: "Ubiquiti",
     model: "UniFi 6",
     dealerLink: "",
-    dealerLinkDate: ""
+    dealerLinkDate: "",
+    images: [],
+    internalNote: ""
   }
 ];
 
@@ -190,6 +205,12 @@ const formatBillingCycleLabel = (value) => {
   if (normalized === "monthly") return "Monatlich";
   if (normalized === "yearly") return "Jährlich";
   return "Einmalig";
+};
+
+const buildOfferConfirmUrl = (guid) => {
+  if (!guid) return "";
+  if (typeof window === "undefined") return `/offers/confirm/${guid}`;
+  return `${window.location.origin}/offers/confirm/${guid}`;
 };
 
 const getCostTotalsByCycle = (offer) => {
@@ -531,8 +552,16 @@ const buildDeviceItemFromBlock = (block = {}) => ({
   price: Number(block.price || 0),
   quantity: normalizeQuantityInput(block.quantity, 1),
   billingCycle: block.billingCycle || "once",
-  images: [],
-  internalNotes: []
+  images: Array.isArray(block.images) ? [...block.images] : [],
+  internalNotes: block.internalNote
+    ? [
+        {
+          id: uid(),
+          type: "internal",
+          text: block.internalNote
+        }
+      ]
+    : []
 });
 
 const defaultOfferFormat = "AN-XXXX";
@@ -577,7 +606,8 @@ const createEmptyOffer = (index, format) => ({
   deviceItems: [],
   serverId: null,
   confirmGuid: "",
-  trackingGuid: ""
+  trackingGuid: "",
+  handoverLocked: false
 });
 
 const sanitizeOffersForSave = (offers) =>
@@ -605,7 +635,28 @@ const normalizeServerOffer = (payload) => {
   if (!next.status) {
     next.status = "Entwurf";
   }
+  if (typeof next.handoverLocked === "undefined") {
+    next.handoverLocked = false;
+  }
   return next;
+};
+
+const dedupeOffers = (list = []) => {
+  const byKey = new Map();
+  list.forEach((offer) => {
+    const key = offer.serverId || offer.guid || offer.id;
+    if (!key) return;
+    const current = byKey.get(key);
+    // prefer entries that have a serverId (fetched from backend) and newer updatedAt timestamps
+    if (
+      !current ||
+      (!!offer.serverId && !current.serverId) ||
+      (offer.updatedAt && current.updatedAt && offer.updatedAt > current.updatedAt)
+    ) {
+      byKey.set(key, offer);
+    }
+  });
+  return Array.from(byKey.values());
 };
 
 const buildPreviewPositions = (offer) => {
@@ -1410,6 +1461,309 @@ function SelectField({ value, onChange, disabled, children }) {
   );
 }
 
+function PositionCard({ item, onUpdate, onRemove }) {
+  if (!item) return null;
+  const [open, setOpen] = useState(false);
+  const billingOptions = [
+    { value: "once", label: "Einmalig" },
+    { value: "monthly", label: "Monatlich" },
+    { value: "yearly", label: "Jährlich" }
+  ];
+  return (
+    <div className="rounded-2xl border border-sand-200 bg-white p-3 text-sm text-sand-700 space-y-2">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((prev) => !prev)}
+          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          title={open ? "Details ausblenden" : "Details anzeigen"}
+        >
+          {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+        <input
+          className={`${inputClass} flex-1`}
+          value={item.title || ""}
+          onChange={(event) => onUpdate({ title: event.target.value })}
+          placeholder="Leistungstitel"
+        />
+        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-2 w-28">
+          <span className="text-sand-500 mr-1">€</span>
+          <input
+            className="w-full bg-transparent py-1 text-[13px] text-sand-900 outline-none appearance-none"
+            type="number"
+            value={item.price ?? ""}
+            onChange={(event) => onUpdate({ price: parseNumberInput(event.target.value) })}
+          />
+        </div>
+        <input
+          className={`${quantityInputClass} w-16`}
+          type="number"
+          value={item.quantity ?? ""}
+          onChange={(event) => onUpdate({ quantity: parseNumberInput(event.target.value) })}
+          placeholder="Menge"
+        />
+        <button
+          type="button"
+          onClick={onRemove}
+          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          title="Entfernen"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+      {open ? (
+        <div className="space-y-2">
+          <Field label="Beschreibung">
+            <textarea
+              className={noteTextareaClass}
+              value={item.aiDraft || ""}
+              onChange={(event) => onUpdate({ aiDraft: event.target.value })}
+              placeholder="Leistungsbeschreibung"
+            />
+          </Field>
+          <div className="grid gap-2 md:grid-cols-2">
+        <Field label="Einheit">
+          <SelectField
+            value={item.unit || "hours"}
+            onChange={(event) => onUpdate({ unit: event.target.value })}
+          >
+            {unitOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </SelectField>
+        </Field>
+            <Field label="Abrechnung">
+              <SelectField
+                value={item.billingCycle || "once"}
+                onChange={(event) => onUpdate({ billingCycle: event.target.value })}
+              >
+                {billingOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </SelectField>
+            </Field>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const UnitOptions = () => (
+  <datalist id="unit-options">
+    <option value="hours" />
+    <option value="days" />
+    <option value="weeks" />
+    <option value="month" />
+    <option value="year" />
+    <option value="piece" />
+    <option value="flat" />
+    <option value="user" />
+    <option value="device" />
+    <option value="license" />
+    <option value="km" />
+    <option value="m" />
+    <option value="gb" />
+    <option value="tb" />
+  </datalist>
+);
+
+function DeviceCard({
+  item,
+  onUpdate,
+  onRemove,
+  onAddImage = () => {},
+  onRemoveImage = () => {}
+}) {
+  if (!item) return null;
+  const [open, setOpen] = useState(false);
+  const [imageUrlDraft, setImageUrlDraft] = useState("");
+  const billingOptions = [
+    { value: "once", label: "Einmalig" },
+    { value: "monthly", label: "Monatlich" },
+    { value: "yearly", label: "Jährlich" }
+  ];
+
+  const handleAddImageUrl = () => {
+    const url = (imageUrlDraft || "").trim();
+    if (!url) return;
+    onAddImage(url);
+    setImageUrlDraft("");
+  };
+
+  const handleFiles = (files) => {
+    if (!files || !files.length) return;
+    Array.from(files).forEach((file) => {
+      if (!file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        if (result) onAddImage(result);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleDrop = (event) => {
+    event.preventDefault();
+    if (event.dataTransfer?.files?.length) {
+      handleFiles(event.dataTransfer.files);
+    } else {
+      const text = event.dataTransfer?.getData("text/plain");
+      if (text) {
+        onAddImage(text.trim());
+      }
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-sand-200 bg-white p-3 text-sm text-sand-700 space-y-2">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((prev) => !prev)}
+          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          title={open ? "Details ausblenden" : "Details anzeigen"}
+        >
+          {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+        <input
+          className={`${inputClass} flex-1`}
+          value={item.product || ""}
+          onChange={(event) => onUpdate({ product: event.target.value })}
+          placeholder="Gerät / Material"
+        />
+        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-2 w-28">
+          <span className="text-sand-500 mr-1">€</span>
+          <input
+            className="w-full bg-transparent py-1 text-[13px] text-sand-900 outline-none appearance-none"
+            type="number"
+            value={item.price ?? ""}
+            onChange={(event) => onUpdate({ price: parseNumberInput(event.target.value) })}
+          />
+        </div>
+        <input
+          className={`${quantityInputClass} w-16`}
+          type="number"
+          value={item.quantity ?? ""}
+          onChange={(event) => onUpdate({ quantity: parseNumberInput(event.target.value) })}
+          placeholder="Menge"
+        />
+        <button
+          type="button"
+          onClick={onRemove}
+          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          title="Entfernen"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+      {open ? (
+        <div className="space-y-2">
+          <Field label="Beschreibung">
+            <textarea
+              className={noteTextareaClass}
+              value={item.description || ""}
+              onChange={(event) => onUpdate({ description: event.target.value })}
+              placeholder="Beschreibung"
+            />
+          </Field>
+          <div className="grid gap-2 md:grid-cols-2">
+            <Field label="Abrechnung">
+              <SelectField
+                value={item.billingCycle || "once"}
+                onChange={(event) => onUpdate({ billingCycle: event.target.value })}
+              >
+                {billingOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </SelectField>
+            </Field>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Bilder</p>
+              <div className="flex items-center gap-2">
+                <input
+                  className="w-52 rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400"
+                  value={imageUrlDraft}
+                  onChange={(e) => setImageUrlDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddImageUrl();
+                    }
+                  }}
+                  placeholder="https://bild.url"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddImageUrl}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                >
+                  URL hinzufügen
+                </button>
+                <label className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 cursor-pointer">
+                  Upload
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      handleFiles(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={handleDrop}
+              className="rounded-xl border border-dashed border-sand-300 bg-sand-50 px-3 py-2 text-xs text-sand-500"
+            >
+              Link einfügen oder Bild-Dateien hierher ziehen.
+            </div>
+            {(item.images || []).length ? (
+              <div className="flex flex-wrap gap-2">
+                {item.images.map((url) => (
+                  <div
+                    key={url}
+                    className="relative h-20 w-28 overflow-hidden rounded-xl border border-sand-200 bg-white"
+                  >
+                    <img
+                      src={url}
+                      alt="Material"
+                      className="h-full w-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => onRemoveImage(url)}
+                      className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-sand-600 hover:bg-white"
+                      title="Entfernen"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-sand-500">Keine Bilder hinterlegt.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function OffersView() {
   const [offers, setOffers] = useState(initialOffers);
   const [activeId, setActiveId] = useState("");
@@ -1455,11 +1809,14 @@ export default function OffersView() {
   const [confirmationMenuOfferId, setConfirmationMenuOfferId] = useState("");
   const [aiLoading, setAiLoading] = useState({});
   const previewWrapperRef = useRef(null);
+  const previewSectionRef = useRef(null);
+  const documentBuildRef = useRef(null);
+  const offerHeaderRef = useRef(null);
   const exportRef = useRef(null);
   const offersFetchedRef = useRef(false);
-  const [previewScale, setPreviewScale] = useState(0.75);
+  const [previewScale, setPreviewScale] = useState(0.7);
+  const [previewMaxHeight, setPreviewMaxHeight] = useState("70vh");
   const autosaveTimer = useRef(null);
-  const serverSaveTimer = useRef(null);
   const serverSaveInFlightRef = useRef({});
   const [detailDraft, setDetailDraft] = useState("");
   const [importerOpen, setImporterOpen] = useState(false);
@@ -1549,7 +1906,7 @@ export default function OffersView() {
         return;
       }
       const next = Math.min(1, width / a4WidthPx);
-      setPreviewScale(Math.max(0.5, next));
+      setPreviewScale(Math.max(0.5, next * 0.9));
     };
     updateScale();
     if (typeof ResizeObserver === "undefined") {
@@ -1560,6 +1917,32 @@ export default function OffersView() {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const computeHeight = () => {
+      const headerEl = offerHeaderRef.current;
+      const previewEl = previewWrapperRef.current;
+      if (!headerEl || !previewEl) return;
+      const available = headerEl.getBoundingClientRect().height;
+      if (available > 0) {
+        const px = `${Math.max(240, available)}px`;
+        setPreviewMaxHeight(px);
+        previewEl.style.height = px;
+      }
+    };
+    computeHeight();
+    window.addEventListener("resize", computeHeight);
+    let observer;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(computeHeight);
+      if (offerHeaderRef.current) observer.observe(offerHeaderRef.current);
+    }
+    return () => {
+      window.removeEventListener("resize", computeHeight);
+      if (observer) observer.disconnect();
+    };
+  }, [mainTab, activeOffer?.id]);
 
   useEffect(() => {
     if (!importerOpen) return;
@@ -1592,9 +1975,9 @@ export default function OffersView() {
         const fetched = Array.isArray(data) ? data.map(normalizeServerOffer).filter(Boolean) : [];
         setOffers((prev) => {
           const drafts = prev.filter((offer) => !offer.serverId);
-          const merged = [...drafts, ...fetched];
+          const merged = dedupeOffers([...drafts, ...fetched]);
           setActiveId((current) =>
-            merged.some((offer) => offer.id === current)
+            merged.some((offer) => offer.id === current || offer.serverId === current)
               ? current
               : merged[0]?.id || ""
           );
@@ -1803,21 +2186,6 @@ export default function OffersView() {
   }, [offers, activeId, serviceBlocks, deviceBlocks, calcBlocks]);
 
   useEffect(() => {
-    if (!activeOffer || isOfferEmpty(activeOffer)) return;
-    if (serverSaveTimer.current) {
-      clearTimeout(serverSaveTimer.current);
-    }
-    serverSaveTimer.current = setTimeout(() => {
-      persistOfferToServer(activeOffer, false);
-    }, 1000);
-    return () => {
-      if (serverSaveTimer.current) {
-        clearTimeout(serverSaveTimer.current);
-      }
-    };
-  }, [activeOffer]);
-
-  useEffect(() => {
     if (!exportOfferId) return;
     const offer = offers.find((item) => item.id === exportOfferId);
     if (!offer || !exportRef.current) return;
@@ -1937,9 +2305,9 @@ export default function OffersView() {
   const updateOfferStatus = (offerId, status) => {
     const offer = offers.find((entry) => entry.id === offerId);
     if (!offer) return;
+    if (offer.handoverLocked && status === "Entwurf") return;
     const nextOffer = { ...offer, status };
     updateOffer(offerId, () => nextOffer);
-    persistOfferToServer(nextOffer, false);
   };
 
   const updateLineItem = (offerId, itemId, patch) => {
@@ -2143,6 +2511,13 @@ export default function OffersView() {
       ...offer,
       deviceItems: offer.deviceItems.map((item) => {
         if (item.id !== itemId) return item;
+        if (url && url.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(url);
+          } catch (error) {
+            // ignore revoke errors
+          }
+        }
         const images = Array.isArray(item.images) ? item.images : [];
         return { ...item, images: images.filter((entry) => entry !== url) };
       })
@@ -2306,6 +2681,10 @@ export default function OffersView() {
 
   const openOfferEmailComposer = () => {
     if (!activeOffer) return;
+    if (!activeOffer.serverId) {
+      setSendStatus("error");
+      return;
+    }
     const defaultText = `Angebot ${activeOffer.reference || ""}`.trim();
     setSendSubject((prev) => prev || defaultText);
     setOfferEmailBody((prev) => prev || defaultText);
@@ -2318,15 +2697,13 @@ export default function OffersView() {
 
   const handleOfferEmailSend = async () => {
     if (!activeOffer || !sendTo) return;
+    if (!activeOffer.serverId) {
+      setSendStatus("error");
+      return;
+    }
     setSendStatus("sending");
     try {
-      let confirmUrl = "";
-      try {
-        const saved = await persistOfferForCustomer(activeOffer);
-        confirmUrl = saved?.confirm_url || "";
-      } catch (error) {
-        confirmUrl = "";
-      }
+      const confirmUrl = buildOfferConfirmUrl(activeOffer.confirmGuid);
       const html = buildOfferEmailHtml(activeOffer, confirmUrl, "offer");
       const baseText =
         (offerEmailBody || `Angebot ${activeOffer.reference || ""}`).trim() ||
@@ -2368,15 +2745,13 @@ export default function OffersView() {
 
   const sendConfirmationEmail = async (offer) => {
     if (!offer || !sendTo) return;
+    if (!offer.serverId) {
+      setSendStatus("error");
+      return;
+    }
     setSendStatus("sending");
     try {
-      let confirmUrl = "";
-      try {
-        const saved = await persistOfferForCustomer(offer);
-        confirmUrl = saved?.confirm_url || "";
-      } catch (error) {
-        confirmUrl = "";
-      }
+      const confirmUrl = buildOfferConfirmUrl(offer.confirmGuid);
       const res = await fetch("/api/offers/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2423,6 +2798,7 @@ export default function OffersView() {
       ...prev,
       [offerId]: { status: "sending", message: "" }
     }));
+    let success = false;
     try {
       const res = await fetch(`/api/sevdesk/offers/${offerId}/draft`, { method: "POST" });
       const data = await parseApiResponse(res);
@@ -2434,6 +2810,7 @@ export default function OffersView() {
         ...prev,
         [offerId]: { status: "sent", message: "Rechnungsentwurf erstellt" }
       }));
+      success = true;
     } catch (error) {
       setSevdeskStatus((prev) => ({
         ...prev,
@@ -2450,6 +2827,7 @@ export default function OffersView() {
         return next;
       });
     }, 4000);
+    return success;
   };
 
   const createSevdeskDraftForOffer = async (offer) => {
@@ -2477,7 +2855,16 @@ export default function OffersView() {
         return;
       }
     }
-    createSevdeskDraft(serverId);
+    const ok = await createSevdeskDraft(serverId);
+    if (ok) {
+      const updated = { ...offer, serverId, handoverLocked: true };
+      updateOffer(offer.id, () => updated);
+      try {
+        await persistOfferForCustomer(updated);
+      } catch (error) {
+        // locking is still applied locally even if sync fails
+      }
+    }
   };
 
   const getHandoverSummary = (offer) => {
@@ -2609,7 +2996,9 @@ export default function OffersView() {
         description: "",
         price: 0,
         quantity: 1,
-        billingCycle: "once"
+        billingCycle: "once",
+        images: [],
+        internalNote: ""
       }
     ]);
   };
@@ -2707,14 +3096,14 @@ export default function OffersView() {
       addDeviceItem();
       return;
     }
-    addLineItem({ type: positionType });
+    addLineItem({ type: "Dienstleistung" });
   };
 
   const addSelectedService = () => {
     if (!activeOffer) return;
     const block = serviceBlocks.find((item) => item.id === servicePick);
     if (!block) return;
-    addLineItem(block);
+    addLineItem({ ...block, type: "Dienstleistung" });
   };
 
   const addSelectedDevice = () => {
@@ -2837,479 +3226,284 @@ export default function OffersView() {
           >
             Textbausteine
           </button>
+          <div className="flex-1" />
+          {mainTab === "new" ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!activeOffer) return;
+                  persistToStorage(false);
+                  persistOfferToServer(activeOffer, true);
+                }}
+                disabled={!activeOffer}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
+                  activeOffer
+                    ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700"
+                    : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
+                }`}
+              >
+                <Save size={12} /> Speichern
+              </button>
+              {saveStatus === "saved" && (
+                <span className="text-xs text-emerald-600">Gespeichert</span>
+              )}
+              {saveStatus === "error" && (
+                <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
+              )}
+            </div>
+          ) : null}
         </div>
 
         {mainTab === "new" ? (
-          <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.65fr] gap-2">
-            <section className="space-y-3">
-
-          {activeOffer ? (
+          activeOffer ? (
             <>
-              <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-lg font-display text-sand-900">Angebotskopf</h2>
-                    <p className="text-sm text-sand-600">
-                      Kunde, Anlass, Status und Referenzen.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                      {activeOffer.status}
-                    </span>
-                    <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                      {positionCount} Positionen
-                    </span>
-                    <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                      Gesamt {formatMoney(totals.total)}
-                    </span>
-                    <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                      Einmal {formatMoney(costTotals.once)}
-                    </span>
-                    <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                      Laufend {formatMoney(costTotals.monthly)} / {formatMoney(costTotals.yearly)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        persistToStorage(false);
-                        persistOfferToServer(activeOffer, true);
-                      }}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+              <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-3 items-start">
+                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/80 backdrop-blur p-3 shadow-soft animate-fade-in">
+                  <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-3 items-start">
+                    <section
+                      ref={offerHeaderRef}
+                      className="self-start rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-3"
                     >
-                      <Save size={12} /> Speichern
-                    </button>
-                    {saveStatus === "saved" && (
-                      <span className="text-xs text-emerald-600">Gespeichert</span>
-                    )}
-                    {saveStatus === "error" && (
-                      <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => exportOfferPdf(activeOffer)}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                    >
-                      <FileDown size={12} /> PDF
-                    </button>
-                  </div>
-                </div>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h2 className="text-xl font-display text-sand-900 leading-tight">Angebotskopf</h2>
+                          <p className="text-sm text-sand-600">
+                            Kunde, Anlass, Status und Referenzen.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                            {activeOffer.status}
+                          </span>
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                            {positionCount} Positionen
+                          </span>
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                            Gesamt {formatMoney(totals.total)}
+                          </span>
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                            Einmal {formatMoney(costTotals.once)}
+                          </span>
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                            Laufend {formatMoney(costTotals.monthly)} / {formatMoney(costTotals.yearly)}
+                          </span>
+                        </div>
+                      </div>
 
-                <div className="mt-4 grid gap-3 md:grid-cols-3 items-stretch">
-                  <div className="rounded-xl border border-sand-200 bg-sand-100 p-3 h-full">
-                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                      Referenz
-                    </p>
-                    <p className="mt-2 text-sm font-semibold text-sand-900">
-                      {activeOffer.reference}
-                    </p>
-                    <p className="mt-1 text-xs text-sand-500">
-                      Erstellt {formatDate(activeOffer.createdAt)}
-                    </p>
-                  </div>
-                  <div className="rounded-xl border border-sand-200 bg-sand-100 p-3 h-full flex flex-col">
-                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                      Kunde
-                    </p>
-                      <p className="mt-2 text-sm font-semibold text-sand-900">
-                        {activeOffer.customer || "Noch offen"}
-                      </p>
-                    {activeOffer.recipientCompany ? (
-                      <p className="mt-1 text-xs text-sand-500">
-                        {activeOffer.recipientCompany}
-                      </p>
-                    ) : null}
-                    {activeOffer.recipientStreet ? (
-                      <p className="text-xs text-sand-500">
-                        {activeOffer.recipientStreet}
-                      </p>
-                    ) : null}
-                    {activeOffer.recipientPostalCity ? (
-                      <p className="text-xs text-sand-500">
-                        {activeOffer.recipientPostalCity}
-                      </p>
-                    ) : null}
-                    {activeOffer.recipientCountry ? (
-                      <p className="text-xs text-sand-500">
-                        {activeOffer.recipientCountry}
-                      </p>
-                    ) : null}
-                    {activeOffer.customerNumber ? (
-                      <p className="mt-1 text-xs text-sand-500">
-                        Kundennummer {activeOffer.customerNumber}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="rounded-xl border border-sand-200 bg-white p-3 h-full">
-                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                      Versand
-                    </p>
-                    <div className="mt-3 space-y-2">
-                      <p className="text-[11px] text-sand-500">
-                        Empfänger: {sendTo || "Noch nicht gesetzt"}
-                      </p>
-                      <p className="text-[11px] text-sand-500">
-                        Betreff:{" "}
-                        {sendSubject || `Angebot ${activeOffer.reference || ""}`.trim()}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={openOfferEmailComposer}
-                        className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90"
-                      >
-                        <Send size={12} />
-                        E-Mail senden
-                      </button>
-                      {sendStatus === "sent" && (
-                        <span className="text-xs text-emerald-600">Gesendet</span>
-                      )}
-                      {sendStatus === "error" && (
-                        <span className="text-xs text-rose-600">Versand fehlgeschlagen</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                      <div className="mt-4 grid gap-3 md:grid-cols-2 items-stretch">
+                        <div className="rounded-xl border border-sand-200 bg-sand-100 p-3 h-full">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                            Referenz
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-sand-900">
+                            {activeOffer.reference}
+                          </p>
+                          <p className="mt-1 text-xs text-sand-500">
+                            Erstellt {formatDate(activeOffer.createdAt)}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-100 p-3 h-full flex flex-col">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                            Kunde
+                          </p>
+                          <p className="mt-2 text-sm font-semibold text-sand-900">
+                            {activeOffer.customer || "Noch offen"}
+                          </p>
+                          {activeOffer.recipientCompany ? (
+                            <p className="mt-1 text-xs text-sand-500">
+                              {activeOffer.recipientCompany}
+                            </p>
+                          ) : null}
+                          {activeOffer.recipientStreet ? (
+                            <p className="text-xs text-sand-500">
+                              {activeOffer.recipientStreet}
+                            </p>
+                          ) : null}
+                          {activeOffer.recipientPostalCity ? (
+                            <p className="text-xs text-sand-500">
+                              {activeOffer.recipientPostalCity}
+                            </p>
+                          ) : null}
+                          {activeOffer.recipientCountry ? (
+                            <p className="text-xs text-sand-500">
+                              {activeOffer.recipientCountry}
+                            </p>
+                          ) : null}
+                          {activeOffer.customerNumber ? (
+                            <p className="mt-1 text-xs text-sand-500">
+                              Kundennummer {activeOffer.customerNumber}
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
 
-                <div className="mt-4">
-                  <div className="rounded-2xl border border-sand-200 bg-sand-50/60 p-4">
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <Field label="Kunde">
-                        <input
-                          className={inputClass}
-                          value={activeOffer.customer}
-                          onChange={(event) =>
-                            updateOffer(activeOffer.id, (offer) => ({
-                              ...offer,
-                              customer: event.target.value
-                            }))
-                          }
-                          placeholder="Kunde eingeben"
-                          list="offer-customers"
-                        />
-                      </Field>
-                      <Field label="Status">
-                        <SelectField
-                          value={activeOffer.status}
-                          onChange={(event) =>
-                            updateOffer(activeOffer.id, (offer) => ({
-                              ...offer,
-                              status: event.target.value
-                            }))
-                          }
-                        >
-                          {statusOptions.map((status) => (
-                            <option key={status} value={status}>
-                              {status}
-                            </option>
-                          ))}
-                        </SelectField>
-                      </Field>
-                    </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,220px)_140px]">
-                      <Field label="MwSt Modus">
-                        <SelectField
-                          value={activeOffer.vatMode || "standard"}
-                          onChange={(event) =>
-                            updateOffer(activeOffer.id, (offer) => ({
-                              ...offer,
-                              vatMode: event.target.value
-                            }))
-                          }
-                        >
-                          {VAT_MODE_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </SelectField>
-                      </Field>
-                      <Field label="MwSt Satz (%)">
-                        <input
-                          className={inputClass}
-                          type="number"
-                          value={activeOffer.vatRate ?? DEFAULT_VAT_RATE}
-                          onChange={(event) =>
-                            updateOffer(activeOffer.id, (offer) => ({
-                              ...offer,
-                              vatRate: Number(event.target.value)
-                            }))
-                          }
-                          disabled={activeOffer.vatMode !== "standard"}
-                        />
-                      </Field>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-3 space-y-3">
-                  <Field label="Anrede">
-                    <input
-                      className={inputClass}
-                      value={activeOffer.salutation || ""}
-                      onChange={(event) =>
-                        updateOffer(activeOffer.id, (offer) => ({
-                          ...offer,
-                          salutation: event.target.value
-                        }))
-                      }
-                      placeholder="Sehr geehrte Damen und Herren,"
-                    />
-                  </Field>
-                  <Field label="Einleitung">
-                    <textarea
-                      className={noteTextareaClass}
-                      value={activeOffer.introText || ""}
-                      onChange={(event) =>
-                        updateOffer(activeOffer.id, (offer) => ({
-                          ...offer,
-                          introText: event.target.value
-                        }))
-                      }
-                      placeholder="Vielen Dank für Ihre Anfrage..."
-                    />
-                  </Field>
-                </div>
-              </section>
-
-              <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                    Dokumentaufbau
-                  </p>
-                  <h2 className="text-lg font-display text-sand-900">
-                    Deckblatt & Abschnitte
-                  </h2>
-                  <p className="text-sm text-sand-600">
-                    Angebot strukturieren und optionale Bereiche pflegen.
-                  </p>
-                </div>
-                <div className="mt-3 space-y-3">
-                  <div className="flex items-center gap-3">
-                    <input
-                      id="offer-cover-enabled"
-                      type="checkbox"
-                      checked={activeOffer.coverEnabled}
-                      onChange={(event) =>
-                        updateOffer(activeOffer.id, (offer) => ({
-                          ...offer,
-                          coverEnabled: event.target.checked
-                        }))
-                      }
-                      className="h-4 w-4"
-                    />
-                    <label htmlFor="offer-cover-enabled" className="text-sm text-sand-700">
-                      Deckblatt aktivieren
-                    </label>
-                  </div>
-                  {activeOffer.coverEnabled ? (
-                    <div className="space-y-3">
-                      <Field label="Deckblatt Titel">
-                        <input
-                          className={inputClass}
-                          value={activeOffer.coverHeadline}
-                          onChange={(event) =>
-                            updateOffer(activeOffer.id, (offer) => ({
-                              ...offer,
-                              coverHeadline: event.target.value
-                            }))
-                          }
-                          placeholder="z.B. Angebot IT-Modernisierung"
-                        />
-                      </Field>
-                      <Field label="Kurzintro">
-                        <div className="space-y-1.5">
-                          <div className="flex justify-end">
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const key = "cover-intro";
-                                if (isAiBusy(key)) return;
-                                setAiBusy(key, true);
-                                try {
-                                  const text = await requestOfferAiText({
-                                    mode: "cover_intro",
-                                    currentText: activeOffer.coverIntro || "",
-                                    context: buildOfferContext(activeOffer),
-                                    fallback: () => generateCoverIntro(activeOffer)
-                                  });
+                      <div className="mt-4">
+                        <div className="rounded-2xl border border-sand-200 bg-sand-50/60 p-4">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <Field label="Kunde">
+                              <input
+                                className={inputClass}
+                                value={activeOffer.customer}
+                                onChange={(event) =>
                                   updateOffer(activeOffer.id, (offer) => ({
                                     ...offer,
-                                    coverIntro: text
-                                  }));
-                                } finally {
-                                  setAiBusy(key, false);
+                                    customer: event.target.value
+                                  }))
                                 }
-                              }}
-                              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
-                            >
-                              {isAiBusy("cover-intro") ? (
-                                <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
-                              ) : (
-                                <Sparkles size={12} />
-                              )}{" "}
-                              Text
-                            </button>
+                                placeholder="Kunde eingeben"
+                                list="offer-customers"
+                              />
+                            </Field>
+                            <Field label="Status">
+                              <SelectField
+                                value={activeOffer.status}
+                                onChange={(event) =>
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    status: event.target.value
+                                  }))
+                                }
+                              >
+                                {statusOptions.map((status) => (
+                                  <option key={status} value={status}>
+                                    {status}
+                                  </option>
+                                ))}
+                              </SelectField>
+                            </Field>
                           </div>
-                          <textarea
-                            className={noteTextareaClass}
-                            value={activeOffer.coverIntro}
+                          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,220px)_140px]">
+                            <Field label="MwSt Modus">
+                              <SelectField
+                                value={activeOffer.vatMode || "standard"}
+                                onChange={(event) =>
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    vatMode: event.target.value
+                                  }))
+                                }
+                              >
+                                {VAT_MODE_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </SelectField>
+                            </Field>
+                            <Field label="MwSt Satz (%)">
+                              <input
+                                className={inputClass}
+                                type="number"
+                                value={activeOffer.vatRate ?? DEFAULT_VAT_RATE}
+                                onChange={(event) =>
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    vatRate: Number(event.target.value)
+                                  }))
+                                }
+                                disabled={activeOffer.vatMode !== "standard"}
+                              />
+                            </Field>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 space-y-3">
+                        <Field label="Anrede">
+                          <input
+                            className={inputClass}
+                            value={activeOffer.salutation || ""}
                             onChange={(event) =>
                               updateOffer(activeOffer.id, (offer) => ({
                                 ...offer,
-                                coverIntro: event.target.value
+                                salutation: event.target.value
                               }))
                             }
-                            placeholder="Einleitung für das Deckblatt"
+                            placeholder="Sehr geehrte Damen und Herren,"
                           />
-                        </div>
-                      </Field>
-                    </div>
-                  ) : null}
-                  <Field label="Übersicht">
-                    <div className="space-y-1.5">
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const key = "overview";
-                            if (isAiBusy(key)) return;
-                            setAiBusy(key, true);
-                            try {
-                              const text = await requestOfferAiText({
-                                mode: "overview",
-                                currentText: activeOffer.overviewText || "",
-                                context: buildOfferContext(activeOffer),
-                                fallback: () => generateOverviewText(activeOffer)
-                              });
+                        </Field>
+                        <Field label="Einleitung">
+                          <textarea
+                            className={noteTextareaClass}
+                            value={activeOffer.introText || ""}
+                            onChange={(event) =>
                               updateOffer(activeOffer.id, (offer) => ({
                                 ...offer,
-                                overviewText: text
-                              }));
-                            } finally {
-                              setAiBusy(key, false);
+                                introText: event.target.value
+                              }))
                             }
-                          }}
-                          className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
-                        >
-                          {isAiBusy("overview") ? (
-                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
-                          ) : (
-                            <Sparkles size={12} />
-                          )}{" "}
-                          Text
-                        </button>
+                            placeholder="Vielen Dank für Ihre Anfrage..."
+                          />
+                        </Field>
                       </div>
-                      <textarea
-                        className={noteTextareaClass}
-                        value={activeOffer.overviewText}
-                        onChange={(event) =>
-                          updateOffer(activeOffer.id, (offer) => ({
-                            ...offer,
-                            overviewText: event.target.value
-                          }))
-                        }
-                        placeholder="Kurzer Überblick zum Angebot"
-                      />
-                    </div>
-                  </Field>
-                  <Field label="Kalkulation (Zusatztext)">
-                    <div className="space-y-1.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className="min-w-[180px]">
-                            <SelectField
-                              value={calcPick}
-                              onChange={(event) => setCalcPick(event.target.value)}
-                              disabled={!calcBlocks.length}
-                            >
-                              {calcBlocks.map((block) => (
-                                <option key={block.id} value={block.id}>
-                                  {block.title || "Zusatztext"}
-                                </option>
-                              ))}
-                            </SelectField>
+                    </section>
+
+                    <aside
+                      className="space-y-4 xl:sticky xl:top-4 self-start"
+                      ref={previewSectionRef}
+                    >
+                      <section className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft">
+                        <div className="flex items-center justify-between mb-4">
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                              Live Vorschau
+                            </p>
+                            <h3 className="text-lg font-display text-sand-900">PDF Layout</h3>
                           </div>
-                          <button
-                            type="button"
-                            onClick={applyCalcBlock}
-                            disabled={!calcBlocks.length || !calcPick}
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-sand-200 bg-white text-sand-600 hover:bg-sand-100 disabled:opacity-40"
-                            title="Baustein einfügen"
-                          >
-                            <Plus size={12} />
-                          </button>
+                          {activeOffer ? (
+                            <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600">
+                              {activeOffer.status}
+                            </span>
+                          ) : null}
                         </div>
                         <button
                           type="button"
-                          onClick={async () => {
-                            const key = "calculation";
-                            if (isAiBusy(key)) return;
-                            setAiBusy(key, true);
-                            try {
-                              const text = await requestOfferAiText({
-                                mode: "calculation",
-                                currentText: activeOffer.calculationText || "",
-                                context: buildOfferContext(activeOffer),
-                                fallback: () => generateCalculationText(activeOffer)
-                              });
-                              updateOffer(activeOffer.id, (offer) => ({
-                                ...offer,
-                                calculationText: text
-                              }));
-                            } finally {
-                              setAiBusy(key, false);
-                            }
+                          onClick={() => {
+                            if (!activeOffer) return;
+                            setPreviewOfferId(activeOffer.id);
+                            setPreviewMode("offer");
                           }}
-                          className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                          className="w-full overflow-hidden text-left"
+                          title={activeOffer ? "Vorschau vergrößern" : ""}
                         >
-                          {isAiBusy("calculation") ? (
-                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
-                          ) : (
-                            <Sparkles size={12} />
-                          )}{" "}
-                          Text
+                          <div
+                            ref={previewWrapperRef}
+                            style={{ maxHeight: previewMaxHeight, height: previewMaxHeight }}
+                            className={`w-full overflow-auto ${activeOffer ? "cursor-zoom-in" : ""}`}
+                          >
+                            <OfferPreview offer={activeOffer} scale={previewScale} />
+                          </div>
                         </button>
-                      </div>
-                      <textarea
-                        className={noteTextareaClass}
-                        value={activeOffer.calculationText}
-                        onChange={(event) =>
-                          updateOffer(activeOffer.id, (offer) => ({
-                            ...offer,
-                            calculationText: event.target.value
-                          }))
-                        }
-                        placeholder="Hinweise zur Kalkulation"
-                      />
+                      </section>
+                    </aside>
+                  </div>
+                </section>
+
+                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-3 shadow-soft animate-fade-in">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                        Positionen
+                      </p>
+                      <h2 className="text-lg font-display text-sand-900">
+                        Positionen zusammenstellen
+                      </h2>
+                      <p className="text-sm text-sand-600">
+                        Leistung oder Material anlegen, Vorlagen nutzen.
+                      </p>
                     </div>
-                  </Field>
-                </div>
-              </section>
-
-              <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                      Positionen
-                    </p>
-                    <h2 className="text-lg font-display text-sand-900">
-                      Positionen zusammenstellen
-                    </h2>
-                    <p className="text-sm text-sand-600">
-                      Leistung oder Material anlegen, Vorlagen nutzen.
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                        {activeOffer.lineItems.length} Leistungspositionen
+                      </span>
+                      <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                        {activeOffer.deviceItems.length} Materialpositionen
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                      {activeOffer.lineItems.length} Leistungspositionen
-                    </span>
-                    <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                      {activeOffer.deviceItems.length} Materialpositionen
-                    </span>
-                  </div>
-                </div>
 
-                <div className="mt-4 space-y-3">
+                  <div className="mt-4 space-y-3">
                     <div className="grid gap-3 md:grid-cols-4">
                       <div className="bg-white border border-sand-200 rounded-2xl p-3 shadow-sm flex flex-col gap-2">
                         <div className="flex items-center gap-2 text-sand-700">
@@ -3322,22 +3516,25 @@ export default function OffersView() {
                           Leistung oder Material direkt anlegen.
                         </p>
                         <div className="flex flex-col gap-2">
-                          <SelectField
-                            value={positionType}
-                            onChange={(event) => setPositionType(event.target.value)}
-                          >
-                            {positionTypes.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </SelectField>
                           <button
                             type="button"
-                            onClick={addPosition}
+                            onClick={() => {
+                              setPositionType("Dienstleistung");
+                              addLineItem({ type: "Dienstleistung" });
+                            }}
                             className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
                           >
-                            <Plus size={12} /> Hinzufügen
+                            <Plus size={12} /> Leistung
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPositionType("Gerät");
+                              addDeviceItem();
+                            }}
+                            className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                          >
+                            <Plus size={12} /> Material
                           </button>
                         </div>
                       </div>
@@ -3426,764 +3623,347 @@ export default function OffersView() {
 
                     <div className="space-y-4">
                       <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                          Leistungspositionen
-                        </p>
-                        <span className="text-xs text-sand-500">
-                          {activeOffer.lineItems.length} Positionen
-                        </span>
-                      </div>
-                      {activeOffer.lineItems.length ? (
-                        activeOffer.lineItems.map((item) => {
-                          const detailKey = `line-details-${item.id}`;
-                          const detailsOpen = !!detailOpen[detailKey];
-                          const notes = normalizeInternalNotes(item);
-                          return (
-                            <div
-                              key={item.id}
-                              className="rounded-2xl border border-sand-200 bg-white p-3"
-                            >
-                              <div className="flex flex-wrap items-start justify-between gap-3">
-                                <div>
-                                  <p className="text-sm font-semibold text-sand-900">
-                                    {item.title || "Unbenannte Position"}
-                                  </p>
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-sand-500">
-                                  <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-1">
-                                    {formatMoney(item.price)} · {formatUnitQuantity(item.quantity, item.unit)} ·{" "}
-                                    {formatBillingCycleLabel(item.billingCycle)}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => saveLineItemAsBlock(item)}
-                                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                                    title="Als Baustein speichern"
-                                  >
-                                    <Save size={12} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeLineItem(activeOffer.id, item.id)}
-                                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                                    title="Position entfernen"
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="mt-3 space-y-3">
-                                  <div className="space-y-2">
-                                    <Field label="Titel">
-                                      <input
-                                        className={inputClass}
-                                        value={item.title}
-                                        onChange={(event) =>
-                                          updateLineItem(activeOffer.id, item.id, {
-                                            title: event.target.value
-                                          })
-                                        }
-                                        placeholder="Kurz & fakturierbar"
-                                      />
-                                    </Field>
-                                    <div className="grid gap-2 md:grid-cols-4">
-                                    <Field label="Preis (netto)">
-                                      <div className="relative">
-                                        <input
-                                          className={priceInputClass}
-                                          type="number"
-                                          value={item.price}
-                                          onChange={(event) =>
-                                            updateLineItem(activeOffer.id, item.id, {
-                                              price: parseNumberInput(event.target.value)
-                                            })
-                                          }
-                                        />
-                                        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sand-400">
-                                          €
-                                        </span>
-                                      </div>
-                                    </Field>
-                                    <Field label="Menge">
-                                      <input
-                                        className={quantityInputClass}
-                                        type="number"
-                                        value={item.quantity}
-                                        disabled={item.unit === "flat"}
-                                        onChange={(event) =>
-                                          updateLineItem(activeOffer.id, item.id, {
-                                              quantity: parseNumberInput(event.target.value)
-                                            })
-                                          }
-                                        />
-                                    </Field>
-                                    <Field label="Einheit">
-                                      <SelectField
-                                        value={item.unit || "hours"}
-                                        onChange={(event) =>
-                                          updateLineItem(activeOffer.id, item.id, {
-                                            unit: event.target.value
-                                          })
-                                        }
-                                      >
-                                        {unitOptions.map((unit) => (
-                                          <option key={unit.value} value={unit.value}>
-                                            {unit.label}
-                                          </option>
-                                        ))}
-                                      </SelectField>
-                                    </Field>
-                                    <Field label="Abrechnung">
-                                      <SelectField
-                                        value={item.billingCycle || "once"}
-                                        onChange={(event) =>
-                                          updateLineItem(activeOffer.id, item.id, {
-                                            billingCycle: event.target.value
-                                          })
-                                        }
-                                      >
-                                        {billingCycleOptions.map((option) => (
-                                          <option key={option.value} value={option.value}>
-                                            {option.label}
-                                          </option>
-                                        ))}
-                                      </SelectField>
-                                    </Field>
-                                    </div>
-                                  </div>
-                                  <div className="mt-3">
-                                    <div className="flex items-center justify-between">
-                                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                        Positionstext
-                                      </p>
-                                      <button
-                                        type="button"
-                                        onClick={async () => {
-                                          const key = `line-ai-${item.id}`;
-                                          if (isAiBusy(key)) return;
-                                          setAiBusy(key, true);
-                                          try {
-                                            const text = await requestOfferAiText({
-                                              mode: "position_text",
-                                              currentText: item.aiDraft || "",
-                                              context: buildLineItemContext(activeOffer, item),
-                                              fallback: () => generateAiText(item)
-                                            });
-                                            updateLineItem(activeOffer.id, item.id, {
-                                              aiDraft: text
-                                            });
-                                          } finally {
-                                            setAiBusy(key, false);
-                                          }
-                                        }}
-                                        className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                                      >
-                                        {isAiBusy(`line-ai-${item.id}`) ? (
-                                          <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
-                                        ) : (
-                                          <Sparkles size={12} />
-                                        )}{" "}
-                                        Text
-                                      </button>
-                                    </div>
-                                    <textarea
-                                      className={noteTextareaClass}
-                                      value={item.aiDraft || ""}
-                                      onChange={(event) =>
-                                        updateLineItem(activeOffer.id, item.id, {
-                                          aiDraft: event.target.value
-                                        })
-                                      }
-                                      placeholder="Optionaler Positionstext für die Vorschau"
-                                    />
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleDetail(detailKey)}
-                                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                                  >
-                                    {detailsOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                                    Details
-                                  </button>
-                                  {detailsOpen ? (
-                                    <>
-                                      <div className="mt-3 rounded-2xl border border-sand-200/70 bg-sand-50/70 p-3">
-                                        <div className="flex items-center justify-between">
-                                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                            Interne Vermerke
-                                          </p>
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              updateLineItemNotes(activeOffer.id, item.id, (prev) => [
-                                                ...prev,
-                                                { id: uid(), type: "", text: "" }
-                                              ])
-                                            }
-                                            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                                          >
-                                            <Plus size={12} /> Vermerk
-                                          </button>
-                                        </div>
-                                        <div className="mt-2 space-y-2">
-                                          {notes.length ? (
-                                            notes.map((note) => (
-                                              <div
-                                                key={note.id}
-                                                className="rounded-xl border border-sand-200 bg-white p-2"
-                                              >
-                                                <div className="flex items-center justify-between">
-                                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                                    Vermerk
-                                                  </p>
-                                                  <button
-                                                    type="button"
-                                                    onClick={() =>
-                                                      updateLineItemNotes(activeOffer.id, item.id, (prev) =>
-                                                        prev.filter((entry) => entry.id !== note.id)
-                                                      )
-                                                    }
-                                                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                                                    title="Vermerk entfernen"
-                                                  >
-                                                    <Trash2 size={12} />
-                                                  </button>
-                                                </div>
-                                                <div className="mt-2 grid gap-2 md:grid-cols-2">
-                                                  <Field label="Typ">
-                                                    <SelectField
-                                                      value={note.type || ""}
-                                                      onChange={(event) =>
-                                                        updateLineItemNotes(activeOffer.id, item.id, (prev) =>
-                                                          prev.map((entry) =>
-                                                            entry.id === note.id
-                                                              ? {
-                                                                  ...entry,
-                                                                  type: event.target.value
-                                                                }
-                                                              : entry
-                                                          )
-                                                        )
-                                                      }
-                                                    >
-                                                      {internalNoteOptions.map((option) => (
-                                                        <option key={option.value} value={option.value}>
-                                                          {option.label}
-                                                        </option>
-                                                      ))}
-                                                    </SelectField>
-                                                  </Field>
-                                                  <Field label="Vermerktext">
-                                                    {note.type === "bezugslink" ? (
-                                                      <div className="space-y-2">
-                                                        <input
-                                                          className={inputClass}
-                                                          value={note.text || ""}
-                                                          onChange={(event) =>
-                                                            updateLineItemNotes(activeOffer.id, item.id, (prev) =>
-                                                              prev.map((entry) =>
-                                                                entry.id === note.id
-                                                                  ? { ...entry, text: event.target.value }
-                                                                  : entry
-                                                              )
-                                                            )
-                                                          }
-                                                          placeholder="https://..."
-                                                        />
-                                                        <button
-                                                          type="button"
-                                                          onClick={() => importFromReferenceLink(item, note)}
-                                                          disabled={
-                                                            !note.text ||
-                                                            importingItemId === `${item.id}:${note.id}`
-                                                          }
-                                                          className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                                        >
-                                                          {importingItemId === `${item.id}:${note.id}` ? (
-                                                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
-                                                          ) : (
-                                                            <Sparkles size={12} />
-                                                          )}
-                                                          {importingItemId === `${item.id}:${note.id}`
-                                                            ? "Import..."
-                                                            : "Import"}
-                                                        </button>
-                                                      </div>
-                                                    ) : (
-                                                      <textarea
-                                                        className={noteTextareaClass}
-                                                        value={note.text || ""}
-                                                        onChange={(event) =>
-                                                          updateLineItemNotes(activeOffer.id, item.id, (prev) =>
-                                                            prev.map((entry) =>
-                                                              entry.id === note.id
-                                                                ? { ...entry, text: event.target.value }
-                                                                : entry
-                                                            )
-                                                          )
-                                                        }
-                                                        placeholder="Interner Vermerk"
-                                                      />
-                                                    )}
-                                                  </Field>
-                                                </div>
-                                              </div>
-                                            ))
-                                          ) : (
-                                            <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-2 text-xs text-sand-500">
-                                              Noch keine Vermerke.
-                                            </div>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </>
-                                  ) : null}
-                                </div>
-                              </div>
-                          );
-                        })
-                      ) : (
-                        <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-4 text-sm text-sand-500">
-                          Noch keine Leistungspositionen ausgewählt.
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                            Leistungspositionen
+                          </p>
+                          <span className="text-xs text-sand-500">
+                            {activeOffer.lineItems.length} Positionen
+                          </span>
                         </div>
-                      )}
-                    </div>
-
-                    <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                          Materialprofile
-                        </p>
-                        <span className="text-xs text-sand-500">
-                          {activeOffer.deviceItems.length} Positionen
-                        </span>
-                      </div>
-                      {activeOffer.deviceItems.length ? (
-                        activeOffer.deviceItems.map((item) => {
-                          const detailKey = `device-${item.id}`;
-                          const showDetails = !!detailOpen[detailKey];
-                          const notes = normalizeInternalNotes(item);
-                          return (
-                            <div
+                        <div className="grid gap-2">
+                          {(activeOffer.lineItems || []).map((item) => (
+                            <PositionCard
                               key={item.id}
-                              className="rounded-2xl border border-sand-200 bg-white p-3"
-                            >
-                              <div className="flex flex-wrap items-start justify-between gap-3">
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                    Materialprofil
-                                  </p>
-                                  <p className="text-sm font-semibold text-sand-900">
-                                    {getDeviceProduct(item)}
-                                  </p>
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-[0.2em] text-sand-500">
-                                    {formatLineTotal(item.price, item.quantity)} · {item.quantity}x ·{" "}
-                                    {formatBillingCycleLabel(item.billingCycle)}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => saveDeviceItemAsBlock(item)}
-                                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                                    title="Als Baustein speichern"
-                                  >
-                                    <Save size={12} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeDeviceItem(activeOffer.id, item.id)}
-                                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                                    title="Position entfernen"
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleDetail(detailKey)}
-                                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                                  >
-                                    {showDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                                    Bearbeiten
-                                  </button>
-                                </div>
-                              </div>
-
-                              {showDetails ? (
-                                <>
-                                  <div className="mt-3 grid gap-3 md:grid-cols-4">
-                                    <Field label="Produkt">
-                                      <input
-                                        className={inputClass}
-                                        value={item.product || getDeviceProduct(item)}
-                                        onChange={(event) =>
-                                          updateDeviceItem(activeOffer.id, item.id, {
-                                            product: event.target.value
-                                          })
-                                        }
-                                        placeholder="Produkt"
-                                      />
-                                    </Field>
-                                    <Field label="Preis (netto)">
-                                      <div className="relative">
-                                        <input
-                                          className={priceInputClass}
-                                          type="number"
-                                          value={item.price}
-                                          onChange={(event) =>
-                                            updateDeviceItem(activeOffer.id, item.id, {
-                                              price: parseNumberInput(event.target.value)
-                                            })
-                                          }
-                                        />
-                                        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sand-400">
-                                          €
-                                        </span>
-                                      </div>
-                                    </Field>
-                                    <Field label="Menge">
-                                    <input
-                                      className={quantityInputClass}
-                                      type="number"
-                                      value={item.quantity}
-                                      onChange={(event) =>
-                                        updateDeviceItem(activeOffer.id, item.id, {
-                                            quantity: parseNumberInput(event.target.value)
-                                          })
-                                        }
-                                      />
-                                    </Field>
-                                    <Field label="Abrechnung">
-                                      <SelectField
-                                        value={item.billingCycle || "once"}
-                                        onChange={(event) =>
-                                          updateDeviceItem(activeOffer.id, item.id, {
-                                            billingCycle: event.target.value
-                                          })
-                                        }
-                                      >
-                                        {billingCycleOptions.map((option) => (
-                                          <option key={option.value} value={option.value}>
-                                            {option.label}
-                                          </option>
-                                        ))}
-                                      </SelectField>
-                                    </Field>
-                                  </div>
-                                  <div className="mt-3">
-                                    <div className="flex items-center justify-between">
-                                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                        Produktbeschreibung
-                                      </p>
-                                      <button
-                                        type="button"
-                                        onClick={async () => {
-                                          const key = `device-ai-${item.id}`;
-                                          if (isAiBusy(key)) return;
-                                          setAiBusy(key, true);
-                                          try {
-                                            const text = await requestOfferAiText({
-                                              mode: "device_description",
-                                              currentText: item.description || "",
-                                              context: buildDeviceContext(activeOffer, item),
-                                              fallback: () => generateDeviceDescription(item)
-                                            });
-                                            updateDeviceItem(activeOffer.id, item.id, {
-                                              description: text
-                                            });
-                                          } finally {
-                                            setAiBusy(key, false);
-                                          }
-                                        }}
-                                        className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                                      >
-                                        {isAiBusy(`device-ai-${item.id}`) ? (
-                                          <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
-                                        ) : (
-                                          <Sparkles size={12} />
-                                        )}{" "}
-                                        Text
-                                      </button>
-                                    </div>
-                                    <textarea
-                                      className={noteTextareaClass}
-                                      value={item.description || ""}
-                                      onChange={(event) =>
-                                        updateDeviceItem(activeOffer.id, item.id, {
-                                          description: event.target.value
-                                        })
-                                      }
-                                      placeholder="Produktbeschreibung oder kurzer Freitext"
-                                    />
-                                  </div>
-                                  <div className="mt-3 rounded-2xl border border-sand-200/70 bg-sand-50/70 p-3">
-                                    <div className="flex items-center justify-between">
-                                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                        Interne Vermerke
-                                      </p>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          updateDeviceItemNotes(activeOffer.id, item.id, (prev) => [
-                                            ...prev,
-                                            { id: uid(), type: "", text: "" }
-                                          ])
-                                        }
-                                        className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                                      >
-                                        <Plus size={12} /> Vermerk
-                                      </button>
-                                    </div>
-                                    <div className="mt-2 space-y-2">
-                                      {notes.length ? (
-                                        notes.map((note) => (
-                                          <div
-                                            key={note.id}
-                                            className="rounded-xl border border-sand-200 bg-white p-2"
-                                          >
-                                            <div className="flex items-center justify-between">
-                                              <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                                Vermerk
-                                              </p>
-                                              <button
-                                                type="button"
-                                                onClick={() =>
-                                                  updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
-                                                    prev.filter((entry) => entry.id !== note.id)
-                                                  )
-                                                }
-                                                className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                                                title="Vermerk entfernen"
-                                              >
-                                                <Trash2 size={12} />
-                                              </button>
-                                            </div>
-                                            <div className="mt-2 grid gap-2 md:grid-cols-2">
-                                              <Field label="Typ">
-                                                <SelectField
-                                                  value={note.type || ""}
-                                                  onChange={(event) =>
-                                                    updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
-                                                      prev.map((entry) =>
-                                                        entry.id === note.id
-                                                          ? { ...entry, type: event.target.value }
-                                                          : entry
-                                                      )
-                                                    )
-                                                  }
-                                                >
-                                                  {internalNoteOptions.map((option) => (
-                                                    <option key={option.value} value={option.value}>
-                                                      {option.label}
-                                                    </option>
-                                                  ))}
-                                                </SelectField>
-                                              </Field>
-                                              <Field label="Vermerktext">
-                                                {note.type === "bezugslink" ? (
-                                                  <div className="space-y-2">
-                                                    <input
-                                                      className={inputClass}
-                                                      value={note.text || ""}
-                                                      onChange={(event) =>
-                                                        updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
-                                                          prev.map((entry) =>
-                                                            entry.id === note.id
-                                                              ? { ...entry, text: event.target.value }
-                                                              : entry
-                                                          )
-                                                        )
-                                                      }
-                                                      placeholder="https://..."
-                                                    />
-                                                    <button
-                                                      type="button"
-                                                      onClick={() => importDeviceFromReferenceLink(item, note)}
-                                                      disabled={
-                                                        !note.text ||
-                                                        importingItemId === `${item.id}:${note.id}`
-                                                      }
-                                                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                                    >
-                                                      {importingItemId === `${item.id}:${note.id}` ? (
-                                                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
-                                                      ) : (
-                                                        <Sparkles size={12} />
-                                                      )}
-                                                      {importingItemId === `${item.id}:${note.id}`
-                                                        ? "Import..."
-                                                        : "Import"}
-                                                    </button>
-                                                  </div>
-                                                ) : (
-                                                  <textarea
-                                                    className={noteTextareaClass}
-                                                    value={note.text || ""}
-                                                    onChange={(event) =>
-                                                      updateDeviceItemNotes(activeOffer.id, item.id, (prev) =>
-                                                        prev.map((entry) =>
-                                                          entry.id === note.id
-                                                            ? { ...entry, text: event.target.value }
-                                                            : entry
-                                                        )
-                                                      )
-                                                    }
-                                                    placeholder="Interner Vermerk"
-                                                  />
-                                                )}
-                                              </Field>
-                                            </div>
-                                          </div>
-                                        ))
-                                      ) : (
-                                        <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-2 text-xs text-sand-500">
-                                          Noch keine Vermerke.
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className="mt-3">
-                                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                                        Produktbilder
-                                      </p>
-                                      <div
-                                        className="mt-2 rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-3 text-xs text-sand-600"
-                                        onDragOver={(event) => event.preventDefault()}
-                                        onDrop={(event) => {
-                                          event.preventDefault();
-                                          const url = extractDropUrl(event);
-                                          addDeviceImage(activeOffer.id, item.id, url);
-                                        }}
-                                      >
-                                        Bild-URL einfügen oder per Drag & Drop aus dem Browser.
-                                      </div>
-                                      <div className="mt-2 flex items-center gap-2">
-                                        <input
-                                          className={inputClass}
-                                          value={imageDrafts[item.id] || ""}
-                                          onChange={(event) =>
-                                            setImageDrafts((prev) => ({
-                                              ...prev,
-                                              [item.id]: event.target.value
-                                            }))
-                                          }
-                                          onKeyDown={(event) => {
-                                            if (event.key !== "Enter") return;
-                                            event.preventDefault();
-                                            const url = imageDrafts[item.id];
-                                            addDeviceImage(activeOffer.id, item.id, url);
-                                            setImageDrafts((prev) => ({
-                                              ...prev,
-                                              [item.id]: ""
-                                            }));
-                                          }}
-                                          placeholder="https://bild.png"
-                                        />
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const url = imageDrafts[item.id];
-                                            addDeviceImage(activeOffer.id, item.id, url);
-                                            setImageDrafts((prev) => ({
-                                              ...prev,
-                                              [item.id]: ""
-                                            }));
-                                          }}
-                                          className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-                                        >
-                                          <Image size={12} /> Hinzufügen
-                                        </button>
-                                      </div>
-                                      <div className="mt-2 flex flex-wrap gap-2">
-                                        {(item.images || []).map((url) => (
-                                          <div
-                                            key={url}
-                                            className="relative w-24 rounded-xl border border-sand-200 bg-white p-2"
-                                          >
-                                            <img
-                                              src={url}
-                                              alt="Produkt"
-                                              className="h-16 w-full rounded-lg object-cover"
-                                            />
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                removeDeviceImage(activeOffer.id, item.id, url)
-                                              }
-                                              className="absolute -right-2 -top-2 rounded-full border border-sand-200 bg-white p-1 text-sand-500 shadow"
-                                              title="Entfernen"
-                                            >
-                                              <Trash2 size={12} />
-                                            </button>
-                                          </div>
-                                        ))}
-                                        {item.images?.length ? null : (
-                                          <div className="text-xs text-sand-500">
-                                            Noch keine Bilder hinzugefügt.
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                </>
-                              ) : null}
+                              item={item}
+                              kind="service"
+                              customers={customers}
+                              onUpdate={(patch) => updateLineItem(activeOffer.id, item.id, patch)}
+                              onRemove={() => removeLineItem(activeOffer.id, item.id)}
+                              onNoteChange={(updater) => updateLineItemNotes(activeOffer.id, item.id, updater)}
+                              onAiDraft={(text) =>
+                                updateLineItem(activeOffer.id, item.id, { aiDraft: text || "" })
+                              }
+                              onAddNote={(note) => addLineItemNote(activeOffer.id, item.id, note)}
+                              onDeleteNote={(noteId) => deleteLineItemNote(activeOffer.id, item.id, noteId)}
+                              onUpdateNote={(noteId, patch) =>
+                                updateLineItemNote(activeOffer.id, item.id, noteId, patch)
+                              }
+                              onVersionsChange={(versions) =>
+                                updateLineItem(activeOffer.id, item.id, { aiVersions: versions })
+                              }
+                              onActiveVersionChange={(versionId) =>
+                                updateLineItem(activeOffer.id, item.id, { activeAiVersionId: versionId })
+                              }
+                            />
+                          ))}
+                          {!activeOffer.lineItems.length ? (
+                            <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-3 text-xs text-sand-500">
+                              Keine Leistungspositionen.
                             </div>
-                          );
-                        })
-                      ) : (
-                        <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-4 text-sm text-sand-500">
-                          Keine Materialpositionen hinterlegt.
+                          ) : null}
                         </div>
-                      )}
+                      </div>
+
+                      <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                            Materialpositionen
+                          </p>
+                          <span className="text-xs text-sand-500">
+                            {activeOffer.deviceItems.length} Positionen
+                          </span>
+                        </div>
+                        <div className="grid gap-2">
+                          {(activeOffer.deviceItems || []).map((item) => (
+                            <DeviceCard
+                              key={item.id}
+                              item={item}
+                              onUpdate={(patch) => updateDeviceItem(activeOffer.id, item.id, patch)}
+                              onRemove={() => removeDeviceItem(activeOffer.id, item.id)}
+                              onAddImage={(image) => addDeviceImage(activeOffer.id, item.id, image)}
+                              onRemoveImage={(imageId) => removeDeviceImage(activeOffer.id, item.id, imageId)}
+                              onAddNote={(note) => addDeviceItemNote(activeOffer.id, item.id, note)}
+                              onDeleteNote={(noteId) => deleteDeviceItemNote(activeOffer.id, item.id, noteId)}
+                              onUpdateNote={(noteId, patch) =>
+                                updateDeviceItemNote(activeOffer.id, item.id, noteId, patch)
+                              }
+                            />
+                          ))}
+                          {!activeOffer.deviceItems.length ? (
+                            <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-3 text-sm text-sand-500">
+                              Keine Materialpositionen hinterlegt.
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </section>
+                </section>
 
-              <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                      Angebotsdetail
-                    </p>
-                    <h2 className="text-lg font-display text-sand-900">
-                      Ablauf & Erläuterung
-                    </h2>
-                    <p className="text-sm text-sand-600">
-                      Optionaler Text, z.B. Projektablauf oder Detailbeschreibung.
-                    </p>
+                <div className="space-y-3 xl:col-span-2">
+                  <section
+                    ref={documentBuildRef}
+                    className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft animate-fade-in"
+                  >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="space-y-1">
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                        Dokumentaufbau
+                      </p>
+                      <h2 className="text-base font-display text-sand-900">
+                        Deckblatt & Abschnitte
+                      </h2>
+                      <p className="text-xs text-sand-600">
+                        Struktur & optionale Bereiche.
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-sand-700">
+                      <input
+                        id="offer-cover-enabled"
+                        type="checkbox"
+                        checked={activeOffer.coverEnabled}
+                        onChange={(event) =>
+                          updateOffer(activeOffer.id, (offer) => ({
+                            ...offer,
+                            coverEnabled: event.target.checked
+                          }))
+                        }
+                        className="h-4 w-4"
+                      />
+                      Deckblatt aktivieren
+                    </label>
                   </div>
-                </div>
-                <textarea
-                  className="mt-3 w-full min-h-[160px] rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400"
-                  value={detailDraft}
-                  onChange={(event) => setDetailDraft(event.target.value)}
-                  placeholder="Projektablauf, Hintergrund, Vorgehen..."
+                  <div className="mt-2 space-y-2">
+                    {activeOffer.coverEnabled ? (
+                      <div className="space-y-2">
+                        <Field label="Deckblatt Titel">
+                          <input
+                            className={inputClass}
+                            value={activeOffer.coverHeadline}
+                            onChange={(event) =>
+                              updateOffer(activeOffer.id, (offer) => ({
+                                ...offer,
+                                coverHeadline: event.target.value
+                              }))
+                            }
+                            placeholder="z.B. Angebot IT-Modernisierung"
+                          />
+                        </Field>
+                        <Field label="Kurzintro">
+                          <div className="space-y-1">
+                            <div className="flex justify-end">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const key = "cover-intro";
+                                  if (isAiBusy(key)) return;
+                                  setAiBusy(key, true);
+                                  try {
+                                    const text = await requestOfferAiText({
+                                      mode: "cover_intro",
+                                      currentText: activeOffer.coverIntro || "",
+                                      context: buildOfferContext(activeOffer),
+                                      fallback: () => generateCoverIntro(activeOffer)
+                                    });
+                                    updateOffer(activeOffer.id, (offer) => ({
+                                      ...offer,
+                                      coverIntro: text
+                                    }));
+                                  } finally {
+                                    setAiBusy(key, false);
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                              >
+                                {isAiBusy("cover-intro") ? (
+                                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                                ) : (
+                                  <Sparkles size={12} />
+                                )}{" "}
+                                Text
+                              </button>
+                            </div>
+                            <textarea
+                              className={noteTextareaClass}
+                              value={activeOffer.coverIntro}
+                              onChange={(event) =>
+                                updateOffer(activeOffer.id, (offer) => ({
+                                  ...offer,
+                                  coverIntro: event.target.value
+                                }))
+                              }
+                              placeholder="Einleitung für das Deckblatt"
+                            />
+                          </div>
+                        </Field>
+                      </div>
+                    ) : null}
+                    <Field label="Übersicht">
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-sand-500">Kurzer Überblick zum Angebot</span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const key = "overview";
+                              if (isAiBusy(key)) return;
+                              setAiBusy(key, true);
+                              try {
+                                const text = await requestOfferAiText({
+                                  mode: "overview",
+                                  currentText: activeOffer.overviewText || "",
+                                  context: buildOfferContext(activeOffer),
+                                  fallback: () => generateOverviewText(activeOffer)
+                                });
+                                updateOffer(activeOffer.id, (offer) => ({
+                                  ...offer,
+                                  overviewText: text
+                                }));
+                              } finally {
+                                setAiBusy(key, false);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                          >
+                            {isAiBusy("overview") ? (
+                              <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                            ) : (
+                              <Sparkles size={12} />
+                            )}{" "}
+                            Text
+                          </button>
+                        </div>
+                        <textarea
+                          className={noteTextareaClass}
+                          value={activeOffer.overviewText}
+                          onChange={(event) =>
+                            updateOffer(activeOffer.id, (offer) => ({
+                              ...offer,
+                              overviewText: event.target.value
+                            }))
+                          }
+                          placeholder="Kurzer Überblick zum Angebot"
+                        />
+                      </div>
+                    </Field>
+                    <Field label="Kalkulation (Zusatztext)">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <div className="min-w-[170px]">
+                              <SelectField
+                                value={calcPick}
+                                onChange={(event) => setCalcPick(event.target.value)}
+                                disabled={!calcBlocks.length}
+                              >
+                                {calcBlocks.map((block) => (
+                                  <option key={block.id} value={block.id}>
+                                    {block.title || "Zusatztext"}
+                                  </option>
+                                ))}
+                              </SelectField>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={applyCalcBlock}
+                              disabled={!calcBlocks.length || !calcPick}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-sand-200 bg-white text-sand-600 hover:bg-sand-100 disabled:opacity-40"
+                              title="Baustein einfügen"
+                            >
+                              <Plus size={12} />
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const key = "calculation";
+                              if (isAiBusy(key)) return;
+                              setAiBusy(key, true);
+                              try {
+                                const text = await requestOfferAiText({
+                                  mode: "calculation",
+                                  currentText: activeOffer.calculationText || "",
+                                  context: buildOfferContext(activeOffer),
+                                  fallback: () => generateCalculationText(activeOffer)
+                                });
+                                updateOffer(activeOffer.id, (offer) => ({
+                                  ...offer,
+                                  calculationText: text
+                                }));
+                              } finally {
+                                setAiBusy(key, false);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                          >
+                            {isAiBusy("calculation") ? (
+                              <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                            ) : (
+                              <Sparkles size={12} />
+                            )}{" "}
+                            Text
+                          </button>
+                      </div>
+                      <textarea
+                        className={noteTextareaClass}
+                        value={activeOffer.calculationText}
+                        onChange={(event) =>
+                            updateOffer(activeOffer.id, (offer) => ({
+                              ...offer,
+                              calculationText: event.target.value
+                            }))
+                          }
+                          placeholder="Hinweise zur Kalkulation"
+                        />
+                      </div>
+                    </Field>
+                  </div>
+                </section>
+
+                  <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-3 shadow-soft animate-fade-in">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                          Angebotsdetail
+                        </p>
+                        <h2 className="text-lg font-display text-sand-900">
+                          Ablauf & Erläuterung
+                        </h2>
+                        <p className="text-sm text-sand-600">
+                          Optionaler Text, z.B. Projektablauf oder Detailbeschreibung.
+                        </p>
+                      </div>
+                    </div>
+                    <textarea
+                      className="mt-3 w-full min-h-[160px] rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400"
+                      value={detailDraft}
+                      onChange={(event) => setDetailDraft(event.target.value)}
+                      placeholder="Projektablauf, Hintergrund, Vorgehen..."
                 />
                 {!detailDraft ? (
                   <p className="mt-2 text-xs text-sand-500">
-                    Formatierter Text aus Word/anderen Tools kann hier eingefügt werden.
-                  </p>
-                ) : null}
-              </section>
+                        Formatierter Text aus Word/anderen Tools kann hier eingefügt werden.
+                      </p>
+                    ) : null}
+                  </section>
 
-              <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                      Beilagen
-                    </p>
-                    <p className="text-sm text-sand-600">
-                      Dokumente und Bilder zum Angebot.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <label className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100 cursor-pointer">
-                      <input
-                        type="file"
-                        className="hidden"
-                        multiple
+                  <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-3 shadow-soft animate-fade-in">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                          Beilagen
+                        </p>
+                        <p className="text-sm text-sand-600">
+                          Dokumente und Bilder zum Angebot.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                      <label className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100 cursor-pointer">
+                        <input
+                          type="file"
+                          className="hidden"
+                          multiple
                         accept=".pdf,.jpg,.jpeg,.png,.webp"
                         onChange={(event) => {
                           addAttachmentFiles(event.target.files);
@@ -4286,101 +4066,18 @@ export default function OffersView() {
                     </div>
                   )}
                 </div>
-              </section>
-
-
-              <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                      Übergabe
-                    </p>
-                    <h2 className="text-lg font-display text-sand-900">
-                      Übergabe & Abrechnung
-                    </h2>
-                    <p className="text-sm text-sand-600">
-                      Rechnungsentwürfe werden manuell aus akzeptierten Angeboten erstellt.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => openHandoverModal(activeOffer)}
-                    disabled={
-                      !activeOffer ||
-                      !isOfferAccepted(activeOffer) ||
-                      activeSevdeskState?.status === "sending"
-                    }
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:opacity-50"
-                  >
-                    Rechnungsentwurf in sevdesk erzeugen
-                  </button>
+                  </section>
                 </div>
-                <div className="mt-4 rounded-2xl border border-dashed border-sand-200 bg-sand-100 p-4 text-sm text-sand-500">
-                  {activeOffer ? (
-                    isOfferAccepted(activeOffer) ? (
-                      <span>Bereit fuer den Rechnungsentwurf.</span>
-                    ) : (
-                      <span>Akzeptiere das Angebot, um einen Rechnungsentwurf zu erstellen.</span>
-                    )
-                  ) : (
-                    <span>Kein Angebot ausgewählt.</span>
-                  )}
-                  {activeSevdeskState ? (
-                    <span className="ml-2">
-                      {activeSevdeskState.status === "sending" && "Erstelle Rechnungsentwurf..."}
-                      {activeSevdeskState.status === "sent" && activeSevdeskState.message}
-                      {activeSevdeskState.status === "error" && activeSevdeskState.message}
-                    </span>
-                  ) : null}
-                </div>
-              </section>
+              </div>
+              <UnitOptions />
             </>
           ) : (
-            <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft text-sm text-sand-500">
+            <section className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft text-sm text-sand-500">
               Kein Angebot ausgewählt.
             </section>
-          )}
-        </section>
-
-        <aside className="space-y-4 xl:max-w-sm xl:justify-self-end">
-          <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft animate-fade-in">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                  Live Vorschau
-                </p>
-                <h3 className="text-lg font-display text-sand-900">PDF Layout</h3>
-              </div>
-              {activeOffer ? (
-                <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600">
-                  {activeOffer.status}
-                </span>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                if (!activeOffer) return;
-                setPreviewOfferId(activeOffer.id);
-                setPreviewMode("offer");
-              }}
-              className="w-full overflow-hidden text-left"
-              title={activeOffer ? "Vorschau vergrößern" : ""}
-            >
-              <div
-                ref={previewWrapperRef}
-                className={`w-full max-h-[70vh] overflow-auto ${
-                  activeOffer ? "cursor-zoom-in" : ""
-                }`}
-              >
-                <OfferPreview offer={activeOffer} scale={previewScale} />
-              </div>
-            </button>
-          </section>
-        </aside>
-      </div>
-    ) : mainTab === "status" ? (
-      <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft animate-fade-in">
+          )
+        ) : mainTab === "status" ? (
+      <section className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft animate-fade-in">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
@@ -4398,8 +4095,8 @@ export default function OffersView() {
             Aktualisieren
           </button>
         </div>
-        <div className="mt-4 space-y-4">
-          <div className="rounded-2xl border border-sand-200 bg-sand-50 p-4">
+        <div className="mt-3 space-y-3">
+          <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
             <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
               Offen
             </p>
@@ -4501,7 +4198,7 @@ export default function OffersView() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-4">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-3">
             <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-600">
               Akzeptiert
             </p>
@@ -4606,7 +4303,7 @@ export default function OffersView() {
                                   sendConfirmationEmail(offer);
                                   setConfirmationMenuOfferId("");
                                 }}
-                                disabled={sendStatus === "sending"}
+                                disabled={sendStatus === "sending" || !offer.serverId}
                                 className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50 disabled:opacity-50"
                               >
                                 E-Mail senden
@@ -4651,17 +4348,23 @@ export default function OffersView() {
                           </div>
                         ) : null}
                         <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateOfferStatus(offer.id, "Entwurf")
-                            }
-                            className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-600 hover:bg-emerald-50"
-                          >
-                            Wieder öffnen
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateOfferStatus(offer.id, "Entwurf")
+                          }
+                          disabled={offer.handoverLocked}
+                          className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-600 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Wieder öffnen
+                        </button>
+                        {offer.handoverLocked ? (
+                          <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                            an Faktura übergeben
+                          </span>
+                        ) : null}
                       </div>
+                    </div>
                     ) : null}
                   </div>
                 ))
@@ -4673,7 +4376,7 @@ export default function OffersView() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-4">
+          <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-3">
             <p className="text-[10px] uppercase tracking-[0.3em] text-rose-500">
               Abgelehnt / Abgelaufen
             </p>
@@ -4770,7 +4473,7 @@ export default function OffersView() {
         </div>
       </section>
     ) : (
-      <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft animate-fade-in">
+      <section className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft animate-fade-in">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
@@ -5020,62 +4723,111 @@ export default function OffersView() {
                       </div>
                     </div>
                     {isOpen ? (
-                      <div className="mt-3 grid gap-2 md:grid-cols-2">
-                        <Field label="Produkt">
-                          <input
-                            className={inputClass}
-                            value={block.product ?? block.title ?? ""}
-                            onChange={(event) =>
-                              updateDeviceBlock(block.id, {
-                                product: event.target.value,
-                                title: event.target.value
-                              })
-                            }
-                            placeholder={getDeviceProduct(block) || "Produkt"}
-                          />
-                        </Field>
-                        <Field label="Preis (netto)">
-                          <div className="relative">
+                      <div className="mt-3 space-y-2">
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <Field label="Produkt">
                             <input
-                              className={priceInputClass}
-                              type="number"
-                              value={block.price ?? ""}
+                              className={inputClass}
+                              value={block.product ?? block.title ?? ""}
                               onChange={(event) =>
                                 updateDeviceBlock(block.id, {
-                                  price: parseNumberInput(event.target.value)
+                                  product: event.target.value,
+                                  title: event.target.value
                                 })
                               }
-                            />
-                            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sand-400">
-                              €
-                            </span>
-                          </div>
-                        </Field>
-                        <Field label="Menge">
-                          <input
-                            className={quantityInputClass}
-                            type="number"
-                            value={block.quantity ?? ""}
-                            onChange={(event) =>
-                              updateDeviceBlock(block.id, {
-                                quantity: parseNumberInput(event.target.value)
-                              })
-                            }
-                          />
-                        </Field>
-                        <div className="md:col-span-2">
-                          <Field label="Produktbeschreibung">
-                            <textarea
-                              className={noteTextareaClass}
-                              value={block.description || ""}
-                              onChange={(event) =>
-                                updateDeviceBlock(block.id, {
-                                  description: event.target.value
-                                })
-                              }
-                              placeholder="Kurzbeschreibung zum Material"
+                              placeholder={getDeviceProduct(block) || "Produkt"}
                             />
                           </Field>
+                          <Field label="Preis (netto)">
+                            <div className="relative">
+                              <input
+                                className={priceInputClass}
+                                type="number"
+                                value={block.price ?? ""}
+                                onChange={(event) =>
+                                  updateDeviceBlock(block.id, {
+                                    price: parseNumberInput(event.target.value)
+                                  })
+                                }
+                              />
+                              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-sand-400">
+                                €
+                              </span>
+                            </div>
+                          </Field>
+                          <Field label="Menge">
+                            <input
+                              className={quantityInputClass}
+                              type="number"
+                              value={block.quantity ?? ""}
+                              onChange={(event) =>
+                                updateDeviceBlock(block.id, {
+                                  quantity: parseNumberInput(event.target.value)
+                                })
+                              }
+                            />
+                          </Field>
+                          <Field label="Abrechnung">
+                            <SelectField
+                              value={block.billingCycle || "once"}
+                              onChange={(event) =>
+                                updateDeviceBlock(block.id, {
+                                  billingCycle: event.target.value
+                                })
+                              }
+                            >
+                              {billingCycleOptions.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </SelectField>
+                          </Field>
+                          <div className="md:col-span-2">
+                            <Field label="Produktbeschreibung">
+                              <textarea
+                                className={noteTextareaClass}
+                                value={block.description || ""}
+                                onChange={(event) =>
+                                  updateDeviceBlock(block.id, {
+                                    description: event.target.value
+                                  })
+                                }
+                                placeholder="Kurzbeschreibung zum Material"
+                              />
+                            </Field>
+                          </div>
+                          <div className="md:col-span-2">
+                            <Field label="Bilder (URLs, eine pro Zeile)">
+                              <textarea
+                                className={noteTextareaClass}
+                                value={(block.images || []).join("\n")}
+                                onChange={(event) =>
+                                  updateDeviceBlock(block.id, {
+                                    images: event.target.value
+                                      .split("\n")
+                                      .map((line) => line.trim())
+                                      .filter(Boolean)
+                                  })
+                                }
+                                placeholder="https://…"
+                              />
+                            </Field>
+                          </div>
+                          <div className="md:col-span-2">
+                            <Field label="Interner Vermerk">
+                              <textarea
+                                className={noteTextareaClass}
+                                value={block.internalNote || ""}
+                                onChange={(event) =>
+                                  updateDeviceBlock(block.id, {
+                                    internalNote: event.target.value
+                                  })
+                                }
+                                placeholder="Nur intern, wird nicht ausgegeben"
+                              />
+                            </Field>
+                          </div>
                         </div>
                       </div>
                     ) : null}

@@ -485,20 +485,26 @@ export default function DayPlanView() {
       const bucket = task.status === "done" ? "done" : "todo";
       map[bucket].push(task);
     });
-    const normalizeCustomer = (value) => String(value || "").trim().toLowerCase();
-    const sortByCustomer = (items) =>
+    const normalizeName = (value) => String(value || "").trim().toLowerCase();
+    const hasRecordedTime = (task) => Boolean(task?.elapsed && task.elapsed > 0);
+    const sortByName = (items) =>
       [...items].sort((a, b) => {
-        const aCustomer = normalizeCustomer(a.customer);
-        const bCustomer = normalizeCustomer(b.customer);
-        if (aCustomer && bCustomer && aCustomer !== bCustomer) {
-          return aCustomer.localeCompare(bCustomer, "de");
+        const aHasTime = hasRecordedTime(a);
+        const bHasTime = hasRecordedTime(b);
+        if (aHasTime !== bHasTime) {
+          return aHasTime ? -1 : 1;
         }
-        if (aCustomer && !bCustomer) return -1;
-        if (!aCustomer && bCustomer) return 1;
+        const aName = normalizeName(a.customer);
+        const bName = normalizeName(b.customer);
+        if (aName && bName && aName !== bName) {
+          return aName.localeCompare(bName, "de");
+        }
+        if (aName && !bName) return -1;
+        if (!aName && bName) return 1;
         return (b.created_at || 0) - (a.created_at || 0);
       });
-    map.todo = sortByCustomer(map.todo);
-    map.done = sortByCustomer(map.done);
+    map.todo = sortByName(map.todo);
+    map.done = sortByName(map.done);
     return map;
   }, [filteredTasks]);
 

@@ -143,6 +143,7 @@ export default function SettingsView() {
   const [sevdeskStatus, setSevdeskStatus] = useState("idle");
   const [sevdeskLoadStatus, setSevdeskLoadStatus] = useState("loading");
   const [sevdeskOpen, setSevdeskOpen] = useState(false);
+  const [sevdeskAdvancedOpen, setSevdeskAdvancedOpen] = useState(false);
   const [sevdeskHealth, setSevdeskHealth] = useState({
     connected: null,
     error: ""
@@ -1832,17 +1833,6 @@ export default function SettingsView() {
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs text-sand-500">Base URL</label>
-                  <input
-                    value={sevdesk.sevdesk_base_url}
-                    onChange={(event) =>
-                      setSevdesk((prev) => ({ ...prev, sevdesk_base_url: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="https://my.sevdesk.de/api/v1"
-                  />
-                </div>
-                <div>
                   <label className="text-xs text-sand-500">API Token</label>
                   <input
                     type="password"
@@ -1877,17 +1867,6 @@ export default function SettingsView() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-sand-500">Steuerart (taxType)</label>
-                  <input
-                    value={sevdesk.sevdesk_tax_type}
-                    onChange={(event) =>
-                      setSevdesk((prev) => ({ ...prev, sevdesk_tax_type: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="default"
-                  />
-                </div>
-                <div>
                   <label className="text-xs text-sand-500">Steuerregel ID (taxRule)</label>
                   <input
                     value={sevdesk.sevdesk_tax_rule_id}
@@ -1896,50 +1875,6 @@ export default function SettingsView() {
                     }
                     className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
                     placeholder="1"
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="text-xs text-sand-500">Steuertext</label>
-                  <input
-                    value={sevdesk.sevdesk_tax_text}
-                    onChange={(event) =>
-                      setSevdesk((prev) => ({ ...prev, sevdesk_tax_text: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="zzgl. Umsatzsteuer"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Waehrung</label>
-                  <input
-                    value={sevdesk.sevdesk_currency}
-                    onChange={(event) =>
-                      setSevdesk((prev) => ({ ...prev, sevdesk_currency: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="EUR"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Rechnungstyp</label>
-                  <input
-                    value={sevdesk.sevdesk_invoice_type}
-                    onChange={(event) =>
-                      setSevdesk((prev) => ({ ...prev, sevdesk_invoice_type: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="RE"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Default Steuer (Rate)</label>
-                  <input
-                    value={sevdesk.sevdesk_default_tax_rate}
-                    onChange={(event) =>
-                      setSevdesk((prev) => ({ ...prev, sevdesk_default_tax_rate: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="19"
                   />
                 </div>
                 <div>
@@ -1953,40 +1888,119 @@ export default function SettingsView() {
                     placeholder="Unity ID"
                   />
                 </div>
-                <div>
-                  <label className="text-xs text-sand-500">Unity ID (Service)</label>
-                  <input
-                    value={sevdesk.sevdesk_service_unity_id}
-                    onChange={(event) =>
-                      setSevdesk((prev) => ({ ...prev, sevdesk_service_unity_id: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="Unity ID"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Unity ID (Material)</label>
-                  <input
-                    value={sevdesk.sevdesk_device_unity_id}
-                    onChange={(event) =>
-                      setSevdesk((prev) => ({ ...prev, sevdesk_device_unity_id: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="Unity ID"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Stundensatz EUR</label>
-                  <input
-                    value={sevdesk.sevdesk_hourly_rate_eur}
-                    onChange={(event) =>
-                      setSevdesk((prev) => ({ ...prev, sevdesk_hourly_rate_eur: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="120"
-                  />
-                </div>
               </div>
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={() => setSevdeskAdvancedOpen((current) => !current)}
+                  className="text-xs uppercase tracking-[0.3em] text-sand-500"
+                >
+                  {sevdeskAdvancedOpen ? "Erweiterte Einstellungen ausblenden" : "Erweiterte Einstellungen anzeigen"}
+                </button>
+              </div>
+              {sevdeskAdvancedOpen ? (
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs text-sand-500">Base URL</label>
+                    <input
+                      value={sevdesk.sevdesk_base_url}
+                      onChange={(event) =>
+                        setSevdesk((prev) => ({ ...prev, sevdesk_base_url: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="https://my.sevdesk.de/api/v1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Steuerart (taxType)</label>
+                    <input
+                      value={sevdesk.sevdesk_tax_type}
+                      onChange={(event) =>
+                        setSevdesk((prev) => ({ ...prev, sevdesk_tax_type: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="default"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-xs text-sand-500">Steuertext</label>
+                    <input
+                      value={sevdesk.sevdesk_tax_text}
+                      onChange={(event) =>
+                        setSevdesk((prev) => ({ ...prev, sevdesk_tax_text: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="zzgl. Umsatzsteuer"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Waehrung</label>
+                    <input
+                      value={sevdesk.sevdesk_currency}
+                      onChange={(event) =>
+                        setSevdesk((prev) => ({ ...prev, sevdesk_currency: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="EUR"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Rechnungstyp</label>
+                    <input
+                      value={sevdesk.sevdesk_invoice_type}
+                      onChange={(event) =>
+                        setSevdesk((prev) => ({ ...prev, sevdesk_invoice_type: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="RE"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Default Steuer (Rate)</label>
+                    <input
+                      value={sevdesk.sevdesk_default_tax_rate}
+                      onChange={(event) =>
+                        setSevdesk((prev) => ({ ...prev, sevdesk_default_tax_rate: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="19"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Unity ID (Service)</label>
+                    <input
+                      value={sevdesk.sevdesk_service_unity_id}
+                      onChange={(event) =>
+                        setSevdesk((prev) => ({ ...prev, sevdesk_service_unity_id: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Unity ID"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Unity ID (Material)</label>
+                    <input
+                      value={sevdesk.sevdesk_device_unity_id}
+                      onChange={(event) =>
+                        setSevdesk((prev) => ({ ...prev, sevdesk_device_unity_id: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Unity ID"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Stundensatz EUR</label>
+                    <input
+                      value={sevdesk.sevdesk_hourly_rate_eur}
+                      onChange={(event) =>
+                        setSevdesk((prev) => ({ ...prev, sevdesk_hourly_rate_eur: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="120"
+                    />
+                  </div>
+                </div>
+              ) : null}
               <div className="mt-6 flex items-center gap-3">
                 <button
                   onClick={saveSevdeskSettings}

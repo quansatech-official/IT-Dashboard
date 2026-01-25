@@ -64,8 +64,8 @@ export const telephonyService = {
     } catch (error) {
       return {
         today: { total: 0, answered: 0, missed: 0, avgDuration: 0 },
-        last24h: { total: 0, answered: 0, missed: 0, avgDuration: 0 },
-        last7d: { total: 0, answered: 0, missed: 0, avgDuration: 0 }
+        last7d: { total: 0, answered: 0, missed: 0, avgDuration: 0 },
+        currentMonth: { total: 0, answered: 0, missed: 0, avgDuration: 0 }
       };
     }
   },

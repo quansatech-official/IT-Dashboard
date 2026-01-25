@@ -98,6 +98,9 @@ export default function CallListView({
   const [assignQuery, setAssignQuery] = useState("");
   const [assignStatus, setAssignStatus] = useState("");
   const [assignBusy, setAssignBusy] = useState(false);
+  const [pbxEditTarget, setPbxEditTarget] = useState(null);
+  const [pbxEditName, setPbxEditName] = useState("");
+  const [pbxEditError, setPbxEditError] = useState("");
   const [toast, setToast] = useState("");
 
   useEffect(() => {
@@ -204,6 +207,12 @@ export default function CallListView({
   }, [assignTarget]);
 
   useEffect(() => {
+    if (!pbxEditTarget) return;
+    setPbxEditName(pbxEditTarget?.name || "");
+    setPbxEditError("");
+  }, [pbxEditTarget]);
+
+  useEffect(() => {
     if (page > visibleTotalPages) setPage(1);
   }, [page, visibleTotalPages]);
 
@@ -256,6 +265,33 @@ export default function CallListView({
     return key ? pbxMatches.get(key) : null;
   };
 
+  const outboundByNumber = useMemo(() => {
+    const map = new Map();
+    calls.forEach((call) => {
+      const direction = call.direction?.toLowerCase() || "";
+      if (!direction.includes("out")) return;
+      const number = normalizeDigits(call.to || call.from || "");
+      if (!number) return;
+      const ts = call.startTime || 0;
+      const current = map.get(number) || 0;
+      if (ts > current) {
+        map.set(number, ts);
+      }
+    });
+    return map;
+  }, [calls]);
+
+  const isUnreturned = (call) => {
+    if (call.answered) return false;
+    const direction = call.direction?.toLowerCase() || "";
+    if (direction.includes("out")) return false;
+    const number = normalizeDigits(call.from || call.to || "");
+    if (!number) return false;
+    const lastOut = outboundByNumber.get(number) || 0;
+    const ts = call.startTime || 0;
+    return !lastOut || lastOut < ts;
+  };
+
   const customerNameForCall = (call) => {
     const key = resolveKey(call);
     return key ? customerMatches.get(key) : "";
@@ -295,6 +331,32 @@ export default function CallListView({
       setToast("Telefonbuch uebernommen.");
     } catch (error) {
       setToast("Telefonbuch-Uebernahme fehlgeschlagen.");
+      setPbxEditTarget({
+        name: payload?.name || "",
+        number: payload?.number || ""
+      });
+    }
+  };
+
+  const handlePbxManualSave = async () => {
+    if (!onAddToPbx || !pbxEditTarget?.number) return;
+    const trimmed = pbxEditName.trim();
+    if (!trimmed) {
+      setPbxEditError("Name fehlt.");
+      return;
+    }
+    setPbxEditError("");
+    try {
+      await Promise.resolve(
+        onAddToPbx({
+          name: trimmed,
+          number: pbxEditTarget.number
+        })
+      );
+      setToast("Telefonbuch uebernommen.");
+      setPbxEditTarget(null);
+    } catch (error) {
+      setPbxEditError("Speichern fehlgeschlagen. Bitte Namen kuerzen.");
     }
   };
 
@@ -350,11 +412,27 @@ export default function CallListView({
                 </td>
               </tr>
             ) : (
-              pagedCalls.map((call) => (
-                <tr key={call.uuid} className="border-b border-sand-100">
+              pagedCalls.map((call) => {
+                const unreturned = isUnreturned(call);
+                return (
+                <tr
+                  key={call.uuid}
+                  className={`border-b border-sand-100 ${unreturned ? "bg-amber-50/70" : ""}`}
+                >
                   <td className="py-3">{formatDate(call.startTime)}</td>
                   <td className="py-3">{formatTime(call.startTime)}</td>
-                  <td className="py-3">{displayNumber(call)}</td>
+                  <td className="py-3">
+                    <div className="flex items-center gap-2">
+                      <span className={unreturned ? "font-semibold text-amber-800" : ""}>
+                        {displayNumber(call)}
+                      </span>
+                      {unreturned ? (
+                        <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+                          Rueckruf offen
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
                   <td className="py-3">{call.extension || "-"}</td>
                   <td className="py-3">
                     {(() => {
@@ -440,7 +518,8 @@ export default function CallListView({
                     </div>
                   </td>
                 </tr>
-              ))
+              );
+              })
             )}
           </tbody>
         </table>
@@ -634,6 +713,57 @@ export default function CallListView({
                   className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
                 >
                   Schließen
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {pbxEditTarget ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-md rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="border-b border-sand-200 px-5 py-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                Anlagentelefonbuch
+              </p>
+              <h3 className="text-lg font-display text-sand-900">Name kuerzen</h3>
+            </div>
+            <div className="p-5 space-y-4">
+              <label className="text-xs uppercase tracking-wide text-sand-600">
+                Rufnummer
+                <input
+                  value={pbxEditTarget.number}
+                  readOnly
+                  className="mt-2 w-full rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="text-xs uppercase tracking-wide text-sand-600">
+                Name (bitte kuerzen)
+                <input
+                  value={pbxEditName}
+                  onChange={(event) => setPbxEditName(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                />
+              </label>
+              {pbxEditError ? (
+                <p className="text-xs text-rose-600">{pbxEditError}</p>
+              ) : (
+                <p className="text-xs text-sand-500">
+                  NFON hat ein Namenslimit. Bitte kuerzen und erneut speichern.
+                </p>
+              )}
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => setPbxEditTarget(null)}
+                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  onClick={handlePbxManualSave}
+                  className="rounded-full bg-sand-900 px-4 py-1 text-xs uppercase tracking-wide text-white hover:opacity-90"
+                >
+                  Speichern
                 </button>
               </div>
             </div>

@@ -34,8 +34,8 @@ const durationSeconds = (call) => {
 export default function CallStatsView({ stats, calls = [], customers = [], pbxEntries = [] }) {
   const periods = [
     { key: "today", label: "Heute" },
-    { key: "last24h", label: "24 Stunden" },
-    { key: "last7d", label: "Letzte 7 Tage" }
+    { key: "last7d", label: "Letzte 7 Tage" },
+    { key: "currentMonth", label: "Aktueller Monat" }
   ];
 
   const safeStats = stats || {};
