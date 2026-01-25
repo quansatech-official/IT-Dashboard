@@ -15,7 +15,6 @@ class Settings:
     also_sftp_port = int(_get_env("ALSO_SFTP_PORT", "22"))
     also_sftp_user = _get_env("ALSO_SFTP_USER", "")
     also_sftp_password = _get_env("ALSO_SFTP_PASSWORD", "")
-    also_sftp_key_path = _get_env("ALSO_SFTP_KEY_PATH", "")
     also_sftp_dir = _get_env("ALSO_SFTP_DIR", "")
     also_feed_db_path = _get_env("ALSO_FEED_DB_PATH", "/data/also_feed.db")
     also_config_path = _get_env("ALSO_CONFIG_PATH", "/data/also_config.json")

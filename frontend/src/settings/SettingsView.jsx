@@ -55,7 +55,6 @@ const defaultMarketplace = {
   also_sftp_port: "22",
   also_sftp_user: "",
   also_sftp_password: "",
-  also_sftp_key_path: "",
   also_sftp_dir: "",
   has_also_sftp_password: false
 };
@@ -318,7 +317,6 @@ export default function SettingsView() {
           also_sftp_host: data?.also_sftp_host || "",
           also_sftp_port: data?.also_sftp_port || defaultMarketplace.also_sftp_port,
           also_sftp_user: data?.also_sftp_user || "",
-          also_sftp_key_path: data?.also_sftp_key_path || "",
           also_sftp_dir: data?.also_sftp_dir || "",
           also_sftp_password: "",
           has_also_sftp_password: Boolean(data?.has_also_sftp_password)
@@ -766,7 +764,6 @@ export default function SettingsView() {
           also_sftp_port: marketplace.also_sftp_port,
           also_sftp_user: marketplace.also_sftp_user,
           also_sftp_password: marketplace.also_sftp_password,
-          also_sftp_key_path: marketplace.also_sftp_key_path,
           also_sftp_dir: marketplace.also_sftp_dir
         })
       });
@@ -783,7 +780,6 @@ export default function SettingsView() {
         also_sftp_host: data?.also_sftp_host || "",
         also_sftp_port: data?.also_sftp_port || defaultMarketplace.also_sftp_port,
         also_sftp_user: data?.also_sftp_user || "",
-        also_sftp_key_path: data?.also_sftp_key_path || "",
         also_sftp_dir: data?.also_sftp_dir || "",
         also_sftp_password: "",
         has_also_sftp_password: Boolean(data?.has_also_sftp_password)
@@ -884,7 +880,21 @@ export default function SettingsView() {
     }));
     try {
       const res = await fetch(`${API}/marketplace/also/status`);
-      if (!res.ok) throw new Error("status_failed");
+      if (!res.ok) {
+        const text = await res.text();
+        let message = text || `Status fehlgeschlagen (${res.status})`;
+        try {
+          const parsed = text ? JSON.parse(text) : null;
+          if (parsed?.detail) {
+            message = String(parsed.detail);
+          } else if (parsed) {
+            message = JSON.stringify(parsed);
+          }
+        } catch (error) {
+          // keep raw text
+        }
+        throw new Error(message);
+      }
       const data = await res.json();
       setAlsoStatus({
         status: "ready",
@@ -2256,20 +2266,6 @@ export default function SettingsView() {
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-sand-500">Key Path (optional)</label>
-                    <input
-                      value={marketplace.also_sftp_key_path}
-                      onChange={(event) =>
-                        setMarketplace((prev) => ({
-                          ...prev,
-                          also_sftp_key_path: event.target.value
-                        }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                      placeholder="/run/secrets/also_sftp.key"
-                    />
-                  </div>
-                  <div>
                     <label className="text-xs text-sand-500">Verzeichnis</label>
                     <input
                       value={marketplace.also_sftp_dir}
@@ -2374,7 +2370,7 @@ export default function SettingsView() {
                   </span>
                 </div>
                 <div className="mt-3 space-y-2">
-                  {["td_synnex", "also", "amazon"].map((source) => {
+                  {["td_synnex", "also"].map((source) => {
                     const info = marketplaceDebugInfo.sources.find(
                       (entry) => entry?.source === source
                     );

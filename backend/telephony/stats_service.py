@@ -14,6 +14,12 @@ def _start_of_day_ms() -> int:
     return int(start.timestamp() * 1000)
 
 
+def _start_of_month_ms() -> int:
+    now = datetime.now()
+    start = datetime(now.year, now.month, 1)
+    return int(start.timestamp() * 1000)
+
+
 def _since_ms(delta: timedelta) -> int:
     now = datetime.now()
     return int((now - delta).timestamp() * 1000)
@@ -131,11 +137,17 @@ def calculate_stats(session: Session) -> Dict:
         .filter(TelephonyCall.start_time >= _since_ms(timedelta(days=7)))
         .all()
     )
+    current_month_calls = (
+        session.query(TelephonyCall)
+        .filter(TelephonyCall.start_time >= _start_of_month_ms())
+        .all()
+    )
 
     return {
         "today": _stats_for_calls(today_calls),
         "last24h": _stats_for_calls(last_24h_calls),
         "last7d": _stats_for_calls(last_7d_calls),
+        "currentMonth": _stats_for_calls(current_month_calls),
         "byExtension": _grouped_stats(last_7d_calls, _extract_extension),
     }
 

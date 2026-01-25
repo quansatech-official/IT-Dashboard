@@ -1826,6 +1826,11 @@ export default function OffersView() {
   const [importResults, setImportResults] = useState([]);
   const [importStatus, setImportStatus] = useState("idle");
   const [importError, setImportError] = useState("");
+  const [importSourcesStatus, setImportSourcesStatus] = useState({
+    status: "idle",
+    lastCheckAt: "",
+    error: ""
+  });
 
   const activeOffer = offers.find((offer) => offer.id === activeId) || null;
   const previewOffer = offers.find((offer) => offer.id === previewOfferId) || null;
@@ -1949,6 +1954,11 @@ export default function OffersView() {
     let active = true;
     setImportStatus("loading");
     setImportError("");
+    setImportSourcesStatus({
+      status: "loading",
+      lastCheckAt: new Date().toISOString(),
+      error: ""
+    });
     fetch("/api/marketplace/sources")
       .then((res) => (res && res.ok ? res.json() : []))
       .then((data) => {
@@ -1956,11 +1966,21 @@ export default function OffersView() {
         const sources = Array.isArray(data) ? data : [];
         setImportSources(sources);
         setImportSource((prev) => prev || "all");
+        setImportSourcesStatus({
+          status: "ready",
+          lastCheckAt: new Date().toISOString(),
+          error: ""
+        });
         setImportStatus("idle");
       })
       .catch((error) => {
         if (!active) return;
         setImportError(error?.message || "Import-Service nicht erreichbar.");
+        setImportSourcesStatus({
+          status: "error",
+          lastCheckAt: new Date().toISOString(),
+          error: error?.message || "Import-Service nicht erreichbar."
+        });
         setImportStatus("error");
       });
     return () => {
@@ -4985,6 +5005,55 @@ export default function OffersView() {
             >
               <X size={14} />
             </button>
+          </div>
+
+          <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-600">
+            <div className="flex items-center justify-between">
+              <span className="uppercase tracking-[0.2em] text-sand-500">
+                Schnittstellenstatus
+              </span>
+              <span className="text-[10px] text-sand-400">
+                {importSourcesStatus.lastCheckAt
+                  ? `Stand: ${new Date(importSourcesStatus.lastCheckAt).toLocaleString("de-DE")}`
+                  : "Stand: n/a"}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span
+                className={`rounded-full border px-3 py-1 uppercase tracking-[0.2em] ${
+                  importSourcesStatus.status === "ready" && !importSourcesStatus.error
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : importSourcesStatus.status === "loading"
+                    ? "border-sand-200 bg-white text-sand-500"
+                    : "border-rose-200 bg-rose-50 text-rose-700"
+                }`}
+              >
+                {importSourcesStatus.status === "loading"
+                  ? "Service prüft…"
+                  : importSourcesStatus.status === "ready" && !importSourcesStatus.error
+                  ? "Service OK"
+                  : "Service offline"}
+              </span>
+              {importSources.length ? (
+                importSources.map((source) => (
+                  <span
+                    key={`${source.source}-status`}
+                    className={`rounded-full border px-3 py-1 uppercase tracking-[0.2em] ${
+                      source.available
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        : "border-sand-200 bg-white text-sand-500"
+                    }`}
+                  >
+                    {source.source}
+                  </span>
+                ))
+              ) : (
+                <span className="text-sand-500">Keine Quellen gefunden.</span>
+              )}
+            </div>
+            {importSourcesStatus.error ? (
+              <div className="mt-2 text-rose-600">{importSourcesStatus.error}</div>
+            ) : null}
           </div>
 
           <div className="grid gap-3 md:grid-cols-[0.6fr_1fr_auto] items-end">

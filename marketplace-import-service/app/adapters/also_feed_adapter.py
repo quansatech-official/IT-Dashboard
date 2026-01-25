@@ -36,15 +36,10 @@ class AlsoFeedAdapter:
         port = int(override.get("port") or settings.also_sftp_port)
         user = override.get("user") or settings.also_sftp_user
         password = override.get("password") or settings.also_sftp_password
-        key_path = override.get("key_path") or settings.also_sftp_key_path
         if not host or not user:
             raise ValueError("ALSO SFTP credentials missing")
         transport = paramiko.Transport((host, port))
-        if key_path:
-            key = paramiko.RSAKey.from_private_key_file(key_path)
-            transport.connect(username=user, pkey=key)
-        else:
-            transport.connect(username=user, password=password)
+        transport.connect(username=user, password=password)
         return paramiko.SFTPClient.from_transport(transport)
 
     def fetch_latest_price_file(self, sftp: paramiko.SFTPClient) -> Tuple[str, bytes]:

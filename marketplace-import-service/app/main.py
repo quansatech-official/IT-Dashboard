@@ -28,7 +28,6 @@ class AlsoConfigRequest(BaseModel):
     port: Optional[int] = None
     user: Optional[str] = None
     password: Optional[str] = None
-    key_path: Optional[str] = None
     dir: Optional[str] = None
 
 
@@ -150,7 +149,6 @@ async def update_also_config(request: AlsoConfigRequest) -> Dict[str, Any]:
         "port": request.port,
         "user": request.user,
         "password": request.password,
-        "key_path": request.key_path,
         "dir": request.dir,
     }
     persist_also_config(payload)
@@ -163,7 +161,6 @@ async def get_also_config() -> Dict[str, Any]:
     host = override.get("host") or settings.also_sftp_host
     port = int(override.get("port") or settings.also_sftp_port)
     user = override.get("user") or settings.also_sftp_user
-    key_path = override.get("key_path") or settings.also_sftp_key_path
     directory = override.get("dir") or settings.also_sftp_dir or "."
     return {
         "override_present": bool(override),
@@ -172,7 +169,6 @@ async def get_also_config() -> Dict[str, Any]:
             "port": override.get("port"),
             "user": override.get("user"),
             "has_password": bool(override.get("password")),
-            "key_path": override.get("key_path"),
             "dir": override.get("dir"),
         },
         "effective": {
@@ -180,7 +176,6 @@ async def get_also_config() -> Dict[str, Any]:
             "port": port,
             "user": user,
             "has_password": bool(settings.also_sftp_password),
-            "key_path": key_path,
             "dir": directory,
         },
     }

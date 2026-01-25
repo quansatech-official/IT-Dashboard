@@ -253,7 +253,6 @@ class IntegrationSettings(Base):
     also_sftp_port = Column(String, default="")
     also_sftp_user = Column(String, default="")
     also_sftp_password = Column(String, default="")
-    also_sftp_key_path = Column(String, default="")
     also_sftp_dir = Column(String, default="")
     sevdesk_base_url = Column(String, default="")
     sevdesk_api_token = Column(String, default="")
@@ -373,8 +372,6 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_user VARCHAR DEFAULT ''")
     if "also_sftp_password" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_password VARCHAR DEFAULT ''")
-    if "also_sftp_key_path" not in columns:
-        statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_key_path VARCHAR DEFAULT ''")
     if "also_sftp_dir" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_dir VARCHAR DEFAULT ''")
     if "sevdesk_base_url" not in columns:
@@ -858,7 +855,6 @@ class IntegrationSettingsUpdate(BaseModel):
     also_sftp_port: Optional[str] = None
     also_sftp_user: Optional[str] = None
     also_sftp_password: Optional[str] = None
-    also_sftp_key_path: Optional[str] = None
     also_sftp_dir: Optional[str] = None
     sevdesk_base_url: Optional[str] = None
     sevdesk_api_token: Optional[str] = None
@@ -1419,7 +1415,6 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "also_sftp_host": settings.also_sftp_host,
         "also_sftp_port": settings.also_sftp_port,
         "also_sftp_user": settings.also_sftp_user,
-        "also_sftp_key_path": settings.also_sftp_key_path,
         "also_sftp_dir": settings.also_sftp_dir,
         "has_also_sftp_password": bool(settings.also_sftp_password),
         "sevdesk_base_url": settings.sevdesk_base_url,
@@ -2747,7 +2742,6 @@ def marketplace_sync_also():
             "port": settings.also_sftp_port,
             "user": settings.also_sftp_user,
             "password": settings.also_sftp_password,
-            "key_path": settings.also_sftp_key_path,
             "dir": settings.also_sftp_dir,
         }
     try:
