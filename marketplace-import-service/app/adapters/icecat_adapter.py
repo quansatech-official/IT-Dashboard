@@ -30,6 +30,38 @@ class IcecatAdapter:
         settings = await self.load_settings()
         return bool(settings.enabled and settings.api_token)
 
+    async def test_connection(self) -> Dict[str, Any]:
+        settings = await self.load_settings()
+        result = {
+            "enabled": bool(settings.enabled),
+            "has_token": bool(settings.api_token),
+            "ok": False,
+            "status_code": None,
+            "error": "",
+        }
+        if not settings.enabled or not settings.api_token:
+            result["error"] = "missing_token"
+            return result
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {settings.api_token}",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                response = await client.get(ICECAT_BASE_URL, params={"ean": "0000000000000"}, headers=headers)
+            result["status_code"] = response.status_code
+            if response.status_code in (401, 403):
+                result["error"] = "unauthorized"
+                return result
+            # 404 is acceptable for a non-existing EAN
+            result["ok"] = response.status_code in (200, 204, 404)
+            if not result["ok"]:
+                result["error"] = f"status_{response.status_code}"
+            return result
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = str(exc)
+            return result
+
     def _cache_get(self, key: str) -> Optional[AlternativeProductContent]:
         entry = self._cache.get(key)
         if not entry:

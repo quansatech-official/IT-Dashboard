@@ -127,6 +127,11 @@ async def get_icecat_alternative(
         return None
 
 
+@app.get("/import/icecat/status")
+async def icecat_status() -> Dict[str, Any]:
+    return await icecat_adapter.test_connection()
+
+
 @app.post("/import/also/run")
 async def run_also_import() -> Dict[str, Any]:
     result = also_feed_adapter.run_import()

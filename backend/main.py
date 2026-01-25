@@ -2506,6 +2506,18 @@ def get_icecat_settings():
         }
 
 
+@app.get("/api/integrations/icecat/status")
+def get_icecat_status():
+    with SessionLocal() as db:
+        base_url = _get_marketplace_import_url(db)
+    try:
+        response = requests.get(f"{base_url}/import/icecat/status", timeout=20)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import error: {exc}") from exc
+    return response.json()
+
+
 @app.get("/api/sevdesk/health")
 def sevdesk_health():
     with SessionLocal() as db:

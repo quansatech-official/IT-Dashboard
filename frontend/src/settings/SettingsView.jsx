@@ -137,6 +137,17 @@ export default function SettingsView() {
   const [icecat, setIcecat] = useState(defaultIcecat);
   const [icecatStatus, setIcecatStatus] = useState("idle");
   const [icecatLoadStatus, setIcecatLoadStatus] = useState("loading");
+  const [icecatHealth, setIcecatHealth] = useState({
+    status: "idle",
+    ok: null,
+    error: ""
+  });
+  const [icecatProductTest, setIcecatProductTest] = useState({
+    query: "",
+    status: "idle",
+    title: "",
+    error: ""
+  });
   const [sevdesk, setSevdesk] = useState(defaultSevdesk);
   const [sevdeskStatus, setSevdeskStatus] = useState("idle");
   const [sevdeskLoadStatus, setSevdeskLoadStatus] = useState("loading");
@@ -822,6 +833,76 @@ export default function SettingsView() {
       setIcecatStatus("error");
     }
     setTimeout(() => setIcecatStatus("idle"), 2000);
+  };
+
+  const refreshIcecatHealth = async () => {
+    setIcecatHealth({ status: "loading", ok: null, error: "" });
+    try {
+      const res = await fetch(`${API}/integrations/icecat/status`);
+      if (!res.ok) throw new Error("status_failed");
+      const data = await res.json();
+      setIcecatHealth({
+        status: "ready",
+        ok: Boolean(data?.ok),
+        error: data?.error || ""
+      });
+    } catch (error) {
+      setIcecatHealth({
+        status: "error",
+        ok: false,
+        error: error?.message ? String(error.message) : "Status fehlgeschlagen."
+      });
+    }
+  };
+
+  const runIcecatProductTest = async () => {
+    const query = icecatProductTest.query.trim();
+    if (!query) return;
+    setIcecatProductTest((prev) => ({
+      ...prev,
+      status: "loading",
+      title: "",
+      error: ""
+    }));
+    try {
+      const isEan = /^\d{8,14}$/.test(query);
+      const params = new URLSearchParams();
+      if (isEan) {
+        params.set("ean", query);
+      } else if (query.includes(":")) {
+        const [brand, ...rest] = query.split(":");
+        const mpn = rest.join(":").trim();
+        if (brand.trim() && mpn) {
+          params.set("brand", brand.trim());
+          params.set("mpn", mpn);
+        }
+      } else {
+        const parts = query.split(/\s+/).filter(Boolean);
+        if (parts.length >= 2) {
+          params.set("brand", parts[0]);
+          params.set("mpn", parts.slice(1).join(" "));
+        }
+      }
+      if (!params.toString()) {
+        throw new Error("Bitte EAN oder Brand+MPN angeben.");
+      }
+      const res = await fetch(`${API}/marketplace/alternative/icecat?${params.toString()}`);
+      if (!res.ok) throw new Error("Test fehlgeschlagen.");
+      const data = await res.json();
+      setIcecatProductTest((prev) => ({
+        ...prev,
+        status: "ready",
+        title: data?.title || "",
+        error: data ? "" : "Kein Treffer"
+      }));
+    } catch (error) {
+      setIcecatProductTest((prev) => ({
+        ...prev,
+        status: "error",
+        title: "",
+        error: error?.message ? String(error.message) : "Test fehlgeschlagen."
+      }));
+    }
   };
 
   const refreshMarketplaceDebug = async () => {
@@ -2130,6 +2211,23 @@ export default function SettingsView() {
                     />
                     Icecat aktiv
                   </label>
+                  <div>
+                    <label className="text-xs text-sand-500">Produktname Test</label>
+                    <input
+                      value={icecatProductTest.query}
+                      onChange={(event) =>
+                        setIcecatProductTest((prev) => ({
+                          ...prev,
+                          query: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="hp probook"
+                    />
+                    <p className="mt-1 text-[10px] text-sand-500">
+                      EAN oder Brand+MPN (z.B. hp probook)
+                    </p>
+                  </div>
                 </div>
                 <div className="mt-4 flex items-center gap-3">
                   <button
@@ -2138,6 +2236,45 @@ export default function SettingsView() {
                   >
                     Speichern
                   </button>
+                  <button
+                    type="button"
+                    onClick={refreshIcecatHealth}
+                    className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600"
+                  >
+                    {icecatHealth.status === "loading" ? "Test läuft..." : "Icecat Test"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={runIcecatProductTest}
+                    className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600"
+                  >
+                    {icecatProductTest.status === "loading" ? "Suche..." : "Produkt testen"}
+                  </button>
+                  {icecatHealth.ok !== null ? (
+                    <span
+                      className={`text-xs ${
+                        icecatHealth.ok ? "text-emerald-600" : "text-rose-600"
+                      }`}
+                    >
+                      {icecatHealth.ok ? "Status OK" : "Status fehlerhaft"}
+                      {icecatHealth.error ? ` · ${icecatHealth.error}` : ""}
+                    </span>
+                  ) : null}
+                  {icecatProductTest.status !== "idle" ? (
+                    <span
+                      className={`text-xs ${
+                        icecatProductTest.status === "error" || icecatProductTest.error
+                          ? "text-rose-600"
+                          : "text-emerald-600"
+                      }`}
+                    >
+                      {icecatProductTest.error
+                        ? icecatProductTest.error
+                        : icecatProductTest.title
+                        ? `Treffer: ${icecatProductTest.title}`
+                        : "Kein Treffer"}
+                    </span>
+                  ) : null}
                   {icecatLoadStatus === "error" && (
                     <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
                   )}
