@@ -3259,7 +3259,20 @@ export default function OffersView() {
         });
         const res = await fetch(`/api/marketplace/search?${params.toString()}`);
         if (!res.ok) throw new Error("Import-Suche fehlgeschlagen.");
-        const data = await res.json();
+        const text = await res.text();
+        let data = [];
+        try {
+          data = text ? JSON.parse(text) : [];
+        } catch (error) {
+          data = [];
+        }
+        console.log("[materialimporter] response", {
+          source: importSource,
+          query: importQuery,
+          status: res.status,
+          length: Array.isArray(data) ? data.length : -1,
+          preview: text.slice(0, 500)
+        });
         setImportResults(Array.isArray(data) ? data : []);
       }
       setImportStatus("idle");
