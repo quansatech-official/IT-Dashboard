@@ -56,6 +56,7 @@ const defaultMarketplace = {
   also_sftp_user: "",
   also_sftp_password: "",
   also_sftp_dir: "",
+  also_sftp_filename: "",
   has_also_sftp_password: false
 };
 
@@ -321,6 +322,7 @@ export default function SettingsView() {
           also_sftp_port: data?.also_sftp_port || defaultMarketplace.also_sftp_port,
           also_sftp_user: data?.also_sftp_user || "",
           also_sftp_dir: data?.also_sftp_dir || "",
+          also_sftp_filename: data?.also_sftp_filename || "",
           also_sftp_password: "",
           has_also_sftp_password: Boolean(data?.has_also_sftp_password)
         }));
@@ -767,7 +769,8 @@ export default function SettingsView() {
           also_sftp_port: marketplace.also_sftp_port,
           also_sftp_user: marketplace.also_sftp_user,
           also_sftp_password: marketplace.also_sftp_password,
-          also_sftp_dir: marketplace.also_sftp_dir
+          also_sftp_dir: marketplace.also_sftp_dir,
+          also_sftp_filename: marketplace.also_sftp_filename
         })
       });
       if (!res.ok) throw new Error("save_failed");
@@ -784,6 +787,7 @@ export default function SettingsView() {
         also_sftp_port: data?.also_sftp_port || defaultMarketplace.also_sftp_port,
         also_sftp_user: data?.also_sftp_user || "",
         also_sftp_dir: data?.also_sftp_dir || "",
+        also_sftp_filename: data?.also_sftp_filename || "",
         also_sftp_password: "",
         has_also_sftp_password: Boolean(data?.has_also_sftp_password)
       }));
@@ -2310,6 +2314,20 @@ export default function SettingsView() {
                       }
                       className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
                       placeholder="/prices"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Dateiname (optional)</label>
+                    <input
+                      value={marketplace.also_sftp_filename}
+                      onChange={(event) =>
+                        setMarketplace((prev) => ({
+                          ...prev,
+                          also_sftp_filename: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="pricelist-1.txt.zip"
                     />
                   </div>
                 </div>

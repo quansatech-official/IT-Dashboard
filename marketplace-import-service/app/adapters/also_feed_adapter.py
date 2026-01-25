@@ -45,10 +45,11 @@ class AlsoFeedAdapter:
     def fetch_latest_price_file(self, sftp: paramiko.SFTPClient) -> Tuple[str, bytes]:
         override = load_also_config()
         directory = override.get("dir") or settings.also_sftp_dir or "."
-        latest = self._find_latest_entry(sftp, directory)
+        filename = override.get("filename") or ""
+        latest = self._resolve_target_entry(sftp, directory, filename)
         if not latest:
             raise ValueError("No price files found")
-        path = f"{directory.rstrip('/')}/{latest.filename}"
+        path = latest.filename if latest.filename.startswith("/") else f"{directory.rstrip('/')}/{latest.filename}"
         logger.info("Fetching ALSO price file: %s", path)
         with sftp.open(path, "rb") as handle:
             data = handle.read()
@@ -71,6 +72,20 @@ class AlsoFeedAdapter:
         if not candidates:
             return None
         return max(candidates, key=lambda item: item.st_mtime)
+
+    @staticmethod
+    def _resolve_target_entry(
+        sftp: paramiko.SFTPClient, directory: str, filename: str
+    ) -> Optional[paramiko.SFTPAttributes]:
+        if filename:
+            path = filename if filename.startswith("/") else f"{directory.rstrip('/')}/{filename}"
+            try:
+                entry = sftp.stat(path)
+                entry.filename = filename
+                return entry
+            except Exception:  # noqa: BLE001
+                return AlsoFeedAdapter._find_latest_entry(sftp, directory)
+        return AlsoFeedAdapter._find_latest_entry(sftp, directory)
 
     @staticmethod
     def _extract_zip_payload(data: bytes) -> Tuple[str, bytes]:
@@ -284,7 +299,8 @@ class AlsoFeedAdapter:
             sftp = self.connect_sftp()
             override = load_also_config()
             directory = override.get("dir") or settings.also_sftp_dir or "."
-            latest = self._find_latest_entry(sftp, directory)
+            filename = override.get("filename") or ""
+            latest = self._resolve_target_entry(sftp, directory, filename)
             if not latest:
                 raise ValueError("No price files found")
             filename = latest.filename

@@ -254,6 +254,7 @@ class IntegrationSettings(Base):
     also_sftp_user = Column(String, default="")
     also_sftp_password = Column(String, default="")
     also_sftp_dir = Column(String, default="")
+    also_sftp_filename = Column(String, default="")
     sevdesk_base_url = Column(String, default="")
     sevdesk_api_token = Column(String, default="")
     sevdesk_contact_person_id = Column(String, default="")
@@ -374,6 +375,8 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_password VARCHAR DEFAULT ''")
     if "also_sftp_dir" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_dir VARCHAR DEFAULT ''")
+    if "also_sftp_filename" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN also_sftp_filename VARCHAR DEFAULT ''")
     if "sevdesk_base_url" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN sevdesk_base_url VARCHAR DEFAULT ''")
     if "sevdesk_api_token" not in columns:
@@ -856,6 +859,7 @@ class IntegrationSettingsUpdate(BaseModel):
     also_sftp_user: Optional[str] = None
     also_sftp_password: Optional[str] = None
     also_sftp_dir: Optional[str] = None
+    also_sftp_filename: Optional[str] = None
     sevdesk_base_url: Optional[str] = None
     sevdesk_api_token: Optional[str] = None
     sevdesk_contact_person_id: Optional[str] = None
@@ -1416,6 +1420,7 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "also_sftp_port": settings.also_sftp_port,
         "also_sftp_user": settings.also_sftp_user,
         "also_sftp_dir": settings.also_sftp_dir,
+        "also_sftp_filename": settings.also_sftp_filename,
         "has_also_sftp_password": bool(settings.also_sftp_password),
         "sevdesk_base_url": settings.sevdesk_base_url,
         "sevdesk_contact_person_id": settings.sevdesk_contact_person_id,
@@ -2774,6 +2779,7 @@ def marketplace_sync_also():
             "user": settings.also_sftp_user,
             "password": settings.also_sftp_password,
             "dir": settings.also_sftp_dir,
+            "filename": settings.also_sftp_filename,
         }
     try:
         response = requests.post(f"{base_url}/import/also/config", json=payload, timeout=20)
