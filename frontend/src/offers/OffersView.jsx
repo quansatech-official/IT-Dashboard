@@ -862,6 +862,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
     0
   );
+  const optionalTotal = [...(offer.lineItems || []), ...(offer.deviceItems || [])].reduce(
+    (sum, item) =>
+      sum + (item?.optional ? Number(item.price || 0) * Number(item.quantity || 0) : 0),
+    0
+  );
   const totalNet = serviceTotal + deviceTotal;
   const totalVat = calcVat(totalNet, offer);
   const recipientName = offer.recipientName || offer.customer || "Kunde offen";
@@ -955,13 +960,19 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           (item) => item.category === "device"
         );
         const showTotals = pageIndex === pagedPositions.length - 1;
+        const totalsShouldBreak =
+          isExport &&
+          showTotals &&
+          (forceTotalsPageBreak ||
+            Boolean((offer.calculationText || "").trim().length > 240) ||
+            (offer.attachments || []).length > 0);
         return (
           <div
             key={`page-${pageIndex}`}
             className="mx-auto"
             style={{
               width: `${a4WidthPx * scale}px`,
-              height: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`,
+              height: isExport ? "auto" : `${a4HeightPx * scale}px`,
               minHeight: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`
             }}
           >
@@ -969,7 +980,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
               style={{
                 width: `${a4WidthPx}px`,
-                height: `${a4HeightPx}px`,
+                height: isExport ? "auto" : `${a4HeightPx}px`,
                 minHeight: `${a4HeightPx}px`,
                 paddingBottom: isExport ? "48px" : undefined,
                 transform: isExport ? "none" : `scale(${scale})`,
@@ -1052,12 +1063,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 {pagePositions.length ? (
                   <div>
                     <div className="mt-2 rounded-xl border border-sand-200">
-                      <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
                         <span>Pos</span>
                         <span>Leistung</span>
                         <span className="text-right">Menge</span>
                         <span className="text-right">Einzelpreis</span>
-                        <span className="text-right">{formatVatLabel(offer)}</span>
                         <span className="text-right">Gesamt (netto)</span>
                       </div>
                       {pageServicePositions.length ? (
@@ -1071,7 +1081,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                 className="border-b border-sand-100"
                                 style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
                               >
-                                <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 px-3 py-2 text-xs text-sand-700">
+                                <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 px-3 py-2 text-xs text-sand-700">
                                   <span>
                                     {item.optional ? "Optional" : `Pos. ${item.positionIndex || "-"}`}
                                   </span>
@@ -1093,14 +1103,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                     {formatMoney(Number(item.price || 0))}
                                   </span>
                                   <span className="text-right">
-                                    {formatMoney(
-                                      calcVat(
-                                        Number(item.price || 0) * Number(item.quantity || 0),
-                                        offer
-                                      )
-                                    )}
-                                  </span>
-                                  <span className="text-right">
                                     {formatLineTotal(item.price, item.quantity)}
                                   </span>
                                 </div>
@@ -1112,16 +1114,13 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                           ))}
                           {showTotals ? (
                             <div
-                              className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
+                              className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
                               style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
                             >
                               <span />
                               <span>Zwischensumme Leistungen</span>
                               <span />
                               <span />
-                              <span className="text-right">
-                                {formatMoney(calcVat(serviceTotal, offer))}
-                              </span>
                               <span className="text-right">{formatMoney(serviceTotal)}</span>
                             </div>
                           ) : null}
@@ -1138,7 +1137,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                 className="border-b border-sand-100"
                                 style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
                               >
-                                <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 px-3 py-2 text-xs text-sand-700">
+                                <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 px-3 py-2 text-xs text-sand-700">
                                   <span>
                                     {item.optional ? "Optional" : `Pos. ${item.positionIndex || "-"}`}
                                   </span>
@@ -1160,14 +1159,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                     {formatMoney(Number(item.price || 0))}
                                   </span>
                                   <span className="text-right">
-                                    {formatMoney(
-                                      calcVat(
-                                        Number(item.price || 0) * Number(item.quantity || 0),
-                                        offer
-                                      )
-                                    )}
-                                  </span>
-                                  <span className="text-right">
                                     {formatLineTotal(item.price, item.quantity)}
                                   </span>
                                 </div>
@@ -1179,16 +1170,13 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                           ))}
                           {showTotals ? (
                             <div
-                              className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
+                              className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
                               style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
                             >
                               <span />
                               <span>Zwischensumme Material</span>
                               <span />
                               <span />
-                              <span className="text-right">
-                                {formatMoney(calcVat(deviceTotal, offer))}
-                              </span>
                               <span className="text-right">{formatMoney(deviceTotal)}</span>
                             </div>
                           ) : null}
@@ -1197,7 +1185,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                     </div>
                     {showTotals ? (
                       <>
-                        {forceTotalsPageBreak ? (
+                        {totalsShouldBreak ? (
                           <div className="html2pdf__page-break" />
                         ) : null}
                         <div
@@ -1205,8 +1193,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                           style={{
                             breakInside: "avoid",
                             pageBreakInside: "avoid",
-                            breakBefore: forceTotalsPageBreak ? "page" : "auto",
-                            pageBreakBefore: forceTotalsPageBreak ? "always" : "auto"
+                            breakBefore: totalsShouldBreak ? "page" : "auto",
+                            pageBreakBefore: totalsShouldBreak ? "always" : "auto"
                           }}
                         >
                           {offer.calculationText ? (
@@ -1269,6 +1257,12 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                 <span>Gesamt netto</span>
                                 <span>{formatMoney(totalNet)}</span>
                               </div>
+                              {optionalTotal > 0 ? (
+                                <div className="flex items-center justify-between text-sand-600">
+                                  <span>Optional (netto)</span>
+                                  <span>{formatMoney(optionalTotal)}</span>
+                                </div>
+                              ) : null}
                               <div className="flex items-center justify-between">
                                 <span>{formatVatLabel(offer)}</span>
                                 <span>{formatMoney(totalVat)}</span>
@@ -1315,14 +1309,16 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           className="mx-auto"
           style={{
             width: `${a4WidthPx * scale}px`,
-            height: `${a4HeightPx * scale}px`
+            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+            minHeight: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`
           }}
         >
           <div
             className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
             style={{
               width: `${a4WidthPx}px`,
-              height: `${a4HeightPx}px`,
+              height: isExport ? "auto" : `${a4HeightPx}px`,
+              minHeight: `${a4HeightPx}px`,
               transform: `scale(${scale})`,
               transformOrigin: "top left"
             }}
@@ -1376,14 +1372,16 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           className="mx-auto"
           style={{
             width: `${a4WidthPx * scale}px`,
-            height: `${a4HeightPx * scale}px`
+            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+            minHeight: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`
           }}
         >
           <div
             className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
             style={{
               width: `${a4WidthPx}px`,
-              height: `${a4HeightPx}px`,
+              height: isExport ? "auto" : `${a4HeightPx}px`,
+              minHeight: `${a4HeightPx}px`,
               transform: `scale(${scale})`,
               transformOrigin: "top left"
             }}
@@ -5314,8 +5312,6 @@ export default function OffersView() {
                               <textarea
                                 className={noteTextareaClass}
                                 value={(block.images || []).join("\n")}
-                                onDragOver={(event) => event.preventDefault()}
-                                onDrop={(event) => handleDeviceBlockDrop(event, block.id)}
                                 onChange={(event) =>
                                   updateDeviceBlock(block.id, {
                                     images: event.target.value
@@ -5324,8 +5320,43 @@ export default function OffersView() {
                                       .filter(Boolean)
                                   })
                                 }
-                                placeholder="https://… oder Dateien hierher ziehen"
+                                placeholder="https://…"
                               />
+                              <div
+                                className="mt-2 flex items-center justify-center rounded-2xl border border-dashed border-sand-200 bg-sand-50 px-4 py-6 text-[11px] uppercase tracking-[0.2em] text-sand-500"
+                                onDragOver={(event) => event.preventDefault()}
+                                onDrop={(event) => handleDeviceBlockDrop(event, block.id)}
+                              >
+                                Dateien hierher ziehen (Drag & Drop)
+                              </div>
+                              {(block.images || []).length ? (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {block.images.map((url) => (
+                                    <div
+                                      key={url}
+                                      className="relative h-20 w-28 overflow-hidden rounded-xl border border-sand-200 bg-white"
+                                    >
+                                      <img
+                                        src={url}
+                                        alt="Material"
+                                        className="h-full w-full object-cover"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          updateDeviceBlock(block.id, {
+                                            images: (block.images || []).filter((entry) => entry !== url)
+                                          })
+                                        }
+                                        className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-sand-600 hover:bg-white"
+                                        title="Entfernen"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
                             </Field>
                           </div>
                           <div className="md:col-span-2">
