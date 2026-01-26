@@ -2225,6 +2225,9 @@ export default function SettingsView() {
                     className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
                     placeholder={sevdesk.has_sevdesk_api_token ? "Gespeichert" : "••••••••"}
                   />
+                  <p className="mt-2 text-[11px] text-sand-400">
+                    Nur API Token noetig; weitere Felder optional fuer Rechnungsentwuerfe.
+                  </p>
                 </div>
                 <div>
                   <label className="text-xs text-sand-500">Kontaktperson ID</label>

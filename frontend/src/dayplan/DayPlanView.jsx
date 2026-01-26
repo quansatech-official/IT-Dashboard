@@ -98,6 +98,24 @@ export default function DayPlanView() {
   const [billedFilter, setBilledFilter] = useState("");
   const [detailOpenId, setDetailOpenId] = useState(null);
   const [detailEdits, setDetailEdits] = useState({});
+  const [sevdeskDefaults, setSevdeskDefaults] = useState({
+    hourly_rate_eur: "",
+    default_tax_rate: "",
+    unity_id: "",
+    service_unity_id: "",
+    has_sevdesk_api_token: false
+  });
+  const [sevdeskDraftOpen, setSevdeskDraftOpen] = useState(false);
+  const [sevdeskDraftTask, setSevdeskDraftTask] = useState(null);
+  const [sevdeskDraftForm, setSevdeskDraftForm] = useState(null);
+  const [sevdeskDraftAdvancedOpen, setSevdeskDraftAdvancedOpen] = useState(false);
+  const [sevdeskDraftStatus, setSevdeskDraftStatus] = useState({ state: "idle", error: "" });
+  const [sevdeskDraftAiLoading, setSevdeskDraftAiLoading] = useState(false);
+  const [sevdeskDraftCheck, setSevdeskDraftCheck] = useState({
+    state: "idle",
+    hasDraft: false,
+    contactFound: true
+  });
   const [collapsedTimers, setCollapsedTimers] = useState(() => {
     if (typeof window === "undefined") return {};
     try {
@@ -145,6 +163,59 @@ export default function DayPlanView() {
       setGroups(Array.isArray(data) ? data : []);
     });
   }, []);
+
+  useEffect(() => {
+    fetch(`${API}/integration_settings`)
+      .then((res) => (res && res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        setSevdeskDefaults({
+          hourly_rate_eur: data?.sevdesk_hourly_rate_eur || "",
+          default_tax_rate: data?.sevdesk_default_tax_rate || "",
+          unity_id: data?.sevdesk_unity_id || "",
+          service_unity_id: data?.sevdesk_service_unity_id || "",
+          has_sevdesk_api_token: Boolean(data?.has_sevdesk_api_token)
+        });
+      })
+      .catch(() => {
+        setSevdeskDefaults((prev) => ({ ...prev, has_sevdesk_api_token: false }));
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!sevdeskDraftOpen || !sevdeskDraftForm) return;
+    if (!sevdeskDefaults.has_sevdesk_api_token) {
+      setSevdeskDraftCheck({ state: "idle", hasDraft: false, contactFound: true });
+      return;
+    }
+    const customerNumber = String(sevdeskDraftForm.customer_number || "").trim();
+    if (!customerNumber) {
+      setSevdeskDraftCheck({ state: "idle", hasDraft: false, contactFound: true });
+      return;
+    }
+    let active = true;
+    const timeout = setTimeout(() => {
+      setSevdeskDraftCheck((prev) => ({ ...prev, state: "loading" }));
+      fetch(`${API}/sevdesk/drafts/check?customer_number=${encodeURIComponent(customerNumber)}`)
+        .then((res) => (res && res.ok ? res.json() : null))
+        .then((data) => {
+          if (!active) return;
+          setSevdeskDraftCheck({
+            state: "ready",
+            hasDraft: Boolean(data?.has_draft),
+            contactFound: data?.contact_found !== false
+          });
+        })
+        .catch(() => {
+          if (!active) return;
+          setSevdeskDraftCheck({ state: "error", hasDraft: false, contactFound: true });
+        });
+    }, 400);
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+    };
+  }, [sevdeskDraftOpen, sevdeskDraftForm?.customer_number, sevdeskDefaults.has_sevdesk_api_token]);
 
   const addTaskToGroup = async (groupId, text) => {
     const trimmed = String(text || "").trim();
@@ -424,6 +495,106 @@ export default function DayPlanView() {
     }));
   };
 
+  const openSevdeskDraft = (task) => {
+    setSevdeskDraftTask(task);
+    setSevdeskDraftForm(buildSevdeskDraftDefaults(task));
+    setSevdeskDraftStatus({ state: "idle", error: "" });
+    setSevdeskDraftAdvancedOpen(false);
+    setSevdeskDraftOpen(true);
+  };
+
+  const updateSevdeskDraftForm = (field, value) => {
+    setSevdeskDraftForm((prev) => {
+      if (!prev) return prev;
+      return { ...prev, [field]: value };
+    });
+  };
+
+  const closeSevdeskDraft = () => {
+    setSevdeskDraftOpen(false);
+    setSevdeskDraftTask(null);
+    setSevdeskDraftForm(null);
+    setSevdeskDraftStatus({ state: "idle", error: "" });
+    setSevdeskDraftAiLoading(false);
+  };
+
+  const submitSevdeskDraft = async () => {
+    if (!sevdeskDraftTask || !sevdeskDraftForm) return;
+    const customerNumber = String(sevdeskDraftForm.customer_number || "").trim();
+    if (!customerNumber) {
+      setSevdeskDraftStatus({ state: "error", error: "Bitte Kundennummer angeben." });
+      return;
+    }
+    setSevdeskDraftStatus({ state: "saving", error: "" });
+    const payload = {
+      customer_number: customerNumber,
+      header: String(sevdeskDraftForm.header || "").trim() || undefined,
+      name: String(sevdeskDraftForm.name || "").trim() || undefined,
+      text: String(sevdeskDraftForm.text || "").trim() || undefined,
+      use_existing_draft: sevdeskDraftForm.use_existing_draft !== false
+    };
+    const quantity = Number(sevdeskDraftForm.quantity);
+    if (Number.isFinite(quantity) && quantity > 0) payload.quantity = quantity;
+    const price = Number(sevdeskDraftForm.price);
+    if (Number.isFinite(price)) payload.price = price;
+    const taxRate = Number(sevdeskDraftForm.tax_rate);
+    if (Number.isFinite(taxRate)) payload.tax_rate = taxRate;
+    const unityId = Number(sevdeskDraftForm.unity_id);
+    if (Number.isFinite(unityId) && unityId > 0) payload.unity_id = unityId;
+
+    try {
+      const res = await fetch(`${API}/sevdesk/tasks/${sevdeskDraftTask.id}/draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = data?.detail || "Sevdesk-Übergabe fehlgeschlagen.";
+        setSevdeskDraftStatus({ state: "error", error: message });
+        return;
+      }
+      if (data?.task?.id) {
+        setTasks((prev) => prev.map((item) => (item.id === data.task.id ? data.task : item)));
+      }
+      setSevdeskDraftStatus({ state: "saved", error: "" });
+      closeSevdeskDraft();
+    } catch (error) {
+      setSevdeskDraftStatus({ state: "error", error: "Sevdesk-Übergabe fehlgeschlagen." });
+    }
+  };
+
+  const generateSevdeskDraftText = async () => {
+    if (!sevdeskDraftTask || !sevdeskDraftForm) return;
+    setSevdeskDraftAiLoading(true);
+    try {
+      const contextParts = [
+        sevdeskDraftTask.title ? `Aufgabe: ${sevdeskDraftTask.title}` : "",
+        sevdeskDraftTask.customer ? `Kunde: ${sevdeskDraftTask.customer}` : "",
+        sevdeskDraftTask.details ? `Notiz: ${sevdeskDraftTask.details}` : "",
+        sevdeskDraftForm.quantity ? `Menge: ${sevdeskDraftForm.quantity}` : "",
+        sevdeskDraftForm.price ? `Preis: ${sevdeskDraftForm.price}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const res = await fetch(`${API}/offer_ai_text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "position_text",
+          current_text: sevdeskDraftForm.text || "",
+          context: contextParts || "n/a"
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.text) {
+        updateSevdeskDraftForm("text", data.text);
+      }
+    } finally {
+      setSevdeskDraftAiLoading(false);
+    }
+  };
+
   const commitCustomerEdit = async (task) => {
     const trimmed = editingCustomerValue.trim();
     if (trimmed === task.customer) {
@@ -630,6 +801,31 @@ export default function DayPlanView() {
     return (hours * 3600 + minutes * 60 + seconds) * 1000;
   };
 
+  const getElapsedMsForTask = (task) => {
+    if (!task) return 0;
+    const base = Number(task.elapsed || 0);
+    if (!task.running || !task.startTime) return base;
+    return Math.max(0, base + (nowMs - Number(task.startTime || 0)));
+  };
+
+  const buildSevdeskDraftDefaults = (task) => {
+    const elapsedMs = getElapsedMsForTask(task);
+    const hours = elapsedMs > 0 ? Math.round((elapsedMs / 3_600_000) * 100) / 100 : 0;
+    const unityDefault =
+      sevdeskDefaults.service_unity_id || sevdeskDefaults.unity_id || "";
+    return {
+      customer_number: task?.customer_number || "",
+      header: "Leistungsnachweis",
+      name: task?.title || "Erledigte Aufgabe",
+      text: task?.details || task?.title || "",
+      quantity: hours > 0 ? String(hours) : "1",
+      price: sevdeskDefaults.hourly_rate_eur ? String(sevdeskDefaults.hourly_rate_eur) : "",
+      tax_rate: sevdeskDefaults.default_tax_rate ? String(sevdeskDefaults.default_tax_rate) : "",
+      unity_id: unityDefault ? String(unityDefault) : "",
+      use_existing_draft: true
+    };
+  };
+
   const knownCustomerNames = useMemo(
     () =>
       customers
@@ -777,7 +973,7 @@ export default function DayPlanView() {
     const hasCustomer = Boolean(task.customer || task.customer_number);
     const canPromote = !task.time_enabled;
     const isDone = task.status === "done";
-    const canInvoice = hasCustomer;
+    const canInvoice = true;
     const isBilled = Boolean(task.aberechnet);
     const knownCustomer = isKnownCustomer(task.customer);
     const assignedEmployee = employees.find((employee) => employee.id === task.employee_id);
@@ -935,7 +1131,7 @@ export default function DayPlanView() {
                 )}
                 <button
                   type="button"
-                  onClick={() => updateTask(task, { aberechnet: true, status: "done" })}
+                  onClick={() => openSevdeskDraft(task)}
                   disabled={!canInvoice}
                   className={`rounded-full border p-1 ${
                     canInvoice
@@ -943,9 +1139,9 @@ export default function DayPlanView() {
                       : "border-sand-100 text-sand-300 cursor-not-allowed"
                   }`}
                   title={
-                    canInvoice
-                      ? "Als fakturiert markieren"
-                      : "Kunde zuordnen, um zu übernehmen"
+                    sevdeskDefaults.has_sevdesk_api_token
+                      ? "Rechnungsentwurf in sevdesk"
+                      : "Sevdesk API Token fehlt"
                   }
                 >
                   <DollarSign size={12} />
@@ -1592,6 +1788,256 @@ export default function DayPlanView() {
           <option key={customer.id} value={customer.name} />
         ))}
       </datalist>
+      <FakturaTaskModal
+        open={sevdeskDraftOpen}
+        task={sevdeskDraftTask}
+        form={sevdeskDraftForm}
+        status={sevdeskDraftStatus}
+        aiLoading={sevdeskDraftAiLoading}
+        advancedOpen={sevdeskDraftAdvancedOpen}
+        hasToken={sevdeskDefaults.has_sevdesk_api_token}
+        draftCheck={sevdeskDraftCheck}
+        onClose={closeSevdeskDraft}
+        onSubmit={submitSevdeskDraft}
+        onGenerateAi={generateSevdeskDraftText}
+        onToggleAdvanced={() => setSevdeskDraftAdvancedOpen((current) => !current)}
+        onChange={updateSevdeskDraftForm}
+      />
+    </div>
+  );
+}
+
+function FakturaTaskModal({
+  open,
+  task,
+  form,
+  status,
+  aiLoading,
+  advancedOpen,
+  hasToken,
+  draftCheck,
+  onClose,
+  onSubmit,
+  onGenerateAi,
+  onToggleAdvanced,
+  onChange
+}) {
+  if (!open || !task || !form) return null;
+  const isSaving = status?.state === "saving";
+  const hasCustomerNumber = String(form.customer_number || "").trim().length > 0;
+  const hasDraft = Boolean(draftCheck?.hasDraft);
+  const contactFound = draftCheck?.contactFound !== false;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
+      <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+        <div className="flex items-center justify-between border-b border-sand-100 px-6 py-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Faktura</p>
+            <h3 className="text-lg font-display text-sand-900">Rechnungsentwurf aus Aufgabe</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 bg-white p-2 text-sand-500 hover:bg-sand-50"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="px-6 py-4 space-y-4">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Aufgabe</p>
+            <p className="text-sm text-sand-900">{task.title}</p>
+          </div>
+          {!hasToken ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              Sevdesk API Token fehlt in den Einstellungen.
+            </div>
+          ) : null}
+          {hasToken && !contactFound ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              Kunde in sevdesk nicht gefunden.
+            </div>
+          ) : null}
+          {hasToken && contactFound && hasDraft ? (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+              Es existiert bereits ein offener Entwurf. Bitte wählen, ob dieser genutzt werden soll.
+            </div>
+          ) : null}
+          {hasToken && contactFound && hasDraft ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-sand-600">
+              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                Entwurf wählen
+              </span>
+              <button
+                type="button"
+                onClick={() => onChange("use_existing_draft", true)}
+                className={`rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
+                  form.use_existing_draft !== false
+                    ? "border-sand-900 bg-sand-900 text-white"
+                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                }`}
+              >
+                Bestehenden verwenden
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange("use_existing_draft", false)}
+                className={`rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
+                  form.use_existing_draft === false
+                    ? "border-sand-900 bg-sand-900 text-white"
+                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                }`}
+              >
+                Neuen Entwurf erstellen
+              </button>
+            </div>
+          ) : null}
+          <div className="grid gap-3 md:grid-cols-2 text-xs text-sand-600">
+            <label className="flex flex-col gap-2">
+              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                Kundennummer (Faktura)
+              </span>
+              <input
+                value={form.customer_number}
+                onChange={(event) => onChange("customer_number", event.target.value)}
+                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                placeholder="Kundennummer"
+              />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                Rechnungsheader
+              </span>
+              <input
+                value={form.header}
+                onChange={(event) => onChange("header", event.target.value)}
+                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                placeholder="Leistungsnachweis"
+              />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Menge (h)</span>
+              <input
+                type="number"
+                min="0"
+                step="0.25"
+                value={form.quantity}
+                onChange={(event) => onChange("quantity", event.target.value)}
+                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+              />
+            </label>
+            <label className="flex flex-col gap-2">
+              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                Preis (EUR)
+              </span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.price}
+                onChange={(event) => onChange("price", event.target.value)}
+                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+              />
+            </label>
+            <label className="flex flex-col gap-2 md:col-span-2">
+              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                Positionsname
+              </span>
+              <input
+                value={form.name}
+                onChange={(event) => onChange("name", event.target.value)}
+                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                placeholder="Erledigte Aufgabe"
+              />
+            </label>
+          </div>
+          <label className="flex flex-col gap-2 text-xs text-sand-600">
+            <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+              Positionstext
+            </span>
+            <textarea
+              value={form.text}
+              onChange={(event) => onChange("text", event.target.value)}
+              className="min-h-[120px] w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+              placeholder="Leistung, Ergebnis oder Hinweise"
+            />
+          </label>
+          <div className="flex items-center justify-between text-[11px] text-sand-500">
+            <button
+              type="button"
+              onClick={onGenerateAi}
+              disabled={aiLoading}
+              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait"
+            >
+              <Sparkles size={12} />
+              {aiLoading ? "KI verbessert..." : "Text verbessern"}
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={onToggleAdvanced}
+            className="text-xs uppercase tracking-[0.3em] text-sand-500"
+          >
+            {advancedOpen ? "Erweiterte Felder ausblenden" : "Erweiterte Felder anzeigen"}
+          </button>
+          {advancedOpen ? (
+            <div className="grid gap-3 md:grid-cols-2 text-xs text-sand-600">
+              <label className="flex flex-col gap-2">
+                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                  Steuer (Rate)
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={form.tax_rate}
+                  onChange={(event) => onChange("tax_rate", event.target.value)}
+                  className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                />
+              </label>
+              <label className="flex flex-col gap-2">
+                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                  Unity ID
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={form.unity_id}
+                  onChange={(event) => onChange("unity_id", event.target.value)}
+                  className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                />
+              </label>
+            </div>
+          ) : null}
+          {status?.error ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              {status.error}
+            </div>
+          ) : null}
+        </div>
+        <div className="flex items-center justify-end gap-3 border-t border-sand-100 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 px-4 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+          >
+            Abbrechen
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={!hasCustomerNumber || isSaving}
+            className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSaving
+              ? "Übergabe läuft..."
+              : hasDraft && form.use_existing_draft !== false
+              ? "Position hinzufügen"
+              : "Rechnungsentwurf erstellen"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

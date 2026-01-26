@@ -1001,6 +1001,19 @@ class SevdeskTaskSyncRequest(BaseModel):
     task_ids: Optional[List[int]] = None
     customer_number: Optional[str] = None
 
+
+class SevdeskTaskDraftRequest(BaseModel):
+    customer_number: Optional[str] = None
+    header: Optional[str] = None
+    name: Optional[str] = None
+    text: Optional[str] = None
+    quantity: Optional[float] = None
+    price: Optional[float] = None
+    tax_rate: Optional[float] = None
+    unity_id: Optional[int] = None
+    use_existing_draft: Optional[bool] = True
+    mark_billed: Optional[bool] = True
+
 class PbxPhonebookCreate(BaseModel):
     name: Optional[str] = ""
     number: Optional[str] = ""
@@ -1131,6 +1144,13 @@ def _require_sevdesk_config(
     missing = []
     if not config.api_token:
         missing.append("sevdesk_api_token")
+    if missing:
+        raise HTTPException(400, f"Sevdesk settings missing: {', '.join(missing)}")
+    return config
+
+
+def _require_sevdesk_invoice_fields(config: SevdeskConfig) -> None:
+    missing = []
     if not config.contact_person_id:
         missing.append("sevdesk_contact_person_id")
     if not config.address_country_id:
@@ -1140,8 +1160,9 @@ def _require_sevdesk_config(
     if not config.unity_id and not config.service_unity_id and not config.device_unity_id:
         missing.append("sevdesk_unity_id")
     if missing:
-        raise HTTPException(400, f"Sevdesk settings missing: {', '.join(missing)}")
-    return config
+        raise HTTPException(
+            400, f"Sevdesk invoice settings missing: {', '.join(missing)}"
+        )
 
 
 def _ollama_generate_text(prompt: str) -> str:
@@ -2666,6 +2687,7 @@ def sevdesk_offer_to_invoice(offer_id: int):
             db.add(settings)
             db.commit()
         config = _require_sevdesk_config(settings)
+        _require_sevdesk_invoice_fields(config)
 
     offer_payload = {}
     if offer.data_json:
@@ -2707,6 +2729,120 @@ def sevdesk_offer_to_invoice(offer_id: int):
     return {"ok": True, "invoice": response}
 
 
+@app.post("/api/sevdesk/tasks/{task_id}/draft")
+def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
+    with SessionLocal() as db:
+        task = db.query(DayTask).get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        metrics = db.query(CustomerMetricsSettings).first()
+        config = _require_sevdesk_config(settings, metrics)
+        _require_sevdesk_invoice_fields(config)
+
+        customer_number = (payload.customer_number or task.customer_number or "").strip()
+        if not customer_number:
+            raise HTTPException(400, "Missing customer_number")
+
+        now_ms = int(time.time() * 1000)
+        elapsed_ms = int(task.elapsed or 0)
+        if task.running and task.startTime:
+            elapsed_ms = max(0, elapsed_ms + (now_ms - int(task.startTime)))
+        elapsed_hours = round(elapsed_ms / 3_600_000, 2) if elapsed_ms > 0 else 0.0
+        quantity = payload.quantity if payload.quantity is not None else elapsed_hours
+        if quantity <= 0:
+            quantity = 1.0
+
+        price = payload.price if payload.price is not None else (config.hourly_rate_eur or 0.0)
+        tax_rate = payload.tax_rate if payload.tax_rate is not None else config.default_tax_rate
+        unity_id = payload.unity_id or config.service_unity_id or config.unity_id
+        if not unity_id:
+            raise HTTPException(400, "Missing unity_id")
+
+        name = (payload.name or task.title or "Erledigte Aufgabe").strip()
+        text = (payload.text or task.details or task.title or "").strip()
+        header = (payload.header or "Leistungsnachweis").strip()
+
+        client = SevdeskClient(config)
+        try:
+            contact = client.get_contact_by_customer_number(customer_number)
+            if not contact:
+                raise HTTPException(404, f"Sevdesk contact not found for {customer_number}")
+            contact_id = int(contact.get("id"))
+
+            positions = [
+                {
+                    "quantity": quantity,
+                    "price": price,
+                    "name": name,
+                    "text": text,
+                    "tax_rate": tax_rate,
+                    "unity_id": unity_id,
+                }
+            ]
+
+            draft = None
+            if payload.use_existing_draft is not False:
+                draft = client.find_draft_invoice(contact_id)
+            if draft:
+                invoice_id = int(draft.get("id"))
+                invoice_snapshot = client.get_invoice(invoice_id) or draft
+                invoice_payload = client.build_invoice_payload(
+                    contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot, header=header
+                )
+            else:
+                invoice_payload = client.build_invoice_payload(contact_id, header=header)
+            response = client.save_invoice(invoice_payload, client.build_positions(positions))
+        except SevdeskError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+        if payload.mark_billed is not False:
+            task.aberechnet = True
+            task.status = "done"
+            task.erledigt = True
+            task.completed_at = now_ms
+        db.commit()
+        db.refresh(task)
+
+        return {"ok": True, "task": serialize_day_task(task), "invoice": response}
+
+
+@app.get("/api/sevdesk/drafts/check")
+def sevdesk_check_draft(customer_number: str):
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        config = _require_sevdesk_config(settings)
+        _require_sevdesk_invoice_fields(config)
+
+    customer_number = (customer_number or "").strip()
+    if not customer_number:
+        raise HTTPException(400, "Missing customer_number")
+
+    client = SevdeskClient(config)
+    try:
+        contact = client.get_contact_by_customer_number(customer_number)
+        if not contact:
+            return {"contact_found": False, "has_draft": False, "draft_id": None}
+        contact_id = int(contact.get("id"))
+        draft = client.find_draft_invoice(contact_id)
+    except SevdeskError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    return {
+        "contact_found": True,
+        "has_draft": bool(draft),
+        "draft_id": int(draft.get("id")) if draft else None,
+    }
+
+
 @app.post("/api/sevdesk/tasks/sync")
 def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
     with SessionLocal() as db:
@@ -2717,6 +2853,7 @@ def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
             db.commit()
         metrics = db.query(CustomerMetricsSettings).first()
         config = _require_sevdesk_config(settings, metrics)
+        _require_sevdesk_invoice_fields(config)
 
         query = db.query(DayTask).filter(DayTask.erledigt.is_(True))
         if payload.task_ids:
