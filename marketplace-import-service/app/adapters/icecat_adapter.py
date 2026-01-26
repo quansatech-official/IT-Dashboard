@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 ICECAT_BASE_URL = "https://live.icecat.biz/api"
 ICECAT_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60
+ICECAT_DEFAULT_PARAMS = {"lang": "de", "content": "1"}
 
 
 class IcecatAdapter:
@@ -48,7 +49,11 @@ class IcecatAdapter:
         }
         try:
             async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                response = await client.get(ICECAT_BASE_URL, params={"ean": "0000000000000"}, headers=headers)
+                response = await client.get(
+                    ICECAT_BASE_URL,
+                    params={**ICECAT_DEFAULT_PARAMS, "ean": "0000000000000"},
+                    headers=headers,
+                )
             result["status_code"] = response.status_code
             if response.status_code in (401, 403):
                 result["error"] = "unauthorized"
@@ -118,7 +123,7 @@ class IcecatAdapter:
             async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
                 response = await client.get(
                     ICECAT_BASE_URL,
-                    params=params,
+                    params={**ICECAT_DEFAULT_PARAMS, **params},
                     headers=headers,
                 )
                 if response.status_code == 404:
