@@ -879,7 +879,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const rowsPerPage = isExport ? 8 : Number.POSITIVE_INFINITY;
   const previewRowsPerPage = 10;
   const pageSize = isExport ? rowsPerPage : previewRowsPerPage;
-  const forceTotalsPageBreak = isExport && previewPositions.length > rowsPerPage;
   const pagedPositions = [];
   for (let i = 0; i < previewPositions.length; i += pageSize) {
     const chunk = previewPositions
@@ -896,6 +895,106 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
     index + 1 < previewPositions.length;
   const a4WidthPx = 210 * 3.7795275591;
   const a4HeightPx = 297 * 3.7795275591;
+  const renderTotalsInline = !isExport;
+  const totalsContent = (
+    <>
+      {offer.calculationText ? (
+        <p className="text-xs text-sand-600 whitespace-pre-line">{offer.calculationText}</p>
+      ) : null}
+      <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-4 text-sm text-sand-700 space-y-4">
+        <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr]">
+          <div className="space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-sand-600">
+              Netto nach Bereich
+            </p>
+            <div className="flex items-center justify-between">
+              <span>Leistungen</span>
+              <span className="font-semibold text-sand-900">{formatMoney(serviceTotal)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>Material</span>
+              <span className="font-semibold text-sand-900">{formatMoney(deviceTotal)}</span>
+            </div>
+          </div>
+          <div className="hidden md:block w-px bg-sand-200" aria-hidden="true" />
+          <div className="space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-sand-600">
+              Laufende Kosten
+            </p>
+            {costTotals.monthly ? (
+              <div className="flex items-center justify-between">
+                <span>Monatlich</span>
+                <span className="font-semibold text-sand-900">
+                  {formatMoney(costTotals.monthly)}
+                </span>
+              </div>
+            ) : null}
+            {costTotals.yearly ? (
+              <div className="flex items-center justify-between">
+                <span>Jährlich</span>
+                <span className="font-semibold text-sand-900">
+                  {formatMoney(costTotals.yearly)}
+                </span>
+              </div>
+            ) : null}
+            {costTotals.once ? (
+              <div className="flex items-center justify-between">
+                <span>Einmalig</span>
+                <span className="font-semibold text-sand-900">
+                  {formatMoney(costTotals.once)}
+                </span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="border-t border-sand-200 pt-3 space-y-2">
+          <div className="flex items-center justify-between font-semibold text-sand-900">
+            <span>Gesamt netto</span>
+            <span>{formatMoney(totalNet)}</span>
+          </div>
+          {optionalTotal > 0 ? (
+            <div className="flex items-center justify-between text-sand-600">
+              <span>Optional (netto)</span>
+              <span>{formatMoney(optionalTotal)}</span>
+            </div>
+          ) : null}
+          <div className="flex items-center justify-between">
+            <span>{formatVatLabel(offer)}</span>
+            <span>{formatMoney(totalVat)}</span>
+          </div>
+          <div className="flex items-center justify-between text-base font-semibold text-sand-900">
+            <span>Gesamt brutto</span>
+            <span>{formatMoney(totalGross)}</span>
+          </div>
+        </div>
+      </div>
+      {(offer.attachments || []).length ? (
+        <div className="mt-4">
+          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Beilagen</p>
+          <div className="mt-2 space-y-2 text-xs text-sand-600">
+            {offer.attachments.map((item) => (
+              <div key={item.id}>
+                <p className="font-semibold text-sand-800">
+                  {item.title || item.fileName || "Beilage"}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+  const totalsOnOwnPage = isExport && (() => {
+    const hasText = Boolean((offer.calculationText || "").trim());
+    const hasAttachments = (offer.attachments || []).length > 0;
+    const hasTotals = totalNet > 0 || optionalTotal > 0;
+    if (!hasText && !hasAttachments && !hasTotals) return false;
+    return pagedPositions.some(
+      (pagePositions, pageIndex) =>
+        pageIndex === pagedPositions.length - 1 &&
+        (pagePositions.length >= rowsPerPage - 1 || hasText || hasAttachments)
+    );
+  })();
 
   return (
     <div
@@ -960,12 +1059,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           (item) => item.category === "device"
         );
         const showTotals = pageIndex === pagedPositions.length - 1;
-        const totalsShouldBreak =
-          isExport &&
-          showTotals &&
-          (forceTotalsPageBreak ||
-            Boolean((offer.calculationText || "").trim().length > 240) ||
-            (offer.attachments || []).length > 0);
         return (
           <div
             key={`page-${pageIndex}`}
@@ -1183,116 +1276,19 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                         </>
                       ) : null}
                     </div>
-                    {showTotals ? (
+                    {showTotals && (!totalsOnOwnPage || renderTotalsInline) ? (
                       <>
-                        {totalsShouldBreak ? (
-                          <div className="html2pdf__page-break" />
-                        ) : null}
                         <div
                           className="mt-2"
                           style={{
                             breakInside: "avoid",
-                            pageBreakInside: "avoid",
-                            breakBefore: totalsShouldBreak ? "page" : "auto",
-                            pageBreakBefore: totalsShouldBreak ? "always" : "auto"
+                            pageBreakInside: "avoid"
                           }}
                         >
-                          {offer.calculationText ? (
-                            <p className="text-xs text-sand-600 whitespace-pre-line">
-                              {offer.calculationText}
-                            </p>
-                          ) : null}
-                          <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-4 text-sm text-sand-700 space-y-4">
-                            <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr]">
-                              <div className="space-y-3">
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-sand-600">
-                                  Netto nach Bereich
-                                </p>
-                                <div className="flex items-center justify-between">
-                                  <span>Leistungen</span>
-                                  <span className="font-semibold text-sand-900">
-                                    {formatMoney(serviceTotal)}
-                                  </span>
-                                </div>
-                                <div className="flex items-center justify-between">
-                                  <span>Material</span>
-                                  <span className="font-semibold text-sand-900">
-                                    {formatMoney(deviceTotal)}
-                                  </span>
-                                </div>
-                              </div>
-                              <div className="hidden md:block w-px bg-sand-200" aria-hidden="true" />
-                              <div className="space-y-3">
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-sand-600">
-                                  Laufende Kosten
-                                </p>
-                                {costTotals.monthly ? (
-                                  <div className="flex items-center justify-between">
-                                    <span>Monatlich</span>
-                                    <span className="font-semibold text-sand-900">
-                                      {formatMoney(costTotals.monthly)}
-                                    </span>
-                                  </div>
-                                ) : null}
-                                {costTotals.yearly ? (
-                                  <div className="flex items-center justify-between">
-                                    <span>Jährlich</span>
-                                    <span className="font-semibold text-sand-900">
-                                      {formatMoney(costTotals.yearly)}
-                                    </span>
-                                  </div>
-                                ) : null}
-                                {costTotals.once ? (
-                                  <div className="flex items-center justify-between">
-                                    <span>Einmalig</span>
-                                    <span className="font-semibold text-sand-900">
-                                      {formatMoney(costTotals.once)}
-                                    </span>
-                                  </div>
-                                ) : null}
-                              </div>
-                            </div>
-                            <div className="border-t border-sand-200 pt-3 space-y-2">
-                              <div className="flex items-center justify-between font-semibold text-sand-900">
-                                <span>Gesamt netto</span>
-                                <span>{formatMoney(totalNet)}</span>
-                              </div>
-                              {optionalTotal > 0 ? (
-                                <div className="flex items-center justify-between text-sand-600">
-                                  <span>Optional (netto)</span>
-                                  <span>{formatMoney(optionalTotal)}</span>
-                                </div>
-                              ) : null}
-                              <div className="flex items-center justify-between">
-                                <span>{formatVatLabel(offer)}</span>
-                                <span>{formatMoney(totalVat)}</span>
-                              </div>
-                              <div className="flex items-center justify-between text-base font-semibold text-sand-900">
-                                <span>Gesamt brutto</span>
-                                <span>{formatMoney(totalGross)}</span>
-                              </div>
-                            </div>
-                          </div>
+                          {totalsContent}
                         </div>
                       </>
                     ) : null}
-                  </div>
-                ) : null}
-
-                {showTotals && (offer.attachments || []).length ? (
-                  <div>
-                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                      Beilagen
-                    </p>
-                    <div className="mt-2 space-y-2 text-xs text-sand-600">
-                      {offer.attachments.map((item) => (
-                        <div key={item.id}>
-                          <p className="font-semibold text-sand-800">
-                            {item.title || item.fileName || "Beilage"}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1303,6 +1299,47 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           </div>
         );
       })}
+
+      {totalsOnOwnPage ? (
+        <>
+          <div className="html2pdf__page-break" />
+          <div
+            className="mx-auto"
+            style={{
+              width: `${a4WidthPx * scale}px`,
+              height: "auto",
+              minHeight: `${a4HeightPx}px`
+            }}
+          >
+            <div
+              className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+              style={{
+                width: `${a4WidthPx}px`,
+                height: "auto",
+                minHeight: `${a4HeightPx}px`,
+                paddingBottom: "48px",
+                transform: "none",
+                transformOrigin: "top left",
+                pageBreakAfter: "auto"
+              }}
+            >
+              <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+                <div className="flex items-center gap-2">
+                  <img src="/QTLogo.jpg" alt="QT" className="h-8 w-auto" />
+                  <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    Angebot
+                  </span>
+                </div>
+                <span className="text-xs text-sand-500">{offer.reference}</span>
+              </div>
+              <div className="mt-4 flex-1 space-y-6">{totalsContent}</div>
+              <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+                Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
 
       {hasProductPhotos ? (
         <div className="html2pdf__page-break" />
@@ -2445,7 +2482,7 @@ export default function OffersView() {
         ? `auftragsbestaetigung_${offer.reference || "angebot"}`
         : offer.reference || "angebot";
     const options = {
-      margin: 0,
+      margin: [8, 0, 8, 0],
       filename: `${filenameBase}.pdf`,
       image: { type: "jpeg", quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true },
@@ -2471,7 +2508,7 @@ export default function OffersView() {
     const run = async () => {
       try {
         const options = {
-          margin: 0,
+          margin: [8, 0, 8, 0],
           image: { type: "jpeg", quality: 0.98 },
           html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false },
           jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
