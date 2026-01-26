@@ -65,7 +65,7 @@ const billingCycleOptions = [
 
 const buildPdfBlobFromElement = async (element) => {
   const canvas = await html2canvas(element, {
-    scale: 1,
+    scale: 2,
     useCORS: true,
     backgroundColor: "#ffffff",
     logging: false
@@ -856,7 +856,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   return (
     <div
       ref={containerRef}
-      className={isExport ? "space-y-6" : "space-y-6 overflow-auto"}
+      className={isExport ? "space-y-6 bg-white" : "space-y-6 overflow-auto"}
+      style={isExport ? { backgroundColor: "#ffffff" } : undefined}
     >
       {offer.coverEnabled ? (
         <div
@@ -2369,7 +2370,7 @@ export default function OffersView() {
         const options = {
           margin: 0,
           image: { type: "jpeg", quality: 0.98 },
-          html2canvas: { scale: 1, useCORS: true, backgroundColor: "#ffffff", logging: false },
+          html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false },
           jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
           pagebreak: { mode: ["css", "legacy", "avoid-all"] }
         };

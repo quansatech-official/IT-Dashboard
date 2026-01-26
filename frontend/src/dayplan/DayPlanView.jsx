@@ -92,6 +92,8 @@ export default function DayPlanView() {
   const [customerFilter, setCustomerFilter] = useState("");
   const [contentFilter, setContentFilter] = useState("");
   const [employeeFilter, setEmployeeFilter] = useState("all");
+  const [openSinceFilter, setOpenSinceFilter] = useState("");
+  const [openSort, setOpenSort] = useState("name");
   const [doneFilter, setDoneFilter] = useState("");
   const [billedFilter, setBilledFilter] = useState("");
   const [detailOpenId, setDetailOpenId] = useState(null);
@@ -495,6 +497,7 @@ export default function DayPlanView() {
   const filteredTasks = useMemo(() => {
     const customerNeedle = normalizeText(customerFilter);
     const contentNeedle = normalizeText(contentFilter);
+    const minOpenDays = Number(openSinceFilter);
     return tasks.filter((task) => {
       const name = normalizeText(task?.customer || "");
       const number = normalizeText(task?.customer_number || "");
@@ -511,9 +514,14 @@ export default function DayPlanView() {
           : employeeFilter === "unassigned"
           ? !task.employee_id
           : String(task.employee_id || "") === employeeFilter;
-      return matchesCustomer && matchesContent && matchesEmployee;
+      const matchesOpenDays =
+        !Number.isFinite(minOpenDays) ||
+        minOpenDays <= 0 ||
+        (task.status !== "done" &&
+          openSinceDays(task.created_at) >= Math.floor(minOpenDays));
+      return matchesCustomer && matchesContent && matchesEmployee && matchesOpenDays;
     });
-  }, [tasks, customerFilter, contentFilter, employeeFilter]);
+  }, [tasks, customerFilter, contentFilter, employeeFilter, openSinceFilter]);
 
   const totalOpenTasks = useMemo(
     () => tasks.filter((task) => task.status !== "done").length,
@@ -549,10 +557,26 @@ export default function DayPlanView() {
         if (!aName && bName) return 1;
         return (b.created_at || 0) - (a.created_at || 0);
       });
-    map.todo = sortByName(map.todo);
+    const sortByOpenAge = (items, direction = "desc") =>
+      [...items].sort((a, b) => {
+        const aHasTime = hasRecordedTime(a);
+        const bHasTime = hasRecordedTime(b);
+        if (aHasTime !== bHasTime) {
+          return aHasTime ? -1 : 1;
+        }
+        const aTs = a.created_at || 0;
+        const bTs = b.created_at || 0;
+        return direction === "desc" ? aTs - bTs : bTs - aTs;
+      });
+    map.todo =
+      openSort === "age_desc"
+        ? sortByOpenAge(map.todo, "desc")
+        : openSort === "age_asc"
+        ? sortByOpenAge(map.todo, "asc")
+        : sortByName(map.todo);
     map.done = sortByName(map.done);
     return map;
-  }, [filteredTasks]);
+  }, [filteredTasks, openSort]);
 
   const doneTasks = useMemo(
     () =>
@@ -1004,21 +1028,23 @@ export default function DayPlanView() {
                 autoFocus
               />
             ) : task.customer ? (
-              <button
-                type="button"
-                onClick={() => {
-                  startCustomerEdit(task);
-                }}
-                className="mt-1 text-[11px] text-sand-500 hover:text-sand-700"
-                title="Kunde ändern"
-              >
-                {task.customer}
+              <div className="mt-1 flex w-full items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    startCustomerEdit(task);
+                  }}
+                  className="min-w-0 flex-1 truncate text-[11px] text-sand-500 hover:text-sand-700"
+                  title="Kunde ändern"
+                >
+                  {task.customer}
+                </button>
                 {!isDone ? (
-                  <span className="ml-2 text-[10px] text-sand-400">
+                  <span className="ml-auto whitespace-nowrap text-[10px] text-sand-400">
                     offen seit {openSinceDays(task.created_at)} Tagen
                   </span>
                 ) : null}
-              </button>
+              </div>
             ) : null}
             {suggestionOpenId === task.id ? (
               <div className="absolute right-0 top-full mt-1 w-64 rounded-xl border border-amber-200 bg-white shadow-soft z-20">
@@ -1236,6 +1262,16 @@ export default function DayPlanView() {
                   </button>
                 ) : null}
               </div>
+              <div className="relative w-full md:w-40">
+                <input
+                  type="number"
+                  min="0"
+                  value={openSinceFilter}
+                  onChange={(event) => setOpenSinceFilter(event.target.value)}
+                  placeholder="Offen seit (Tage)..."
+                  className="w-full rounded-full border border-sand-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sand-200 md:px-3 md:py-1 md:text-xs"
+                />
+              </div>
               <div className="relative w-full md:w-48">
                 <select
                   value={employeeFilter}
@@ -1250,6 +1286,17 @@ export default function DayPlanView() {
                       {employee.short_code || employee.name}
                     </option>
                   ))}
+                </select>
+              </div>
+              <div className="relative w-full md:w-44">
+                <select
+                  value={openSort}
+                  onChange={(event) => setOpenSort(event.target.value)}
+                  className="w-full rounded-full border border-sand-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sand-200 md:px-3 md:py-1 md:text-xs"
+                >
+                  <option value="name">Sortieren: Kunde</option>
+                  <option value="age_desc">Sortieren: offen (älteste)</option>
+                  <option value="age_asc">Sortieren: offen (neueste)</option>
                 </select>
               </div>
               <input
