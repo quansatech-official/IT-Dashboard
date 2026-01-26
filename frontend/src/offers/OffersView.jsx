@@ -744,7 +744,8 @@ const buildPreviewPositions = (offer) => {
 const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer", options = {}) => {
   const introHtml = options?.introHtml || "";
   const signatureHtml = options?.signatureHtml || "";
-  const positions = buildPreviewPositions(offer);
+  const showDetails = mode === "confirmation";
+  const positions = showDetails ? buildPreviewPositions(offer) : [];
   const headline =
     mode === "confirmation" ? "Ihre Auftragsbestätigung" : "Ihr Angebot";
   const rows = positions
@@ -768,40 +769,38 @@ const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer", options = {}) =>
     `
     )
     .join("");
-  const confirmBlock = confirmUrl
-    ? `
-      <div style="margin:20px 0;padding:16px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;">
-        <p style="margin:0 0 12px;">Bitte bestätigen Sie das Angebot:</p>
-        <a href="${confirmUrl}" style="display:inline-block;padding:10px 16px;background:#111827;color:#ffffff;text-decoration:none;border-radius:999px;font-size:12px;text-transform:uppercase;letter-spacing:0.2em;">
-          Angebot bestätigen
-        </a>
-      </div>
-    `
-    : "";
+  const confirmBlock = "";
   const introBlock = introHtml
     ? `<div style="margin:12px 0 16px;">${introHtml}</div>`
     : "";
   const signatureBlock = signatureHtml
     ? `<div style="margin-top:20px;border-top:1px solid #e5e7eb;padding-top:12px;">${signatureHtml}</div>`
     : "";
+  const detailsBlock = showDetails && rows
+    ? `
+      <table style="width:100%;border-collapse:collapse;margin-top:12px;">
+        <thead>
+          <tr>
+            <th style="text-align:left;border-bottom:1px solid #ddd;padding:6px 8px;">Pos</th>
+            <th style="text-align:left;border-bottom:1px solid #ddd;padding:6px 8px;">Überschrift</th>
+            <th style="text-align:right;border-bottom:1px solid #ddd;padding:6px 8px;">Menge</th>
+            <th style="text-align:right;border-bottom:1px solid #ddd;padding:6px 8px;">Netto</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    `
+    : "";
   return `
     <div style="font-family:Arial,sans-serif;color:#1f2937">
       <h2>${headline} ${offer.reference || ""}</h2>
       <p>Kunde: ${offer.customer || "Kunde offen"}</p>
       ${introBlock}
-      ${offer.overviewText ? `<p>${offer.overviewText.replace(/\n/g, "<br/>")}</p>` : ""}
+      ${showDetails && offer.overviewText ? `<p>${offer.overviewText.replace(/\n/g, "<br/>")}</p>` : ""}
       ${confirmBlock}
-      <table style="width:100%;border-collapse:collapse;margin-top:12px;">
-        <thead>
-          <tr>
-            <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #ddd;">Pos</th>
-            <th style="text-align:left;padding:6px 8px;border-bottom:1px solid #ddd;">Überschrift</th>
-            <th style="text-align:right;padding:6px 8px;border-bottom:1px solid #ddd;">Menge</th>
-            <th style="text-align:right;padding:6px 8px;border-bottom:1px solid #ddd;">Netto</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
+      ${detailsBlock}
       ${signatureBlock}
     </div>
   `;
@@ -2964,24 +2963,15 @@ export default function OffersView() {
       });
       const baseText =
         htmlToPlainText(introHtml) ||
-        (offerEmailBody || `Angebot ${offer.reference || ""}`).trim() ||
-        `Angebot ${offer.reference || ""}`;
+        (offerEmailBody || `Angebot ${offer.reference || ""} im Anhang.`).trim() ||
+        `Angebot ${offer.reference || ""} im Anhang.`;
       const signatureText = htmlToPlainText(signatureHtml);
-      let text = confirmUrl
-        ? `${baseText}\nBestätigungslink: ${confirmUrl}`
-        : baseText;
+      let text = baseText;
       if (signatureText) {
         text = `${text}\n\n${signatureText}`;
       }
       const pdfBlob = await generateOfferPdfBlob(offer, "offer");
-      const { attachments, skippedLinks } = await buildEmailAttachments(offer, pdfBlob);
-      if (skippedLinks.length) {
-        const linksText = skippedLinks.map((url) => `- ${url}`).join("\n");
-        text += `\n\nBeilagen-Links:\n${linksText}`;
-        html += `<p style="margin-top:12px;">Beilagen-Links:<br/>${skippedLinks
-          .map((url) => `<a href="${url}">${url}</a>`)
-          .join("<br/>")}</p>`;
-      }
+      const { attachments } = await buildEmailAttachments(offer, pdfBlob);
       const res = await fetch("/api/offers/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

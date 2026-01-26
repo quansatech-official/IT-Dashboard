@@ -63,6 +63,14 @@ const formatDoneDate = (value) => {
   });
 };
 
+const openSinceDays = (value) => {
+  const ts = Number(value || 0);
+  if (!ts) return "";
+  const ms = Date.now() - ts;
+  if (ms < 0) return "";
+  return Math.max(0, Math.floor(ms / (1000 * 60 * 60 * 24)));
+};
+
 export default function DayPlanView() {
   const [tasks, setTasks] = useState([]);
   const [error, setError] = useState("");
@@ -1005,6 +1013,11 @@ export default function DayPlanView() {
                 title="Kunde ändern"
               >
                 {task.customer}
+                {!isDone ? (
+                  <span className="ml-2 text-[10px] text-sand-400">
+                    offen seit {openSinceDays(task.created_at)} Tagen
+                  </span>
+                ) : null}
               </button>
             ) : null}
             {suggestionOpenId === task.id ? (

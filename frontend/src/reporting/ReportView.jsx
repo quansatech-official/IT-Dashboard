@@ -342,6 +342,7 @@ export default function ReportView() {
     reportId: null,
     fallbackText: "",
     pdfHtml: "",
+    pdfFilenameBase: "",
     trackingText: "",
     isSending: false
   });
@@ -1432,6 +1433,11 @@ export default function ReportView() {
       /src="\/QTLogo\.jpg"/g,
       `src="${window.location.origin}/QTLogo.jpg"`
     );
+    const filenameBase = `IT-Kundenbericht_${normalized.customer || "Kunde"}_${
+      normalized.period || "ohne Zeitraum"
+    }`
+      .replaceAll(" ", "_")
+      .replaceAll("/", "-");
     const text = buildPlainText(normalized);
     const introHtml = plainTextToHtml(text);
     const trackingText = beaconUrl
@@ -1446,13 +1452,14 @@ export default function ReportView() {
       reportId: item.id,
       fallbackText: text,
       pdfHtml,
+      pdfFilenameBase: filenameBase,
       trackingText,
       isSending: false
     });
   };
 
   const handleReportEmailSend = async () => {
-    const { reportId, to, subject, html, pdfHtml } = reportEmailComposer;
+    const { reportId, to, subject, html, pdfHtml, pdfFilenameBase } = reportEmailComposer;
     if (!reportId) return;
     if (!to?.trim()) {
       setToast("Bitte Empfänger-E-Mail-Adresse angeben.");
@@ -1462,9 +1469,11 @@ export default function ReportView() {
     setToast("Sende Bericht...");
     await new Promise((resolve) => setTimeout(resolve, 50));
     try {
-      const filenameBase = `IT-Kundenbericht_${report.customer}_${report.period || "ohne Zeitraum"}`
-        .replaceAll(" ", "_")
-        .replaceAll("/", "-");
+      const filenameBase =
+        pdfFilenameBase ||
+        `IT-Kundenbericht_${report.customer || "Kunde"}_${report.period || "ohne Zeitraum"}`
+          .replaceAll(" ", "_")
+          .replaceAll("/", "-");
       let pdfBlob = null;
       try {
         pdfBlob = pdfHtml ? await generateReportPdfBlob(pdfHtml, filenameBase) : null;
