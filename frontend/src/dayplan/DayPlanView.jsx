@@ -175,9 +175,16 @@ export default function DayPlanView() {
     try {
       const res = await fetch(`${API}/integration_settings`);
       const data = res && res.ok ? await res.json() : null;
-      if (!data) return;
+      const metricsRes = await fetch(`${API}/customer_metrics_settings`);
+      const metricsData = metricsRes && metricsRes.ok ? await metricsRes.json() : null;
+      if (!data && !metricsData) return sevdeskDefaults;
+      const hourlyRate =
+        data?.sevdesk_hourly_rate_eur ||
+        metricsData?.hourly_rate_eur ||
+        sevdeskDefaults.hourly_rate_eur ||
+        "";
       const nextDefaults = {
-        hourly_rate_eur: data?.sevdesk_hourly_rate_eur || "",
+        hourly_rate_eur: hourlyRate,
         default_tax_rate: data?.sevdesk_default_tax_rate || "",
         unity_id: data?.sevdesk_unity_id || "",
         service_unity_id: data?.sevdesk_service_unity_id || "",
@@ -189,6 +196,7 @@ export default function DayPlanView() {
     } catch (error) {
       setSevdeskDefaults((prev) => ({ ...prev, has_sevdesk_api_token: false }));
       setSevdeskTokenAvailable(false);
+      return sevdeskDefaults;
     }
   };
 
@@ -506,7 +514,7 @@ export default function DayPlanView() {
   };
 
   const openSevdeskDraft = async (task) => {
-    const latestDefaults = await refreshSevdeskDefaults();
+    const latestDefaults = (await refreshSevdeskDefaults()) || sevdeskDefaults;
     setSevdeskDraftTask(task);
     setSevdeskDraftForm(buildSevdeskDraftDefaults(task, latestDefaults));
     setSevdeskDraftStatus({ state: "idle", error: "" });
@@ -1844,7 +1852,7 @@ export default function DayPlanView() {
         status={sevdeskDraftStatus}
         aiLoading={sevdeskDraftAiLoading}
         advancedOpen={sevdeskDraftAdvancedOpen}
-        hasToken={sevdeskTokenAvailable}
+        hasToken={sevdeskTokenAvailable || sevdeskDefaults.has_sevdesk_api_token}
         draftCheck={sevdeskDraftCheck}
         onClose={closeSevdeskDraft}
         onSubmit={submitSevdeskDraft}

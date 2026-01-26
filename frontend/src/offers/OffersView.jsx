@@ -1523,7 +1523,7 @@ function SelectField({ value, onChange, disabled, children }) {
   );
 }
 
-function PositionCard({ item, onUpdate, onRemove }) {
+function PositionCard({ item, onUpdate, onRemove, onSaveAsBlock }) {
   if (!item) return null;
   const [open, setOpen] = useState(false);
   const billingOptions = [
@@ -1571,6 +1571,14 @@ function PositionCard({ item, onUpdate, onRemove }) {
           title="Entfernen"
         >
           <Trash2 size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onSaveAsBlock?.(item)}
+          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          title="Als Baustein speichern"
+        >
+          <Star size={12} />
         </button>
       </div>
       {open ? (
@@ -1639,7 +1647,8 @@ function DeviceCard({
   onUpdate,
   onRemove,
   onAddImage = () => {},
-  onRemoveImage = () => {}
+  onRemoveImage = () => {},
+  onSaveAsBlock
 }) {
   if (!item) return null;
   const [open, setOpen] = useState(false);
@@ -1722,6 +1731,14 @@ function DeviceCard({
           title="Entfernen"
         >
           <Trash2 size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onSaveAsBlock?.(item)}
+          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          title="Als Baustein speichern"
+        >
+          <Star size={12} />
         </button>
       </div>
       {open ? (
@@ -3982,6 +3999,7 @@ export default function OffersView() {
                               customers={customers}
                               onUpdate={(patch) => updateLineItem(activeOffer.id, item.id, patch)}
                               onRemove={() => removeLineItem(activeOffer.id, item.id)}
+                              onSaveAsBlock={saveLineItemAsBlock}
                               onNoteChange={(updater) => updateLineItemNotes(activeOffer.id, item.id, updater)}
                               onAiDraft={(text) =>
                                 updateLineItem(activeOffer.id, item.id, { aiDraft: text || "" })
@@ -4023,6 +4041,7 @@ export default function OffersView() {
                               item={item}
                               onUpdate={(patch) => updateDeviceItem(activeOffer.id, item.id, patch)}
                               onRemove={() => removeDeviceItem(activeOffer.id, item.id)}
+                              onSaveAsBlock={saveDeviceItemAsBlock}
                               onAddImage={(image) => addDeviceImage(activeOffer.id, item.id, image)}
                               onRemoveImage={(imageId) => removeDeviceImage(activeOffer.id, item.id, imageId)}
                               onAddNote={(note) => addDeviceItemNote(activeOffer.id, item.id, note)}
