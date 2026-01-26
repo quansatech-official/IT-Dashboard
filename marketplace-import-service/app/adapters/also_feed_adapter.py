@@ -350,7 +350,11 @@ class AlsoFeedAdapter:
     def _parse_decimal(value: str) -> Optional[float]:
         if not value:
             return None
-        normalized = value.replace(".", "").replace(",", ".")
+        normalized = value.strip().replace(" ", "").replace("'", "")
+        if "," in normalized and "." in normalized:
+            normalized = normalized.replace(".", "").replace(",", ".")
+        elif "," in normalized:
+            normalized = normalized.replace(",", ".")
         try:
             return float(normalized)
         except ValueError:

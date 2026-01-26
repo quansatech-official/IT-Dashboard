@@ -1515,12 +1515,12 @@ function PositionCard({ item, onUpdate, onRemove }) {
           {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
         <input
-          className={`${inputClass} flex-1`}
+          className={`${inputClass} flex-1 min-w-[140px]`}
           value={item.title || ""}
           onChange={(event) => onUpdate({ title: event.target.value })}
           placeholder="Leistungstitel"
         />
-        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-2 w-28">
+        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-2 w-24">
           <span className="text-sand-500 mr-1">€</span>
           <input
             className="w-full bg-transparent py-1 text-[13px] text-sand-900 outline-none appearance-none"
@@ -1530,7 +1530,7 @@ function PositionCard({ item, onUpdate, onRemove }) {
           />
         </div>
         <input
-          className={`${quantityInputClass} w-16`}
+          className={`${quantityInputClass} w-12`}
           type="number"
           value={item.quantity ?? ""}
           onChange={(event) => onUpdate({ quantity: parseNumberInput(event.target.value) })}
@@ -1666,12 +1666,12 @@ function DeviceCard({
           {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
         <input
-          className={`${inputClass} flex-1`}
+          className={`${inputClass} flex-1 min-w-[140px]`}
           value={item.product || ""}
           onChange={(event) => onUpdate({ product: event.target.value })}
           placeholder="Gerät / Material"
         />
-        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-2 w-28">
+        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-2 w-24">
           <span className="text-sand-500 mr-1">€</span>
           <input
             className="w-full bg-transparent py-1 text-[13px] text-sand-900 outline-none appearance-none"
@@ -1681,7 +1681,7 @@ function DeviceCard({
           />
         </div>
         <input
-          className={`${quantityInputClass} w-16`}
+          className={`${quantityInputClass} w-12`}
           type="number"
           value={item.quantity ?? ""}
           onChange={(event) => onUpdate({ quantity: parseNumberInput(event.target.value) })}
@@ -3487,7 +3487,7 @@ export default function OffersView() {
     addDeviceItem({
       title: item.title || item.sku || "Material",
       product: item.title || item.sku || "Material",
-      description: item.shortDescription || "",
+      description: item.shortDescription || item.title || "",
       price,
       quantity: 1
     });
