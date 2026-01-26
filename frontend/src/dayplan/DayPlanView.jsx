@@ -806,28 +806,13 @@ export default function DayPlanView() {
                     {task.title}
                   </button>
                 )}
-                {assignedEmployee ? (
-                  <span
-                    className="mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.2em]"
-                    style={{
-                      borderColor: assignedEmployee.color || "#111827",
-                      color: assignedEmployee.color || "#111827"
-                    }}
-                  >
-                    <span
-                      className="h-2 w-2 rounded-full"
-                      style={{ backgroundColor: assignedEmployee.color || "#111827" }}
-                    />
-                    {assignedEmployee.short_code || assignedEmployee.name}
-                  </span>
-                ) : null}
                 {isDone && task.completed_at ? (
                   <p className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-sand-400">
                     Erledigt {formatDoneDate(task.completed_at)}
                   </p>
                 ) : null}
               </div>
-              <div className="flex flex-wrap items-center justify-end gap-1 pr-6">
+              <div className="flex flex-wrap items-center justify-end gap-1 ml-auto pr-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -964,7 +949,11 @@ export default function DayPlanView() {
                   type="button"
                   onClick={() => toggleEmployeeMenu(task.id)}
                   className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
-                  title="Mitarbeiter zuweisen"
+                  title={
+                    assignedEmployee
+                      ? `Mitarbeiter: ${assignedEmployee.short_code || assignedEmployee.name}`
+                      : "Mitarbeiter zuweisen"
+                  }
                   style={{
                     borderColor: assignedEmployee?.color || undefined,
                     color: assignedEmployee?.color || undefined

@@ -338,6 +338,7 @@ export default function ReportView() {
     body: "",
     html: "",
     reportId: null,
+    fallbackText: "",
     trackingText: "",
     isSending: false
   });
@@ -1275,13 +1276,14 @@ export default function ReportView() {
       body: introHtml,
       html: baseHtml,
       reportId: item.id,
+      fallbackText: text,
       trackingText,
       isSending: false
     });
   };
 
   const handleReportEmailSend = async () => {
-    const { reportId, to, subject, body, html } = reportEmailComposer;
+    const { reportId, to, subject, html } = reportEmailComposer;
     if (!reportId) return;
     if (!to?.trim()) {
       setToast("Bitte Empfänger-E-Mail-Adresse angeben.");
@@ -1289,15 +1291,10 @@ export default function ReportView() {
     }
     updateReportEmailComposer({ isSending: true });
     try {
-      const signatureText = htmlToPlainText(smtpSignatureHtml);
-      const introHtml = normalizeHtmlBody(body);
-      const bodyText = htmlToPlainText(introHtml);
-      const text = signatureText ? `${bodyText}\n\n${signatureText}`.trim() : bodyText;
-      const htmlWithSignature = wrapEmailHtml(html, introHtml, smtpSignatureHtml);
       const res = await fetch(`/api/reports/${reportId}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, subject, html: htmlWithSignature, text })
+        body: JSON.stringify({ to, subject, html })
       });
       if (!res.ok) throw new Error("send_failed");
       const updated = await res.json();

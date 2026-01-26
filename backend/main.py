@@ -3754,6 +3754,7 @@ def send_report(report_id: int, data: ReportSendRequest):
         if not report.guid:
             report.guid = str(uuid.uuid4())
         subject = data.subject or f"IT-Kundenbericht – {report.customer} ({report.period or 'ohne Zeitraum'})"
+        report_url = _build_report_beacon_url(settings.beacon_base_url, report.guid)
 
         from_addr = settings.sender_email
         if settings.sender_name:
@@ -3766,7 +3767,12 @@ def send_report(report_id: int, data: ReportSendRequest):
         msg["Subject"] = subject
         msg["From"] = from_addr
         msg["To"] = data.to
-        msg.set_content(data.text or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung.")
+        fallback_text = (
+            f"Wenn Ihr E-Mail-Programm kein HTML anzeigen kann, öffnen Sie den Bericht hier: {report_url}"
+            if report_url
+            else "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung."
+        )
+        msg.set_content(data.text or fallback_text)
         msg.add_alternative(data.html, subtype="html")
 
         if settings.use_ssl:
