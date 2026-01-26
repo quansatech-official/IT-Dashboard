@@ -944,6 +944,11 @@ class ReportSendRequest(BaseModel):
     text: Optional[str] = None
     attachments: Optional[List["EmailAttachment"]] = None
 
+
+class ReportPdfRequest(BaseModel):
+    html: str
+    filename: Optional[str] = None
+
 class EmailAttachment(BaseModel):
     filename: str
     content_base64: str
@@ -3818,6 +3823,24 @@ def send_report(report_id: int, data: ReportSendRequest):
         db.commit()
         db.refresh(report)
         return serialize_report(report)
+
+
+@app.post("/api/reports/pdf")
+def build_report_pdf(payload: ReportPdfRequest):
+    try:
+        from weasyprint import HTML  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"PDF renderer unavailable: {exc}") from exc
+    if not payload.html:
+        raise HTTPException(400, "Missing HTML")
+    try:
+        pdf_bytes = HTML(string=payload.html).write_pdf()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Report PDF render failed: %s", exc)
+        raise HTTPException(500, f"PDF render failed: {exc}") from exc
+    filename = (payload.filename or "report.pdf").strip() or "report.pdf"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
 
 @app.post("/api/offers/send")

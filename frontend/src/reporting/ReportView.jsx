@@ -712,44 +712,72 @@ export default function ReportView() {
         )
       );
       try {
-        await html2pdf()
-          .set({
-            margin: [12, 12, 14, 12],
-            filename: `${filename}.pdf`,
-            html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
-            jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-            pagebreak: { mode: ["css", "legacy"] }
-          })
-          .from(container)
-          .save();
+        const blob = await fetchReportPdfBlob(html, filename);
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `${filename}.pdf`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
         setToast("PDF erstellt.");
       } catch (error) {
-        const canvas = await html2canvas(container, {
-          scale: 1,
-          useCORS: true,
-          backgroundColor: "#ffffff",
-          logging: false
-        });
-        const imgData = canvas.toDataURL("image/jpeg", 0.92);
-        const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        const pageHeight = pdf.internal.pageSize.getHeight();
-        const ratio = pageWidth / canvas.width;
-        const imgHeight = canvas.height * ratio;
-        let position = 0;
-        pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
-        let heightLeft = imgHeight - pageHeight;
-        while (heightLeft > 0) {
-          position -= pageHeight;
-          pdf.addPage();
+        try {
+          await html2pdf()
+            .set({
+              margin: [12, 12, 14, 12],
+              filename: `${filename}.pdf`,
+              html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+              jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+              pagebreak: { mode: ["css", "legacy"] }
+            })
+            .from(container)
+            .save();
+          setToast("PDF erstellt.");
+        } catch (fallbackError) {
+          const canvas = await html2canvas(container, {
+            scale: 1,
+            useCORS: true,
+            backgroundColor: "#ffffff",
+            logging: false
+          });
+          const imgData = canvas.toDataURL("image/jpeg", 0.92);
+          const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+          const pageWidth = pdf.internal.pageSize.getWidth();
+          const pageHeight = pdf.internal.pageSize.getHeight();
+          const ratio = pageWidth / canvas.width;
+          const imgHeight = canvas.height * ratio;
+          let position = 0;
           pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
-          heightLeft -= pageHeight;
+          let heightLeft = imgHeight - pageHeight;
+          while (heightLeft > 0) {
+            position -= pageHeight;
+            pdf.addPage();
+            pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+            heightLeft -= pageHeight;
+          }
+          pdf.save(`${filename}.pdf`);
+          setToast("PDF erstellt.");
         }
-        pdf.save(`${filename}.pdf`);
-        setToast("PDF erstellt.");
       }
     } catch (error) {
-      setToast("PDF Export fehlgeschlagen.");
+      try {
+        const win = window.open("", "_blank", "width=900,height=700");
+        if (win) {
+          win.document.write(
+            `<html><head><title>IT-Kundenbericht</title></head><body>${html}</body></html>`
+          );
+          win.document.close();
+          win.focus();
+          win.print();
+          setToast("PDF Export über Drucken.");
+        } else {
+          setToast("PDF Export fehlgeschlagen.");
+        }
+      } catch (printError) {
+        setToast("PDF Export fehlgeschlagen.");
+      }
     } finally {
       if (container.parentNode) {
         container.parentNode.removeChild(container);
@@ -759,8 +787,14 @@ export default function ReportView() {
   };
 
   const generateReportPdfBlob = async (html, filenameBase) => {
+    const inlineHtml = await inlineReportLogo(html);
+    try {
+      return await fetchReportPdfBlob(inlineHtml, filenameBase);
+    } catch (error) {
+      // fallback to client rendering
+    }
     const container = document.createElement("div");
-    container.innerHTML = await inlineReportLogo(html);
+    container.innerHTML = inlineHtml;
     container.style.position = "fixed";
     container.style.left = "-9999px";
     container.style.top = "0";
@@ -1200,6 +1234,22 @@ export default function ReportView() {
     } catch (error) {
       return html;
     }
+  };
+
+  const fetchReportPdfBlob = async (html, filenameBase) => {
+    const res = await fetch("/api/reports/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        html,
+        filename: `${filenameBase}.pdf`
+      })
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `status_${res.status}`);
+    }
+    return await res.blob();
   };
 
   const chunkBase64 = (value, size = 76) => {

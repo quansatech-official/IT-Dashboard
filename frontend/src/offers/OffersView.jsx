@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 import EmailComposerModal from "../components/EmailComposerModal";
 import html2pdf from "html2pdf.js";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 
 const SMTP_STORAGE_KEY = "qt_smtp_settings_cache";
 
@@ -60,6 +62,32 @@ const billingCycleOptions = [
   { value: "monthly", label: "Monatlich" },
   { value: "yearly", label: "Jährlich" }
 ];
+
+const buildPdfBlobFromElement = async (element) => {
+  const canvas = await html2canvas(element, {
+    scale: 1,
+    useCORS: true,
+    backgroundColor: "#ffffff",
+    logging: false
+  });
+  const imgData = canvas.toDataURL("image/jpeg", 0.92);
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const ratio = pageWidth / canvas.width;
+  const imgHeight = canvas.height * ratio;
+  let position = 0;
+  pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+  let heightLeft = imgHeight - pageHeight;
+  while (heightLeft > 0) {
+    position -= pageHeight;
+    pdf.addPage();
+    pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+    heightLeft -= pageHeight;
+  }
+  const arrayBuffer = pdf.output("arraybuffer");
+  return new Blob([arrayBuffer], { type: "application/pdf" });
+};
 
 const initialServiceBlocks = [
   {
@@ -2336,32 +2364,38 @@ export default function OffersView() {
     const offer = offers.find((item) => item.id === emailExportOfferId);
     if (!offer || !emailPdfRef.current) return;
     const element = emailPdfRef.current;
-    const options = {
-      margin: 0,
-      image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      pagebreak: { mode: ["css", "legacy", "avoid-all"] }
-    };
     const handlers = emailExportPromiseRef.current;
-    html2pdf()
-      .set(options)
-      .from(element)
-      .toPdf()
-      .get("pdf")
-      .then((pdf) => {
-        const buffer = pdf.output("arraybuffer");
+    const run = async () => {
+      try {
+        const options = {
+          margin: 0,
+          image: { type: "jpeg", quality: 0.98 },
+          html2canvas: { scale: 1, useCORS: true, backgroundColor: "#ffffff", logging: false },
+          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+          pagebreak: { mode: ["css", "legacy", "avoid-all"] }
+        };
+        const buffer = await html2pdf()
+          .set(options)
+          .from(element)
+          .toPdf()
+          .get("pdf")
+          .then((pdf) => pdf.output("arraybuffer"));
         const blob = new Blob([buffer], { type: "application/pdf" });
         handlers?.resolve?.(blob);
-      })
-      .catch((error) => {
-        handlers?.reject?.(error);
-      })
-      .finally(() => {
+      } catch (error) {
+        try {
+          const blob = await buildPdfBlobFromElement(element);
+          handlers?.resolve?.(blob);
+        } catch (fallbackError) {
+          handlers?.reject?.(fallbackError);
+        }
+      } finally {
         emailExportPromiseRef.current = null;
         setEmailExportOfferId("");
         setEmailExportMode("offer");
-      });
+      }
+    };
+    run();
   }, [emailExportOfferId, offers, emailExportMode]);
 
   useEffect(() => {
