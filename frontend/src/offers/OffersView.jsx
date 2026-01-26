@@ -15,6 +15,7 @@ import {
   Save,
   Send,
   Sparkles,
+  Star,
   Trash2,
   X
 } from "lucide-react";

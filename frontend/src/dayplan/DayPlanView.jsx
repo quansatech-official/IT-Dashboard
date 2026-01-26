@@ -173,7 +173,7 @@ export default function DayPlanView() {
 
   const refreshSevdeskDefaults = async () => {
     try {
-      const res = await fetch(`${API}/integration_settings`);
+      const res = await fetch(`${API}/integrations`);
       const data = res && res.ok ? await res.json() : null;
       const metricsRes = await fetch(`${API}/customer_metrics_settings`);
       const metricsData = metricsRes && metricsRes.ok ? await metricsRes.json() : null;
