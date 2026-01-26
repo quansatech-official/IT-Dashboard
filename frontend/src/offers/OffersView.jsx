@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BookmarkPlus,
   Check,
   ChevronDown,
   ChevronUp,
@@ -15,7 +16,6 @@ import {
   Save,
   Send,
   Sparkles,
-  Star,
   Trash2,
   X
 } from "lucide-react";
@@ -1576,10 +1576,10 @@ function PositionCard({ item, onUpdate, onRemove, onSaveAsBlock }) {
         <button
           type="button"
           onClick={() => onSaveAsBlock?.(item)}
-          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          className="text-slate-400 hover:text-sand-700"
           title="Als Baustein speichern"
         >
-          <Star size={12} />
+          <BookmarkPlus size={16} />
         </button>
       </div>
       {open ? (
@@ -1736,10 +1736,10 @@ function DeviceCard({
         <button
           type="button"
           onClick={() => onSaveAsBlock?.(item)}
-          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          className="text-slate-400 hover:text-sand-700"
           title="Als Baustein speichern"
         >
-          <Star size={12} />
+          <BookmarkPlus size={16} />
         </button>
       </div>
       {open ? (
