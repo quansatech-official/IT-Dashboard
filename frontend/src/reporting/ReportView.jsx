@@ -13,9 +13,44 @@ import {
   customers as fallbackCustomers,
   summarySuggestions as defaultSummarySuggestions
 } from "./constants";
-import { buildPlainText, renderReportHTML, uid } from "./utils";
+import { buildPlainText, escapeHTML, renderReportHTML, uid } from "./utils";
 
 const SMTP_STORAGE_KEY = "qt_smtp_settings_cache";
+
+const htmlToPlainText = (html = "") =>
+  String(html)
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\n\s+\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+
+const normalizeHtmlBody = (html = "") => (htmlToPlainText(html) ? String(html).trim() : "");
+
+const loadCachedSignature = () => {
+  if (typeof window === "undefined") return "";
+  try {
+    const raw = window.localStorage.getItem(SMTP_STORAGE_KEY);
+    const cached = raw ? JSON.parse(raw) : {};
+    return String(cached?.signature_html || "");
+  } catch (error) {
+    return "";
+  }
+};
+
+const wrapEmailHtml = (baseHtml, introHtml = "", signatureHtml = "") => {
+  const introBlock = introHtml
+    ? `<div style="margin: 0 0 16px; font-family: Arial, sans-serif; color: #1f2937;">${introHtml}</div>`
+    : "";
+  const signatureBlock = signatureHtml
+    ? `<div style="margin-top: 16px; border-top: 1px solid #e5e7eb; padding-top: 12px; font-family: Arial, sans-serif; color: #1f2937;">${signatureHtml}</div>`
+    : "";
+  return `${introBlock}${baseHtml}${signatureBlock}`;
+};
+
+const plainTextToHtml = (text = "") =>
+  escapeHTML(String(text)).replace(/\n/g, "<br/>");
 const ENABLE_OPEN_BEACON = true;
 const DEFAULT_BEACON_BASE_URL = "https://work.quansatech.at/beacon";
 
@@ -280,6 +315,7 @@ export default function ReportView() {
     html: ""
   });
   const [beaconBaseUrl, setBeaconBaseUrl] = useState(loadBeaconBaseUrl);
+  const [smtpSignatureHtml, setSmtpSignatureHtml] = useState(loadCachedSignature);
   const [freeText, setFreeText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isPdfExporting, setIsPdfExporting] = useState(false);
@@ -381,14 +417,16 @@ export default function ReportView() {
         if (!res.ok) return;
         const data = await res.json();
         const next = String(data?.beacon_base_url || "").trim();
+        const signature = String(data?.signature_html || "");
         if (!active) return;
         setBeaconBaseUrl(next);
+        setSmtpSignatureHtml(signature);
         try {
           const raw = window.localStorage.getItem(SMTP_STORAGE_KEY);
           const cached = raw ? JSON.parse(raw) : {};
           window.localStorage.setItem(
             SMTP_STORAGE_KEY,
-            JSON.stringify({ ...cached, beacon_base_url: next })
+            JSON.stringify({ ...cached, beacon_base_url: next, signature_html: signature })
           );
         } catch (error) {
           // ignore cache errors
@@ -1221,11 +1259,12 @@ export default function ReportView() {
     const normalized = normalizeReport(data);
     const subject = `IT-Kundenbericht – ${normalized.customer} (${normalized.period || "ohne Zeitraum"})`;
     const beaconUrl = buildBeaconUrl(normalized.guid, beaconBaseUrl);
-    const html = renderReportHTML(normalized, { mode: "email", beaconUrl }).replace(
+    const baseHtml = renderReportHTML(normalized, { mode: "email", beaconUrl }).replace(
       /src="\/QTLogo\.jpg"/g,
       `src="${window.location.origin}/QTLogo.jpg"`
     );
     const text = buildPlainText(normalized);
+    const introHtml = plainTextToHtml(text);
     const trackingText = beaconUrl
       ? `Tracking Beacon: ${beaconUrl}`
       : "Tracking nicht aktiviert (Beacon URL fehlt).";
@@ -1233,8 +1272,8 @@ export default function ReportView() {
       open: true,
       to: "",
       subject,
-      body: text,
-      html,
+      body: introHtml,
+      html: baseHtml,
       reportId: item.id,
       trackingText,
       isSending: false
@@ -1250,10 +1289,15 @@ export default function ReportView() {
     }
     updateReportEmailComposer({ isSending: true });
     try {
+      const signatureText = htmlToPlainText(smtpSignatureHtml);
+      const introHtml = normalizeHtmlBody(body);
+      const bodyText = htmlToPlainText(introHtml);
+      const text = signatureText ? `${bodyText}\n\n${signatureText}`.trim() : bodyText;
+      const htmlWithSignature = wrapEmailHtml(html, introHtml, smtpSignatureHtml);
       const res = await fetch(`/api/reports/${reportId}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, subject, html, text: body })
+        body: JSON.stringify({ to, subject, html: htmlWithSignature, text })
       });
       if (!res.ok) throw new Error("send_failed");
       const updated = await res.json();
@@ -1776,7 +1820,7 @@ export default function ReportView() {
         recipient={reportEmailComposer.to}
         subject={reportEmailComposer.subject}
         body={reportEmailComposer.body}
-        helperText="Der Plaintext wird gesendet, das HTML wird automatisch erstellt."
+        helperText="HTML wird gesendet, Plaintext wird automatisch erstellt."
         trackingText={reportEmailComposer.trackingText}
         isSending={reportEmailComposer.isSending}
         onClose={closeReportEmailComposer}

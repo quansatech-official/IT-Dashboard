@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Mail, Settings } from "lucide-react";
 import { telephonyService } from "../telephony/telephonyService";
+import NotesRichTextEditor from "../components/NotesRichTextEditor";
 
 const API = "/api";
 const STORAGE_KEY = "qt_smtp_settings_cache";
@@ -20,6 +21,7 @@ const defaultSmtp = {
   beacon_base_url: "https://work.quansatech.at/beacon",
   use_tls: true,
   use_ssl: false,
+  signature_html: "",
   has_password: false
 };
 
@@ -56,7 +58,7 @@ const defaultMarketplace = {
   also_sftp_user: "",
   also_sftp_password: "",
   also_sftp_dir: "",
-  also_sftp_filename: "",
+  also_sftp_filename: "pricelist-1.txt.zip",
   has_also_sftp_password: false
 };
 
@@ -179,6 +181,8 @@ export default function SettingsView() {
   });
   const [alsoSyncStatus, setAlsoSyncStatus] = useState("idle");
   const [alsoSyncMessage, setAlsoSyncMessage] = useState("");
+  const [alsoClearStatus, setAlsoClearStatus] = useState("idle");
+  const [alsoClearMessage, setAlsoClearMessage] = useState("");
   const [pbxDebugInfo, setPbxDebugInfo] = useState({
     lastCheckAt: "",
     lastCheckOk: null,
@@ -333,7 +337,7 @@ export default function SettingsView() {
           also_sftp_port: data?.also_sftp_port || defaultMarketplace.also_sftp_port,
           also_sftp_user: data?.also_sftp_user || "",
           also_sftp_dir: data?.also_sftp_dir || "",
-          also_sftp_filename: data?.also_sftp_filename || "",
+          also_sftp_filename: data?.also_sftp_filename || defaultMarketplace.also_sftp_filename,
           also_sftp_password: "",
           has_also_sftp_password: Boolean(data?.has_also_sftp_password)
         }));
@@ -485,7 +489,8 @@ export default function SettingsView() {
           sender_email: smtp.sender_email,
           beacon_base_url: smtp.beacon_base_url,
           use_tls: smtp.use_tls,
-          use_ssl: smtp.use_ssl
+          use_ssl: smtp.use_ssl,
+          signature_html: smtp.signature_html
         })
       });
       if (!res.ok) throw new Error("save_failed");
@@ -515,7 +520,10 @@ export default function SettingsView() {
       const res = await fetch(`${API}/smtp_settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ beacon_base_url: smtp.beacon_base_url })
+        body: JSON.stringify({
+          beacon_base_url: smtp.beacon_base_url,
+          signature_html: smtp.signature_html
+        })
       });
       if (!res.ok) throw new Error("save_failed");
       const data = await res.json();
@@ -1044,6 +1052,35 @@ export default function SettingsView() {
     }, 4000);
   };
 
+  const clearAlsoDb = async () => {
+    if (alsoClearStatus === "loading") return;
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        "ALSO-Datenbank wirklich leeren? Danach muss der Import neu gestartet werden."
+      );
+      if (!confirmed) return;
+    }
+    setAlsoClearStatus("loading");
+    setAlsoClearMessage("");
+    try {
+      const res = await fetch(`${API}/marketplace/also/clear`, { method: "POST" });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "clear_failed");
+      }
+      await refreshAlsoStatus();
+      setAlsoClearStatus("ready");
+      setAlsoClearMessage("ALSO-Datenbank geleert.");
+    } catch (error) {
+      setAlsoClearStatus("error");
+      setAlsoClearMessage(error?.message ? String(error.message) : "Löschen fehlgeschlagen.");
+    }
+    setTimeout(() => {
+      setAlsoClearStatus("idle");
+      setAlsoClearMessage("");
+    }, 4000);
+  };
+
   const refreshPbxDebug = async () => {
     let response;
     try {
@@ -1259,6 +1296,19 @@ export default function SettingsView() {
                     className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
                     placeholder="reports@example.com"
                   />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-xs text-sand-500">Signatur</label>
+                  <div className="mt-2">
+                    <NotesRichTextEditor
+                      value={smtp.signature_html}
+                      onChange={(value) =>
+                        setSmtp((prev) => ({ ...prev, signature_html: value }))
+                      }
+                      placeholder="Mit freundlichen Gruessen"
+                      minHeight="140px"
+                    />
+                  </div>
                 </div>
                 <label className="flex items-center gap-2 text-sm text-sand-700">
                   <input
@@ -2484,6 +2534,21 @@ export default function SettingsView() {
                       "ALSO Import starten"
                     )}
                   </button>
+                  <button
+                    type="button"
+                    onClick={clearAlsoDb}
+                    disabled={alsoClearStatus === "loading"}
+                    className="rounded-full border border-rose-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide text-rose-700 disabled:opacity-50"
+                  >
+                    {alsoClearStatus === "loading" ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span className="h-3 w-3 animate-spin rounded-full border border-rose-400 border-t-transparent" />
+                        Lösche
+                      </span>
+                    ) : (
+                      "DB leeren"
+                    )}
+                  </button>
                   {alsoSyncMessage ? (
                     <span
                       className={`text-xs ${
@@ -2491,6 +2556,15 @@ export default function SettingsView() {
                       }`}
                     >
                       {alsoSyncMessage}
+                    </span>
+                  ) : null}
+                  {alsoClearMessage ? (
+                    <span
+                      className={`text-xs ${
+                        alsoClearStatus === "error" ? "text-rose-600" : "text-emerald-600"
+                      }`}
+                    >
+                      {alsoClearMessage}
                     </span>
                   ) : null}
                   <button

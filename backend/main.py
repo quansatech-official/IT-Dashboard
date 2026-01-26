@@ -286,6 +286,7 @@ class SmtpSettings(Base):
     use_tls = Column(Boolean, default=True)
     use_ssl = Column(Boolean, default=False)
     beacon_base_url = Column(String, default="")
+    signature_html = Column(String, default="")
 
 
 class OfferSettings(Base):
@@ -546,10 +547,16 @@ def _ensure_smtp_settings_columns() -> None:
     if not inspector.has_table("smtp_settings"):
         return
     columns = {column["name"] for column in inspector.get_columns("smtp_settings")}
-    if "beacon_base_url" in columns:
+    statements = []
+    if "beacon_base_url" not in columns:
+        statements.append("ALTER TABLE smtp_settings ADD COLUMN beacon_base_url VARCHAR")
+    if "signature_html" not in columns:
+        statements.append("ALTER TABLE smtp_settings ADD COLUMN signature_html VARCHAR")
+    if not statements:
         return
     with engine.begin() as connection:
-        connection.execute(text("ALTER TABLE smtp_settings ADD COLUMN beacon_base_url VARCHAR"))
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 _ensure_smtp_settings_columns()
@@ -888,6 +895,7 @@ class SmtpSettingsUpdate(BaseModel):
     use_tls: Optional[bool] = None
     use_ssl: Optional[bool] = None
     beacon_base_url: Optional[str] = None
+    signature_html: Optional[str] = None
 
 
 class CustomerMetricsSettingsUpdate(BaseModel):
@@ -1459,6 +1467,7 @@ def serialize_smtp_settings(settings: SmtpSettings) -> Dict[str, Any]:
         "use_tls": settings.use_tls,
         "use_ssl": settings.use_ssl,
         "beacon_base_url": settings.beacon_base_url,
+        "signature_html": settings.signature_html,
         "has_password": bool(settings.password),
     }
 
@@ -2792,13 +2801,16 @@ def marketplace_sync_also():
     with SessionLocal() as db:
         settings = _get_settings(db)
         base_url = _get_marketplace_import_url(db)
+        filename = (settings.also_sftp_filename or "").strip()
+        if not filename or filename.lower() == "stock.txt":
+            filename = "pricelist-1.txt.zip"
         payload = {
             "host": settings.also_sftp_host,
             "port": settings.also_sftp_port,
             "user": settings.also_sftp_user,
             "password": settings.also_sftp_password,
             "dir": settings.also_sftp_dir,
-            "filename": settings.also_sftp_filename,
+            "filename": filename,
         }
     try:
         response = requests.post(f"{base_url}/import/also/config", json=payload, timeout=20)
@@ -2829,6 +2841,18 @@ def marketplace_also_status():
         response.raise_for_status()
     except requests.RequestException as exc:
         raise HTTPException(502, f"Marketplace import status error: {exc}") from exc
+    return response.json()
+
+
+@app.post("/api/marketplace/also/clear")
+def marketplace_also_clear():
+    with SessionLocal() as db:
+        base_url = _get_marketplace_import_url(db)
+    try:
+        response = requests.post(f"{base_url}/import/also/clear", timeout=20)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Marketplace import clear error: {exc}") from exc
     return response.json()
 
 # ============ PBX PHONEBOOK ============

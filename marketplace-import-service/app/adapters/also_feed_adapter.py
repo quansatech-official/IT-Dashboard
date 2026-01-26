@@ -154,6 +154,9 @@ class AlsoFeedAdapter:
                 logger.warning("Skipping invalid row: %s", exc)
                 continue
 
+    def clear_store(self) -> None:
+        self._store.clear()
+
     @staticmethod
     def _looks_like_header(row: List[str]) -> bool:
         expected = {

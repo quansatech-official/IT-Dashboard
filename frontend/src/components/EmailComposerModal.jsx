@@ -1,10 +1,8 @@
 import { X } from "lucide-react";
+import NotesRichTextEditor from "./NotesRichTextEditor";
 
 const inputClass =
   "w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200";
-const textareaClass =
-  "w-full min-h-[120px] rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm leading-relaxed text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200";
-
 export default function EmailComposerModal({
   open,
   title,
@@ -55,13 +53,15 @@ export default function EmailComposerModal({
             />
           </label>
           <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-            Text (Plaintext)
-            <textarea
-              className={textareaClass}
-              value={body}
-              onChange={(event) => onBodyChange?.(event.target.value)}
-              placeholder="Nachrichtentext..."
-            />
+            Nachricht
+            <div className="mt-2">
+              <NotesRichTextEditor
+                value={body}
+                onChange={onBodyChange}
+                placeholder="Sehr geehrte Damen und Herren,"
+                minHeight="140px"
+              />
+            </div>
           </label>
         </div>
         <div className="flex flex-col gap-1 border-t border-sand-100 px-6 py-4 text-[11px] text-sand-500">

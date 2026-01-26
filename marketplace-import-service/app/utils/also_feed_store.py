@@ -49,6 +49,11 @@ class AlsoFeedStore:
             for statement in SCHEMA.strip().split(";"):
                 if statement.strip():
                     conn.execute(statement)
+    
+    def clear(self) -> None:
+        if os.path.exists(self.db_path):
+            os.remove(self.db_path)
+        self._init_db()
 
     def replace_items(self, items: Iterable[NormalizedItem]) -> int:
         rows = 0

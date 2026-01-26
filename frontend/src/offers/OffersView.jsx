@@ -21,6 +21,8 @@ import {
 import EmailComposerModal from "../components/EmailComposerModal";
 import html2pdf from "html2pdf.js";
 
+const SMTP_STORAGE_KEY = "qt_smtp_settings_cache";
+
 const inputClass =
   "w-full rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400";
 
@@ -623,6 +625,17 @@ const sanitizeOffersForSave = (offers) =>
 
 const sanitizeOfferForSave = (offer) => sanitizeOffersForSave([offer])[0];
 
+const htmlToPlainText = (html = "") =>
+  String(html)
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\n\s+\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+
+const normalizeHtmlBody = (html = "") => (htmlToPlainText(html) ? String(html).trim() : "");
+
 const normalizeServerOffer = (payload) => {
   if (!payload || typeof payload !== "object") return null;
   const next = { ...payload };
@@ -639,6 +652,17 @@ const normalizeServerOffer = (payload) => {
     next.handoverLocked = false;
   }
   return next;
+};
+
+const loadCachedSignature = () => {
+  if (typeof window === "undefined") return "";
+  try {
+    const raw = window.localStorage.getItem(SMTP_STORAGE_KEY);
+    const cached = raw ? JSON.parse(raw) : {};
+    return String(cached?.signature_html || "");
+  } catch (error) {
+    return "";
+  }
 };
 
 const dedupeOffers = (list = []) => {
@@ -689,7 +713,9 @@ const buildPreviewPositions = (offer) => {
   return [...linePositions, ...devicePositions];
 };
 
-const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer") => {
+const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer", options = {}) => {
+  const introHtml = options?.introHtml || "";
+  const signatureHtml = options?.signatureHtml || "";
   const positions = buildPreviewPositions(offer);
   const headline =
     mode === "confirmation" ? "Ihre Auftragsbestätigung" : "Ihr Angebot";
@@ -724,10 +750,17 @@ const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer") => {
       </div>
     `
     : "";
+  const introBlock = introHtml
+    ? `<div style="margin:12px 0 16px;">${introHtml}</div>`
+    : "";
+  const signatureBlock = signatureHtml
+    ? `<div style="margin-top:20px;border-top:1px solid #e5e7eb;padding-top:12px;">${signatureHtml}</div>`
+    : "";
   return `
     <div style="font-family:Arial,sans-serif;color:#1f2937">
       <h2>${headline} ${offer.reference || ""}</h2>
       <p>Kunde: ${offer.customer || "Kunde offen"}</p>
+      ${introBlock}
       ${offer.overviewText ? `<p>${offer.overviewText.replace(/\n/g, "<br/>")}</p>` : ""}
       ${confirmBlock}
       <table style="width:100%;border-collapse:collapse;margin-top:12px;">
@@ -741,6 +774,7 @@ const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer") => {
         </thead>
         <tbody>${rows}</tbody>
       </table>
+      ${signatureBlock}
     </div>
   `;
 };
@@ -1801,6 +1835,7 @@ export default function OffersView() {
   const [offerEmailModalOpen, setOfferEmailModalOpen] = useState(false);
   const [emailOfferId, setEmailOfferId] = useState("");
   const [emailHelperText, setEmailHelperText] = useState("");
+  const [smtpSignatureHtml, setSmtpSignatureHtml] = useState(loadCachedSignature);
   const [handoverModal, setHandoverModal] = useState({
     open: false,
     offerId: "",
@@ -1939,6 +1974,31 @@ export default function OffersView() {
     const observer = new ResizeObserver(updateScale);
     observer.observe(element);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/smtp_settings")
+      .then((res) => (res && res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active) return;
+        const signature = String(data?.signature_html || "");
+        setSmtpSignatureHtml(signature);
+        try {
+          const raw = window.localStorage.getItem(SMTP_STORAGE_KEY);
+          const cached = raw ? JSON.parse(raw) : {};
+          window.localStorage.setItem(
+            SMTP_STORAGE_KEY,
+            JSON.stringify({ ...cached, signature_html: signature })
+          );
+        } catch (error) {
+          // ignore cache errors
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -2862,13 +2922,23 @@ export default function OffersView() {
     setSendStatus("sending");
     try {
       const confirmUrl = buildOfferConfirmUrl(offer.confirmGuid);
-      let html = buildOfferEmailHtml(offer, confirmUrl, "offer");
+      const introHtml = normalizeHtmlBody(offerEmailBody || "");
+      const signatureHtml = String(smtpSignatureHtml || "").trim();
+      let html = buildOfferEmailHtml(offer, confirmUrl, "offer", {
+        introHtml,
+        signatureHtml
+      });
       const baseText =
+        htmlToPlainText(introHtml) ||
         (offerEmailBody || `Angebot ${offer.reference || ""}`).trim() ||
         `Angebot ${offer.reference || ""}`;
+      const signatureText = htmlToPlainText(signatureHtml);
       let text = confirmUrl
         ? `${baseText}\nBestätigungslink: ${confirmUrl}`
         : baseText;
+      if (signatureText) {
+        text = `${text}\n\n${signatureText}`;
+      }
       const pdfBlob = await generateOfferPdfBlob(offer, "offer");
       const { attachments, skippedLinks } = await buildEmailAttachments(offer, pdfBlob);
       if (skippedLinks.length) {
@@ -2920,14 +2990,22 @@ export default function OffersView() {
     setSendStatus("sending");
     try {
       const confirmUrl = buildOfferConfirmUrl(offer.confirmGuid);
+      const signatureHtml = String(smtpSignatureHtml || "").trim();
+      const signatureText = htmlToPlainText(signatureHtml);
+      let text = `Auftragsbestätigung ${offer.reference || ""}`.trim();
+      if (signatureText) {
+        text = `${text}\n\n${signatureText}`;
+      }
       const res = await fetch("/api/offers/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to: sendTo,
           subject: `Auftragsbestätigung ${offer.reference || ""}`.trim(),
-          html: buildOfferEmailHtml(offer, confirmUrl, "confirmation"),
-          text: `Auftragsbestätigung ${offer.reference || ""}`.trim()
+          html: buildOfferEmailHtml(offer, confirmUrl, "confirmation", {
+            signatureHtml
+          }),
+          text
         })
       });
       if (!res.ok) throw new Error("send_failed");
@@ -5414,7 +5492,7 @@ export default function OffersView() {
     recipient={sendTo}
     subject={sendSubject || emailDefaultSubject || offerDefaultSubject}
     body={offerEmailBody}
-    helperText={emailHelperText || "Der Plaintext wird gesendet, das HTML wird automatisch erstellt."}
+    helperText={emailHelperText || "HTML wird gesendet, Plaintext wird automatisch erstellt."}
     trackingText={emailTrackingText}
     isSending={sendStatus === "sending"}
     onClose={closeOfferEmailComposer}

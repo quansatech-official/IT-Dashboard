@@ -148,6 +148,15 @@ async def also_status() -> Dict[str, Any]:
     return also_feed_adapter.check_status()
 
 
+@app.post("/import/also/clear")
+async def clear_also_db() -> Dict[str, Any]:
+    try:
+        also_feed_adapter.clear_store()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"status": "ok"}
+
+
 @app.post("/import/also/config")
 async def update_also_config(request: AlsoConfigRequest) -> Dict[str, Any]:
     payload = {

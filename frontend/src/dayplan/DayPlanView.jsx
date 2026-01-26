@@ -1055,17 +1055,19 @@ export default function DayPlanView() {
             ) : null}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => toggleDetails(task)}
-          className="absolute bottom-2 right-2 rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
-          title="Details anzeigen"
-        >
-          <ChevronDown
-            size={12}
-            className={`transition ${detailOpenId === task.id ? "rotate-180" : ""}`}
-          />
-        </button>
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => toggleDetails(task)}
+            className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
+            title="Details anzeigen"
+          >
+            <ChevronDown
+              size={12}
+              className={`transition ${detailOpenId === task.id ? "rotate-180" : ""}`}
+            />
+          </button>
+        </div>
       </div>
     );
   };
