@@ -84,10 +84,21 @@ class DayTask(Base):
     arrival_time = Column(String, default="")
     departure_time = Column(String, default="")
     deadline = Column(String, default="")
+    employee_id = Column(Integer, nullable=True)
     elapsed = Column(BigInteger, default=0)      # ms
     running = Column(Boolean, default=False)
     startTime = Column("starttime", BigInteger, default=0)    # ms timestamp
     completed_at = Column(BigInteger, default=0)
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
+class Employee(Base):
+    __tablename__ = "employees"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    short_code = Column(String, default="")
+    color = Column(String, default="#111827")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
@@ -634,6 +645,8 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN departure_time VARCHAR DEFAULT ''")
     if "deadline" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN deadline VARCHAR DEFAULT ''")
+    if "employee_id" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN employee_id INTEGER")
     if "elapsed" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN elapsed BIGINT DEFAULT 0")
     if "running" not in columns:
@@ -717,6 +730,7 @@ class DayTaskCreate(BaseModel):
     arrival_time: Optional[str] = ""
     departure_time: Optional[str] = ""
     deadline: Optional[str] = ""
+    employee_id: Optional[int] = None
     elapsed: Optional[int] = 0
     running: Optional[bool] = False
     startTime: Optional[int] = 0
@@ -741,10 +755,23 @@ class DayTaskUpdate(BaseModel):
     arrival_time: Optional[str] = None
     departure_time: Optional[str] = None
     deadline: Optional[str] = None
+    employee_id: Optional[int] = None
     elapsed: Optional[int] = None
     running: Optional[bool] = None
     startTime: Optional[int] = None
     completed_at: Optional[int] = None
+
+
+class EmployeeCreate(BaseModel):
+    name: str
+    short_code: Optional[str] = ""
+    color: Optional[str] = "#111827"
+
+
+class EmployeeUpdate(BaseModel):
+    name: Optional[str] = None
+    short_code: Optional[str] = None
+    color: Optional[str] = None
 
 
 class DayTaskGroupCreate(BaseModel):
@@ -1024,11 +1051,22 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "arrival_time": t.arrival_time,
         "departure_time": t.departure_time,
         "deadline": t.deadline,
+        "employee_id": t.employee_id,
         "elapsed": t.elapsed,
         "running": t.running,
         "startTime": t.startTime,
         "completed_at": t.completed_at,
         "created_at": t.created_at,
+    }
+
+
+def serialize_employee(e: Employee) -> Dict[str, Any]:
+    return {
+        "id": e.id,
+        "name": e.name,
+        "short_code": e.short_code,
+        "color": e.color,
+        "created_at": e.created_at,
     }
 
 
@@ -2293,6 +2331,55 @@ def get_day_task_groups():
         return [serialize_day_task_group(g) for g in groups]
 
 
+@app.get("/api/employees")
+def get_employees():
+    with SessionLocal() as db:
+        employees = db.query(Employee).order_by(Employee.created_at.asc()).all()
+        return [serialize_employee(employee) for employee in employees]
+
+
+@app.post("/api/employees")
+def create_employee(data: EmployeeCreate):
+    with SessionLocal() as db:
+        employee = Employee(
+            name=data.name.strip(),
+            short_code=(data.short_code or "").strip(),
+            color=(data.color or "#111827").strip() or "#111827",
+        )
+        db.add(employee)
+        db.commit()
+        db.refresh(employee)
+        return serialize_employee(employee)
+
+
+@app.patch("/api/employees/{employee_id}")
+def update_employee(employee_id: int, data: EmployeeUpdate):
+    with SessionLocal() as db:
+        employee = db.query(Employee).get(employee_id)
+        if not employee:
+            raise HTTPException(404, "employee not found")
+        for field, value in data.dict(exclude_unset=True).items():
+            if field == "color" and value:
+                value = str(value).strip() or "#111827"
+            setattr(employee, field, value)
+        db.commit()
+        return serialize_employee(employee)
+
+
+@app.delete("/api/employees/{employee_id}")
+def delete_employee(employee_id: int):
+    with SessionLocal() as db:
+        employee = db.query(Employee).get(employee_id)
+        if not employee:
+            raise HTTPException(404, "employee not found")
+        db.query(DayTask).filter(DayTask.employee_id == employee_id).update(
+            {DayTask.employee_id: None}
+        )
+        db.delete(employee)
+        db.commit()
+    return {"status": "ok"}
+
+
 @app.post("/api/day_task_groups")
 def create_day_task_group(data: DayTaskGroupCreate):
     with SessionLocal() as db:
@@ -2373,6 +2460,7 @@ def create_day_task(data: DayTaskCreate):
             arrival_time=data.arrival_time or "",
             departure_time=data.departure_time or "",
             deadline=data.deadline or "",
+            employee_id=data.employee_id,
             elapsed=int(data.elapsed or 0),
             running=bool(data.running),
             startTime=int(data.startTime or 0),

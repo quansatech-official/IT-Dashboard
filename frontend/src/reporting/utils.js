@@ -14,6 +14,10 @@ export const renderReportHTML = (report, options = {}) => {
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
+  const actionSummary = (report.actions || [])
+    .map((action) => escapeHTML(action.title || ""))
+    .filter(Boolean);
+  const actionSummaryLine = actionSummary.length ? actionSummary.join(" · ") : "";
   const introText =
     "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste mit Handlungsbedarf.";
   const statusBadge = (status = "") => {
@@ -114,6 +118,13 @@ export const renderReportHTML = (report, options = {}) => {
                             <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #d9e2ea; margin-top: 4px;">${escapeHTML(
                               report.customer
                             )} · ${escapeHTML(period)}</div>
+                            ${
+                              actionSummaryLine
+                                ? `<div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #c6d1da; margin-top: 6px; line-height: 1.4;">
+                                  ${actionSummaryLine}
+                                </div>`
+                                : ""
+                            }
                           </td>
                         </tr>
                       </table>

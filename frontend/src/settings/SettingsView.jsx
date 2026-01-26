@@ -107,6 +107,12 @@ export default function SettingsView() {
   const [smtp, setSmtp] = useState(loadCachedSmtp);
   const [status, setStatus] = useState("idle");
   const [loadStatus, setLoadStatus] = useState("loading");
+  const [employees, setEmployees] = useState([]);
+  const [employeeDraft, setEmployeeDraft] = useState({
+    name: "",
+    short_code: "",
+    color: "#111827"
+  });
   const [cti, setCti] = useState(defaultCti);
   const [ctiStatus, setCtiStatus] = useState("idle");
   const [ctiLoadStatus, setCtiLoadStatus] = useState("loading");
@@ -266,6 +272,23 @@ export default function SettingsView() {
       .catch(() => {
         if (!active) return;
         setLoadStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${API}/employees`)
+      .then((res) => (res && res.ok ? res.json() : []))
+      .then((data) => {
+        if (!active) return;
+        setEmployees(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setEmployees([]);
       });
     return () => {
       active = false;
@@ -563,6 +586,55 @@ export default function SettingsView() {
       setBeaconCheckStatus("error");
     }
     setTimeout(() => setBeaconCheckStatus("idle"), 2000);
+  };
+
+  const addEmployee = async () => {
+    const name = (employeeDraft.name || "").trim();
+    if (!name) return;
+    try {
+      const res = await fetch(`${API}/employees`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          short_code: employeeDraft.short_code || "",
+          color: employeeDraft.color || "#111827"
+        })
+      });
+      if (!res.ok) throw new Error("create_failed");
+      const created = await res.json();
+      setEmployees((prev) => [...prev, created]);
+      setEmployeeDraft({ name: "", short_code: "", color: "#111827" });
+    } catch (error) {
+      // ignore create errors for now
+    }
+  };
+
+  const updateEmployee = async (id, patch) => {
+    try {
+      const res = await fetch(`${API}/employees/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch)
+      });
+      if (!res.ok) throw new Error("update_failed");
+      const updated = await res.json();
+      setEmployees((prev) => prev.map((item) => (item.id === id ? updated : item)));
+    } catch (error) {
+      // ignore update errors for now
+    }
+  };
+
+  const deleteEmployee = async (id) => {
+    const ok = window.confirm("Mitarbeiter wirklich löschen?");
+    if (!ok) return;
+    try {
+      const res = await fetch(`${API}/employees/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("delete_failed");
+      setEmployees((prev) => prev.filter((item) => item.id !== id));
+    } catch (error) {
+      // ignore delete errors for now
+    }
   };
 
   const saveAiPrompts = async () => {
@@ -1348,6 +1420,131 @@ export default function SettingsView() {
               </div>
             </>
           ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Aufgaben</p>
+              <h3 className="text-lg font-display text-sand-900">Mitarbeiter</h3>
+              <p className="text-sm text-sand-600">
+                Zuweisungen, Kürzel und Farben für die Aufgaben-Pins.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-[1.5fr_1fr_auto_auto] gap-3 items-end">
+            <div>
+              <label className="text-xs text-sand-500">Name</label>
+              <input
+                value={employeeDraft.name}
+                onChange={(event) =>
+                  setEmployeeDraft((prev) => ({ ...prev, name: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder="Max Mustermann"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-sand-500">Kürzel</label>
+              <input
+                value={employeeDraft.short_code}
+                onChange={(event) =>
+                  setEmployeeDraft((prev) => ({ ...prev, short_code: event.target.value }))
+                }
+                className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                placeholder="MM"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-sand-500">Farbe</label>
+              <input
+                type="color"
+                value={employeeDraft.color}
+                onChange={(event) =>
+                  setEmployeeDraft((prev) => ({ ...prev, color: event.target.value }))
+                }
+                className="mt-1 h-10 w-12 rounded-xl border border-sand-200 bg-white p-1"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={addEmployee}
+              className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+            >
+              Hinzufügen
+            </button>
+          </div>
+          <div className="mt-4 space-y-2">
+            {employees.length ? (
+              employees.map((employee) => (
+                <div
+                  key={employee.id}
+                  className="grid grid-cols-1 md:grid-cols-[1.5fr_1fr_auto_auto] gap-3 items-center rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2"
+                >
+                  <input
+                    value={employee.name || ""}
+                    onChange={(event) =>
+                      setEmployees((prev) =>
+                        prev.map((item) =>
+                          item.id === employee.id
+                            ? { ...item, name: event.target.value }
+                            : item
+                        )
+                      )
+                    }
+                    onBlur={(event) =>
+                      updateEmployee(employee.id, { name: event.target.value })
+                    }
+                    className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                  />
+                  <input
+                    value={employee.short_code || ""}
+                    onChange={(event) =>
+                      setEmployees((prev) =>
+                        prev.map((item) =>
+                          item.id === employee.id
+                            ? { ...item, short_code: event.target.value }
+                            : item
+                        )
+                      )
+                    }
+                    onBlur={(event) =>
+                      updateEmployee(employee.id, { short_code: event.target.value })
+                    }
+                    className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                  />
+                  <input
+                    type="color"
+                    value={employee.color || "#111827"}
+                    onChange={(event) =>
+                      setEmployees((prev) =>
+                        prev.map((item) =>
+                          item.id === employee.id
+                            ? { ...item, color: event.target.value }
+                            : item
+                        )
+                      )
+                    }
+                    onBlur={(event) =>
+                      updateEmployee(employee.id, { color: event.target.value })
+                    }
+                    className="h-9 w-10 rounded-xl border border-sand-200 bg-white p-1"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => deleteEmployee(employee.id)}
+                    className="rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                  >
+                    Löschen
+                  </button>
+                </div>
+              ))
+            ) : (
+              <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-4 text-xs text-sand-500">
+                Noch keine Mitarbeiter angelegt.
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">

@@ -6,6 +6,7 @@ import {
   Clock,
   DollarSign,
   Heart,
+  Pin,
   Play,
   Sparkles,
   Square,
@@ -66,6 +67,7 @@ export default function DayPlanView() {
   const [tasks, setTasks] = useState([]);
   const [error, setError] = useState("");
   const [customers, setCustomers] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [groups, setGroups] = useState([]);
   const [groupDrafts, setGroupDrafts] = useState({});
   const [editingGroupId, setEditingGroupId] = useState(null);
@@ -78,7 +80,10 @@ export default function DayPlanView() {
   const [editingTitle, setEditingTitle] = useState("");
   const [editingCustomerId, setEditingCustomerId] = useState(null);
   const [editingCustomerValue, setEditingCustomerValue] = useState("");
+  const [employeeMenuOpenId, setEmployeeMenuOpenId] = useState(null);
   const [customerFilter, setCustomerFilter] = useState("");
+  const [contentFilter, setContentFilter] = useState("");
+  const [employeeFilter, setEmployeeFilter] = useState("all");
   const [doneFilter, setDoneFilter] = useState("");
   const [billedFilter, setBilledFilter] = useState("");
   const [detailOpenId, setDetailOpenId] = useState(null);
@@ -109,6 +114,20 @@ export default function DayPlanView() {
 
   useEffect(() => {
     refreshCustomers();
+  }, []);
+
+  const refreshEmployees = () =>
+    fetch(`${API}/employees`)
+      .then((res) => (res && res.ok ? res.json() : []))
+      .then((data) => {
+        setEmployees(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        setEmployees([]);
+      });
+
+  useEffect(() => {
+    refreshEmployees();
   }, []);
 
   useEffect(() => {
@@ -425,6 +444,12 @@ export default function DayPlanView() {
     if (!hasMultiple) return;
     setSuggestionOpenId((prev) => (prev === taskId ? null : taskId));
     setSuggestionQuery("");
+    setEmployeeMenuOpenId(null);
+  };
+
+  const toggleEmployeeMenu = (taskId) => {
+    setEmployeeMenuOpenId((prev) => (prev === taskId ? null : taskId));
+    setSuggestionOpenId(null);
   };
 
   const normalizeText = (value) => {
@@ -460,14 +485,27 @@ export default function DayPlanView() {
   };
 
   const filteredTasks = useMemo(() => {
-    const needle = normalizeText(customerFilter);
-    if (!needle) return tasks;
+    const customerNeedle = normalizeText(customerFilter);
+    const contentNeedle = normalizeText(contentFilter);
     return tasks.filter((task) => {
       const name = normalizeText(task?.customer || "");
       const number = normalizeText(task?.customer_number || "");
-      return (name && name.includes(needle)) || (number && number.includes(needle));
+      const matchesCustomer =
+        !customerNeedle ||
+        (name && name.includes(customerNeedle)) ||
+        (number && number.includes(customerNeedle));
+      const matchesContent = matchesTask(task, contentNeedle);
+      const matchesEmployee =
+        employeeFilter === "all"
+          ? true
+          : employeeFilter === "assigned"
+          ? Boolean(task.employee_id)
+          : employeeFilter === "unassigned"
+          ? !task.employee_id
+          : String(task.employee_id || "") === employeeFilter;
+      return matchesCustomer && matchesContent && matchesEmployee;
     });
-  }, [tasks, customerFilter]);
+  }, [tasks, customerFilter, contentFilter, employeeFilter]);
 
   const totalOpenTasks = useMemo(
     () => tasks.filter((task) => task.status !== "done").length,
@@ -715,6 +753,7 @@ export default function DayPlanView() {
     const canInvoice = hasCustomer;
     const isBilled = Boolean(task.aberechnet);
     const knownCustomer = isKnownCustomer(task.customer);
+    const assignedEmployee = employees.find((employee) => employee.id === task.employee_id);
     const timeTask = task.time_enabled ? task : null;
     const elapsedMs = timeTask
       ? (timeTask.elapsed || 0) +
@@ -767,6 +806,21 @@ export default function DayPlanView() {
                     {task.title}
                   </button>
                 )}
+                {assignedEmployee ? (
+                  <span
+                    className="mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.2em]"
+                    style={{
+                      borderColor: assignedEmployee.color || "#111827",
+                      color: assignedEmployee.color || "#111827"
+                    }}
+                  >
+                    <span
+                      className="h-2 w-2 rounded-full"
+                      style={{ backgroundColor: assignedEmployee.color || "#111827" }}
+                    />
+                    {assignedEmployee.short_code || assignedEmployee.name}
+                  </span>
+                ) : null}
                 {isDone && task.completed_at ? (
                   <p className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-sand-400">
                     Erledigt {formatDoneDate(task.completed_at)}
@@ -908,6 +962,18 @@ export default function DayPlanView() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => toggleEmployeeMenu(task.id)}
+                  className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                  title="Mitarbeiter zuweisen"
+                  style={{
+                    borderColor: assignedEmployee?.color || undefined,
+                    color: assignedEmployee?.color || undefined
+                  }}
+                >
+                  <Pin size={12} />
+                </button>
+                <button
+                  type="button"
                   onClick={() => toggleDetails(task)}
                   className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
                   title="Details anzeigen"
@@ -991,6 +1057,48 @@ export default function DayPlanView() {
                   {suggestionQuery.trim() && !filteredCustomerNames.length ? (
                     <div className="px-3 py-2 text-xs text-sand-400">Kein Kunde gefunden.</div>
                   ) : null}
+                </div>
+              </div>
+            ) : null}
+            {employeeMenuOpenId === task.id ? (
+              <div className="absolute right-0 top-full mt-1 w-56 rounded-xl border border-sand-200 bg-white shadow-soft z-20">
+                <div className="px-3 py-2 text-[10px] uppercase tracking-wide text-sand-400">
+                  Mitarbeiter
+                </div>
+                <div className="px-3 pb-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateTask(task, { employee_id: null });
+                      setEmployeeMenuOpenId(null);
+                    }}
+                    className="w-full text-left rounded-lg border border-sand-200 px-3 py-2 text-xs text-sand-600 hover:bg-sand-50"
+                  >
+                    Keine Zuweisung
+                  </button>
+                </div>
+                <div className="max-h-48 overflow-auto border-t border-sand-100">
+                  {employees.length ? (
+                    employees.map((employee) => (
+                      <button
+                        key={employee.id}
+                        type="button"
+                        onClick={() => {
+                          updateTask(task, { employee_id: employee.id });
+                          setEmployeeMenuOpenId(null);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs text-sand-700 hover:bg-sand-50"
+                      >
+                        <span
+                          className="mr-2 inline-flex h-2 w-2 rounded-full"
+                          style={{ backgroundColor: employee.color || "#111827" }}
+                        />
+                        {employee.short_code || employee.name}
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-2 text-xs text-sand-400">Keine Mitarbeiter.</div>
+                  )}
                 </div>
               </div>
             ) : null}
@@ -1107,6 +1215,40 @@ export default function DayPlanView() {
                     <X size={12} />
                   </button>
                 ) : null}
+              </div>
+              <div className="relative w-full md:w-52">
+                <input
+                  value={contentFilter}
+                  onChange={(event) => setContentFilter(event.target.value)}
+                  placeholder="Inhalt suchen..."
+                  className="w-full rounded-full border border-sand-200 bg-white px-4 py-2 pr-9 text-base focus:outline-none focus:ring-2 focus:ring-sand-200 md:px-3 md:py-1 md:text-xs"
+                />
+                {contentFilter.trim() ? (
+                  <button
+                    type="button"
+                    onClick={() => setContentFilter("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-sand-200 bg-white p-1 text-sand-400 hover:bg-sand-100"
+                    title="Suche löschen"
+                  >
+                    <X size={12} />
+                  </button>
+                ) : null}
+              </div>
+              <div className="relative w-full md:w-48">
+                <select
+                  value={employeeFilter}
+                  onChange={(event) => setEmployeeFilter(event.target.value)}
+                  className="w-full rounded-full border border-sand-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sand-200 md:px-3 md:py-1 md:text-xs"
+                >
+                  <option value="all">Alle Mitarbeiter</option>
+                  <option value="assigned">Zugewiesen</option>
+                  <option value="unassigned">Nicht zugewiesen</option>
+                  {employees.map((employee) => (
+                    <option key={employee.id} value={String(employee.id)}>
+                      {employee.short_code || employee.name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <input
                 value={groupDrafts.todo || ""}
