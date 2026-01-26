@@ -164,7 +164,8 @@ export default function SettingsView() {
   const [sevdeskAdvancedOpen, setSevdeskAdvancedOpen] = useState(false);
   const [sevdeskHealth, setSevdeskHealth] = useState({
     connected: null,
-    error: ""
+    error: "",
+    checkedAt: ""
   });
   const [marketplaceDebugInfo, setMarketplaceDebugInfo] = useState({
     lastCheckAt: "",
@@ -1225,15 +1226,21 @@ export default function SettingsView() {
       if (!res.ok || !data?.connected) {
         setSevdeskHealth({
           connected: false,
-          error: data?.error || "Verbindung fehlgeschlagen"
+          error: data?.error || "Verbindung fehlgeschlagen",
+          checkedAt: new Date().toISOString()
         });
         return;
       }
-      setSevdeskHealth({ connected: true, error: "" });
+      setSevdeskHealth({
+        connected: true,
+        error: "",
+        checkedAt: new Date().toISOString()
+      });
     } catch (error) {
       setSevdeskHealth({
         connected: false,
-        error: error?.message ? String(error.message) : "Fehler"
+        error: error?.message ? String(error.message) : "Fehler",
+        checkedAt: new Date().toISOString()
       });
     }
   };
@@ -2412,6 +2419,22 @@ export default function SettingsView() {
               </div>
               {sevdeskHealth.error ? (
                 <div className="mt-3 text-xs text-rose-600">{sevdeskHealth.error}</div>
+              ) : null}
+              {sevdeskHealth.connected === true ? (
+                <div className="mt-3 text-xs text-emerald-600">
+                  Verbindung OK
+                  {sevdeskHealth.checkedAt
+                    ? ` · Letzter Check: ${new Date(sevdeskHealth.checkedAt).toLocaleString("de-DE")}`
+                    : ""}
+                </div>
+              ) : null}
+              {sevdeskHealth.connected === false && !sevdeskHealth.error ? (
+                <div className="mt-3 text-xs text-rose-600">
+                  Verbindung fehlgeschlagen
+                  {sevdeskHealth.checkedAt
+                    ? ` · Letzter Check: ${new Date(sevdeskHealth.checkedAt).toLocaleString("de-DE")}`
+                    : ""}
+                </div>
               ) : null}
             </>
           ) : null}

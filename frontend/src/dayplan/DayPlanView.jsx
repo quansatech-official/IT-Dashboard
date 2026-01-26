@@ -8,6 +8,7 @@ import {
   Heart,
   Pin,
   Play,
+  Plus,
   Sparkles,
   Square,
   Star,
@@ -984,6 +985,8 @@ export default function DayPlanView() {
       : 0;
     const timeInputValue = timeEdits[task.id] ?? msToHHMMSS(elapsedMs);
     const isTimerCollapsed = Boolean(collapsedTimers[task.id]);
+    const hasDeadline = Boolean(String(task?.deadline || "").trim());
+    const isDetailsCollapsed = detailOpenId !== task.id;
     return (
       <div
         key={task.id}
@@ -993,6 +996,9 @@ export default function DayPlanView() {
           event.dataTransfer.setData("text/plain", `task:${task.id}`);
         }}
       >
+        {hasDeadline && isDetailsCollapsed ? (
+          <div className="pointer-events-none absolute right-0 top-0 h-0 w-0 border-l-[14px] border-t-[14px] border-l-transparent border-t-rose-500" />
+        ) : null}
         <div className="flex items-start gap-1.5">
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-1.5">
@@ -1416,102 +1422,91 @@ export default function DayPlanView() {
                 ? `${filteredOpenTasks} von ${totalOpenTasks} Aufgaben`
                 : `${totalOpenTasks} Aufgaben`}
             </div>
-            <div className="flex items-center gap-2">
-              <div className="relative w-full md:w-52">
-                <input
-                  value={customerFilter}
-                  onChange={(event) => setCustomerFilter(event.target.value)}
-                  placeholder="Kunde filtern..."
-                  className="w-full rounded-full border border-amber-200 bg-white px-4 py-2 pr-9 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
-                />
-                {customerFilter.trim() ? (
-                  <button
-                    type="button"
-                    onClick={() => setCustomerFilter("")}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-sand-200 bg-white p-1 text-sand-400 hover:bg-sand-100"
-                    title="Filter löschen"
+            <div className="w-full rounded-xl border border-sand-200 bg-white/70 p-2 shadow-soft">
+              <div className="grid gap-1.5 md:grid-cols-12 md:items-end">
+                <label className="md:col-span-3 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                  Kunde
+                  <div className="relative mt-1">
+                    <input
+                      value={customerFilter}
+                      onChange={(event) => setCustomerFilter(event.target.value)}
+                      placeholder="Name oder Nummer"
+                      className="w-full rounded-lg border border-amber-200 bg-white px-2 py-1 pr-7 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    />
+                    {customerFilter.trim() ? (
+                      <button
+                        type="button"
+                        onClick={() => setCustomerFilter("")}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full border border-sand-200 bg-white p-0.5 text-sand-400 hover:bg-sand-100"
+                        title="Filter löschen"
+                      >
+                        <X size={12} />
+                      </button>
+                    ) : null}
+                  </div>
+                </label>
+                <label className="md:col-span-3 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                  Inhalt
+                  <div className="relative mt-1">
+                    <input
+                      value={contentFilter}
+                      onChange={(event) => setContentFilter(event.target.value)}
+                      placeholder="Titel oder Notiz"
+                      className="w-full rounded-lg border border-sand-200 bg-white px-2 py-1 pr-7 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-sand-200"
+                    />
+                    {contentFilter.trim() ? (
+                      <button
+                        type="button"
+                        onClick={() => setContentFilter("")}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full border border-sand-200 bg-white p-0.5 text-sand-400 hover:bg-sand-100"
+                        title="Suche löschen"
+                      >
+                        <X size={12} />
+                      </button>
+                    ) : null}
+                  </div>
+                </label>
+                <label className="md:col-span-2 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                  Offen seit
+                  <input
+                    type="number"
+                    min="0"
+                    value={openSinceFilter}
+                    onChange={(event) => setOpenSinceFilter(event.target.value)}
+                    placeholder="Tage"
+                    className="mt-1 w-full rounded-lg border border-sand-200 bg-white px-2 py-1 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-sand-200"
+                  />
+                </label>
+                <label className="md:col-span-2 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                  Mitarbeiter
+                  <select
+                    value={employeeFilter}
+                    onChange={(event) => setEmployeeFilter(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-sand-200 bg-white px-2 py-1 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-sand-200"
                   >
-                    <X size={12} />
-                  </button>
-                ) : null}
-              </div>
-              <div className="relative w-full md:w-52">
-                <input
-                  value={contentFilter}
-                  onChange={(event) => setContentFilter(event.target.value)}
-                  placeholder="Inhalt suchen..."
-                  className="w-full rounded-full border border-sand-200 bg-white px-4 py-2 pr-9 text-base focus:outline-none focus:ring-2 focus:ring-sand-200 md:px-3 md:py-1 md:text-xs"
-                />
-                {contentFilter.trim() ? (
-                  <button
-                    type="button"
-                    onClick={() => setContentFilter("")}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-sand-200 bg-white p-1 text-sand-400 hover:bg-sand-100"
-                    title="Suche löschen"
+                    <option value="all">Alle</option>
+                    <option value="assigned">Zugewiesen</option>
+                    <option value="unassigned">Unzugewiesen</option>
+                    {employees.map((employee) => (
+                      <option key={employee.id} value={String(employee.id)}>
+                        {employee.short_code || employee.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="md:col-span-2 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                  Sortierung
+                  <select
+                    value={openSort}
+                    onChange={(event) => setOpenSort(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-sand-200 bg-white px-2 py-1 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-sand-200"
                   >
-                    <X size={12} />
-                  </button>
-                ) : null}
+                    <option value="name">Kunde</option>
+                    <option value="age_desc">Offen (älteste)</option>
+                    <option value="age_asc">Offen (neueste)</option>
+                  </select>
+                </label>
               </div>
-              <div className="relative w-full md:w-40">
-                <input
-                  type="number"
-                  min="0"
-                  value={openSinceFilter}
-                  onChange={(event) => setOpenSinceFilter(event.target.value)}
-                  placeholder="Offen seit (Tage)..."
-                  className="w-full rounded-full border border-sand-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sand-200 md:px-3 md:py-1 md:text-xs"
-                />
-              </div>
-              <div className="relative w-full md:w-48">
-                <select
-                  value={employeeFilter}
-                  onChange={(event) => setEmployeeFilter(event.target.value)}
-                  className="w-full rounded-full border border-sand-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sand-200 md:px-3 md:py-1 md:text-xs"
-                >
-                  <option value="all">Alle Mitarbeiter</option>
-                  <option value="assigned">Zugewiesen</option>
-                  <option value="unassigned">Nicht zugewiesen</option>
-                  {employees.map((employee) => (
-                    <option key={employee.id} value={String(employee.id)}>
-                      {employee.short_code || employee.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="relative w-full md:w-44">
-                <select
-                  value={openSort}
-                  onChange={(event) => setOpenSort(event.target.value)}
-                  className="w-full rounded-full border border-sand-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-sand-200 md:px-3 md:py-1 md:text-xs"
-                >
-                  <option value="name">Sortieren: Kunde</option>
-                  <option value="age_desc">Sortieren: offen (älteste)</option>
-                  <option value="age_asc">Sortieren: offen (neueste)</option>
-                </select>
-              </div>
-              <input
-                value={groupDrafts.todo || ""}
-                onChange={(event) =>
-                  setGroupDrafts((prev) => ({ ...prev, todo: event.target.value }))
-                }
-                onKeyDown={(event) => {
-                  if (event.isComposing || event.keyCode === 229 || event.repeat) return;
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    createGroup("todo");
-                  }
-                }}
-                placeholder="Neue Gruppe…"
-                className="w-full md:w-40 rounded-full border border-amber-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
-              />
-              <button
-                type="button"
-                onClick={() => createGroup("todo")}
-                className="rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-amber-100 md:px-3 md:py-1 md:text-[10px]"
-              >
-                Gruppe
-              </button>
             </div>
           </div>
         </div>
@@ -1541,12 +1536,37 @@ export default function DayPlanView() {
               onDrop={(event) => handleDrop(event, column.id)}
             >
               <div className="flex items-center justify-between mb-3 gap-3">
-                <div>
+                <div className="flex items-center gap-2">
                   <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">
                     {column.label}
                   </h2>
                 </div>
-                <span className="text-xs text-sand-500">{grouped[column.id].length}</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-sand-500">{grouped[column.id].length}</span>
+                  <input
+                    value={groupDrafts.todo || ""}
+                    onChange={(event) =>
+                      setGroupDrafts((prev) => ({ ...prev, todo: event.target.value }))
+                    }
+                    onKeyDown={(event) => {
+                      if (event.isComposing || event.keyCode === 229 || event.repeat) return;
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        createGroup("todo");
+                      }
+                    }}
+                    placeholder="Neue Gruppe…"
+                    className="w-28 rounded-lg border border-amber-200 bg-white px-2 py-1 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => createGroup("todo")}
+                    className="rounded-lg border border-amber-200 bg-amber-50 p-1 text-sand-700 hover:bg-amber-100"
+                    title="Gruppe anlegen"
+                  >
+                    <Plus size={12} />
+                  </button>
+                </div>
               </div>
               <div className="grid gap-3 lg:grid-cols-2">
                 <div className="space-y-2 max-h-[70vh] overflow-auto pr-1">
