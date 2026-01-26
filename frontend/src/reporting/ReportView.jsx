@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileDown, FileText, Flag, Plus, Save, Sparkles, Users2, PenLine } from "lucide-react";
 import html2pdf from "html2pdf.js";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 import ActionCard from "./components/ActionCard";
 import ArchivePanel from "./components/ArchivePanel";
 import CatalogManager from "./components/CatalogManager";
@@ -708,17 +710,43 @@ export default function ReportView() {
             })
         )
       );
-      await html2pdf()
-        .set({
-          margin: [12, 12, 14, 12],
-          filename: `${filename}.pdf`,
-          html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
-          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-          pagebreak: { mode: ["css", "legacy"] }
-        })
-        .from(container)
-        .save();
-      setToast("PDF erstellt.");
+      try {
+        await html2pdf()
+          .set({
+            margin: [12, 12, 14, 12],
+            filename: `${filename}.pdf`,
+            html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+            jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+            pagebreak: { mode: ["css", "legacy"] }
+          })
+          .from(container)
+          .save();
+        setToast("PDF erstellt.");
+      } catch (error) {
+        const canvas = await html2canvas(container, {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+          logging: false
+        });
+        const imgData = canvas.toDataURL("image/jpeg", 0.92);
+        const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        const ratio = pageWidth / canvas.width;
+        const imgHeight = canvas.height * ratio;
+        let position = 0;
+        pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+        let heightLeft = imgHeight - pageHeight;
+        while (heightLeft > 0) {
+          position -= pageHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+          heightLeft -= pageHeight;
+        }
+        pdf.save(`${filename}.pdf`);
+        setToast("PDF erstellt.");
+      }
     } catch (error) {
       setToast("PDF Export fehlgeschlagen.");
     } finally {
@@ -753,18 +781,44 @@ export default function ReportView() {
             })
         )
       );
-      const blob = await html2pdf()
-        .set({
-          margin: [12, 12, 14, 12],
-          filename: `${filenameBase}.pdf`,
-          html2canvas: { scale: 1, useCORS: true, backgroundColor: "#ffffff", logging: false },
-          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-          pagebreak: { mode: ["css", "legacy"] }
-        })
-        .from(container)
-        .toPdf()
-        .output("blob");
-      return blob;
+      try {
+        const arrayBuffer = await html2pdf()
+          .set({
+            margin: [12, 12, 14, 12],
+            filename: `${filenameBase}.pdf`,
+            html2canvas: { scale: 1, useCORS: true, backgroundColor: "#ffffff", logging: false },
+            jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+            pagebreak: { mode: ["css", "legacy"] }
+          })
+          .from(container)
+          .toPdf()
+          .output("arraybuffer");
+        return new Blob([arrayBuffer], { type: "application/pdf" });
+      } catch (error) {
+        const canvas = await html2canvas(container, {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+          logging: false
+        });
+        const imgData = canvas.toDataURL("image/jpeg", 0.92);
+        const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        const pageHeight = pdf.internal.pageSize.getHeight();
+        const ratio = pageWidth / canvas.width;
+        const imgHeight = canvas.height * ratio;
+        let position = 0;
+        pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+        let heightLeft = imgHeight - pageHeight;
+        while (heightLeft > 0) {
+          position -= pageHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+          heightLeft -= pageHeight;
+        }
+        const arrayBuffer = pdf.output("arraybuffer");
+        return new Blob([arrayBuffer], { type: "application/pdf" });
+      }
     } finally {
       if (container.parentNode) {
         container.parentNode.removeChild(container);
