@@ -104,6 +104,9 @@ export default function DayPlanView() {
     default_tax_rate: "",
     unity_id: "",
     service_unity_id: "",
+    contact_person_id: "",
+    address_country_id: "",
+    tax_rule_id: "",
     has_sevdesk_api_token: false
   });
   const [sevdeskTokenAvailable, setSevdeskTokenAvailable] = useState(false);
@@ -188,6 +191,9 @@ export default function DayPlanView() {
         default_tax_rate: data?.sevdesk_default_tax_rate || "",
         unity_id: data?.sevdesk_unity_id || "",
         service_unity_id: data?.sevdesk_service_unity_id || "",
+        contact_person_id: data?.sevdesk_contact_person_id || "",
+        address_country_id: data?.sevdesk_address_country_id || "",
+        tax_rule_id: data?.sevdesk_tax_rule_id || "",
         has_sevdesk_api_token: Boolean(data?.has_sevdesk_api_token)
       };
       setSevdeskDefaults(nextDefaults);
@@ -868,6 +874,15 @@ export default function DayPlanView() {
   );
 
   const hasRunningTimer = useMemo(() => tasks.some((task) => task?.running), [tasks]);
+
+  const missingSevdeskInvoiceFields = useMemo(() => {
+    const missing = [];
+    if (!String(sevdeskDefaults.contact_person_id || "").trim()) missing.push("Kontaktperson-ID");
+    if (!String(sevdeskDefaults.address_country_id || "").trim()) missing.push("Adressland-ID");
+    if (!String(sevdeskDefaults.tax_rule_id || "").trim()) missing.push("Steuerregel-ID");
+    if (!String(sevdeskDefaults.unity_id || "").trim()) missing.push("Standard-Unity-ID");
+    return missing;
+  }, [sevdeskDefaults]);
 
   useEffect(() => {
     if (!hasRunningTimer) return;
@@ -1853,6 +1868,7 @@ export default function DayPlanView() {
         aiLoading={sevdeskDraftAiLoading}
         advancedOpen={sevdeskDraftAdvancedOpen}
         hasToken={sevdeskTokenAvailable || sevdeskDefaults.has_sevdesk_api_token}
+        missingInvoiceFields={missingSevdeskInvoiceFields}
         draftCheck={sevdeskDraftCheck}
         onClose={closeSevdeskDraft}
         onSubmit={submitSevdeskDraft}
@@ -1872,6 +1888,7 @@ function FakturaTaskModal({
   aiLoading,
   advancedOpen,
   hasToken,
+  missingInvoiceFields,
   draftCheck,
   onClose,
   onSubmit,
@@ -1884,6 +1901,7 @@ function FakturaTaskModal({
   const hasCustomerNumber = String(form.customer_number || "").trim().length > 0;
   const hasDraft = Boolean(draftCheck?.hasDraft);
   const contactFound = draftCheck?.contactFound !== false;
+  const hasMissingInvoiceFields = Array.isArray(missingInvoiceFields) && missingInvoiceFields.length > 0;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
       <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
@@ -1908,6 +1926,12 @@ function FakturaTaskModal({
           {!hasToken ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
               Sevdesk API Token fehlt in den Einstellungen.
+            </div>
+          ) : null}
+          {hasToken && hasMissingInvoiceFields ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              In den sevdesk-Einstellungen fehlen: {missingInvoiceFields.join(", ")}. Bitte in den
+              Einstellungen ergänzen.
             </div>
           ) : null}
           {!task.customer ? (
@@ -2095,7 +2119,7 @@ function FakturaTaskModal({
           <button
             type="button"
             onClick={onSubmit}
-            disabled={!hasToken || !hasCustomerNumber || isSaving}
+            disabled={!hasToken || !hasCustomerNumber || isSaving || hasMissingInvoiceFields}
             className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSaving

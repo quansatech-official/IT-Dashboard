@@ -249,6 +249,7 @@ const getCostTotalsByCycle = (offer) => {
   if (!offer) return totals;
   const allItems = [...(offer.lineItems || []), ...(offer.deviceItems || [])];
   allItems.forEach((item) => {
+    if (item?.optional) return;
     const cycle = normalizeBillingCycle(item.billingCycle);
     totals[cycle] += Number(item.price || 0) * Number(item.quantity || 0);
   });
@@ -568,7 +569,8 @@ const buildLineItemFromBlock = (block = {}) => ({
   aiVersions: [],
   activeAiVersionId: null,
   aiDraft: "",
-  internalNotes: []
+  internalNotes: [],
+  optional: false
 });
 
 const buildDeviceItemFromBlock = (block = {}) => ({
@@ -592,7 +594,8 @@ const buildDeviceItemFromBlock = (block = {}) => ({
           text: block.internalNote
         }
       ]
-    : []
+    : [],
+  optional: false
 });
 
 const defaultOfferFormat = "AN-XXXX";
@@ -603,6 +606,25 @@ const makeReference = (format, index) => {
   const width = match[0].length;
   const number = String(index).padStart(width, "0");
   return template.replace(match[0], number);
+};
+
+const getNextOfferIndex = (offers, format) => {
+  const template = (format || defaultOfferFormat).trim() || defaultOfferFormat;
+  const match = template.match(/X+/);
+  if (!match) return offers.length + 1;
+  const width = match[0].length;
+  const prefix = template.slice(0, match.index);
+  const suffix = template.slice((match.index || 0) + width);
+  let max = 0;
+  offers.forEach((offer) => {
+    const reference = String(offer?.reference || "");
+    if (!reference.startsWith(prefix) || !reference.endsWith(suffix)) return;
+    const numberPart = reference.slice(prefix.length, reference.length - suffix.length);
+    if (numberPart.length !== width || !/^\d+$/.test(numberPart)) return;
+    const value = Number(numberPart);
+    if (value > max) max = value;
+  });
+  return max ? max + 1 : offers.length + 1;
 };
 
 const createEmptyOffer = (index, format) => ({
@@ -714,8 +736,11 @@ const dedupeOffers = (list = []) => {
 
 const buildPreviewPositions = (offer) => {
   if (!offer) return [];
+  let index = 0;
   const linePositions = (offer.lineItems || []).map((item) => {
     const activeVersion = getActiveVersion(item);
+    const isOptional = Boolean(item.optional);
+    const positionIndex = isOptional ? null : (index += 1);
     return {
       id: item.id,
       title: item.title || "Position",
@@ -725,20 +750,28 @@ const buildPreviewPositions = (offer) => {
       billingCycle: item.billingCycle || "once",
       text: item.aiDraft || activeVersion?.text || "",
       images: [],
-      category: "service"
+      category: "service",
+      optional: isOptional,
+      positionIndex
     };
   });
-  const devicePositions = (offer.deviceItems || []).map((item) => ({
-    id: item.id,
-    title: formatDeviceTitle(item),
-    quantity: item.quantity,
-    price: item.price,
-    unit: "piece",
-    billingCycle: item.billingCycle || "once",
-    text: item.description || "",
-    images: item.images || [],
-    category: "device"
-  }));
+  const devicePositions = (offer.deviceItems || []).map((item) => {
+    const isOptional = Boolean(item.optional);
+    const positionIndex = isOptional ? null : (index += 1);
+    return {
+      id: item.id,
+      title: formatDeviceTitle(item),
+      quantity: item.quantity,
+      price: item.price,
+      unit: "piece",
+      billingCycle: item.billingCycle || "once",
+      text: item.description || "",
+      images: item.images || [],
+      category: "device",
+      optional: isOptional,
+      positionIndex
+    };
+  });
   return [...linePositions, ...devicePositions];
 };
 
@@ -749,11 +782,14 @@ const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer", options = {}) =>
   const positions = showDetails ? buildPreviewPositions(offer) : [];
   const headline =
     mode === "confirmation" ? "Ihre Auftragsbestätigung" : "Ihr Angebot";
+  let emailIndex = 0;
   const rows = positions
-    .map(
-      (item, index) => `
+    .map((item) => {
+      const isOptional = Boolean(item.optional);
+      const label = isOptional ? "Optional" : `${(emailIndex += 1)}`;
+      return `
       <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${index + 1}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #eee;">${label}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #eee;">${item.title} (${formatBillingCycleLabel(
           item.billingCycle
         )})</td>
@@ -767,8 +803,8 @@ const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer", options = {}) =>
         )}</td>
       </tr>
       ${item.text ? `<tr><td></td><td colspan="3" style="padding:4px 8px;color:#666;">${item.text.replace(/\n/g, "<br/>")}</td></tr>` : ""}
-    `
-    )
+    `;
+    })
     .join("");
   const confirmBlock = "";
   const introBlock = introHtml
@@ -817,11 +853,13 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   }
   const previewPositions = buildPreviewPositions(offer);
   const serviceTotal = (offer.lineItems || []).reduce(
-    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+    (sum, item) =>
+      sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
     0
   );
   const deviceTotal = (offer.deviceItems || []).reduce(
-    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+    (sum, item) =>
+      sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
     0
   );
   const totalNet = serviceTotal + deviceTotal;
@@ -833,10 +871,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const hasPositionText = previewPositions.some((item) => item.text);
   const hasProductPhotos = previewPositions.some((item) => item.images?.length);
   const isExport = Boolean(containerRef);
-  const forceTotalsPageBreak = isExport && previewPositions.length > 10;
-  const rowsPerPage = isExport ? 10 : Number.POSITIVE_INFINITY;
+  const rowsPerPage = isExport ? 8 : Number.POSITIVE_INFINITY;
   const previewRowsPerPage = 10;
-  const pageSize = isExport ? previewPositions.length : previewRowsPerPage;
+  const pageSize = isExport ? rowsPerPage : previewRowsPerPage;
+  const forceTotalsPageBreak = isExport && previewPositions.length > rowsPerPage;
   const pagedPositions = [];
   for (let i = 0; i < previewPositions.length; i += pageSize) {
     const chunk = previewPositions
@@ -923,15 +961,15 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             className="mx-auto"
             style={{
               width: `${a4WidthPx * scale}px`,
-              height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-              minHeight: `${a4HeightPx * scale}px`
+              height: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`,
+              minHeight: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`
             }}
           >
             <div
               className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
               style={{
                 width: `${a4WidthPx}px`,
-                height: isExport ? "auto" : `${a4HeightPx}px`,
+                height: `${a4HeightPx}px`,
                 minHeight: `${a4HeightPx}px`,
                 paddingBottom: isExport ? "48px" : undefined,
                 transform: isExport ? "none" : `scale(${scale})`,
@@ -1014,12 +1052,13 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 {pagePositions.length ? (
                   <div>
                     <div className="mt-2 rounded-xl border border-sand-200">
-                      <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
                         <span>Pos</span>
                         <span>Leistung</span>
                         <span className="text-right">Menge</span>
+                        <span className="text-right">Einzelpreis</span>
                         <span className="text-right">{formatVatLabel(offer)}</span>
-                        <span className="text-right">Netto</span>
+                        <span className="text-right">Gesamt (netto)</span>
                       </div>
                       {pageServicePositions.length ? (
                         <>
@@ -1032,8 +1071,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                 className="border-b border-sand-100"
                                 style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
                               >
-                                <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 px-3 py-2 text-xs text-sand-700">
-                                  <span>Pos. {item.overallIndex + 1}</span>
+                                <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 px-3 py-2 text-xs text-sand-700">
+                                  <span>
+                                    {item.optional ? "Optional" : `Pos. ${item.positionIndex || "-"}`}
+                                  </span>
                                   <div>
                                     <p className="font-semibold text-sand-800">{item.title}</p>
                                     {item.text ? (
@@ -1048,6 +1089,9 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                       {formatBillingCycleLabel(item.billingCycle)}
                                     </div>
                                   </div>
+                                  <span className="text-right">
+                                    {formatMoney(Number(item.price || 0))}
+                                  </span>
                                   <span className="text-right">
                                     {formatMoney(
                                       calcVat(
@@ -1068,11 +1112,12 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                           ))}
                           {showTotals ? (
                             <div
-                              className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
+                              className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
                               style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
                             >
                               <span />
                               <span>Zwischensumme Leistungen</span>
+                              <span />
                               <span />
                               <span className="text-right">
                                 {formatMoney(calcVat(serviceTotal, offer))}
@@ -1093,8 +1138,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                 className="border-b border-sand-100"
                                 style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
                               >
-                                <div className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 px-3 py-2 text-xs text-sand-700">
-                                  <span>Pos. {item.overallIndex + 1}</span>
+                                <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 px-3 py-2 text-xs text-sand-700">
+                                  <span>
+                                    {item.optional ? "Optional" : `Pos. ${item.positionIndex || "-"}`}
+                                  </span>
                                   <div>
                                     <p className="font-semibold text-sand-800">{item.title}</p>
                                     {item.text ? (
@@ -1109,6 +1156,9 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                       {formatBillingCycleLabel(item.billingCycle)}
                                     </div>
                                   </div>
+                                  <span className="text-right">
+                                    {formatMoney(Number(item.price || 0))}
+                                  </span>
                                   <span className="text-right">
                                     {formatMoney(
                                       calcVat(
@@ -1129,11 +1179,12 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                           ))}
                           {showTotals ? (
                             <div
-                              className="grid grid-cols-[0.2fr_1.2fr_0.4fr_0.5fr_0.5fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
+                              className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.45fr_0.55fr] gap-2 border-b border-sand-100 bg-sand-50 px-3 py-2 text-xs font-semibold text-sand-700"
                               style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
                             >
                               <span />
                               <span>Zwischensumme Material</span>
+                              <span />
                               <span />
                               <span className="text-right">
                                 {formatMoney(calcVat(deviceTotal, offer))}
@@ -1593,18 +1644,18 @@ function PositionCard({ item, onUpdate, onRemove, onSaveAsBlock }) {
             />
           </Field>
           <div className="grid gap-2 md:grid-cols-2">
-        <Field label="Einheit">
-          <SelectField
-            value={item.unit || "hours"}
-            onChange={(event) => onUpdate({ unit: event.target.value })}
-          >
-            {unitOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </SelectField>
-        </Field>
+            <Field label="Einheit">
+              <SelectField
+                value={item.unit || "hours"}
+                onChange={(event) => onUpdate({ unit: event.target.value })}
+              >
+                {unitOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </SelectField>
+            </Field>
             <Field label="Abrechnung">
               <SelectField
                 value={item.billingCycle || "once"}
@@ -1617,6 +1668,21 @@ function PositionCard({ item, onUpdate, onRemove, onSaveAsBlock }) {
                 ))}
               </SelectField>
             </Field>
+            <div className="flex items-center gap-3 pt-6">
+              <input
+                id={`line-optional-${item.id}`}
+                type="checkbox"
+                checked={Boolean(item.optional)}
+                onChange={(event) => onUpdate({ optional: event.target.checked })}
+                className="h-4 w-4"
+              />
+              <label
+                htmlFor={`line-optional-${item.id}`}
+                className="text-sm text-sand-700"
+              >
+                Optional
+              </label>
+            </div>
           </div>
         </div>
       ) : null}
@@ -1765,6 +1831,21 @@ function DeviceCard({
                 ))}
               </SelectField>
             </Field>
+            <div className="flex items-center gap-3 pt-6">
+              <input
+                id={`device-optional-${item.id}`}
+                type="checkbox"
+                checked={Boolean(item.optional)}
+                onChange={(event) => onUpdate({ optional: event.target.checked })}
+                className="h-4 w-4"
+              />
+              <label
+                htmlFor={`device-optional-${item.id}`}
+                className="text-sm text-sand-700"
+              >
+                Optional
+              </label>
+            </div>
           </div>
           <div className="space-y-1">
             <div className="flex items-center justify-between">
@@ -2436,7 +2517,10 @@ export default function OffersView() {
 
   const positionCount = useMemo(() => {
     if (!activeOffer) return 0;
-    return activeOffer.lineItems.length + activeOffer.deviceItems.length;
+    return (
+      activeOffer.lineItems.filter((item) => !item?.optional).length +
+      activeOffer.deviceItems.filter((item) => !item?.optional).length
+    );
   }, [activeOffer]);
 
   const customerNames = useMemo(
@@ -2451,7 +2535,8 @@ export default function OffersView() {
     () =>
       activeOffer
         ? activeOffer.lineItems.reduce(
-    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+    (sum, item) =>
+            sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
             0
           )
         : 0,
@@ -2462,7 +2547,8 @@ export default function OffersView() {
     () =>
       activeOffer
         ? activeOffer.deviceItems.reduce(
-    (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+    (sum, item) =>
+            sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
             0
           )
         : 0,
@@ -2480,7 +2566,9 @@ export default function OffersView() {
 
   const totals = useMemo(() => {
     if (!activeOffer) return { total: 0, count: 0 };
-    const count = activeOffer.lineItems.length + activeOffer.deviceItems.length;
+    const count =
+      activeOffer.lineItems.filter((item) => !item?.optional).length +
+      activeOffer.deviceItems.filter((item) => !item?.optional).length;
     return { total: totalNet, count };
   }, [activeOffer, totalNet]);
 
@@ -2799,7 +2887,8 @@ export default function OffersView() {
 
   const addOffer = () => {
     setOffers((prev) => {
-      const next = createEmptyOffer(prev.length + 1, offerNumberFormat);
+      const nextIndex = getNextOfferIndex(prev, offerNumberFormat);
+      const next = createEmptyOffer(nextIndex, offerNumberFormat);
       setActiveId(next.id);
       return [next, ...prev];
     });
@@ -2814,7 +2903,7 @@ export default function OffersView() {
     if (!offer) return;
     const newId = uid();
     setOffers((prev) => {
-      const reference = makeReference(offerNumberFormat, prev.length + 1);
+      const reference = makeReference(offerNumberFormat, getNextOfferIndex(prev, offerNumberFormat));
       const copy = {
         ...offer,
         id: newId,
@@ -2897,11 +2986,13 @@ export default function OffersView() {
 
   const getOfferTotal = (offer) => {
     const serviceTotal = (offer.lineItems || []).reduce(
-      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+      (sum, item) =>
+        sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
       0
     );
     const deviceTotal = (offer.deviceItems || []).reduce(
-      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+      (sum, item) =>
+        sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
       0
     );
     return serviceTotal + deviceTotal;
@@ -3159,17 +3250,21 @@ export default function OffersView() {
   const getHandoverSummary = (offer) => {
     if (!offer) return null;
     const serviceTotal = (offer.lineItems || []).reduce(
-      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+      (sum, item) =>
+        sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
       0
     );
     const deviceTotal = (offer.deviceItems || []).reduce(
-      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+      (sum, item) =>
+        sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
       0
     );
     const net = serviceTotal + deviceTotal;
     const vat = calcVat(net, offer);
     return {
-      positions: (offer.lineItems || []).length + (offer.deviceItems || []).length,
+      positions:
+        (offer.lineItems || []).filter((item) => !item?.optional).length +
+        (offer.deviceItems || []).filter((item) => !item?.optional).length,
       totalNet: net,
       totalVat: vat,
       totalGross: net + vat,
@@ -3309,6 +3404,48 @@ export default function OffersView() {
 
   const updateDeviceBlock = (id, patch) => {
     setDeviceBlocks((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
+  const appendDeviceBlockImages = (id, urls) => {
+    if (!urls || !urls.length) return;
+    setDeviceBlocks((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const current = Array.isArray(item.images) ? item.images : [];
+        const next = [...current];
+        urls.forEach((url) => {
+          const trimmed = String(url || "").trim();
+          if (!trimmed || next.includes(trimmed)) return;
+          next.push(trimmed);
+        });
+        return { ...item, images: next };
+      })
+    );
+  };
+
+  const handleDeviceBlockDrop = (event, blockId) => {
+    event.preventDefault();
+    const files = event.dataTransfer?.files;
+    if (files && files.length) {
+      Array.from(files).forEach((file) => {
+        if (!file.type.startsWith("image/")) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = typeof reader.result === "string" ? reader.result : "";
+          if (result) appendDeviceBlockImages(blockId, [result]);
+        };
+        reader.readAsDataURL(file);
+      });
+      return;
+    }
+    const text = event.dataTransfer?.getData("text/plain") || "";
+    if (text) {
+      const urls = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      appendDeviceBlockImages(blockId, urls);
+    }
   };
 
   const updateCalcBlock = (id, patch) => {
@@ -3855,10 +3992,10 @@ export default function OffersView() {
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                        {activeOffer.lineItems.length} Leistungspositionen
+                        {activeOffer.lineItems.filter((item) => !item?.optional).length} Leistungspositionen
                       </span>
                       <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-                        {activeOffer.deviceItems.length} Materialpositionen
+                        {activeOffer.deviceItems.filter((item) => !item?.optional).length} Materialpositionen
                       </span>
                     </div>
                   </div>
@@ -3988,7 +4125,7 @@ export default function OffersView() {
                             Leistungspositionen
                           </p>
                           <span className="text-xs text-sand-500">
-                            {activeOffer.lineItems.length} Positionen
+                            {activeOffer.lineItems.filter((item) => !item?.optional).length} Positionen
                           </span>
                         </div>
                         <div className="grid gap-2">
@@ -4032,7 +4169,7 @@ export default function OffersView() {
                             Materialpositionen
                           </p>
                           <span className="text-xs text-sand-500">
-                            {activeOffer.deviceItems.length} Positionen
+                            {activeOffer.deviceItems.filter((item) => !item?.optional).length} Positionen
                           </span>
                         </div>
                         <div className="grid gap-2">
@@ -5177,6 +5314,8 @@ export default function OffersView() {
                               <textarea
                                 className={noteTextareaClass}
                                 value={(block.images || []).join("\n")}
+                                onDragOver={(event) => event.preventDefault()}
+                                onDrop={(event) => handleDeviceBlockDrop(event, block.id)}
                                 onChange={(event) =>
                                   updateDeviceBlock(block.id, {
                                     images: event.target.value
@@ -5185,7 +5324,7 @@ export default function OffersView() {
                                       .filter(Boolean)
                                   })
                                 }
-                                placeholder="https://…"
+                                placeholder="https://… oder Dateien hierher ziehen"
                               />
                             </Field>
                           </div>
