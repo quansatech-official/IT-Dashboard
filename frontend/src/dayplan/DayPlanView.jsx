@@ -559,11 +559,6 @@ export default function DayPlanView() {
       });
     const sortByOpenAge = (items, direction = "desc") =>
       [...items].sort((a, b) => {
-        const aHasTime = hasRecordedTime(a);
-        const bHasTime = hasRecordedTime(b);
-        if (aHasTime !== bHasTime) {
-          return aHasTime ? -1 : 1;
-        }
         const aTs = a.created_at || 0;
         const bTs = b.created_at || 0;
         return direction === "desc" ? aTs - bTs : bTs - aTs;
@@ -1028,13 +1023,13 @@ export default function DayPlanView() {
                 autoFocus
               />
             ) : task.customer ? (
-              <div className="mt-1 flex w-full items-center gap-2">
+              <div className="mt-1 flex w-full items-start gap-2">
                 <button
                   type="button"
                   onClick={() => {
                     startCustomerEdit(task);
                   }}
-                  className="min-w-0 flex-1 truncate text-[11px] text-sand-500 hover:text-sand-700"
+                  className="min-w-0 flex-1 truncate text-left text-[11px] text-sand-500 hover:text-sand-700"
                   title="Kunde ändern"
                 >
                   {task.customer}
