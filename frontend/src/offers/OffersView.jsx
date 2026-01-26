@@ -1305,6 +1305,9 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       })}
 
       {hasProductPhotos ? (
+        <div className="html2pdf__page-break" />
+      ) : null}
+      {hasProductPhotos ? (
         <div
           className="mx-auto"
           style={{
@@ -1367,13 +1370,16 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         </div>
       ) : null}
 
-      {offer.detailHtml ? (
-        <div
-          className="mx-auto"
-          style={{
-            width: `${a4WidthPx * scale}px`,
-            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-            minHeight: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`
+                      {offer.detailHtml ? (
+                        <div className="html2pdf__page-break" />
+                      ) : null}
+                      {offer.detailHtml ? (
+                        <div
+                          className="mx-auto"
+                          style={{
+                            width: `${a4WidthPx * scale}px`,
+                            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+                            minHeight: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`
           }}
         >
           <div
