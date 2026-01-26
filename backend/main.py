@@ -2193,6 +2193,7 @@ def update_customer(customer_id: int, data: CustomerUpdate):
         if not customer:
             raise HTTPException(404, "Customer not found")
 
+        previous_name = customer.name
         for field, value in data.dict(exclude_unset=True, exclude={"phones"}).items():
             setattr(customer, field, value)
 
@@ -2216,6 +2217,11 @@ def update_customer(customer_id: int, data: CustomerUpdate):
                     if entry.id:
                         keep_ids.add(entry.id)
             customer.phones = [phone for phone in customer.phones if phone.id in keep_ids]
+
+        if customer.name != previous_name:
+            db.query(DayTask).filter(
+                func.lower(func.trim(DayTask.customer)) == func.lower(func.trim(previous_name))
+            ).update({DayTask.customer: customer.name}, synchronize_session=False)
 
         db.commit()
         db.refresh(customer)

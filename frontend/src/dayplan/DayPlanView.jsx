@@ -106,6 +106,7 @@ export default function DayPlanView() {
     service_unity_id: "",
     has_sevdesk_api_token: false
   });
+  const [sevdeskTokenAvailable, setSevdeskTokenAvailable] = useState(false);
   const [sevdeskDraftOpen, setSevdeskDraftOpen] = useState(false);
   const [sevdeskDraftTask, setSevdeskDraftTask] = useState(null);
   const [sevdeskDraftForm, setSevdeskDraftForm] = useState(null);
@@ -175,21 +176,25 @@ export default function DayPlanView() {
       const res = await fetch(`${API}/integration_settings`);
       const data = res && res.ok ? await res.json() : null;
       if (!data) return;
-      setSevdeskDefaults({
+      const nextDefaults = {
         hourly_rate_eur: data?.sevdesk_hourly_rate_eur || "",
         default_tax_rate: data?.sevdesk_default_tax_rate || "",
         unity_id: data?.sevdesk_unity_id || "",
         service_unity_id: data?.sevdesk_service_unity_id || "",
         has_sevdesk_api_token: Boolean(data?.has_sevdesk_api_token)
-      });
+      };
+      setSevdeskDefaults(nextDefaults);
+      setSevdeskTokenAvailable(Boolean(data?.has_sevdesk_api_token));
+      return nextDefaults;
     } catch (error) {
       setSevdeskDefaults((prev) => ({ ...prev, has_sevdesk_api_token: false }));
+      setSevdeskTokenAvailable(false);
     }
   };
 
   useEffect(() => {
     if (!sevdeskDraftOpen || !sevdeskDraftForm) return;
-    if (!sevdeskDefaults.has_sevdesk_api_token) {
+    if (!sevdeskTokenAvailable) {
       setSevdeskDraftCheck({ state: "idle", hasDraft: false, contactFound: true });
       return;
     }
@@ -220,7 +225,7 @@ export default function DayPlanView() {
       active = false;
       clearTimeout(timeout);
     };
-  }, [sevdeskDraftOpen, sevdeskDraftForm?.customer_number, sevdeskDefaults.has_sevdesk_api_token]);
+  }, [sevdeskDraftOpen, sevdeskDraftForm?.customer_number, sevdeskTokenAvailable]);
 
   const addTaskToGroup = async (groupId, text) => {
     const trimmed = String(text || "").trim();
@@ -501,9 +506,9 @@ export default function DayPlanView() {
   };
 
   const openSevdeskDraft = async (task) => {
-    await refreshSevdeskDefaults();
+    const latestDefaults = await refreshSevdeskDefaults();
     setSevdeskDraftTask(task);
-    setSevdeskDraftForm(buildSevdeskDraftDefaults(task));
+    setSevdeskDraftForm(buildSevdeskDraftDefaults(task, latestDefaults));
     setSevdeskDraftStatus({ state: "idle", error: "" });
     setSevdeskDraftAdvancedOpen(false);
     setSevdeskDraftOpen(true);
@@ -827,20 +832,20 @@ export default function DayPlanView() {
     return String(match?.creditor_number || "").trim();
   };
 
-  const buildSevdeskDraftDefaults = (task) => {
+  const buildSevdeskDraftDefaults = (task, defaultsOverride) => {
+    const defaults = defaultsOverride || sevdeskDefaults;
     const elapsedMs = getElapsedMsForTask(task);
     const hours = elapsedMs > 0 ? elapsedMs / 3_600_000 : 0;
     const roundedHours = roundUpToQuarterHours(hours);
-    const unityDefault =
-      sevdeskDefaults.service_unity_id || sevdeskDefaults.unity_id || "";
+    const unityDefault = defaults.service_unity_id || defaults.unity_id || "";
     return {
       customer_number: getCustomerNumberForTask(task),
       header: "Leistungsnachweis",
       name: task?.title || "Erledigte Aufgabe",
       text: task?.details || task?.title || "",
       quantity: roundedHours > 0 ? String(roundedHours) : "1",
-      price: sevdeskDefaults.hourly_rate_eur ? String(sevdeskDefaults.hourly_rate_eur) : "",
-      tax_rate: sevdeskDefaults.default_tax_rate ? String(sevdeskDefaults.default_tax_rate) : "",
+      price: defaults.hourly_rate_eur ? String(defaults.hourly_rate_eur) : "",
+      tax_rate: defaults.default_tax_rate ? String(defaults.default_tax_rate) : "",
       unity_id: unityDefault ? String(unityDefault) : "",
       use_existing_draft: true
     };
@@ -1169,7 +1174,7 @@ export default function DayPlanView() {
                       ? "Kunde zuweisen"
                       : !customerNumber
                       ? "Kundennummer im Kundenstamm fehlt"
-                      : sevdeskDefaults.has_sevdesk_api_token
+                      : sevdeskTokenAvailable
                       ? "Rechnungsentwurf in sevdesk"
                       : "Sevdesk API Token fehlt"
                   }
@@ -1839,7 +1844,7 @@ export default function DayPlanView() {
         status={sevdeskDraftStatus}
         aiLoading={sevdeskDraftAiLoading}
         advancedOpen={sevdeskDraftAdvancedOpen}
-        hasToken={sevdeskDefaults.has_sevdesk_api_token}
+        hasToken={sevdeskTokenAvailable}
         draftCheck={sevdeskDraftCheck}
         onClose={closeSevdeskDraft}
         onSubmit={submitSevdeskDraft}
