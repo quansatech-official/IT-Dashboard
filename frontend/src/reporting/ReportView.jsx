@@ -755,7 +755,7 @@ export default function ReportView() {
         .set({
           margin: [12, 12, 14, 12],
           filename: `${filenameBase}.pdf`,
-          html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+          html2canvas: { scale: 1, useCORS: true, backgroundColor: "#ffffff", logging: false },
           jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
           pagebreak: { mode: ["css", "legacy"] }
         })
@@ -1336,7 +1336,9 @@ export default function ReportView() {
       setToast("Bitte Empfänger-E-Mail-Adresse angeben.");
       return;
     }
-    updateReportEmailComposer({ isSending: true });
+    updateReportEmailComposer({ isSending: true, open: false });
+    setToast("Sende Bericht...");
+    await new Promise((resolve) => setTimeout(resolve, 50));
     try {
       const filenameBase = `IT-Kundenbericht_${report.customer}_${report.period || "ohne Zeitraum"}`
         .replaceAll(" ", "_")
@@ -1363,14 +1365,14 @@ export default function ReportView() {
       setToast("E-Mail gesendet.");
       setReportEmailComposer((prev) => ({
         ...prev,
-        open: false,
         isSending: false
       }));
     } catch (error) {
       setToast("SMTP Versand fehlgeschlagen.");
       setReportEmailComposer((prev) => ({
         ...prev,
-        isSending: false
+        isSending: false,
+        open: true
       }));
     }
   };

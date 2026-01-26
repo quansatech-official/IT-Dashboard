@@ -38,6 +38,21 @@ export default function TelephonyView() {
   const hasRefreshAuth = settings.hasRefreshToken;
   const hasCredentials = Boolean(hasPasswordAuth || hasRefreshAuth);
 
+  const handleResolveCallback = async (call) => {
+    if (!call?.uuid) return null;
+    const updated = await telephonyService.resolveCallback(call.uuid, true);
+    if (updated?.uuid) {
+      setCalls((prev) =>
+        prev.map((item) =>
+          item.uuid === updated.uuid
+            ? { ...item, callbackResolved: updated.callbackResolved }
+            : item
+        )
+      );
+    }
+    return updated;
+  };
+
   useEffect(() => {
     let active = true;
     telephonyService.fetchSettings().then((data) => {
@@ -245,6 +260,7 @@ export default function TelephonyView() {
               onCallback={(extension, number) =>
                 telephonyService.clickToDial({ extension, number })
               }
+              onResolveCallback={handleResolveCallback}
               onAssignNumber={handleAssignNumber}
               onAddToPbx={handleAddToPbx}
             />

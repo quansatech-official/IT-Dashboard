@@ -144,18 +144,6 @@ export const renderReportHTML = (report, options = {}) => {
               </td>
             </tr>
             ${
-              summary
-                ? `<tr>
-              <td style="padding: 10px 24px;">
-                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">Kurz-Zusammenfassung</div>
-                <div style="margin-top: 8px; font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 13px; color: #3f3a33; line-height: 1.55;">${escapeHTML(
-                  summary
-                )}</div>
-              </td>
-            </tr>`
-                : ""
-            }
-            ${
               customerAction
                 ? `<tr>
               <td style="padding: 10px 24px;">

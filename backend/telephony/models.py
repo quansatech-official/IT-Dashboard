@@ -25,6 +25,7 @@ class TelephonyCall(Base):
     customer_name = Column(String, default="")
     raw_payload = Column(Text, default="")
     extension = Column(String, default="")
+    callback_resolved = Column(Boolean, default=False)
 
 
 class TelephonySettings(Base):

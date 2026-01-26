@@ -86,6 +86,7 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
     const list = Array.isArray(calls) ? calls : [];
     return list.filter((call) => {
       if (call.answered) return false;
+      if (call.callbackResolved) return false;
       const direction = call.direction?.toLowerCase() || "";
       if (direction.includes("out")) return false;
       const number = normalizeNumber(call.from || call.to || "");

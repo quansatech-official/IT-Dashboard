@@ -83,6 +83,7 @@ export default function CallListView({
   pbxApiActive = false,
   onCallback,
   onResolve,
+  onResolveCallback,
   onAssignNumber,
   onAddToPbx
 }) {
@@ -289,6 +290,7 @@ export default function CallListView({
     if (!number) return false;
     const lastOut = outboundByNumber.get(number) || 0;
     const ts = call.startTime || 0;
+    if (call.callbackResolved) return false;
     return !lastOut || lastOut < ts;
   };
 
@@ -427,9 +429,22 @@ export default function CallListView({
                         {displayNumber(call)}
                       </span>
                       {unreturned ? (
-                        <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!onResolveCallback) return;
+                            const updated = await onResolveCallback(call);
+                            if (updated) {
+                              setToast("Rückruf erledigt.");
+                            } else {
+                              setToast("Status konnte nicht gespeichert werden.");
+                            }
+                          }}
+                          className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-200"
+                          title="Als erledigt markieren"
+                        >
                           Rueckruf offen
-                        </span>
+                        </button>
                       ) : null}
                     </div>
                   </td>

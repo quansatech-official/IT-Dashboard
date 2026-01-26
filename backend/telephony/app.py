@@ -88,6 +88,22 @@ def _ensure_call_extension_column() -> None:
 
 _ensure_call_extension_column()
 
+
+def _ensure_call_callback_resolved_column() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("telephony_calls"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("telephony_calls")}
+    if "callback_resolved" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE telephony_calls ADD COLUMN callback_resolved BOOLEAN DEFAULT FALSE")
+        )
+
+
+_ensure_call_callback_resolved_column()
+
 app = FastAPI(title="Telephony Module")
 
 app.add_middleware(
@@ -207,6 +223,7 @@ def _serialize_call(call: TelephonyCall, include_raw: bool = False) -> Dict:
         "duration": call.duration,
         "answered": call.answered,
         "customerName": call.customer_name,
+        "callbackResolved": bool(call.callback_resolved),
     }
     if include_raw:
         payload["rawPayload"] = call.raw_payload
@@ -263,6 +280,10 @@ class ClickToDialRequest(BaseModel):
     callee_context: Optional[str] = "global"
 
 
+class CallbackResolvedRequest(BaseModel):
+    resolved: bool = True
+
+
 @app.on_event("startup")
 def _startup() -> None:
     start_stream_listener(SessionLocal)
@@ -304,6 +325,19 @@ def click_to_dial(payload: ClickToDialRequest) -> Dict:
             }
         )
         return result
+
+
+@app.patch("/telephony/calls/{call_uuid}/callback_resolved")
+@app.patch("/api/telephony/calls/{call_uuid}/callback_resolved")
+def resolve_callback(call_uuid: str, payload: CallbackResolvedRequest) -> Dict:
+    with SessionLocal() as session:
+        call = session.query(TelephonyCall).filter(TelephonyCall.uuid == call_uuid).first()
+        if not call:
+            raise HTTPException(404, "Call not found")
+        call.callback_resolved = bool(payload.resolved)
+        session.commit()
+        session.refresh(call)
+        return _serialize_call(call)
 
 
 @app.get("/telephony/stats")

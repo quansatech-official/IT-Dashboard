@@ -1432,8 +1432,7 @@ export default function SettingsView() {
             <div className="flex items-center gap-2">
               <Users2 size={18} />
               <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Aufgaben</p>
-                <h3 className="text-lg font-display text-sand-900">Mitarbeiter</h3>
+                <h3 className="text-lg font-display text-sand-900">Unternehmensstamm</h3>
               </div>
             </div>
             <span className="text-sm text-sand-500">{employeeOpen ? "–" : "+"}</span>

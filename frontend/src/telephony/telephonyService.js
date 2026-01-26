@@ -49,6 +49,18 @@ export const telephonyService = {
       return null;
     }
   },
+  resolveCallback: async (uuid, resolved = true) => {
+    try {
+      const response = await fetch(`${API}/calls/${uuid}/callback_resolved`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolved })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      return null;
+    }
+  },
   fetchLatestCallDebug: async () => {
     try {
       const response = await fetch(`${API}/calls?limit=1&include_raw=1`);
