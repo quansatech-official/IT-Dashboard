@@ -9,6 +9,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
+import math
 import time
 import uuid
 import json
@@ -1107,6 +1108,12 @@ def _parse_int(value: Optional[str]) -> Optional[int]:
         return None
 
 
+def _round_up_to_quarter_hours(hours: float) -> float:
+    if hours <= 0:
+        return 0.0
+    return math.ceil(hours * 4) / 4
+
+
 def _build_sevdesk_config(
     settings: IntegrationSettings, metrics: Optional[CustomerMetricsSettings] = None
 ) -> SevdeskConfig:
@@ -1596,7 +1603,10 @@ def _default_ai_prompts() -> Dict[str, Any]:
             "cover_intro": "Schreibe einen kurzen Deckblatt-Introtext (2-4 Saetze).",
             "overview": "Schreibe einen kurzen Ueberblick fuer den Kunden (2-4 Saetze oder kurze Stichpunkte).",
             "calculation": "Schreibe kurze Hinweise zur Kalkulation (1-3 Saetze).",
-            "position_text": "Schreibe einen klaren Positionstext fuer eine Dienstleistung (3-6 Saetze).",
+            "position_text": (
+                "Schreibe einen sehr kurzen Text fuer eine Rechnungsposition "
+                "(1-3 kurze Saetze). Kein Aufsatz, keine Einleitung."
+            ),
             "device_description": "Schreibe eine kurze Produktbeschreibung fuer Material (3-6 Saetze).",
         },
     }
@@ -1622,10 +1632,16 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
         except ValueError:
             data = {}
     defaults = _default_ai_prompts()
+    mode_defaults = defaults.get("offer_mode_instructions") or {}
+    mode_data = data.get("offer_mode_instructions")
+    if isinstance(mode_data, dict):
+        merged_modes = {**mode_defaults, **mode_data}
+    else:
+        merged_modes = mode_defaults
     return {
         "action_prompt": data.get("action_prompt", defaults["action_prompt"]),
         "offer_base_prompt": data.get("offer_base_prompt", defaults["offer_base_prompt"]),
-        "offer_mode_instructions": data.get("offer_mode_instructions", defaults["offer_mode_instructions"]),
+        "offer_mode_instructions": merged_modes,
         "updated_at": _offer_iso_timestamp(store.updated_at),
     }
 
@@ -2752,8 +2768,9 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
         elapsed_ms = int(task.elapsed or 0)
         if task.running and task.startTime:
             elapsed_ms = max(0, elapsed_ms + (now_ms - int(task.startTime)))
-        elapsed_hours = round(elapsed_ms / 3_600_000, 2) if elapsed_ms > 0 else 0.0
+        elapsed_hours = elapsed_ms / 3_600_000 if elapsed_ms > 0 else 0.0
         quantity = payload.quantity if payload.quantity is not None else elapsed_hours
+        quantity = _round_up_to_quarter_hours(float(quantity))
         if quantity <= 0:
             quantity = 1.0
 

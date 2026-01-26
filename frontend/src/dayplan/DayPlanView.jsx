@@ -166,22 +166,26 @@ export default function DayPlanView() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API}/integration_settings`)
-      .then((res) => (res && res.ok ? res.json() : null))
-      .then((data) => {
-        if (!data) return;
-        setSevdeskDefaults({
-          hourly_rate_eur: data?.sevdesk_hourly_rate_eur || "",
-          default_tax_rate: data?.sevdesk_default_tax_rate || "",
-          unity_id: data?.sevdesk_unity_id || "",
-          service_unity_id: data?.sevdesk_service_unity_id || "",
-          has_sevdesk_api_token: Boolean(data?.has_sevdesk_api_token)
-        });
-      })
-      .catch(() => {
-        setSevdeskDefaults((prev) => ({ ...prev, has_sevdesk_api_token: false }));
-      });
+    const load = () => refreshSevdeskDefaults();
+    load();
   }, []);
+
+  const refreshSevdeskDefaults = async () => {
+    try {
+      const res = await fetch(`${API}/integration_settings`);
+      const data = res && res.ok ? await res.json() : null;
+      if (!data) return;
+      setSevdeskDefaults({
+        hourly_rate_eur: data?.sevdesk_hourly_rate_eur || "",
+        default_tax_rate: data?.sevdesk_default_tax_rate || "",
+        unity_id: data?.sevdesk_unity_id || "",
+        service_unity_id: data?.sevdesk_service_unity_id || "",
+        has_sevdesk_api_token: Boolean(data?.has_sevdesk_api_token)
+      });
+    } catch (error) {
+      setSevdeskDefaults((prev) => ({ ...prev, has_sevdesk_api_token: false }));
+    }
+  };
 
   useEffect(() => {
     if (!sevdeskDraftOpen || !sevdeskDraftForm) return;
@@ -496,7 +500,8 @@ export default function DayPlanView() {
     }));
   };
 
-  const openSevdeskDraft = (task) => {
+  const openSevdeskDraft = async (task) => {
+    await refreshSevdeskDefaults();
     setSevdeskDraftTask(task);
     setSevdeskDraftForm(buildSevdeskDraftDefaults(task));
     setSevdeskDraftStatus({ state: "idle", error: "" });
@@ -534,7 +539,7 @@ export default function DayPlanView() {
       text: String(sevdeskDraftForm.text || "").trim() || undefined,
       use_existing_draft: sevdeskDraftForm.use_existing_draft !== false
     };
-    const quantity = Number(sevdeskDraftForm.quantity);
+    const quantity = roundUpToQuarterHours(Number(sevdeskDraftForm.quantity));
     if (Number.isFinite(quantity) && quantity > 0) payload.quantity = quantity;
     const price = Number(sevdeskDraftForm.price);
     if (Number.isFinite(price)) payload.price = price;
@@ -572,9 +577,7 @@ export default function DayPlanView() {
       const contextParts = [
         sevdeskDraftTask.title ? `Aufgabe: ${sevdeskDraftTask.title}` : "",
         sevdeskDraftTask.customer ? `Kunde: ${sevdeskDraftTask.customer}` : "",
-        sevdeskDraftTask.details ? `Notiz: ${sevdeskDraftTask.details}` : "",
-        sevdeskDraftForm.quantity ? `Menge: ${sevdeskDraftForm.quantity}` : "",
-        sevdeskDraftForm.price ? `Preis: ${sevdeskDraftForm.price}` : ""
+        sevdeskDraftTask.details ? `Notiz: ${sevdeskDraftTask.details}` : ""
       ]
         .filter(Boolean)
         .join("\n");
@@ -783,6 +786,12 @@ export default function DayPlanView() {
       .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
   };
 
+  const roundUpToQuarterHours = (hours) => {
+    const value = Number(hours);
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return Math.ceil(value * 4) / 4;
+  };
+
   const parseDurationInput = (value) => {
     const parts = String(value || "")
       .trim()
@@ -809,17 +818,27 @@ export default function DayPlanView() {
     return Math.max(0, base + (nowMs - Number(task.startTime || 0)));
   };
 
+  const getCustomerNumberForTask = (task) => {
+    const name = String(task?.customer || "").trim().toLowerCase();
+    if (!name) return "";
+    const match = customers.find(
+      (customer) => String(customer?.name || "").trim().toLowerCase() === name
+    );
+    return String(match?.creditor_number || "").trim();
+  };
+
   const buildSevdeskDraftDefaults = (task) => {
     const elapsedMs = getElapsedMsForTask(task);
-    const hours = elapsedMs > 0 ? Math.round((elapsedMs / 3_600_000) * 100) / 100 : 0;
+    const hours = elapsedMs > 0 ? elapsedMs / 3_600_000 : 0;
+    const roundedHours = roundUpToQuarterHours(hours);
     const unityDefault =
       sevdeskDefaults.service_unity_id || sevdeskDefaults.unity_id || "";
     return {
-      customer_number: task?.customer_number || "",
+      customer_number: getCustomerNumberForTask(task),
       header: "Leistungsnachweis",
       name: task?.title || "Erledigte Aufgabe",
       text: task?.details || task?.title || "",
-      quantity: hours > 0 ? String(hours) : "1",
+      quantity: roundedHours > 0 ? String(roundedHours) : "1",
       price: sevdeskDefaults.hourly_rate_eur ? String(sevdeskDefaults.hourly_rate_eur) : "",
       tax_rate: sevdeskDefaults.default_tax_rate ? String(sevdeskDefaults.default_tax_rate) : "",
       unity_id: unityDefault ? String(unityDefault) : "",
@@ -974,7 +993,8 @@ export default function DayPlanView() {
     const hasCustomer = Boolean(task.customer || task.customer_number);
     const canPromote = !task.time_enabled;
     const isDone = task.status === "done";
-    const canInvoice = true;
+    const customerNumber = getCustomerNumberForTask(task);
+    const canInvoice = Boolean(customerNumber);
     const isBilled = Boolean(task.aberechnet);
     const knownCustomer = isKnownCustomer(task.customer);
     const assignedEmployee = employees.find((employee) => employee.id === task.employee_id);
@@ -1145,7 +1165,11 @@ export default function DayPlanView() {
                       : "border-sand-100 text-sand-300 cursor-not-allowed"
                   }`}
                   title={
-                    sevdeskDefaults.has_sevdesk_api_token
+                    !hasCustomer
+                      ? "Kunde zuweisen"
+                      : !customerNumber
+                      ? "Kundennummer im Kundenstamm fehlt"
+                      : sevdeskDefaults.has_sevdesk_api_token
                       ? "Rechnungsentwurf in sevdesk"
                       : "Sevdesk API Token fehlt"
                   }
@@ -1873,6 +1897,16 @@ function FakturaTaskModal({
               Sevdesk API Token fehlt in den Einstellungen.
             </div>
           ) : null}
+          {!task.customer ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              Bitte zuerst einen Kunden zuweisen. Ohne Kunde keine Übergabe an sevdesk.
+            </div>
+          ) : null}
+          {task.customer && !hasCustomerNumber ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              Kundennummer fehlt im Kundenstamm.
+            </div>
+          ) : null}
           {hasToken && !contactFound ? (
             <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
               Kunde in sevdesk nicht gefunden.
@@ -1915,13 +1949,14 @@ function FakturaTaskModal({
           <div className="grid gap-3 md:grid-cols-2 text-xs text-sand-600">
             <label className="flex flex-col gap-2">
               <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                Kundennummer (Faktura)
+                Kundennummer (Kundenstamm)
               </span>
               <input
                 value={form.customer_number}
                 onChange={(event) => onChange("customer_number", event.target.value)}
-                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                placeholder="Kundennummer"
+                disabled
+                className="w-full rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                placeholder="Keine Kundennummer"
               />
             </label>
             <label className="flex flex-col gap-2">
@@ -2047,7 +2082,7 @@ function FakturaTaskModal({
           <button
             type="button"
             onClick={onSubmit}
-            disabled={!hasCustomerNumber || isSaving}
+            disabled={!hasToken || !hasCustomerNumber || isSaving}
             className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSaving
