@@ -9,6 +9,7 @@ export default function EmailComposerModal({
   recipient = "",
   subject = "",
   body = "",
+  showBody = true,
   helperText = "",
   trackingText = "",
   isSending = false,
@@ -52,17 +53,19 @@ export default function EmailComposerModal({
               placeholder="Betreff"
             />
           </label>
-          <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-            Nachricht
-            <div className="mt-2">
-              <NotesRichTextEditor
-                value={body}
-                onChange={onBodyChange}
-                placeholder="Sehr geehrte Damen und Herren,"
-                minHeight="140px"
-              />
-            </div>
-          </label>
+          {showBody ? (
+            <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+              Nachricht
+              <div className="mt-2">
+                <NotesRichTextEditor
+                  value={body}
+                  onChange={onBodyChange}
+                  placeholder="Sehr geehrte Damen und Herren,"
+                  minHeight="140px"
+                />
+              </div>
+            </label>
+          ) : null}
         </div>
         <div className="flex flex-col gap-1 border-t border-sand-100 px-6 py-4 text-[11px] text-sand-500">
           {trackingText ? <p>{trackingText}</p> : null}

@@ -339,6 +339,7 @@ export default function ReportView() {
     html: "",
     reportId: null,
     fallbackText: "",
+    pdfHtml: "",
     trackingText: "",
     isSending: false
   });
@@ -723,6 +724,47 @@ export default function ReportView() {
     } finally {
       document.body.removeChild(container);
       setIsPdfExporting(false);
+    }
+  };
+
+  const generateReportPdfBlob = async (html, filenameBase) => {
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    container.style.position = "fixed";
+    container.style.left = "-9999px";
+    container.style.top = "0";
+    container.style.width = "210mm";
+    container.style.background = "#ffffff";
+    document.body.appendChild(container);
+    try {
+      const images = Array.from(container.querySelectorAll("img"));
+      await Promise.all(
+        images.map(
+          (img) =>
+            new Promise((resolve) => {
+              if (img.complete) {
+                resolve();
+                return;
+              }
+              img.onload = resolve;
+              img.onerror = resolve;
+            })
+        )
+      );
+      const blob = await html2pdf()
+        .set({
+          margin: [12, 12, 14, 12],
+          filename: `${filenameBase}.pdf`,
+          html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff" },
+          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+          pagebreak: { mode: ["css", "legacy"] }
+        })
+        .from(container)
+        .toPdf()
+        .output("blob");
+      return blob;
+    } finally {
+      document.body.removeChild(container);
     }
   };
 
@@ -1264,6 +1306,10 @@ export default function ReportView() {
       /src="\/QTLogo\.jpg"/g,
       `src="${window.location.origin}/QTLogo.jpg"`
     );
+    const pdfHtml = renderReportHTML(normalized, { mode: "pdf" }).replace(
+      /src="\/QTLogo\.jpg"/g,
+      `src="${window.location.origin}/QTLogo.jpg"`
+    );
     const text = buildPlainText(normalized);
     const introHtml = plainTextToHtml(text);
     const trackingText = beaconUrl
@@ -1273,17 +1319,18 @@ export default function ReportView() {
       open: true,
       to: "",
       subject,
-      body: introHtml,
+      body: "",
       html: baseHtml,
       reportId: item.id,
       fallbackText: text,
+      pdfHtml,
       trackingText,
       isSending: false
     });
   };
 
   const handleReportEmailSend = async () => {
-    const { reportId, to, subject, html } = reportEmailComposer;
+    const { reportId, to, subject, html, pdfHtml } = reportEmailComposer;
     if (!reportId) return;
     if (!to?.trim()) {
       setToast("Bitte Empfänger-E-Mail-Adresse angeben.");
@@ -1291,10 +1338,24 @@ export default function ReportView() {
     }
     updateReportEmailComposer({ isSending: true });
     try {
+      const filenameBase = `IT-Kundenbericht_${report.customer}_${report.period || "ohne Zeitraum"}`
+        .replaceAll(" ", "_")
+        .replaceAll("/", "-");
+      const pdfBlob = pdfHtml ? await generateReportPdfBlob(pdfHtml, filenameBase) : null;
+      const pdfBase64 = pdfBlob ? String(await blobToBase64(pdfBlob)).split(",")[1] || "" : "";
+      const attachments = pdfBase64
+        ? [
+            {
+              filename: `${filenameBase}.pdf`,
+              content_base64: pdfBase64,
+              content_type: "application/pdf"
+            }
+          ]
+        : [];
       const res = await fetch(`/api/reports/${reportId}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, subject, html })
+        body: JSON.stringify({ to, subject, html, attachments })
       });
       if (!res.ok) throw new Error("send_failed");
       const updated = await res.json();
@@ -1817,8 +1878,9 @@ export default function ReportView() {
         recipient={reportEmailComposer.to}
         subject={reportEmailComposer.subject}
         body={reportEmailComposer.body}
-        helperText="HTML wird gesendet, Plaintext wird automatisch erstellt."
-        trackingText={reportEmailComposer.trackingText}
+        showBody={false}
+        helperText=""
+        trackingText=""
         isSending={reportEmailComposer.isSending}
         onClose={closeReportEmailComposer}
         onSend={handleReportEmailSend}

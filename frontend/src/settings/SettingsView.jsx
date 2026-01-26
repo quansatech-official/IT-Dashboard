@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Mail, Settings } from "lucide-react";
+import { Mail, Settings, Users2 } from "lucide-react";
 import { telephonyService } from "../telephony/telephonyService";
 import NotesRichTextEditor from "../components/NotesRichTextEditor";
 
@@ -1429,9 +1429,12 @@ export default function SettingsView() {
             onClick={() => setEmployeeOpen((current) => !current)}
             className="flex w-full items-center justify-between gap-2 text-sand-700"
           >
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Aufgaben</p>
-              <h3 className="text-lg font-display text-sand-900">Mitarbeiter</h3>
+            <div className="flex items-center gap-2">
+              <Users2 size={18} />
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Aufgaben</p>
+                <h3 className="text-lg font-display text-sand-900">Mitarbeiter</h3>
+              </div>
             </div>
             <span className="text-sm text-sand-500">{employeeOpen ? "–" : "+"}</span>
           </button>
