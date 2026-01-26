@@ -683,7 +683,8 @@ export default function ReportView() {
     }
     if (isPdfExporting) return;
     setIsPdfExporting(true);
-    const html = renderReportHTML(report, { mode: "pdf" });
+    const rawHtml = renderReportHTML(report, { mode: "pdf" });
+    const html = await inlineReportLogo(rawHtml);
     const container = document.createElement("div");
     container.innerHTML = html;
     container.style.position = "fixed";
@@ -759,7 +760,7 @@ export default function ReportView() {
 
   const generateReportPdfBlob = async (html, filenameBase) => {
     const container = document.createElement("div");
-    container.innerHTML = html;
+    container.innerHTML = await inlineReportLogo(html);
     container.style.position = "fixed";
     container.style.left = "-9999px";
     container.style.top = "0";
@@ -1187,6 +1188,19 @@ export default function ReportView() {
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
+
+  const inlineReportLogo = async (html) => {
+    try {
+      const logoRes = await fetch("/QTLogo.jpg");
+      if (!logoRes.ok) return html;
+      const logoBlob = await logoRes.blob();
+      const logoDataUrl = await blobToBase64(logoBlob);
+      const logoBase64 = String(logoDataUrl);
+      return html.replace(/src="\/QTLogo\.jpg"/g, `src="${logoBase64}"`);
+    } catch (error) {
+      return html;
+    }
+  };
 
   const chunkBase64 = (value, size = 76) => {
     const chunks = [];
