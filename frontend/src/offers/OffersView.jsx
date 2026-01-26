@@ -2444,7 +2444,7 @@ export default function OffersView() {
       image: { type: "jpeg", quality: 0.98 },
       html2canvas: { scale: 2, useCORS: true },
       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      pagebreak: { mode: ["css", "legacy", "avoid-all"] }
+      pagebreak: { mode: ["css", "legacy"] }
     };
     html2pdf()
       .set(options)
@@ -2469,7 +2469,7 @@ export default function OffersView() {
           image: { type: "jpeg", quality: 0.98 },
           html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false },
           jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-          pagebreak: { mode: ["css", "legacy", "avoid-all"] }
+          pagebreak: { mode: ["css", "legacy"] }
         };
         const buffer = await html2pdf()
           .set(options)
