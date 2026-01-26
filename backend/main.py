@@ -3806,6 +3806,9 @@ def send_report(report_id: int, data: ReportSendRequest):
             if settings.username:
                 server.login(settings.username, settings.password or "")
             server.send_message(msg)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("SMTP report send failed: %s", exc)
+            raise HTTPException(502, f"SMTP send failed: {exc}") from exc
         finally:
             server.quit()
 

@@ -722,7 +722,9 @@ export default function ReportView() {
     } catch (error) {
       setToast("PDF Export fehlgeschlagen.");
     } finally {
-      document.body.removeChild(container);
+      if (container.parentNode) {
+        container.parentNode.removeChild(container);
+      }
       setIsPdfExporting(false);
     }
   };
@@ -764,7 +766,9 @@ export default function ReportView() {
         .output("blob");
       return blob;
     } finally {
-      document.body.removeChild(container);
+      if (container.parentNode) {
+        container.parentNode.removeChild(container);
+      }
     }
   };
 
@@ -1343,7 +1347,18 @@ export default function ReportView() {
       const filenameBase = `IT-Kundenbericht_${report.customer}_${report.period || "ohne Zeitraum"}`
         .replaceAll(" ", "_")
         .replaceAll("/", "-");
-      const pdfBlob = pdfHtml ? await generateReportPdfBlob(pdfHtml, filenameBase) : null;
+      let pdfBlob = null;
+      try {
+        pdfBlob = pdfHtml ? await generateReportPdfBlob(pdfHtml, filenameBase) : null;
+      } catch (error) {
+        setToast("PDF Erstellung fehlgeschlagen.");
+        setReportEmailComposer((prev) => ({
+          ...prev,
+          isSending: false,
+          open: true
+        }));
+        return;
+      }
       const pdfBase64 = pdfBlob ? String(await blobToBase64(pdfBlob)).split(",")[1] || "" : "";
       const attachments = pdfBase64
         ? [
@@ -1359,7 +1374,10 @@ export default function ReportView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to, subject, html, attachments })
       });
-      if (!res.ok) throw new Error("send_failed");
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `status_${res.status}`);
+      }
       const updated = await res.json();
       applyReportSentUpdate(reportId, updated);
       setToast("E-Mail gesendet.");
@@ -1368,7 +1386,9 @@ export default function ReportView() {
         isSending: false
       }));
     } catch (error) {
-      setToast("SMTP Versand fehlgeschlagen.");
+      setToast(
+        `SMTP Versand fehlgeschlagen.${error?.message ? ` (${error.message})` : ""}`
+      );
       setReportEmailComposer((prev) => ({
         ...prev,
         isSending: false,
