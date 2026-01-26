@@ -724,7 +724,7 @@ export default function ReportView() {
         setToast("PDF erstellt.");
       } catch (error) {
         const canvas = await html2canvas(container, {
-          scale: 2,
+          scale: 1,
           useCORS: true,
           backgroundColor: "#ffffff",
           logging: false

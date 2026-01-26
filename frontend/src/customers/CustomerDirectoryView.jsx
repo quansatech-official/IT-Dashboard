@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 import {
   BadgeCheck,
   Building2,
@@ -411,12 +413,73 @@ export default function CustomerDirectoryView() {
 
   const exportDeliveryPdf = (task) => {
     const html = renderDeliveryHtml(task);
-    const win = window.open("", "_blank", "width=900,height=700");
-    if (!win) return;
-    win.document.write(`<html><head><title>Lieferschein</title></head><body>${html}</body></html>`);
-    win.document.close();
-    win.focus();
-    win.print();
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    container.style.position = "fixed";
+    container.style.left = "-9999px";
+    container.style.top = "0";
+    container.style.width = "210mm";
+    container.style.background = "#ffffff";
+    document.body.appendChild(container);
+    const filename = `Lieferschein_${activeCustomer?.name || "Kunde"}_${
+      task?.created_at ? new Date(task.created_at).toLocaleDateString("de-DE") : "Datum"
+    }`
+      .replaceAll(" ", "_")
+      .replaceAll("/", "-");
+    const images = Array.from(container.querySelectorAll("img"));
+    Promise.all(
+      images.map(
+        (img) =>
+          new Promise((resolve) => {
+            if (img.complete) {
+              resolve();
+              return;
+            }
+            img.onload = resolve;
+            img.onerror = resolve;
+          })
+      )
+    )
+      .then(async () => {
+        try {
+          const canvas = await html2canvas(container, {
+            scale: 1,
+            useCORS: true,
+            backgroundColor: "#ffffff",
+            logging: false
+          });
+          const imgData = canvas.toDataURL("image/jpeg", 0.92);
+          const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+          const pageWidth = pdf.internal.pageSize.getWidth();
+          const pageHeight = pdf.internal.pageSize.getHeight();
+          const ratio = pageWidth / canvas.width;
+          const imgHeight = canvas.height * ratio;
+          let position = 0;
+          pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+          let heightLeft = imgHeight - pageHeight;
+          while (heightLeft > 0) {
+            position -= pageHeight;
+            pdf.addPage();
+            pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+            heightLeft -= pageHeight;
+          }
+          pdf.save(`${filename}.pdf`);
+        } catch (error) {
+          const win = window.open("", "_blank", "width=900,height=700");
+          if (!win) return;
+          win.document.write(
+            `<html><head><title>Lieferschein</title></head><body>${html}</body></html>`
+          );
+          win.document.close();
+          win.focus();
+          win.print();
+        }
+      })
+      .finally(() => {
+        if (container.parentNode) {
+          container.parentNode.removeChild(container);
+        }
+      });
   };
 
   const removeDeliveryNote = async (taskId) => {
