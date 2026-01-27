@@ -866,11 +866,14 @@ export default function DayPlanView() {
     const hours = elapsedMs > 0 ? elapsedMs / 3_600_000 : 0;
     const roundedHours = roundUpToQuarterHours(hours);
     const unityDefault = defaults.service_unity_id || defaults.unity_id || "";
+    const title = String(task?.title || "").trim();
+    const details = String(task?.details || "").trim();
+    const positionText = title && details ? `${title}. Notiz: ${details}` : title || details;
     return {
       customer_number: getCustomerNumberForTask(task),
       header: "Leistungsnachweis",
-      name: task?.title || "Erledigte Aufgabe",
-      text: task?.details || task?.title || "",
+      name: "Arbeitszeit",
+      text: positionText,
       quantity: roundedHours > 0 ? String(roundedHours) : "1",
       price: defaults.hourly_rate_eur ? String(defaults.hourly_rate_eur) : "",
       tax_rate: defaults.default_tax_rate ? String(defaults.default_tax_rate) : "",

@@ -1500,18 +1500,26 @@ function HandoverModal({
   open,
   offer,
   summary,
+  selectedLineItemIds,
+  selectedDeviceItemIds,
   text,
   aiLoading,
   onClose,
   onConfirm,
   onTextChange,
-  onGenerateAi
+  onGenerateAi,
+  onToggleLineItem,
+  onToggleDeviceItem
 }) {
   if (!open || !offer || !summary) return null;
   const trackingText = offer.trackingGuid
     ? `Tracking aktiv (ID ${offer.trackingGuid}).`
     : "Tracking wird beim Versand aktiviert, sofern Beacon konfiguriert ist.";
   const statusLabel = summary.accepted ? "Angebot angenommen" : "Angebot nicht angenommen";
+  const lineItems = offer.lineItems || [];
+  const deviceItems = offer.deviceItems || [];
+  const lineSelectedSet = new Set((selectedLineItemIds || []).map((id) => String(id)));
+  const deviceSelectedSet = new Set((selectedDeviceItemIds || []).map((id) => String(id)));
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
       <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
@@ -1563,6 +1571,110 @@ function HandoverModal({
           </div>
         </div>
         <div className="border-t border-sand-100 px-6 py-4">
+          <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.3em] text-sand-500">
+            <span>Positionen auswählen</span>
+            <span className="text-sand-400">Optional nicht vorausgewählt</span>
+          </div>
+          <div className="mt-3 space-y-3 text-xs text-sand-600">
+            {lineItems.length ? (
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Leistungen</p>
+                <div className="mt-2 space-y-2">
+                  {lineItems.map((item, index) => {
+                    const itemId = String(item?.id || "");
+                    const checked = itemId ? lineSelectedSet.has(itemId) : false;
+                    const total = Number(item.price || 0) * Number(item.quantity || 0);
+                    return (
+                      <label
+                        key={`line-${itemId || index}`}
+                        className="flex items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-white px-3 py-2"
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => onToggleLineItem(itemId)}
+                            className="h-4 w-4 rounded border-sand-300 text-amber-500 focus:ring-amber-200"
+                            disabled={!itemId}
+                          />
+                          <div>
+                            <p className="text-sm text-sand-900">
+                              {item.title || "Leistung"}
+                            </p>
+                            <p className="text-[11px] text-sand-400">
+                              {formatUnitQuantity(item.quantity, item.unit) || "Menge n/a"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          {item.optional ? (
+                            <span className="mb-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-amber-600">
+                              Optional
+                            </span>
+                          ) : null}
+                          <p className="text-sm text-sand-900">{formatMoney(total)}</p>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            {deviceItems.length ? (
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Material</p>
+                <div className="mt-2 space-y-2">
+                  {deviceItems.map((item, index) => {
+                    const itemId = String(item?.id || "");
+                    const checked = itemId ? deviceSelectedSet.has(itemId) : false;
+                    const total = Number(item.price || 0) * Number(item.quantity || 0);
+                    return (
+                      <label
+                        key={`device-${itemId || index}`}
+                        className="flex items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-white px-3 py-2"
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => onToggleDeviceItem(itemId)}
+                            className="h-4 w-4 rounded border-sand-300 text-amber-500 focus:ring-amber-200"
+                            disabled={!itemId}
+                          />
+                          <div>
+                            <p className="text-sm text-sand-900">
+                              {formatDeviceTitle(item)}
+                            </p>
+                            <p className="text-[11px] text-sand-400">
+                              {formatUnitQuantity(item.quantity, item.unit) || "Menge n/a"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          {item.optional ? (
+                            <span className="mb-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-amber-600">
+                              Optional
+                            </span>
+                          ) : null}
+                          <p className="text-sm text-sand-900">{formatMoney(total)}</p>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
+            {!lineItems.length && !deviceItems.length ? (
+              <p className="text-[11px] text-sand-400">Keine Positionen vorhanden.</p>
+            ) : null}
+            {summary.positions === 0 ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-600">
+                Bitte mindestens eine Position auswählen.
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="border-t border-sand-100 px-6 py-4">
           <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
             Positionstext für Aufgaben (Plaintext)
             <textarea
@@ -1596,7 +1708,7 @@ function HandoverModal({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={aiLoading || !summary.accepted}
+            disabled={aiLoading || !summary.accepted || summary.positions === 0}
             className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Übergabe an Faktura starten
@@ -2049,7 +2161,8 @@ export default function OffersView() {
     offerId: "",
     text: "",
     aiLoading: false,
-    summary: null
+    selectedLineItemIds: [],
+    selectedDeviceItemIds: []
   });
   const [sevdeskStatus, setSevdeskStatus] = useState({});
   const [expandedOffers, setExpandedOffers] = useState({});
@@ -2103,6 +2216,12 @@ export default function OffersView() {
     : "Tracking wird beim Versand aktiviert, sofern Beacon konfiguriert ist.";
   const offerDefaultSubject = `Angebot ${activeOffer?.reference || ""}`.trim();
   const emailDefaultSubject = `Angebot ${emailOffer?.reference || ""}`.trim();
+  const handoverOffer = offers.find((item) => item.id === handoverModal.offerId) || null;
+  const handoverSummary = getHandoverSummary(
+    handoverOffer,
+    handoverModal.selectedLineItemIds,
+    handoverModal.selectedDeviceItemIds
+  );
   const customersByName = useMemo(() => {
     const map = new Map();
     customers.forEach((customer) => {
@@ -3339,14 +3458,18 @@ export default function OffersView() {
     }
   };
 
-  const createSevdeskDraft = async (offerId) => {
+  const createSevdeskDraft = async (offerId, payload) => {
     setSevdeskStatus((prev) => ({
       ...prev,
       [offerId]: { status: "sending", message: "" }
     }));
     let success = false;
     try {
-      const res = await fetch(`/api/sevdesk/offers/${offerId}/draft`, { method: "POST" });
+      const res = await fetch(`/api/sevdesk/offers/${offerId}/draft`, {
+        method: "POST",
+        headers: payload ? { "Content-Type": "application/json" } : undefined,
+        body: payload ? JSON.stringify(payload) : undefined
+      });
       const data = await parseApiResponse(res);
       if (!res.ok || !data?.ok) {
         const detail = data?.detail || data?.error || data?.message || data?.raw || "Fehler";
@@ -3376,7 +3499,7 @@ export default function OffersView() {
     return success;
   };
 
-  const createSevdeskDraftForOffer = async (offer) => {
+  const createSevdeskDraftForOffer = async (offer, selection) => {
     if (!offer) return;
     if (!isOfferAccepted(offer)) {
       setSevdeskStatus((prev) => ({
@@ -3401,7 +3524,13 @@ export default function OffersView() {
         return;
       }
     }
-    const ok = await createSevdeskDraft(serverId);
+    const payload = selection
+      ? {
+          line_item_ids: selection.lineItemIds,
+          device_item_ids: selection.deviceItemIds
+        }
+      : null;
+    const ok = await createSevdeskDraft(serverId, payload);
     if (ok) {
       const updated = { ...offer, serverId, handoverLocked: true };
       updateOffer(offer.id, () => updated);
@@ -3413,24 +3542,34 @@ export default function OffersView() {
     }
   };
 
-  const getHandoverSummary = (offer) => {
+  const getHandoverSummary = (offer, selectedLineItemIds, selectedDeviceItemIds) => {
     if (!offer) return null;
-    const serviceTotal = (offer.lineItems || []).reduce(
-      (sum, item) =>
-        sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
+    const selectedLineSet = Array.isArray(selectedLineItemIds)
+      ? new Set(selectedLineItemIds.map((id) => String(id)))
+      : null;
+    const selectedDeviceSet = Array.isArray(selectedDeviceItemIds)
+      ? new Set(selectedDeviceItemIds.map((id) => String(id)))
+      : null;
+    const serviceItems = (offer.lineItems || []).filter((item) => {
+      if (!selectedLineSet) return !item?.optional;
+      return selectedLineSet.has(String(item?.id || ""));
+    });
+    const deviceItems = (offer.deviceItems || []).filter((item) => {
+      if (!selectedDeviceSet) return !item?.optional;
+      return selectedDeviceSet.has(String(item?.id || ""));
+    });
+    const serviceTotal = serviceItems.reduce(
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
       0
     );
-    const deviceTotal = (offer.deviceItems || []).reduce(
-      (sum, item) =>
-        sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
+    const deviceTotal = deviceItems.reduce(
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
       0
     );
     const net = serviceTotal + deviceTotal;
     const vat = calcVat(net, offer);
     return {
-      positions:
-        (offer.lineItems || []).filter((item) => !item?.optional).length +
-        (offer.deviceItems || []).filter((item) => !item?.optional).length,
+      positions: serviceItems.length + deviceItems.length,
       totalNet: net,
       totalVat: vat,
       totalGross: net + vat,
@@ -3446,14 +3585,28 @@ export default function OffersView() {
     return offer.introText || `Details zur Übergabe von Angebot ${offer.reference || ""}.`;
   };
 
+  const buildHandoverSelection = (offer) => {
+    const lineItemIds = (offer?.lineItems || [])
+      .filter((item) => !item?.optional)
+      .map((item) => String(item?.id || ""))
+      .filter(Boolean);
+    const deviceItemIds = (offer?.deviceItems || [])
+      .filter((item) => !item?.optional)
+      .map((item) => String(item?.id || ""))
+      .filter(Boolean);
+    return { lineItemIds, deviceItemIds };
+  };
+
   const openHandoverModal = (offer) => {
     if (!offer) return;
+    const selection = buildHandoverSelection(offer);
     setHandoverModal({
       open: true,
       offerId: offer.id,
       text: offer.handoverNote || getHandoverDefaultText(offer),
       aiLoading: false,
-      summary: getHandoverSummary(offer)
+      selectedLineItemIds: selection.lineItemIds,
+      selectedDeviceItemIds: selection.deviceItemIds
     });
   };
 
@@ -3463,6 +3616,34 @@ export default function OffersView() {
 
   const handleHandoverTextChange = (value) => {
     setHandoverModal((prev) => ({ ...prev, text: value }));
+  };
+
+  const toggleHandoverLineItem = (itemId) => {
+    const id = String(itemId || "");
+    if (!id) return;
+    setHandoverModal((prev) => {
+      const current = new Set(prev.selectedLineItemIds || []);
+      if (current.has(id)) {
+        current.delete(id);
+      } else {
+        current.add(id);
+      }
+      return { ...prev, selectedLineItemIds: Array.from(current) };
+    });
+  };
+
+  const toggleHandoverDeviceItem = (itemId) => {
+    const id = String(itemId || "");
+    if (!id) return;
+    setHandoverModal((prev) => {
+      const current = new Set(prev.selectedDeviceItemIds || []);
+      if (current.has(id)) {
+        current.delete(id);
+      } else {
+        current.add(id);
+      }
+      return { ...prev, selectedDeviceItemIds: Array.from(current) };
+    });
   };
 
   const handleHandoverAi = async () => {
@@ -3492,8 +3673,12 @@ export default function OffersView() {
   const handleHandoverConfirm = () => {
     const offer = offers.find((entry) => entry.id === handoverModal.offerId);
     if (!offer) return;
+    const selection = {
+      lineItemIds: handoverModal.selectedLineItemIds,
+      deviceItemIds: handoverModal.selectedDeviceItemIds
+    };
     closeHandoverModal();
-    createSevdeskDraftForOffer(offer);
+    createSevdeskDraftForOffer(offer, selection);
   };
 
   const addLineItem = (block) => {
@@ -5887,14 +6072,18 @@ export default function OffersView() {
   />
   <HandoverModal
     open={handoverModal.open}
-    offer={offers.find((item) => item.id === handoverModal.offerId)}
-    summary={handoverModal.summary}
+    offer={handoverOffer}
+    summary={handoverSummary}
+    selectedLineItemIds={handoverModal.selectedLineItemIds}
+    selectedDeviceItemIds={handoverModal.selectedDeviceItemIds}
     text={handoverModal.text}
     aiLoading={handoverModal.aiLoading}
     onClose={closeHandoverModal}
     onConfirm={handleHandoverConfirm}
     onTextChange={handleHandoverTextChange}
     onGenerateAi={handleHandoverAi}
+    onToggleLineItem={toggleHandoverLineItem}
+    onToggleDeviceItem={toggleHandoverDeviceItem}
   />
   <datalist id="offer-customers">
         {customerNames.map((name) => (

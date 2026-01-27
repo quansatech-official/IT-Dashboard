@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BarChart3, FileText, PhoneCall, ClipboardList } from "lucide-react";
+import { BarChart3, FileText, PhoneCall, ClipboardList, Receipt } from "lucide-react";
 
 const API = "/api";
 
@@ -10,6 +10,41 @@ const StatCard = ({ title, value, subtitle }) => (
     {subtitle ? <p className="text-[11px] text-sand-500 mt-1">{subtitle}</p> : null}
   </div>
 );
+
+const TopCustomerCard = ({ title, items }) => {
+  const safeItems = Array.isArray(items) ? items : [];
+  const maxValue = Math.max(1, ...safeItems.map((item) => Number(item?.totalEur || 0)));
+  return (
+    <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
+      <p className="text-[9px] uppercase tracking-[0.28em] text-sand-500">{title}</p>
+      {safeItems.length ? (
+        <div className="mt-2 space-y-2">
+          {safeItems.map((item, index) => (
+            <div key={`${title}-${item.name || "unknown"}-${index}`} className="space-y-1">
+              <div className="flex items-center justify-between text-[11px] text-sand-600">
+                <span className="truncate pr-2">{item.name || "Unbekannt"}</span>
+                <span>{`€ ${Number(item.totalEur || 0).toFixed(2)}`}</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-sand-100">
+                <div
+                  className="h-2 rounded-full bg-amber-400"
+                  style={{
+                    width: `${Math.max(6, (Number(item.totalEur || 0) / maxValue) * 100)}%`
+                  }}
+                />
+              </div>
+              <div className="text-[10px] text-sand-400">
+                {item.count || 0} Rechnungen
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-2 text-[11px] text-sand-400">Keine Daten vorhanden.</p>
+      )}
+    </div>
+  );
+};
 
 export default function StatsView() {
   const [stats, setStats] = useState(null);
@@ -41,6 +76,8 @@ export default function StatsView() {
     if (!total) return "0%";
     return `${Math.round((part / total) * 100)}%`;
   };
+
+  const formatEur = (value) => `€ ${Number(value || 0).toFixed(2)}`;
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
@@ -128,6 +165,55 @@ export default function StatsView() {
                   subtitle="Basis: erfasste Zeit erledigter Aufgaben"
                 />
               </div>
+            </section>
+
+            <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
+              <div className="flex items-center gap-2 mb-3 text-sand-700">
+                <Receipt size={16} />
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
+                  Faktura / sevdesk
+                </p>
+              </div>
+              {!stats.sevdesk?.connected ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">
+                  {stats.sevdesk?.error
+                    ? `Sevdesk nicht verbunden: ${stats.sevdesk.error}`
+                    : "Sevdesk nicht verbunden."}
+                </div>
+              ) : (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <StatCard
+                      title="Entwurfsrechnungen"
+                      value={stats.sevdesk?.drafts?.count ?? 0}
+                      subtitle={`Summe ${formatEur(stats.sevdesk?.drafts?.sumEur ?? 0)}`}
+                    />
+                    <StatCard
+                      title="Fällige Rechnungen"
+                      value={stats.sevdesk?.due?.count ?? 0}
+                      subtitle={`Summe ${formatEur(stats.sevdesk?.due?.sumEur ?? 0)}`}
+                    />
+                  </div>
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    <TopCustomerCard
+                      title="Top 5 Kunden · Dieser Monat"
+                      items={stats.sevdesk?.topCustomers?.thisMonth}
+                    />
+                    <TopCustomerCard
+                      title="Top 5 Kunden · Letzte 6 Monate"
+                      items={stats.sevdesk?.topCustomers?.halfYear}
+                    />
+                    <TopCustomerCard
+                      title="Top 5 Kunden · Aktuelles Jahr"
+                      items={stats.sevdesk?.topCustomers?.currentYear}
+                    />
+                    <TopCustomerCard
+                      title="Top 5 Kunden · Letztes Jahr"
+                      items={stats.sevdesk?.topCustomers?.lastYear}
+                    />
+                  </div>
+                </>
+              )}
             </section>
 
             <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">

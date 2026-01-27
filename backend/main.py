@@ -1015,6 +1015,11 @@ class SevdeskTaskDraftRequest(BaseModel):
     use_existing_draft: Optional[bool] = True
     mark_billed: Optional[bool] = True
 
+
+class SevdeskOfferDraftRequest(BaseModel):
+    line_item_ids: Optional[List[str]] = None
+    device_item_ids: Optional[List[str]] = None
+
 class PbxPhonebookCreate(BaseModel):
     name: Optional[str] = ""
     number: Optional[str] = ""
@@ -1226,6 +1231,191 @@ def _offer_items_to_sevdesk_positions(offer_payload: Dict[str, Any], config: Sev
             }
         )
     return positions
+
+
+def _filter_offer_items(items: List[Dict[str, Any]], allowed_ids: Optional[set[str]]) -> List[Dict[str, Any]]:
+    if allowed_ids is None:
+        return items
+    return [item for item in items if str(item.get("id") or "") in allowed_ids]
+
+
+def _build_sevdesk_draft_header(
+    client: SevdeskClient,
+    config: SevdeskConfig,
+    invoice_snapshot: Optional[Dict[str, Any]] = None,
+    draft_snapshot: Optional[Dict[str, Any]] = None,
+) -> str:
+    invoice_number = client.extract_invoice_number(invoice_snapshot)
+    if not invoice_number:
+        invoice_number = client.extract_invoice_number(draft_snapshot)
+    if not invoice_number:
+        invoice_number = client.get_next_invoice_number(config.invoice_type)
+    if not invoice_number:
+        raise SevdeskError("Could not determine Sevdesk invoice number.", status_code=502)
+    return f"Rechnung RE-Nr. {invoice_number}"
+
+
+def _build_task_position_text(task: DayTask) -> str:
+    title = (task.title or "").strip()
+    details = (task.details or "").strip()
+    if title and details:
+        return f"{title}. Notiz: {details}"
+    return title or details or ""
+
+
+def _parse_sevdesk_date(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            timestamp = float(value)
+            if timestamp > 1_000_000_000_000:
+                timestamp /= 1000
+            return datetime.fromtimestamp(timestamp)
+        except (TypeError, ValueError, OSError):
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            if parsed.tzinfo:
+                return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_sevdesk_amount(invoice: Dict[str, Any]) -> float:
+    for key in (
+        "sumGross",
+        "sumNet",
+        "sum",
+        "total",
+        "sumTotal",
+        "sumBrutto",
+        "sumNetto",
+    ):
+        if key in invoice:
+            return _parse_float(invoice.get(key), default=0.0)
+    return 0.0
+
+
+def _extract_sevdesk_contact(invoice: Dict[str, Any]) -> Tuple[str, str]:
+    contact = invoice.get("contact")
+    contact_id = ""
+    contact_name = ""
+    if isinstance(contact, dict):
+        contact_id = str(contact.get("id") or "").strip()
+        contact_name = str(
+            contact.get("name")
+            or contact.get("customerName")
+            or contact.get("firstName")
+            or ""
+        ).strip()
+    if not contact_name:
+        contact_name = str(
+            invoice.get("contactName") or invoice.get("customerName") or "Unbekannt"
+        ).strip()
+    return contact_id or contact_name, contact_name or "Unbekannt"
+
+
+def _invoice_is_due(invoice: Dict[str, Any], today: datetime) -> bool:
+    status = _parse_int(invoice.get("status"))
+    if status == 100:
+        return False
+    due_date = _parse_sevdesk_date(
+        invoice.get("dueDate")
+        or invoice.get("paymentDeadline")
+        or invoice.get("paymentDeadlineDate")
+    )
+    if not due_date or due_date.date() > today.date():
+        return False
+    amount = _parse_sevdesk_amount(invoice)
+    paid = _parse_float(invoice.get("sumPaid"), default=0.0)
+    if amount > 0 and paid >= amount:
+        return False
+    if invoice.get("paidDate") or invoice.get("paid"):
+        return False
+    if status is not None and status not in (200, 300):
+        return False
+    return True
+
+
+def _top_customers_for_period(
+    invoices: List[Dict[str, Any]],
+    start_dt: datetime,
+    end_dt: datetime,
+) -> List[Dict[str, Any]]:
+    totals: Dict[str, Dict[str, Any]] = {}
+    for invoice in invoices:
+        status = _parse_int(invoice.get("status"))
+        if status == 100:
+            continue
+        invoice_date = _parse_sevdesk_date(invoice.get("invoiceDate"))
+        if not invoice_date:
+            continue
+        if invoice_date < start_dt or invoice_date > end_dt:
+            continue
+        amount = _parse_sevdesk_amount(invoice)
+        if amount <= 0:
+            continue
+        key, name = _extract_sevdesk_contact(invoice)
+        entry = totals.get(key)
+        if not entry:
+            entry = {"name": name, "total": 0.0, "count": 0}
+        entry["total"] += amount
+        entry["count"] += 1
+        if name and entry.get("name") in ("", "Unbekannt"):
+            entry["name"] = name
+        totals[key] = entry
+    ranked = sorted(totals.values(), key=lambda item: item["total"], reverse=True)[:5]
+    return [
+        {"name": item["name"], "totalEur": round(item["total"], 2), "count": item["count"]}
+        for item in ranked
+    ]
+
+
+def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, Any]:
+    drafts = client.list_invoices(params={"status": 100}, max_pages=10)
+    draft_sum = round(sum(_parse_sevdesk_amount(item) for item in drafts), 2)
+
+    due_candidates: List[Dict[str, Any]] = []
+    for status in (200, 300):
+        due_candidates.extend(client.list_invoices(params={"status": status}, max_pages=10))
+    seen_due: set[str] = set()
+    due_invoices: List[Dict[str, Any]] = []
+    for item in due_candidates:
+        invoice_id = str(item.get("id") or "")
+        if invoice_id in seen_due:
+            continue
+        seen_due.add(invoice_id)
+        if _invoice_is_due(item, now_dt):
+            due_invoices.append(item)
+    due_sum = round(sum(_parse_sevdesk_amount(item) for item in due_invoices), 2)
+
+    all_invoices = client.list_invoices(max_pages=25)
+    start_month = datetime(now_dt.year, now_dt.month, 1)
+    start_half_year = now_dt - timedelta(days=182)
+    start_current_year = datetime(now_dt.year, 1, 1)
+    start_last_year = datetime(now_dt.year - 1, 1, 1)
+    end_last_year = datetime(now_dt.year - 1, 12, 31, 23, 59, 59)
+
+    top_customers = {
+        "thisMonth": _top_customers_for_period(all_invoices, start_month, now_dt),
+        "halfYear": _top_customers_for_period(all_invoices, start_half_year, now_dt),
+        "currentYear": _top_customers_for_period(all_invoices, start_current_year, now_dt),
+        "lastYear": _top_customers_for_period(all_invoices, start_last_year, end_last_year),
+    }
+
+    return {
+        "connected": True,
+        "drafts": {"count": len(drafts), "sumEur": draft_sum},
+        "due": {"count": len(due_invoices), "sumEur": due_sum},
+        "topCustomers": top_customers,
+    }
 
 
 def _summarize_tasks_for_invoice(tasks: List[DayTask]) -> str:
@@ -1592,8 +1782,9 @@ def _default_ai_prompts() -> Dict[str, Any]:
             "overview": "Schreibe einen kurzen Ueberblick fuer den Kunden (2-4 Saetze oder kurze Stichpunkte).",
             "calculation": "Schreibe kurze Hinweise zur Kalkulation (1-3 Saetze).",
             "position_text": (
-                "Schreibe einen sehr kurzen Text fuer eine Rechnungsposition "
-                "(1-3 kurze Saetze). Kein Aufsatz, keine Einleitung."
+                "Erstelle einen sehr kurzen, professionellen Positionstext "
+                "(1-2 kurze Saetze). Integriere Aufgaben-Titel und Notiz "
+                "klar und sachlich. Kein Aufsatz, keine Einleitung."
             ),
             "device_description": "Schreibe eine kurze Produktbeschreibung fuer Material (3-6 Saetze).",
         },
@@ -2684,7 +2875,7 @@ def sevdesk_health():
 
 
 @app.post("/api/sevdesk/offers/{offer_id}/draft")
-def sevdesk_offer_to_invoice(offer_id: int):
+def sevdesk_offer_to_invoice(offer_id: int, payload: Optional[SevdeskOfferDraftRequest] = None):
     with SessionLocal() as db:
         offer = db.query(Offer).get(offer_id)
         if not offer:
@@ -2706,6 +2897,18 @@ def sevdesk_offer_to_invoice(offer_id: int):
         except json.JSONDecodeError as exc:
             raise HTTPException(400, f"Invalid offer payload: {exc}") from exc
 
+    if payload:
+        if payload.line_item_ids is not None:
+            line_ids = set(payload.line_item_ids or [])
+            offer_payload["lineItems"] = _filter_offer_items(
+                offer_payload.get("lineItems") or [], line_ids
+            )
+        if payload.device_item_ids is not None:
+            device_ids = set(payload.device_item_ids or [])
+            offer_payload["deviceItems"] = _filter_offer_items(
+                offer_payload.get("deviceItems") or [], device_ids
+            )
+
     customer_number = (offer_payload.get("customerNumber") or "").strip()
     if not customer_number:
         raise HTTPException(400, "Offer missing customerNumber")
@@ -2723,14 +2926,15 @@ def sevdesk_offer_to_invoice(offer_id: int):
             raise HTTPException(400, "Sevdesk unity id missing for offer positions")
 
         draft = client.find_draft_invoice(contact_id)
-        header = (offer.reference or offer_payload.get("reference") or "").strip() or "Rechnung"
         if draft:
             invoice_id = int(draft.get("id"))
             invoice_snapshot = client.get_invoice(invoice_id) or draft
+            header = _build_sevdesk_draft_header(client, config, invoice_snapshot, draft)
             invoice_payload = client.build_invoice_payload(
-                contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot
+                contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot, header=header
             )
         else:
+            header = _build_sevdesk_draft_header(client, config)
             invoice_payload = client.build_invoice_payload(contact_id, header=header)
         response = client.save_invoice(invoice_payload, client.build_positions(positions))
     except SevdeskError as exc:
@@ -2774,9 +2978,9 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
         if not unity_id:
             raise HTTPException(400, "Missing unity_id")
 
-        name = (payload.name or task.title or "Erledigte Aufgabe").strip()
-        text = (payload.text or task.details or task.title or "").strip()
-        header = (payload.header or "Leistungsnachweis").strip()
+        name = "Arbeitszeit"
+        text = _build_task_position_text(task)
+        header = None
 
         client = SevdeskClient(config)
         try:
@@ -2802,10 +3006,12 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
             if draft:
                 invoice_id = int(draft.get("id"))
                 invoice_snapshot = client.get_invoice(invoice_id) or draft
+                header = _build_sevdesk_draft_header(client, config, invoice_snapshot, draft)
                 invoice_payload = client.build_invoice_payload(
                     contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot, header=header
                 )
             else:
+                header = _build_sevdesk_draft_header(client, config)
                 invoice_payload = client.build_invoice_payload(contact_id, header=header)
             response = client.save_invoice(invoice_payload, client.build_positions(positions))
         except SevdeskError as exc:
@@ -3879,6 +4085,13 @@ def get_company_stats(days: int = 30):
         except ValueError:
             hourly_rate = 0.0
 
+        integration = db.query(IntegrationSettings).first()
+        if not integration:
+            integration = IntegrationSettings()
+            db.add(integration)
+            db.commit()
+        sevdesk_config = _build_sevdesk_config(integration, settings)
+
     telephony_minutes = 0
     telephony_missed = 0
     try:
@@ -3911,6 +4124,13 @@ def get_company_stats(days: int = 30):
         round(float(done_time_week_hours) * hourly_rate, 2) if hourly_rate else 0
     )
 
+    sevdesk_stats: Dict[str, Any] = {"connected": False}
+    if sevdesk_config.api_token:
+        try:
+            sevdesk_stats = _build_sevdesk_stats(SevdeskClient(sevdesk_config), now_dt)
+        except SevdeskError as exc:
+            sevdesk_stats = {"connected": False, "error": str(exc)}
+
     return {
         "dayTasks": {
             "total": day_tasks_total,
@@ -3939,6 +4159,7 @@ def get_company_stats(days: int = 30):
             "unread": reports_unread,
             "confirmed": reports_confirmed,
         },
+        "sevdesk": sevdesk_stats,
         "revenueEstimateEur": revenue_estimate,
         "revenueEstimateTodayEur": revenue_estimate_today,
         "revenueEstimateWeekEur": revenue_estimate_week,

@@ -119,6 +119,59 @@ class SevdeskClient:
         payload = self.request("GET", f"/Invoice/{invoice_id}")
         return self._extract_first(payload)
 
+    def extract_invoice_number(self, invoice: Optional[Dict[str, Any]]) -> Optional[str]:
+        if not invoice:
+            return None
+        for key in ("invoiceNumber", "invoiceNumberDefault", "number"):
+            value = invoice.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def get_next_invoice_number(self, invoice_type: Optional[str] = None) -> Optional[str]:
+        params: Dict[str, Any] = {}
+        if invoice_type:
+            params["invoiceType"] = invoice_type
+        payload = self.request("GET", "/Invoice/Factory/getNextInvoiceNumber", params=params)
+        obj = self._extract_first(payload) or {}
+        if isinstance(obj, dict):
+            for key in ("invoiceNumber", "invoiceNumberDefault", "number", "nextInvoiceNumber"):
+                value = obj.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        for key in ("invoiceNumber", "invoiceNumberDefault", "number", "nextInvoiceNumber"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def list_invoices(
+        self,
+        params: Optional[Dict[str, Any]] = None,
+        *,
+        limit: int = 100,
+        max_pages: int = 25,
+    ) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        base_params = dict(params or {})
+        safe_limit = max(1, min(int(base_params.get("limit") or limit), 500))
+        for page in range(max_pages):
+            request_params = {**base_params, "limit": safe_limit, "offset": page * safe_limit}
+            payload = self.request("GET", "/Invoice", params=request_params)
+            objects = payload.get("objects")
+            if isinstance(objects, list):
+                items = objects
+            elif isinstance(objects, dict):
+                items = [objects]
+            else:
+                items = []
+            if not items:
+                break
+            results.extend(items)
+            if len(items) < safe_limit:
+                break
+        return results
+
     def get_default_contact_person_id(self) -> Optional[int]:
         if self._contact_person_id_cache:
             return self._contact_person_id_cache
@@ -213,6 +266,13 @@ class SevdeskClient:
             "contact": {"id": contact_id, "objectName": "Contact"},
             "addressCountry": address_country,
         }
+        header_value = (header or "").strip()
+        if not header_value and invoice_snapshot:
+            existing_header = invoice_snapshot.get("header")
+            if isinstance(existing_header, str) and existing_header.strip():
+                header_value = existing_header.strip()
+        if header_value:
+            payload["header"] = header_value
         if not contact_person:
             raise SevdeskError(
                 "Missing Sevdesk contact person. Please configure sevdesk_contact_person_id.",
