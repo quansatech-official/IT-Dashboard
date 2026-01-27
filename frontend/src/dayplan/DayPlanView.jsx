@@ -680,11 +680,13 @@ export default function DayPlanView() {
     const details = normalizeText(task?.details || "");
     const customer = normalizeText(task?.customer || "");
     const number = normalizeText(task?.customer_number || "");
+    const shortCode = normalizeText(getCustomerShortCodeForTask(task));
     return (
       (title && title.includes(needle)) ||
       (details && details.includes(needle)) ||
       (customer && customer.includes(needle)) ||
-      (number && number.includes(needle))
+      (number && number.includes(needle)) ||
+      (shortCode && shortCode.includes(needle))
     );
   };
 
@@ -695,10 +697,12 @@ export default function DayPlanView() {
     return tasks.filter((task) => {
       const name = normalizeText(task?.customer || "");
       const number = normalizeText(task?.customer_number || "");
+      const shortCode = normalizeText(getCustomerShortCodeForTask(task));
       const matchesCustomer =
         !customerNeedle ||
         (name && name.includes(customerNeedle)) ||
-        (number && number.includes(customerNeedle));
+        (number && number.includes(customerNeedle)) ||
+        (shortCode && shortCode.includes(customerNeedle));
       const matchesContent = matchesTask(task, contentNeedle);
       const matchesEmployee =
         employeeFilter === "all"
@@ -844,6 +848,25 @@ export default function DayPlanView() {
       (customer) => String(customer?.name || "").trim().toLowerCase() === name
     );
     return String(match?.creditor_number || "").trim();
+  };
+
+  const customerShortCodeByName = useMemo(() => {
+    const map = new Map();
+    customers.forEach((customer) => {
+      const name = String(customer?.name || "").trim().toLowerCase();
+      if (!name) return;
+      const shortCode = String(customer?.short_code || customer?.shortCode || "").trim();
+      if (shortCode) {
+        map.set(name, shortCode);
+      }
+    });
+    return map;
+  }, [customers]);
+
+  const getCustomerShortCodeForTask = (task) => {
+    const name = String(task?.customer || "").trim().toLowerCase();
+    if (!name) return "";
+    return String(customerShortCodeByName.get(name) || "").trim();
   };
 
   const buildSevdeskDraftDefaults = (task, defaultsOverride) => {

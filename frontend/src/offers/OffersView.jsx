@@ -2028,6 +2028,7 @@ export default function OffersView() {
   const [offerNumberFormat, setOfferNumberFormat] = useState(defaultOfferFormat);
   const [offerSettingsLoaded, setOfferSettingsLoaded] = useState(false);
   const [blocksLoaded, setBlocksLoaded] = useState(false);
+  const [offersLoaded, setOffersLoaded] = useState(false);
   const [lastOfferIndex, setLastOfferIndex] = useState(0);
   const [previewOfferId, setPreviewOfferId] = useState("");
   const [previewMode, setPreviewMode] = useState("offer");
@@ -2321,7 +2322,10 @@ export default function OffersView() {
           return merged;
         });
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        setOffersLoaded(true);
+      });
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2330,6 +2334,21 @@ export default function OffersView() {
       const raw = window.localStorage.getItem(AUTOSAVE_KEY);
       const stored = raw ? JSON.parse(raw) : null;
       if (stored) {
+        if (Array.isArray(stored?.offers) && stored.offers.length) {
+          setOffers(stored.offers);
+          const storedActive = stored.activeId;
+          if (
+            storedActive &&
+            stored.offers.some(
+              (offer) => offer.id === storedActive || offer.serverId === storedActive
+            )
+          ) {
+            setActiveId(storedActive);
+          } else {
+            setActiveId(stored.offers[0]?.id || "");
+          }
+          setStarterCreated(true);
+        }
         if (Array.isArray(stored?.serviceBlocks) && stored.serviceBlocks.length) {
           setServiceBlocks(stored.serviceBlocks);
         }
@@ -2412,7 +2431,7 @@ export default function OffersView() {
     return () => {
       active = false;
     };
-  }, [offerNumberFormat, offerSettingsLoaded, starterCreated]);
+  }, [offerNumberFormat, offerSettingsLoaded, starterCreated, offersLoaded, offers]);
 
   useEffect(() => {
     if (!offers.length) return;
@@ -2427,7 +2446,8 @@ export default function OffersView() {
   }, [offers, offerNumberFormat]);
 
   useEffect(() => {
-    if (starterCreated || !offerSettingsLoaded) return;
+    if (starterCreated || !offerSettingsLoaded || !offersLoaded) return;
+    if (offers.length) return;
     const nextIndex = getNextOfferIndex(offers, offerNumberFormat, lastOfferIndexRef.current);
     const starter = createEmptyOffer(nextIndex, offerNumberFormat);
     setLastOfferIndex((prev) => {

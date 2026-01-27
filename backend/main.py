@@ -1129,7 +1129,7 @@ def _build_sevdesk_config(
     return SevdeskConfig(
         base_url=base_url,
         api_token=(settings.sevdesk_api_token or "").strip(),
-        contact_person_id=_parse_int(settings.sevdesk_contact_person_id) or 1,
+        contact_person_id=_parse_int(settings.sevdesk_contact_person_id),
         address_country_id=_parse_int(settings.sevdesk_address_country_id) or 1,
         tax_type=(settings.sevdesk_tax_type or "default").strip() or "default",
         tax_rule_id=_parse_int(settings.sevdesk_tax_rule_id) or 1,
@@ -3904,8 +3904,12 @@ def get_company_stats(days: int = 30):
     revenue_estimate = round(open_time_hours * hourly_rate, 2) if hourly_rate else 0
     done_time_today_hours = round(done_elapsed_today / 3600000, 2) if done_elapsed_today else 0
     done_time_week_hours = round(done_elapsed_week / 3600000, 2) if done_elapsed_week else 0
-    revenue_estimate_today = round(done_time_today_hours * hourly_rate, 2) if hourly_rate else 0
-    revenue_estimate_week = round(done_time_week_hours * hourly_rate, 2) if hourly_rate else 0
+    revenue_estimate_today = (
+        round(float(done_time_today_hours) * hourly_rate, 2) if hourly_rate else 0
+    )
+    revenue_estimate_week = (
+        round(float(done_time_week_hours) * hourly_rate, 2) if hourly_rate else 0
+    )
 
     return {
         "dayTasks": {

@@ -18,7 +18,7 @@ class SevdeskError(RuntimeError):
 class SevdeskConfig:
     base_url: str
     api_token: str
-    contact_person_id: int
+    contact_person_id: Optional[int]
     address_country_id: int
     tax_type: str
     tax_rule_id: int
@@ -32,7 +32,6 @@ class SevdeskConfig:
     hourly_rate_eur: Optional[float] = None
 
 
-DEFAULT_CONTACT_PERSON_ID = 1
 DEFAULT_ADDRESS_COUNTRY_ID = 1
 DEFAULT_UNITY_ID = 1
 DEFAULT_TAX_RULE_ID = 1
@@ -146,10 +145,12 @@ class SevdeskClient:
                 "id": str(self.config.tax_rule_id or DEFAULT_TAX_RULE_ID),
                 "objectName": "TaxRule",
             }
-            contact_person = invoice_snapshot.get("contactPerson") or {
-                "id": self.config.contact_person_id or DEFAULT_CONTACT_PERSON_ID,
-                "objectName": "SevUser",
-            }
+            contact_person = invoice_snapshot.get("contactPerson")
+            if not contact_person and self.config.contact_person_id:
+                contact_person = {
+                    "id": self.config.contact_person_id,
+                    "objectName": "SevUser",
+                }
             address_country = invoice_snapshot.get("addressCountry") or {
                 "id": self.config.address_country_id or DEFAULT_ADDRESS_COUNTRY_ID,
                 "objectName": "StaticCountry",
@@ -165,10 +166,12 @@ class SevdeskClient:
             tax_text = self.config.tax_text or DEFAULT_TAX_TEXT
             currency = self.config.currency or DEFAULT_CURRENCY
             tax_rule = {"id": str(self.config.tax_rule_id or DEFAULT_TAX_RULE_ID), "objectName": "TaxRule"}
-            contact_person = {
-                "id": self.config.contact_person_id or DEFAULT_CONTACT_PERSON_ID,
-                "objectName": "SevUser"
-            }
+            contact_person = None
+            if self.config.contact_person_id:
+                contact_person = {
+                    "id": self.config.contact_person_id,
+                    "objectName": "SevUser"
+                }
             address_country = {
                 "id": self.config.address_country_id or DEFAULT_ADDRESS_COUNTRY_ID,
                 "objectName": "StaticCountry"
@@ -191,9 +194,10 @@ class SevdeskClient:
             "currency": currency,
             "discount": discount,
             "contact": {"id": contact_id, "objectName": "Contact"},
-            "contactPerson": contact_person,
             "addressCountry": address_country,
         }
+        if contact_person:
+            payload["contactPerson"] = contact_person
         if invoice_id is not None:
             payload["id"] = invoice_id
         if header_value:

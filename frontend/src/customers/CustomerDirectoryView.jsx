@@ -993,35 +993,35 @@ export default function CustomerDirectoryView() {
         </div>
       ) : null}
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
               <Users size={18} />
             </div>
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-              <h1 className="text-2xl font-display text-sand-900">Kundenstamm</h1>
+              <h1 className="text-xl font-display text-sand-900">Kundenstamm</h1>
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
               onClick={handleCreate}
-              className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide hover:opacity-90"
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-1.5 text-xs uppercase tracking-wide hover:opacity-90"
             >
               <Plus size={14} /> Neuer Kunde
             </button>
             <button
               type="button"
               onClick={downloadCsv}
-              className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-1.5 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
             >
               CSV exportieren
             </button>
             <button
               type="button"
               onClick={() => importInputRef.current?.click()}
-              className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-1.5 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
             >
               CSV importieren
             </button>
@@ -1037,13 +1037,13 @@ export default function CustomerDirectoryView() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8">
-        <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-          <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-5">
-            <div className="flex items-center justify-between mb-4">
+      <main className="max-w-6xl mx-auto px-4 py-5">
+        <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+          <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-4">
+            <div className="flex items-center justify-between mb-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Übersicht</p>
-                <h2 className="text-lg font-display text-sand-900">Kundendatei</h2>
+                <h2 className="text-base font-display text-sand-900">Kundendatei</h2>
               </div>
               <span className="rounded-full border border-sand-200 px-3 py-1 text-xs text-sand-600">
                 {customers.length} Kunde{customers.length === 1 ? "" : "n"}
@@ -1056,10 +1056,10 @@ export default function CustomerDirectoryView() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Suche nach Name, Nummer, Telefon…"
-                className="w-full rounded-2xl border border-sand-200 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                className="w-full rounded-2xl border border-sand-200 pl-9 pr-3 py-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-sand-300"
               />
             </label>
-            <div className="mt-4 space-y-2 max-h-[520px] overflow-auto pr-1">
+            <div className="mt-3 space-y-1.5 max-h-[520px] overflow-auto pr-1">
               {filteredCustomers.length ? (
                 sortedCustomers.map((customer) => {
                   return (
@@ -1067,16 +1067,16 @@ export default function CustomerDirectoryView() {
                       key={customer.id}
                       type="button"
                       onClick={() => setActiveId(customer.id)}
-                      className={`w-full text-left rounded-2xl border px-3 py-3 transition ${
+                      className={`w-full text-left rounded-2xl border px-2.5 py-1 transition ${
                         customer.id === activeId
                           ? "border-sand-900 bg-sand-900 text-white"
                           : "border-sand-200 bg-sand-50 text-sand-700 hover:bg-sand-100"
                       }`}
                     >
-                      <div className="text-sm font-semibold">
+                      <div className="text-[11px] font-semibold leading-tight">
                         {customer.name?.trim() || "Unbenannter Kunde"}
                       </div>
-                      <div className="mt-1 text-xs text-sand-500">
+                      <div className="mt-0.5 text-[9px] text-sand-500 leading-tight">
                         {customer.creditorNumber || customer.shortCode ? (
                           <>
                             {customer.creditorNumber
