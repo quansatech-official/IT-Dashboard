@@ -8,6 +8,9 @@ import {
   FileDown,
   FilePlus,
   Image,
+  Upload,
+  Info,
+  MessageSquare,
   Link,
   Plus,
   Copy,
@@ -35,6 +38,8 @@ const noteTextareaClass = `${textareaClass} min-h-[60px]`;
 const selectClass = `${inputClass} appearance-none pr-10 bg-[url('data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"%234B5563\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 7l5 5 5-5\"/></svg>')] bg-no-repeat bg-[right_0.9rem_center] bg-[length:18px]`;
 const priceInputClass = `${inputClass} pr-8 appearance-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 const quantityInputClass = `${inputClass} appearance-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
+const inlinePriceInputClass =
+  "w-full bg-transparent py-1 text-[13px] text-sand-900 outline-none appearance-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
 const statusOptions = ["Entwurf", "gesendet", "angenommen", "abgelehnt"];
 const complexityOptions = ["niedrig", "mittel", "hoch"];
@@ -167,7 +172,7 @@ const initialDeviceBlocks = [
     dealerLink: "",
     dealerLinkDate: "",
     images: [],
-    internalNote: ""
+    internalNotes: []
   },
   {
     id: "device-backup",
@@ -177,7 +182,7 @@ const initialDeviceBlocks = [
     dealerLink: "",
     dealerLinkDate: "",
     images: [],
-    internalNote: ""
+    internalNotes: []
   },
   {
     id: "device-wifi",
@@ -187,7 +192,7 @@ const initialDeviceBlocks = [
     dealerLink: "",
     dealerLinkDate: "",
     images: [],
-    internalNote: ""
+    internalNotes: []
   }
 ];
 
@@ -202,6 +207,32 @@ const initialCalcBlocks = [
 ];
 
 const uid = () => Math.random().toString(36).slice(2, 10);
+
+const normalizeBlockInternalNotes = (block = {}) => {
+  if (Array.isArray(block.internalNotes) && block.internalNotes.length) {
+    return block.internalNotes.map((note) => ({
+      id: note.id || uid(),
+      type: note.type || "anmerkungen",
+      text: note.text || ""
+    }));
+  }
+  if (block.internalNote) {
+    return [
+      {
+        id: uid(),
+        type: "anmerkungen",
+        text: block.internalNote
+      }
+    ];
+  }
+  return [];
+};
+
+const normalizeBlockListWithNotes = (list = []) =>
+  list.map((block) => ({
+    ...block,
+    internalNotes: normalizeBlockInternalNotes(block)
+  }));
 
 const formatDate = (value) => {
   if (!value) return "";
@@ -225,6 +256,18 @@ const formatMoney = (value) => {
 
 const formatLineTotal = (price, quantity) =>
   formatMoney(Number(price || 0) * Number(quantity || 0));
+
+const calculatePriceFromInputs = ({
+  base,
+  markupPercent,
+  researchPercent,
+  absoluteMarkup
+}) => {
+  const baseValue = Number(base || 0);
+  const percent = Number(markupPercent || 0) + Number(researchPercent || 0);
+  const absolute = Number(absoluteMarkup || 0);
+  return baseValue + absolute + (baseValue * percent) / 100;
+};
 
 const normalizeBillingCycle = (value) => {
   if (value === "monthly" || value === "yearly") return value;
@@ -542,6 +585,7 @@ const internalNoteOptions = [
 const initialOffers = [];
 const AUTOSAVE_KEY = "qt_offer_autosave";
 const LAST_OFFER_INDEX_KEY = "qt_offer_last_index";
+const PRICE_CALC_DRAFTS_KEY = "qt_offer_price_calc_drafts";
 
 const normalizeVersionId = (item) => {
   const first = item.aiVersions?.[0]?.id || null;
@@ -567,10 +611,10 @@ const buildLineItemFromBlock = (block = {}) => ({
   unit: block.unit || "hours",
   researchHours: Number(block.researchHours || 0),
   billingCycle: block.billingCycle || "once",
+  internalNotes: normalizeBlockInternalNotes(block),
   aiVersions: [],
   activeAiVersionId: null,
   aiDraft: "",
-  internalNotes: [],
   optional: false
 });
 
@@ -587,15 +631,7 @@ const buildDeviceItemFromBlock = (block = {}) => ({
   quantity: normalizeQuantityInput(block.quantity, 1),
   billingCycle: block.billingCycle || "once",
   images: Array.isArray(block.images) ? [...block.images] : [],
-  internalNotes: block.internalNote
-    ? [
-        {
-          id: uid(),
-          type: "internal",
-          text: block.internalNote
-        }
-      ]
-    : [],
+  internalNotes: normalizeBlockInternalNotes(block),
   optional: false
 });
 
@@ -1742,42 +1778,203 @@ function SelectField({ value, onChange, disabled, children }) {
   );
 }
 
-function PositionCard({ item, onUpdate, onRemove, onSaveAsBlock }) {
+function PriceCalcModal({
+  open,
+  itemLabel,
+  currentPrice,
+  values,
+  onChange,
+  onClose,
+  onApply
+}) {
+  if (!open) return null;
+  const result = calculatePriceFromInputs(values || {});
+  const displayLabel = itemLabel || "Position";
+  const handleKeyDown = (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      onApply(result);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
+      <div
+        className="w-full max-w-xs overflow-hidden rounded-2xl border border-sand-200 bg-white shadow-soft"
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+      >
+        <div className="flex items-center justify-between border-b border-sand-100 px-3 py-2">
+          <div className="text-xs font-semibold text-sand-900">
+            Preisrechner · {displayLabel}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-50"
+            aria-label="Preisberechnung schließen"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="px-3 py-2 space-y-2">
+          <div className="grid gap-1.5">
+            <Field label="EK netto (Ausgangspunkt)">
+              <input
+                className={priceInputClass}
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                value={values?.base ?? ""}
+                onChange={(event) => onChange({ base: parseNumberInput(event.target.value) })}
+                onFocus={(event) => event.target.select()}
+                autoFocus
+                placeholder="z.B. 980"
+              />
+            </Field>
+            <Field label="Aufschlag %">
+              <input
+                className={priceInputClass}
+                type="number"
+                inputMode="decimal"
+                step="0.1"
+                value={values?.markupPercent ?? ""}
+                onChange={(event) => onChange({ markupPercent: parseNumberInput(event.target.value) })}
+                onFocus={(event) => event.target.select()}
+                placeholder="optional"
+              />
+            </Field>
+            <Field label="Recherche Aufschlag %">
+              <input
+                className={priceInputClass}
+                type="number"
+                inputMode="decimal"
+                step="0.1"
+                value={values?.researchPercent ?? ""}
+                onChange={(event) => onChange({ researchPercent: parseNumberInput(event.target.value) })}
+                onFocus={(event) => event.target.select()}
+                placeholder="optional"
+              />
+            </Field>
+            <Field label="Aufschlag € (absolut)">
+              <input
+                className={priceInputClass}
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                value={values?.absoluteMarkup ?? ""}
+                onChange={(event) => onChange({ absoluteMarkup: parseNumberInput(event.target.value) })}
+                onFocus={(event) => event.target.select()}
+                placeholder="optional"
+              />
+            </Field>
+          </div>
+          <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-600">
+            <div className="flex items-center justify-between">
+              <span>Aktuell</span>
+              <span className="text-sand-900">
+                {currentPrice !== "" && currentPrice !== null && typeof currentPrice !== "undefined"
+                  ? formatMoney(currentPrice)
+                  : "—"}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between">
+              <span>Neu</span>
+              <span className="text-sm font-semibold text-sand-900">
+                {formatMoney(result)}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-sand-100 px-3 py-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+          >
+            Abbrechen
+          </button>
+          <button
+            type="button"
+            onClick={() => onApply(result)}
+            className="inline-flex items-center justify-center rounded-full bg-sand-900 px-2 py-1 text-[10px] uppercase tracking-wide text-white hover:opacity-90"
+          >
+            Preis übernehmen
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PositionCard({
+  item,
+  onUpdate,
+  onRemove,
+  onSaveAsBlock,
+  onOpenPriceCalc,
+  onNotesChange
+}) {
   if (!item) return null;
   const [open, setOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const notes = Array.isArray(item.internalNotes) && item.internalNotes.length
+    ? item.internalNotes
+    : item.internalNoteType
+      ? [
+          {
+            id: `legacy-${item.id}`,
+            type: item.internalNoteType,
+            text: item.internalNoteText || ""
+          }
+        ]
+      : [];
   const billingOptions = [
     { value: "once", label: "Einmalig" },
     { value: "monthly", label: "Monatlich" },
     { value: "yearly", label: "Jährlich" }
   ];
   return (
-    <div className="rounded-2xl border border-sand-200 bg-white p-3 text-sm text-sand-700 space-y-2">
-      <div className="flex items-center gap-2">
+    <div className="rounded-2xl border border-sand-200 bg-white p-2 text-sm text-sand-700 space-y-1.5">
+      <div className="flex items-center gap-1.5">
         <button
           type="button"
           onClick={() => setOpen((prev) => !prev)}
-          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          className="rounded-full border border-sand-200 bg-white p-0.5 text-sand-500 hover:bg-sand-100"
           title={open ? "Details ausblenden" : "Details anzeigen"}
         >
           {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
         <input
-          className={`${inputClass} flex-[7] min-w-[280px]`}
+          className={`${inputClass} flex-[7] min-w-[220px]`}
           value={item.title || ""}
           onChange={(event) => onUpdate({ title: event.target.value })}
           placeholder="Leistungstitel"
         />
-        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-2 flex-[1.5] min-w-[110px]">
-          <span className="text-sand-500 mr-1">€</span>
+        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-1.5 flex-[1.4] min-w-[96px]">
+          <span className="text-sand-500 mr-0.5 text-xs">€</span>
           <input
-            className="w-full bg-transparent py-1 text-[13px] text-sand-900 outline-none appearance-none"
+            className={inlinePriceInputClass}
             type="number"
             value={item.price ?? ""}
             onChange={(event) => onUpdate({ price: parseNumberInput(event.target.value) })}
           />
+          <button
+            type="button"
+            onClick={() => onOpenPriceCalc?.(item)}
+            className="ml-0.5 rounded-full border border-sand-200 bg-white p-0.5 text-sand-500 hover:bg-sand-100"
+            title="Preisberechnung öffnen"
+            aria-label="Preisberechnung öffnen"
+          >
+            <Info size={12} />
+          </button>
         </div>
         <input
-          className={`${quantityInputClass} flex-[1.5] min-w-[90px]`}
+          className={`${quantityInputClass} flex-[1.2] min-w-[70px]`}
           type="number"
           value={item.quantity ?? ""}
           onChange={(event) => onUpdate({ quantity: parseNumberInput(event.target.value) })}
@@ -1786,7 +1983,7 @@ function PositionCard({ item, onUpdate, onRemove, onSaveAsBlock }) {
         <button
           type="button"
           onClick={onRemove}
-          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          className="rounded-full border border-sand-200 bg-white p-0.5 text-sand-500 hover:bg-sand-100"
           title="Entfernen"
         >
           <Trash2 size={12} />
@@ -1794,7 +1991,7 @@ function PositionCard({ item, onUpdate, onRemove, onSaveAsBlock }) {
         <button
           type="button"
           onClick={() => onSaveAsBlock?.(item)}
-          className="text-slate-400 hover:text-sand-700"
+          className="text-slate-400 hover:text-sand-700 p-0.5"
           title="Als Baustein speichern"
         >
           <BookmarkPlus size={16} />
@@ -1810,32 +2007,38 @@ function PositionCard({ item, onUpdate, onRemove, onSaveAsBlock }) {
               placeholder="Leistungsbeschreibung"
             />
           </Field>
-          <div className="grid gap-2 md:grid-cols-2">
-            <Field label="Einheit">
-              <SelectField
-                value={item.unit || "hours"}
-                onChange={(event) => onUpdate({ unit: event.target.value })}
-              >
-                {unitOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </SelectField>
-            </Field>
-            <Field label="Abrechnung">
-              <SelectField
-                value={item.billingCycle || "once"}
-                onChange={(event) => onUpdate({ billingCycle: event.target.value })}
-              >
-                {billingOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </SelectField>
-            </Field>
-            <div className="flex items-center gap-3 pt-6">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap gap-1.5">
+              <div className="min-w-[150px] flex-1">
+                <Field label="Einheit">
+                  <SelectField
+                    value={item.unit || "hours"}
+                    onChange={(event) => onUpdate({ unit: event.target.value })}
+                  >
+                    {unitOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </SelectField>
+                </Field>
+              </div>
+              <div className="min-w-[150px] flex-1">
+                <Field label="Abrechnung">
+                  <SelectField
+                    value={item.billingCycle || "once"}
+                    onChange={(event) => onUpdate({ billingCycle: event.target.value })}
+                  >
+                    {billingOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </SelectField>
+                </Field>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 pt-0.5">
               <input
                 id={`line-optional-${item.id}`}
                 type="checkbox"
@@ -1849,6 +2052,95 @@ function PositionCard({ item, onUpdate, onRemove, onSaveAsBlock }) {
               >
                 Optional
               </label>
+            </div>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-sand-500">
+                <span className="inline-flex items-center gap-1">
+                  <MessageSquare size={12} /> Interne Vermerke
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setNotesOpen((prev) => !prev)}
+                  className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                  title={notesOpen ? "Interne Vermerke einklappen" : "Interne Vermerke öffnen"}
+                  aria-label={notesOpen ? "Interne Vermerke einklappen" : "Interne Vermerke öffnen"}
+                >
+                  {notesOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+              </div>
+              {notesOpen ? (
+                <div className="space-y-1.5">
+                  {notes.length ? (
+                    notes.map((note, index) => (
+                      <div key={note.id || index} className="flex items-start gap-1.5">
+                        <div className="min-w-[120px]">
+                          <SelectField
+                            value={note.type || ""}
+                            onChange={(event) => {
+                              if (!onNotesChange) return;
+                              const next = notes.map((entry, idx) =>
+                                idx === index ? { ...entry, type: event.target.value } : entry
+                              );
+                              onNotesChange(next);
+                            }}
+                          >
+                            {internalNoteOptions.map((option) => (
+                              <option key={option.value || "none"} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </SelectField>
+                        </div>
+                        <input
+                          className={inputClass}
+                          value={note.text || ""}
+                          onChange={(event) => {
+                            if (!onNotesChange) return;
+                            const next = notes.map((entry, idx) =>
+                              idx === index ? { ...entry, text: event.target.value } : entry
+                            );
+                            onNotesChange(next);
+                          }}
+                          placeholder={
+                            note.type === "bezugslink" ? "https://..." : "Interner Vermerk"
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!onNotesChange) return;
+                            onNotesChange(notes.filter((_, idx) => idx !== index));
+                          }}
+                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                          title="Entfernen"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-xs text-sand-500">Keine internen Vermerke.</p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!onNotesChange) return;
+                      onNotesChange([
+                        ...notes,
+                        {
+                          id: uid(),
+                          type: "anmerkungen",
+                          text: ""
+                        }
+                      ]);
+                      setNotesOpen(true);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                  >
+                    <Plus size={12} /> Vermerk hinzufügen
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1882,10 +2174,24 @@ function DeviceCard({
   onRemove,
   onAddImage = () => {},
   onRemoveImage = () => {},
-  onSaveAsBlock
+  onSaveAsBlock,
+  onOpenPriceCalc,
+  onNotesChange
 }) {
   if (!item) return null;
   const [open, setOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const notes = Array.isArray(item.internalNotes) && item.internalNotes.length
+    ? item.internalNotes
+    : item.internalNoteType
+      ? [
+          {
+            id: `legacy-${item.id}`,
+            type: item.internalNoteType,
+            text: item.internalNoteText || ""
+          }
+        ]
+      : [];
   const [imageUrlDraft, setImageUrlDraft] = useState("");
   const billingOptions = [
     { value: "once", label: "Einmalig" },
@@ -1926,33 +2232,42 @@ function DeviceCard({
   };
 
   return (
-    <div className="rounded-2xl border border-sand-200 bg-white p-3 text-sm text-sand-700 space-y-2">
-      <div className="flex items-center gap-2">
+    <div className="rounded-2xl border border-sand-200 bg-white p-2 text-sm text-sand-700 space-y-1.5">
+      <div className="flex items-center gap-1.5">
         <button
           type="button"
           onClick={() => setOpen((prev) => !prev)}
-          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          className="rounded-full border border-sand-200 bg-white p-0.5 text-sand-500 hover:bg-sand-100"
           title={open ? "Details ausblenden" : "Details anzeigen"}
         >
           {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
         <input
-          className={`${inputClass} flex-[7] min-w-[280px]`}
+          className={`${inputClass} flex-[7] min-w-[220px]`}
           value={item.product || ""}
           onChange={(event) => onUpdate({ product: event.target.value })}
           placeholder="Gerät / Material"
         />
-        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-2 flex-[1.5] min-w-[110px]">
-          <span className="text-sand-500 mr-1">€</span>
+        <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-1.5 flex-[1.4] min-w-[96px]">
+          <span className="text-sand-500 mr-0.5 text-xs">€</span>
           <input
-            className="w-full bg-transparent py-1 text-[13px] text-sand-900 outline-none appearance-none"
+            className={inlinePriceInputClass}
             type="number"
             value={item.price ?? ""}
             onChange={(event) => onUpdate({ price: parseNumberInput(event.target.value) })}
           />
+          <button
+            type="button"
+            onClick={() => onOpenPriceCalc?.(item)}
+            className="ml-0.5 rounded-full border border-sand-200 bg-white p-0.5 text-sand-500 hover:bg-sand-100"
+            title="Preisberechnung öffnen"
+            aria-label="Preisberechnung öffnen"
+          >
+            <Info size={12} />
+          </button>
         </div>
         <input
-          className={`${quantityInputClass} flex-[1.5] min-w-[90px]`}
+          className={`${quantityInputClass} flex-[1.2] min-w-[70px]`}
           type="number"
           value={item.quantity ?? ""}
           onChange={(event) => onUpdate({ quantity: parseNumberInput(event.target.value) })}
@@ -1961,7 +2276,7 @@ function DeviceCard({
         <button
           type="button"
           onClick={onRemove}
-          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+          className="rounded-full border border-sand-200 bg-white p-0.5 text-sand-500 hover:bg-sand-100"
           title="Entfernen"
         >
           <Trash2 size={12} />
@@ -1969,7 +2284,7 @@ function DeviceCard({
         <button
           type="button"
           onClick={() => onSaveAsBlock?.(item)}
-          className="text-slate-400 hover:text-sand-700"
+          className="text-slate-400 hover:text-sand-700 p-0.5"
           title="Als Baustein speichern"
         >
           <BookmarkPlus size={16} />
@@ -2015,49 +2330,57 @@ function DeviceCard({
             </div>
           </div>
           <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Bilder</p>
-              <div className="flex items-center gap-2">
-                <input
-                  className="w-52 rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400"
-                  value={imageUrlDraft}
-                  onChange={(e) => setImageUrlDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleAddImageUrl();
-                    }
-                  }}
-                  placeholder="https://bild.url"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddImageUrl}
-                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                >
-                  URL hinzufügen
-                </button>
-                <label className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 cursor-pointer">
-                  Upload
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      handleFiles(e.target.files);
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
+            <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Bilder</p>
+            <div className="grid gap-2 md:grid-cols-2">
+              <div
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={handleDrop}
+                className="flex h-28 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 text-[11px] uppercase tracking-[0.2em] text-sand-500"
+              >
+                <img src="/QTLogo.jpg" alt="QT" className="h-6 w-auto opacity-70" />
+                <span>Drag & Drop</span>
               </div>
-            </div>
-            <div
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleDrop}
-              className="rounded-xl border border-dashed border-sand-300 bg-sand-50 px-3 py-2 text-xs text-sand-500"
-            >
-              Link einfügen oder Bild-Dateien hierher ziehen.
+              <div className="flex flex-col justify-between gap-2">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">URL</p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      className={inputClass}
+                      value={imageUrlDraft}
+                      onChange={(e) => setImageUrlDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleAddImageUrl();
+                        }
+                      }}
+                      placeholder="https://bild.url"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddImageUrl}
+                      className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 whitespace-nowrap"
+                    >
+                      URL hinzufügen
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 cursor-pointer">
+                    <Upload size={12} /> Upload
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        handleFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
             </div>
             {(item.images || []).length ? (
               <div className="flex flex-wrap gap-2">
@@ -2085,6 +2408,95 @@ function DeviceCard({
             ) : (
               <p className="text-xs text-sand-500">Keine Bilder hinterlegt.</p>
             )}
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-sand-500">
+              <span className="inline-flex items-center gap-1">
+                <MessageSquare size={12} /> Interne Vermerke
+              </span>
+              <button
+                type="button"
+                onClick={() => setNotesOpen((prev) => !prev)}
+                className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                title={notesOpen ? "Interne Vermerke einklappen" : "Interne Vermerke öffnen"}
+                aria-label={notesOpen ? "Interne Vermerke einklappen" : "Interne Vermerke öffnen"}
+              >
+                {notesOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
+            </div>
+            {notesOpen ? (
+              <div className="space-y-1.5">
+                {notes.length ? (
+                  notes.map((note, index) => (
+                    <div key={note.id || index} className="flex items-start gap-1.5">
+                      <div className="min-w-[120px]">
+                        <SelectField
+                          value={note.type || ""}
+                          onChange={(event) => {
+                            if (!onNotesChange) return;
+                            const next = notes.map((entry, idx) =>
+                              idx === index ? { ...entry, type: event.target.value } : entry
+                            );
+                            onNotesChange(next);
+                          }}
+                        >
+                          {internalNoteOptions.map((option) => (
+                            <option key={option.value || "none"} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </SelectField>
+                      </div>
+                      <input
+                        className={inputClass}
+                        value={note.text || ""}
+                        onChange={(event) => {
+                          if (!onNotesChange) return;
+                          const next = notes.map((entry, idx) =>
+                            idx === index ? { ...entry, text: event.target.value } : entry
+                          );
+                          onNotesChange(next);
+                        }}
+                        placeholder={
+                          note.type === "bezugslink" ? "https://..." : "Interner Vermerk"
+                        }
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!onNotesChange) return;
+                          onNotesChange(notes.filter((_, idx) => idx !== index));
+                        }}
+                        className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                        title="Entfernen"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-sand-500">Keine internen Vermerke.</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!onNotesChange) return;
+                    onNotesChange([
+                      ...notes,
+                      {
+                        id: uid(),
+                        type: "anmerkungen",
+                        text: ""
+                      }
+                    ]);
+                    setNotesOpen(true);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                >
+                  <Plus size={12} /> Vermerk hinzufügen
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -2138,6 +2550,18 @@ export default function OffersView() {
     selectedLineItemIds: [],
     selectedDeviceItemIds: []
   });
+  const [priceCalcModal, setPriceCalcModal] = useState({
+    open: false,
+    itemId: "",
+    itemType: "service",
+    itemLabel: "",
+    currentPrice: "",
+    base: "",
+    markupPercent: "",
+    researchPercent: "",
+    absoluteMarkup: ""
+  });
+  const [priceCalcDrafts, setPriceCalcDrafts] = useState({});
   const [sevdeskStatus, setSevdeskStatus] = useState({});
   const [expandedOffers, setExpandedOffers] = useState({});
   const [confirmationMenuOfferId, setConfirmationMenuOfferId] = useState("");
@@ -2149,6 +2573,7 @@ export default function OffersView() {
   const exportRef = useRef(null);
   const emailPdfRef = useRef(null);
   const emailExportPromiseRef = useRef(null);
+  const lastSavedOffersRef = useRef({});
   const offersFetchedRef = useRef(false);
   const lastOfferIndexRef = useRef(0);
   const [previewScale, setPreviewScale] = useState(0.7);
@@ -2306,6 +2731,31 @@ export default function OffersView() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(PRICE_CALC_DRAFTS_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === "object") {
+        setPriceCalcDrafts(parsed);
+      }
+    } catch (error) {
+      console.warn("[offers] price calc drafts load failed", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        PRICE_CALC_DRAFTS_KEY,
+        JSON.stringify(priceCalcDrafts)
+      );
+    } catch (error) {
+      console.warn("[offers] price calc drafts save failed", error);
+    }
+  }, [priceCalcDrafts]);
+
+  useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const computeHeight = () => {
       const headerEl = offerHeaderRef.current;
@@ -2443,10 +2893,10 @@ export default function OffersView() {
           setStarterCreated(true);
         }
         if (Array.isArray(stored?.serviceBlocks) && stored.serviceBlocks.length) {
-          setServiceBlocks(stored.serviceBlocks);
+          setServiceBlocks(normalizeBlockListWithNotes(stored.serviceBlocks));
         }
         if (Array.isArray(stored?.deviceBlocks) && stored.deviceBlocks.length) {
-          setDeviceBlocks(stored.deviceBlocks);
+          setDeviceBlocks(normalizeBlockListWithNotes(stored.deviceBlocks));
         }
         if (Array.isArray(stored?.calcBlocks) && stored.calcBlocks.length) {
           setCalcBlocks(stored.calcBlocks);
@@ -2482,10 +2932,10 @@ export default function OffersView() {
       .then((data) => {
         if (!active) return;
         if (data?.serviceBlocks?.length) {
-          setServiceBlocks(data.serviceBlocks);
+          setServiceBlocks(normalizeBlockListWithNotes(data.serviceBlocks));
         }
         if (data?.deviceBlocks?.length) {
-          setDeviceBlocks(data.deviceBlocks);
+          setDeviceBlocks(normalizeBlockListWithNotes(data.deviceBlocks));
         }
         if (data?.calcBlocks?.length) {
           setCalcBlocks(data.calcBlocks);
@@ -2643,6 +3093,13 @@ export default function OffersView() {
 
   useEffect(() => {
     setDetailDraft(activeOffer?.detailHtml || "");
+  }, [activeOffer?.id]);
+
+  useEffect(() => {
+    if (!activeOffer?.id) return;
+    if (!lastSavedOffersRef.current[activeOffer.id]) {
+      lastSavedOffersRef.current[activeOffer.id] = cloneOffer(activeOffer);
+    }
   }, [activeOffer?.id]);
 
   useEffect(() => {
@@ -2829,6 +3286,8 @@ export default function OffersView() {
     });
     return { open, accepted, declined };
   }, [offers]);
+
+  const cloneOffer = (offer) => JSON.parse(JSON.stringify(offer));
 
   const updateOffer = (offerId, updater) => {
     setOffers((prev) =>
@@ -3579,6 +4038,50 @@ export default function OffersView() {
     setHandoverModal((prev) => ({ ...prev, open: false }));
   };
 
+  const openPriceCalc = (item, itemType = "service") => {
+    if (!item) return;
+    const label =
+      itemType === "device"
+        ? item.product || item.title || "Material"
+        : item.title || "Leistung";
+    const draft = priceCalcDrafts[item.id] || {};
+    setPriceCalcModal({
+      open: true,
+      itemId: item.id || "",
+      itemType,
+      itemLabel: label,
+      currentPrice: item.price ?? "",
+      base: draft.base ?? item.price ?? "",
+      markupPercent: draft.markupPercent ?? "",
+      researchPercent: draft.researchPercent ?? "",
+      absoluteMarkup: draft.absoluteMarkup ?? ""
+    });
+  };
+
+  const closePriceCalc = () => {
+    setPriceCalcModal((prev) => ({ ...prev, open: false }));
+  };
+
+  const applyPriceCalc = (nextPrice) => {
+    if (!activeOffer || !priceCalcModal.itemId) return;
+    setPriceCalcDrafts((prev) => ({
+      ...prev,
+      [priceCalcModal.itemId]: {
+        base: priceCalcModal.base,
+        markupPercent: priceCalcModal.markupPercent,
+        researchPercent: priceCalcModal.researchPercent,
+        absoluteMarkup: priceCalcModal.absoluteMarkup
+      }
+    }));
+    const update = { price: Number(nextPrice || 0) };
+    if (priceCalcModal.itemType === "device") {
+      updateDeviceItem(activeOffer.id, priceCalcModal.itemId, update);
+    } else {
+      updateLineItem(activeOffer.id, priceCalcModal.itemId, update);
+    }
+    closePriceCalc();
+  };
+
   const toggleHandoverLineItem = (itemId) => {
     const id = String(itemId || "");
     if (!id) return;
@@ -3618,6 +4121,42 @@ export default function OffersView() {
     createSevdeskDraftForOffer(offer, selection);
   };
 
+  const handleManualSave = async () => {
+    if (!activeOffer) return;
+    const snapshot = cloneOffer(activeOffer);
+    lastSavedOffersRef.current[activeOffer.id] = snapshot;
+    persistToStorage(false);
+    const saved = await persistOfferToServer(activeOffer, true);
+    if (saved?.id) {
+      lastSavedOffersRef.current[activeOffer.id] = cloneOffer(normalizeServerOffer(saved) || saved);
+    }
+  };
+
+  const handleClearOffer = () => {
+    if (!activeOffer) return;
+    const ok = window.confirm("Angebot wirklich leeren?");
+    if (!ok) return;
+    const referenceIndex =
+      getOfferIndexFromReference(activeOffer.reference, offerNumberFormat) || null;
+    const base = createEmptyOffer(
+      referenceIndex || getNextOfferIndex(offers, offerNumberFormat, lastOfferIndexRef.current),
+      offerNumberFormat
+    );
+    const cleared = {
+      ...base,
+      id: activeOffer.id,
+      reference: activeOffer.reference || base.reference,
+      createdAt: activeOffer.createdAt || base.createdAt,
+      status: activeOffer.status || base.status,
+      serverId: activeOffer.serverId || null,
+      confirmGuid: activeOffer.confirmGuid || "",
+      trackingGuid: activeOffer.trackingGuid || "",
+      handoverLocked: Boolean(activeOffer.handoverLocked)
+    };
+    updateOffer(activeOffer.id, () => cleared);
+    setDetailDraft("");
+  };
+
   const addLineItem = (block) => {
     if (!activeOffer) return;
     const newItem = buildLineItemFromBlock(block);
@@ -3651,7 +4190,8 @@ export default function OffersView() {
         unit: "hours",
         researchHours: 0,
         keywords: [],
-        billingCycle: "once"
+        billingCycle: "once",
+        internalNotes: []
       }
     ]);
   };
@@ -3670,7 +4210,7 @@ export default function OffersView() {
         quantity: 1,
         billingCycle: "once",
         images: [],
-        internalNote: ""
+        internalNotes: []
       }
     ]);
   };
@@ -3711,19 +4251,24 @@ export default function OffersView() {
     );
   };
 
+  const handleDeviceBlockFiles = (blockId, files) => {
+    if (!files || !files.length) return;
+    Array.from(files).forEach((file) => {
+      if (!file.type.startsWith("image/")) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        if (result) appendDeviceBlockImages(blockId, [result]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleDeviceBlockDrop = (event, blockId) => {
     event.preventDefault();
     const files = event.dataTransfer?.files;
     if (files && files.length) {
-      Array.from(files).forEach((file) => {
-        if (!file.type.startsWith("image/")) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = typeof reader.result === "string" ? reader.result : "";
-          if (result) appendDeviceBlockImages(blockId, [result]);
-        };
-        reader.readAsDataURL(file);
-      });
+      handleDeviceBlockFiles(blockId, files);
       return;
     }
     const text = event.dataTransfer?.getData("text/plain") || "";
@@ -4016,11 +4561,7 @@ export default function OffersView() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  if (!activeOffer) return;
-                  persistToStorage(false);
-                  persistOfferToServer(activeOffer, true);
-                }}
+                onClick={handleManualSave}
                 disabled={!activeOffer}
                 className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
                   activeOffer
@@ -4029,6 +4570,18 @@ export default function OffersView() {
                 }`}
               >
                 <Save size={12} /> Speichern
+              </button>
+              <button
+                type="button"
+                onClick={handleClearOffer}
+                disabled={!activeOffer}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
+                  activeOffer
+                    ? "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                    : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
+                }`}
+              >
+                <Trash2 size={12} /> Leeren
               </button>
               {saveStatus === "saved" && (
                 <span className="text-xs text-emerald-600">Gespeichert</span>
@@ -4421,25 +4974,12 @@ export default function OffersView() {
                             <PositionCard
                               key={item.id}
                               item={item}
-                              kind="service"
-                              customers={customers}
                               onUpdate={(patch) => updateLineItem(activeOffer.id, item.id, patch)}
                               onRemove={() => removeLineItem(activeOffer.id, item.id)}
                               onSaveAsBlock={saveLineItemAsBlock}
-                              onNoteChange={(updater) => updateLineItemNotes(activeOffer.id, item.id, updater)}
-                              onAiDraft={(text) =>
-                                updateLineItem(activeOffer.id, item.id, { aiDraft: text || "" })
-                              }
-                              onAddNote={(note) => addLineItemNote(activeOffer.id, item.id, note)}
-                              onDeleteNote={(noteId) => deleteLineItemNote(activeOffer.id, item.id, noteId)}
-                              onUpdateNote={(noteId, patch) =>
-                                updateLineItemNote(activeOffer.id, item.id, noteId, patch)
-                              }
-                              onVersionsChange={(versions) =>
-                                updateLineItem(activeOffer.id, item.id, { aiVersions: versions })
-                              }
-                              onActiveVersionChange={(versionId) =>
-                                updateLineItem(activeOffer.id, item.id, { activeAiVersionId: versionId })
+                              onOpenPriceCalc={(lineItem) => openPriceCalc(lineItem, "service")}
+                              onNotesChange={(notes) =>
+                                updateLineItemNotes(activeOffer.id, item.id, () => notes)
                               }
                             />
                           ))}
@@ -4468,12 +5008,11 @@ export default function OffersView() {
                               onUpdate={(patch) => updateDeviceItem(activeOffer.id, item.id, patch)}
                               onRemove={() => removeDeviceItem(activeOffer.id, item.id)}
                               onSaveAsBlock={saveDeviceItemAsBlock}
+                              onOpenPriceCalc={(deviceItem) => openPriceCalc(deviceItem, "device")}
                               onAddImage={(image) => addDeviceImage(activeOffer.id, item.id, image)}
                               onRemoveImage={(imageId) => removeDeviceImage(activeOffer.id, item.id, imageId)}
-                              onAddNote={(note) => addDeviceItemNote(activeOffer.id, item.id, note)}
-                              onDeleteNote={(noteId) => deleteDeviceItemNote(activeOffer.id, item.id, noteId)}
-                              onUpdateNote={(noteId, patch) =>
-                                updateDeviceItemNote(activeOffer.id, item.id, noteId, patch)
+                              onNotesChange={(notes) =>
+                                updateDeviceItemNotes(activeOffer.id, item.id, () => notes)
                               }
                             />
                           ))}
@@ -5302,6 +5841,9 @@ export default function OffersView() {
               serviceBlocks.map((block) => {
                 const key = `service-${block.id}`;
                 const isOpen = !!blockOpen[key];
+                const notes = Array.isArray(block.internalNotes)
+                  ? block.internalNotes
+                  : normalizeBlockInternalNotes(block);
                 return (
                   <div
                     key={block.id}
@@ -5461,6 +6003,84 @@ export default function OffersView() {
                             placeholder="Kurztext"
                           />
                         </Field>
+                        <Field label="Interne Vermerke">
+                          <div className="space-y-2">
+                            {notes.length ? (
+                              notes.map((note, index) => (
+                                <div key={note.id || index} className="flex items-start gap-2">
+                                  <div className="min-w-[140px]">
+                                    <SelectField
+                                      value={note.type || ""}
+                                      onChange={(event) => {
+                                        const next = notes.map((entry, idx) =>
+                                          idx === index
+                                            ? { ...entry, type: event.target.value }
+                                            : entry
+                                        );
+                                        updateServiceBlock(block.id, { internalNotes: next });
+                                      }}
+                                    >
+                                      {internalNoteOptions.map((option) => (
+                                        <option key={option.value || "none"} value={option.value}>
+                                          {option.label}
+                                        </option>
+                                      ))}
+                                    </SelectField>
+                                  </div>
+                                  <input
+                                    className={inputClass}
+                                    value={note.text || ""}
+                                    onChange={(event) => {
+                                      const next = notes.map((entry, idx) =>
+                                        idx === index
+                                          ? { ...entry, text: event.target.value }
+                                          : entry
+                                      );
+                                      updateServiceBlock(block.id, { internalNotes: next });
+                                    }}
+                                    placeholder={
+                                      note.type === "bezugslink" ? "https://..." : "Interner Vermerk"
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateServiceBlock(block.id, {
+                                        internalNotes: notes.filter((_, idx) => idx !== index)
+                                      })
+                                    }
+                                    className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                                    title="Entfernen"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </div>
+                              ))
+                            ) : (
+                              <p className="text-xs text-sand-500">
+                                Keine internen Vermerke.
+                              </p>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateServiceBlock(block.id, {
+                                  internalNotes: [
+                                    ...notes,
+                                    {
+                                      id: uid(),
+                                      type: "anmerkungen",
+                                      text: ""
+                                    }
+                                  ]
+                                })
+                              }
+                              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                            >
+                              <Plus size={12} /> Vermerk hinzufügen
+                            </button>
+                          </div>
+                        </Field>
                       </div>
                     ) : null}
                   </div>
@@ -5490,6 +6110,9 @@ export default function OffersView() {
               deviceBlocks.map((block) => {
                 const key = `device-${block.id}`;
                 const isOpen = !!blockOpen[key];
+                const notes = Array.isArray(block.internalNotes)
+                  ? block.internalNotes
+                  : normalizeBlockInternalNotes(block);
                 return (
                   <div
                     key={block.id}
@@ -5598,69 +6221,186 @@ export default function OffersView() {
                             </Field>
                           </div>
                           <div className="md:col-span-2">
-                            <Field label="Bilder (URLs, eine pro Zeile)">
-                              <textarea
-                                className={noteTextareaClass}
-                                value={(block.images || []).join("\n")}
-                                onChange={(event) =>
-                                  updateDeviceBlock(block.id, {
-                                    images: event.target.value
-                                      .split("\n")
-                                      .map((line) => line.trim())
-                                      .filter(Boolean)
-                                  })
-                                }
-                                placeholder="https://…"
-                              />
-                              <div
-                                className="mt-2 flex items-center justify-center rounded-2xl border border-dashed border-sand-200 bg-sand-50 px-4 py-6 text-[11px] uppercase tracking-[0.2em] text-sand-500"
-                                onDragOver={(event) => event.preventDefault()}
-                                onDrop={(event) => handleDeviceBlockDrop(event, block.id)}
-                              >
-                                Dateien hierher ziehen (Drag & Drop)
-                              </div>
-                              {(block.images || []).length ? (
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  {block.images.map((url) => (
-                                    <div
-                                      key={url}
-                                      className="relative h-20 w-28 overflow-hidden rounded-xl border border-sand-200 bg-white"
-                                    >
-                                      <img
-                                        src={url}
-                                        alt="Material"
-                                        className="h-full w-full object-cover"
+                            <Field label="Bilder">
+                              {(() => {
+                                const draftKey = `device-block-${block.id}`;
+                                const imageDraft = imageDrafts[draftKey] || "";
+                                const setDraft = (value) =>
+                                  setImageDrafts((prev) => ({ ...prev, [draftKey]: value }));
+                                const addDraftUrl = () => {
+                                  const trimmed = (imageDraft || "").trim();
+                                  if (!trimmed) return;
+                                  appendDeviceBlockImages(block.id, [trimmed]);
+                                  setDraft("");
+                                };
+                                return (
+                                  <>
+                                    <div className="grid gap-2 md:grid-cols-[1.2fr_1fr]">
+                                      <div
+                                        className="flex h-28 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-sand-200 bg-sand-50 px-4 text-[11px] uppercase tracking-[0.2em] text-sand-500"
+                                        onDragOver={(event) => event.preventDefault()}
+                                        onDrop={(event) => handleDeviceBlockDrop(event, block.id)}
+                                      >
+                                        <img src="/QTLogo.jpg" alt="QT" className="h-6 w-auto opacity-70" />
+                                        <span>Drag & Drop</span>
+                                      </div>
+                                      <div className="flex flex-col justify-between gap-2">
+                                        <div>
+                                          <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">
+                                            URL
+                                          </p>
+                                          <div className="flex items-center gap-2">
+                                            <input
+                                              className={inputClass}
+                                              value={imageDraft}
+                                              onChange={(event) => setDraft(event.target.value)}
+                                              onKeyDown={(event) => {
+                                                if (event.key === "Enter") {
+                                                  event.preventDefault();
+                                                  addDraftUrl();
+                                                }
+                                              }}
+                                              placeholder="https://…"
+                                            />
+                                            <button
+                                              type="button"
+                                              onClick={addDraftUrl}
+                                              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 whitespace-nowrap"
+                                            >
+                                              URL hinzufügen
+                                            </button>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <label className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 cursor-pointer">
+                                            <Upload size={12} /> Upload
+                                            <input
+                                              type="file"
+                                              accept="image/*"
+                                              multiple
+                                              className="hidden"
+                                              onChange={(event) => {
+                                                handleDeviceBlockFiles(block.id, event.target.files);
+                                                event.target.value = "";
+                                              }}
+                                            />
+                                          </label>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    {(block.images || []).length ? (
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        {block.images.map((url) => (
+                                          <div
+                                            key={url}
+                                            className="relative h-20 w-28 overflow-hidden rounded-xl border border-sand-200 bg-white"
+                                          >
+                                            <img
+                                              src={url}
+                                              alt="Material"
+                                              className="h-full w-full object-cover"
+                                            />
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                updateDeviceBlock(block.id, {
+                                                  images: (block.images || []).filter((entry) => entry !== url)
+                                                })
+                                              }
+                                              className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-sand-600 hover:bg-white"
+                                              title="Entfernen"
+                                            >
+                                              <X size={12} />
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </>
+                                );
+                              })()}
+                            </Field>
+                          </div>
+                          <div className="md:col-span-2">
+                            <Field label="Interne Vermerke">
+                              <div className="space-y-2">
+                                {notes.length ? (
+                                  notes.map((note, index) => (
+                                    <div key={note.id || index} className="flex items-start gap-2">
+                                      <div className="min-w-[140px]">
+                                        <SelectField
+                                          value={note.type || ""}
+                                          onChange={(event) => {
+                                            const next = notes.map((entry, idx) =>
+                                              idx === index
+                                                ? { ...entry, type: event.target.value }
+                                                : entry
+                                            );
+                                            updateDeviceBlock(block.id, { internalNotes: next });
+                                          }}
+                                        >
+                                          {internalNoteOptions.map((option) => (
+                                            <option key={option.value || "none"} value={option.value}>
+                                              {option.label}
+                                            </option>
+                                          ))}
+                                        </SelectField>
+                                      </div>
+                                      <input
+                                        className={inputClass}
+                                        value={note.text || ""}
+                                        onChange={(event) => {
+                                          const next = notes.map((entry, idx) =>
+                                            idx === index
+                                              ? { ...entry, text: event.target.value }
+                                              : entry
+                                          );
+                                          updateDeviceBlock(block.id, { internalNotes: next });
+                                        }}
+                                        placeholder={
+                                          note.type === "bezugslink"
+                                            ? "https://..."
+                                            : "Interner Vermerk"
+                                        }
                                       />
                                       <button
                                         type="button"
                                         onClick={() =>
                                           updateDeviceBlock(block.id, {
-                                            images: (block.images || []).filter((entry) => entry !== url)
+                                            internalNotes: notes.filter((_, idx) => idx !== index)
                                           })
                                         }
-                                        className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-sand-600 hover:bg-white"
+                                        className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
                                         title="Entfernen"
                                       >
                                         <X size={12} />
                                       </button>
                                     </div>
-                                  ))}
-                                </div>
-                              ) : null}
-                            </Field>
-                          </div>
-                          <div className="md:col-span-2">
-                            <Field label="Interner Vermerk">
-                              <textarea
-                                className={noteTextareaClass}
-                                value={block.internalNote || ""}
-                                onChange={(event) =>
-                                  updateDeviceBlock(block.id, {
-                                    internalNote: event.target.value
-                                  })
-                                }
-                                placeholder="Nur intern, wird nicht ausgegeben"
-                              />
+                                  ))
+                                ) : (
+                                  <p className="text-xs text-sand-500">
+                                    Keine internen Vermerke.
+                                  </p>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateDeviceBlock(block.id, {
+                                      internalNotes: [
+                                        ...notes,
+                                        {
+                                          id: uid(),
+                                          type: "anmerkungen",
+                                          text: ""
+                                        }
+                                      ]
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                                >
+                                  <Plus size={12} /> Vermerk hinzufügen
+                                </button>
+                              </div>
                             </Field>
                           </div>
                         </div>
@@ -5829,12 +6569,13 @@ export default function OffersView() {
                 onChange={(event) => setImportSource(event.target.value)}
               >
                 <option value="all">Alle Quellen</option>
-                {importSources.map((source) => (
-                  <option key={source.source} value={source.source}>
-                    {source.source}
-                    {source.available ? "" : " (nicht aktiv)"}
-                  </option>
-                ))}
+                {importSources
+                  .filter((source) => source.available)
+                  .map((source) => (
+                    <option key={source.source} value={source.source}>
+                      {source.source}
+                    </option>
+                  ))}
                 <option value="icecat">
                   icecat
                   {icecatApiStatus.enabled && icecatApiStatus.hasToken
@@ -5860,20 +6601,18 @@ export default function OffersView() {
               {importStatus === "loading" ? "Suche..." : "Suchen"}
             </button>
           </div>
-          {importSources.length ? (
+          {importSources.filter((source) => source.available).length ? (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-sand-600">
-              {importSources.map((source) => (
-                <span
-                  key={`${source.source}-chip`}
-                  className={`rounded-full border px-3 py-1 uppercase tracking-[0.2em] ${
-                    source.available
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : "border-sand-200 bg-white text-sand-500"
-                  }`}
-                >
-                  {source.source}
-                </span>
-              ))}
+              {importSources
+                .filter((source) => source.available)
+                .map((source) => (
+                  <span
+                    key={`${source.source}-chip`}
+                    className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 uppercase tracking-[0.2em] text-emerald-700"
+                  >
+                    {source.source}
+                  </span>
+                ))}
             </div>
           ) : null}
 
@@ -5937,14 +6676,11 @@ export default function OffersView() {
               {["td_synnex", "also"].map((source) => {
                 const info = importSources.find((item) => item.source === source);
                 const available = Boolean(info?.available);
+                if (!available) return null;
                 return (
                   <span
                     key={`status-${source}`}
-                    className={`rounded-full border px-2 py-1 ${
-                      available
-                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                        : "border-sand-200 bg-white text-sand-500"
-                    }`}
+                    className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700"
                   >
                     {source}
                   </span>
@@ -6006,6 +6742,31 @@ export default function OffersView() {
     onSubjectChange={setSendSubject}
     onBodyChange={setOfferEmailBody}
     sendLabel="Senden"
+  />
+  <PriceCalcModal
+    open={priceCalcModal.open}
+    itemLabel={priceCalcModal.itemLabel}
+    currentPrice={priceCalcModal.currentPrice}
+    values={priceCalcModal}
+    onChange={(patch) =>
+      setPriceCalcModal((prev) => {
+        const next = { ...prev, ...patch };
+        if (next.itemId) {
+          setPriceCalcDrafts((drafts) => ({
+            ...drafts,
+            [next.itemId]: {
+              base: next.base,
+              markupPercent: next.markupPercent,
+              researchPercent: next.researchPercent,
+              absoluteMarkup: next.absoluteMarkup
+            }
+          }));
+        }
+        return next;
+      })
+    }
+    onClose={closePriceCalc}
+    onApply={applyPriceCalc}
   />
   <HandoverModal
     open={handoverModal.open}

@@ -58,7 +58,18 @@ const normalizeCustomer = (customer) => ({
   postalCode: customer.postal_code ?? customer.postalCode ?? "",
   city: customer.city ?? "",
   country: customer.country ?? "",
-  phones: customer.phones?.length ? customer.phones : [blankPhone()]
+  phones: customer.phones?.length ? customer.phones : [blankPhone()],
+  customerReport:
+    customer.customer_report ??
+    customer.customerReport ??
+    customer.report_enabled ??
+    customer.reportEnabled ??
+    true,
+  newsletter:
+    customer.newsletter ??
+    customer.newsletter_enabled ??
+    customer.newsletterEnabled ??
+    true
 });
 
 const customerPayload = (customer) => ({
@@ -70,6 +81,8 @@ const customerPayload = (customer) => ({
   postal_code: customer.postalCode || "",
   city: customer.city || "",
   country: customer.country || "",
+  customer_report: Boolean(customer.customerReport),
+  newsletter: Boolean(customer.newsletter),
   phones: (customer.phones || [])
     .filter((phone) => (phone.label || "").trim() || (phone.number || "").trim())
     .map((phone) => ({
@@ -1291,6 +1304,45 @@ export default function CustomerDirectoryView() {
                       />
                     </div>
                   </label>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Vermerke</p>
+                    {!activeCustomer.customerReport ? (
+                      <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600">
+                        Kundenbericht deaktiviert
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <label className="flex items-center gap-3 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(activeCustomer.customerReport)}
+                        onChange={(event) =>
+                          updateCustomer(activeCustomer.id, {
+                            customerReport: event.target.checked
+                          })
+                        }
+                        className="h-4 w-4"
+                      />
+                      <span>Kundenbericht</span>
+                    </label>
+                    <label className="flex items-center gap-3 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(activeCustomer.newsletter)}
+                        onChange={(event) =>
+                          updateCustomer(activeCustomer.id, {
+                            newsletter: event.target.checked
+                          })
+                        }
+                        className="h-4 w-4"
+                      />
+                      <span>Newsletter</span>
+                    </label>
+                  </div>
                 </div>
 
                 <div className="grid gap-3 md:grid-cols-2">

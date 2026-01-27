@@ -225,57 +225,40 @@ export default function NotesView() {
   return (
     <div className="min-h-[100dvh] h-[100dvh] bg-sand-50 overflow-hidden">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur shrink-0">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
-            <StickyNote size={18} />
+        <div className="max-w-6xl mx-auto px-4 py-1.5 flex items-center gap-2">
+          <div className="h-7 w-7 rounded-lg bg-sand-900 text-white flex items-center justify-center">
+            <StickyNote size={14} />
           </div>
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-            <h1 className="text-xl font-display text-sand-900">Notizen</h1>
+            <p className="text-[9px] uppercase tracking-[0.25em] text-sand-500">QT Workbench</p>
+            <h1 className="text-base font-display text-sand-900">Notizen</h1>
           </div>
         </div>
       </header>
 
-      <main className="h-[calc(100dvh-68px)] max-w-6xl mx-auto px-4 py-4 flex flex-col">
-        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-4 flex flex-col h-full">
-          <div className="flex items-center gap-2 text-sand-700 mb-4">
-            <StickyNote size={18} />
-            <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Pinboard</p>
-          </div>
-          <div className="mb-3 text-xs text-sand-500 flex items-center justify-between gap-2">
-            {saveState.status === "saving"
-              ? "Speichert..."
-              : saveState.status === "saved"
-              ? `Gespeichert ${saveState.at}`
-              : saveState.status === "error"
-              ? "Speichern fehlgeschlagen"
-              : ""}
-            <span className="text-sand-400">{isEmpty ? "Leer" : "Bearbeitet"}</span>
-          </div>
-          <div className="mb-4 flex flex-wrap items-center gap-2">
-            {quickTags.map((tag) => (
-              <button
-                key={tag}
-                type="button"
-                onClick={() => insertTag(tag)}
-                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-              >
-                #{tag}
-              </button>
-            ))}
-            <label className="ml-auto text-xs uppercase tracking-wide text-sand-500">
-              Filter
-              <input
-                value={filterTag}
-                onChange={(event) => setFilterTag(event.target.value)}
-                placeholder="z. B. #todo"
-                className="ml-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[16px] sm:text-xs"
-              />
-            </label>
+      <main className="h-[calc(100dvh-50px)] max-w-6xl mx-auto px-4 py-2 flex flex-col">
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-3 flex flex-col h-full">
+          <div className="flex items-center justify-between gap-3 text-sand-700 mb-3">
+            <div className="flex items-center gap-2">
+              <StickyNote size={16} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Pinboard</p>
+            </div>
+            <div className="text-[11px] text-sand-500 flex items-center gap-3">
+              <span>
+                {saveState.status === "saving"
+                  ? "Speichert..."
+                  : saveState.status === "saved"
+                  ? `Gespeichert ${saveState.at}`
+                  : saveState.status === "error"
+                  ? "Speichern fehlgeschlagen"
+                  : ""}
+              </span>
+              <span className="text-sand-400">{isEmpty ? "Leer" : "Bearbeitet"}</span>
+            </div>
           </div>
           <div
             id="pinboard-toolbar"
-            className="sticky top-0 z-10 -mx-4 px-4 py-3 flex flex-wrap items-center gap-2 bg-white/95 backdrop-blur border-b border-sand-200 mb-4"
+            className="sticky top-0 z-10 -mx-3 px-3 py-2 flex flex-wrap items-center gap-1.5 bg-white/95 backdrop-blur border-b border-sand-200 mb-3"
           >
             <select
               value={editor?.getAttributes("heading").level || 0}
@@ -296,7 +279,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => editor?.chain().focus().toggleBold().run()}
-              className="rounded-full border border-sand-200 bg-white p-2 text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-700 hover:bg-sand-100"
               title="Fett"
             >
               <Bold size={12} />
@@ -304,7 +287,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => editor?.chain().focus().toggleItalic().run()}
-              className="rounded-full border border-sand-200 bg-white p-2 text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-700 hover:bg-sand-100"
               title="Kursiv"
             >
               <Italic size={12} />
@@ -312,7 +295,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => editor?.chain().focus().toggleUnderline().run()}
-              className="rounded-full border border-sand-200 bg-white p-2 text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-700 hover:bg-sand-100"
               title="Unterstrichen"
             >
               <UnderlineIcon size={12} />
@@ -320,7 +303,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => editor?.chain().focus().toggleStrike().run()}
-              className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100"
               title="Durchgestrichen"
             >
               S
@@ -328,7 +311,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => editor?.chain().focus().toggleBlockquote().run()}
-              className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100"
               title="Zitat"
             >
               “ ”
@@ -336,7 +319,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
-              className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100"
               title="Code"
             >
               {"</>"}
@@ -344,7 +327,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => editor?.chain().focus().toggleOrderedList().run()}
-              className="rounded-full border border-sand-200 bg-white p-2 text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-700 hover:bg-sand-100"
               title="Nummeriert"
             >
               <ListOrdered size={12} />
@@ -352,7 +335,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => editor?.chain().focus().toggleBulletList().run()}
-              className="rounded-full border border-sand-200 bg-white p-2 text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-700 hover:bg-sand-100"
               title="Liste"
             >
               <List size={12} />
@@ -379,7 +362,7 @@ export default function NotesView() {
               value={editor?.getAttributes("textStyle").color || "#111827"}
               onChange={(event) => editor?.chain().focus().setColor(event.target.value).run()}
               title="Textfarbe"
-              className="h-9 w-9 rounded-full border border-sand-200 bg-white p-1"
+              className="h-8 w-8 rounded-full border border-sand-200 bg-white p-1"
             />
             <select
               value={editor?.getAttributes("highlight").color || ""}
@@ -402,7 +385,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={setLink}
-              className="rounded-full border border-sand-200 bg-white p-2 text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-700 hover:bg-sand-100"
               title="Link"
             >
               <Link2 size={12} />
@@ -410,7 +393,7 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => imageInputRef.current?.click()}
-              className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100"
               title="Bild einfügen"
             >
               Bild
@@ -418,25 +401,34 @@ export default function NotesView() {
             <button
               type="button"
               onClick={() => editor?.chain().focus().undo().run()}
-              className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100"
             >
               Undo
             </button>
             <button
               type="button"
               onClick={() => editor?.chain().focus().redo().run()}
-              className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100"
             >
               Redo
             </button>
             <button
               type="button"
               onClick={() => editor?.chain().focus().unsetAllMarks().clearNodes().run()}
-              className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100"
               title="Format löschen"
             >
               Clear
             </button>
+            <label className="ml-2 flex items-center gap-2 text-[10px] uppercase tracking-wide text-sand-500">
+              Filter
+              <input
+                value={filterTag}
+                onChange={(event) => setFilterTag(event.target.value)}
+                placeholder="#todo"
+                className="w-28 rounded-full border border-sand-200 bg-white px-3 py-1 text-[16px] sm:text-xs"
+              />
+            </label>
           </div>
           <input
             ref={imageInputRef}
@@ -446,23 +438,42 @@ export default function NotesView() {
             className="hidden"
           />
           <div className="flex-1 overflow-auto space-y-4 pb-6">
-            <div className="relative">
-              {isEmpty && isLoaded ? (
-                <div className="pointer-events-none absolute left-4 top-3 text-[15px] text-sand-400">
-                  Notizen, Ideen und To-Dos hier sammeln...
+            <div className="flex gap-3">
+              <div className="w-[90%] min-w-0">
+                <div className="relative">
+                  {isEmpty && isLoaded ? (
+                    <div className="pointer-events-none absolute left-4 top-3 text-[15px] text-sand-400">
+                      Notizen, Ideen und To-Dos hier sammeln...
+                    </div>
+                  ) : null}
+                  {isLoaded ? (
+                    <EditorContent
+                      editor={editor}
+                      onClick={() => editor?.chain().focus().run()}
+                      className="min-h-[40vh] h-full cursor-text rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-[16px] text-sand-900 focus-within:ring-2 focus-within:ring-sand-300 [&_.ProseMirror]:min-h-[40vh] [&_.ProseMirror]:outline-none [&_.ProseMirror]:whitespace-pre-wrap"
+                    />
+                  ) : (
+                    <div className="min-h-[40vh] rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-6 text-sm text-sand-400">
+                      Pinboard wird geladen...
+                    </div>
+                  )}
                 </div>
-              ) : null}
-              {isLoaded ? (
-                <EditorContent
-                  editor={editor}
-                  onClick={() => editor?.chain().focus().run()}
-                  className="min-h-[40vh] h-full cursor-text rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-[16px] text-sand-900 focus-within:ring-2 focus-within:ring-sand-300 [&_.ProseMirror]:min-h-[40vh] [&_.ProseMirror]:outline-none [&_.ProseMirror]:whitespace-pre-wrap"
-                />
-              ) : (
-                <div className="min-h-[40vh] rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-6 text-sm text-sand-400">
-                  Pinboard wird geladen...
+              </div>
+              <div className="w-[10%] min-w-[110px]">
+                <p className="mb-2 text-[10px] uppercase tracking-[0.2em] text-sand-500">Hashtags</p>
+                <div className="flex flex-col gap-1.5">
+                  {quickTags.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => insertTag(tag)}
+                      className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      #{tag}
+                    </button>
+                  ))}
                 </div>
-              )}
+              </div>
             </div>
             {filterTag ? (
               <div className="rounded-2xl border border-sand-200 bg-white p-4">
