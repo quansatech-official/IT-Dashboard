@@ -1342,6 +1342,23 @@ def _extract_sevdesk_contact(invoice: Dict[str, Any]) -> Tuple[str, str]:
     return contact_id or contact_name, contact_name
 
 
+def _format_contact_name(contact: Dict[str, Any]) -> str:
+    if not isinstance(contact, dict):
+        return ""
+    name = str(
+        contact.get("name")
+        or contact.get("customerName")
+        or contact.get("name2")
+        or ""
+    ).strip()
+    if name:
+        return name
+    first = str(contact.get("firstName") or contact.get("first_name") or "").strip()
+    last = str(contact.get("familyName") or contact.get("lastName") or "").strip()
+    combo = " ".join(part for part in (first, last) if part)
+    return combo.strip()
+
+
 def _invoice_is_due(invoice: Dict[str, Any], today: datetime) -> bool:
     status = _parse_int(invoice.get("status"))
     if status == 100:
@@ -1453,12 +1470,7 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
                 continue
             if not contact:
                 continue
-            contact_name = str(
-                contact.get("name")
-                or contact.get("customerName")
-                or contact.get("firstName")
-                or ""
-            ).strip()
+            contact_name = _format_contact_name(contact)
             if not contact_name:
                 continue
             for bucket in top_customers.values():
