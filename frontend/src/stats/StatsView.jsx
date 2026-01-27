@@ -109,7 +109,8 @@ export default function StatsView() {
 
       <main className="max-w-6xl mx-auto px-5 py-5 space-y-4">
         {status === "loading" ? (
-          <div className="rounded-2xl border border-sand-200 bg-white p-3 text-sm text-sand-500">
+          <div className="rounded-2xl border border-sand-200 bg-white p-3 text-sm text-sand-500 flex items-center gap-3">
+            <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-sand-300 border-t-transparent" />
             Kennzahlen laden…
           </div>
         ) : status === "error" ? (

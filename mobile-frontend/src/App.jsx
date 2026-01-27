@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, FileSignature, List, RefreshCw } from "lucide-react";
+import { BarChart3, ClipboardList, FileSignature, List, RefreshCw } from "lucide-react";
 
 const API = "/api";
 
@@ -39,13 +39,14 @@ const api = {
 };
 
 const tabs = [
+  { id: "quick", label: "Schnell", icon: ClipboardList },
   { id: "tasks", label: "Aufgaben", icon: List },
   { id: "delivery", label: "Lieferschein", icon: FileSignature },
   { id: "stats", label: "Statistik", icon: BarChart3 }
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("tasks");
+  const [activeTab, setActiveTab] = useState("quick");
   const [customers, setCustomers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [stats, setStats] = useState(null);
@@ -53,6 +54,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [deliveryNotes, setDeliveryNotes] = useState([]);
   const [nowMs, setNowMs] = useState(Date.now());
+
+  const [quickCustomer, setQuickCustomer] = useState("");
+  const [quickText, setQuickText] = useState("");
+  const quickTextareaRef = useRef(null);
 
   const [taskFilter, setTaskFilter] = useState("");
 
@@ -85,6 +90,14 @@ export default function App() {
     load();
   }, []);
 
+  useEffect(() => {
+    if (activeTab !== "quick") return;
+    const timer = setTimeout(() => {
+      quickTextareaRef.current?.focus();
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [activeTab]);
+
   const hasRunningTask = useMemo(() => tasks.some((task) => task.running), [tasks]);
 
   useEffect(() => {
@@ -100,6 +113,30 @@ export default function App() {
 
   const findCustomer = (name) =>
     customers.find((item) => (item.name || "").toLowerCase() === name.trim().toLowerCase());
+
+  const addQuickTasks = async () => {
+    const lines = quickText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!lines.length) return;
+    const customer = quickCustomer.trim() ? findCustomer(quickCustomer) : null;
+    if (quickCustomer.trim() && !customer) {
+      setStatus("Bitte Kunde aus der Liste waehlen oder leer lassen.");
+      return;
+    }
+    for (const line of lines) {
+      await api.createTask({
+        customer: customer?.name ?? "",
+        customer_number: customer?.creditor_number ?? "",
+        title: line,
+        status: "todo"
+      });
+    }
+    setQuickText("");
+    setStatus("Aufgabe(n) gespeichert.");
+    load();
+  };
 
   const deliveryCustomerMatch = useMemo(() => {
     if (!deliveryCustomer.trim()) return null;
@@ -267,6 +304,46 @@ export default function App() {
       <main className="main">
         {status ? <div className="status-pill">{status}</div> : null}
 
+        {activeTab === "quick" && (
+          <div className="card stack quick-card">
+            <div className="card-header">
+              <div className="section-title">Schnellerfassung</div>
+              <p className="hint">Eine Aufgabe pro Zeile. Fokus: schnell notieren.</p>
+            </div>
+            <div className="field">
+              <label>Kunde (optional)</label>
+              <input
+                list="customer-list"
+                value={quickCustomer}
+                onChange={(event) => setQuickCustomer(event.target.value)}
+                placeholder="Kunde auswaehlen (optional)"
+              />
+            </div>
+            <div className="field quick-field">
+              <label>Aufgaben</label>
+              <textarea
+                rows={8}
+                value={quickText}
+                onChange={(event) => setQuickText(event.target.value)}
+                placeholder="z.B. Backup pruefen\nRouter Neustart"
+                ref={quickTextareaRef}
+              />
+            </div>
+            <div className="quick-actions">
+              <button className="primary-btn" type="button" onClick={addQuickTasks}>
+                Speichern
+              </button>
+              <button
+                className="secondary-btn"
+                type="button"
+                onClick={() => setQuickText("")}
+              >
+                Leeren
+              </button>
+            </div>
+          </div>
+        )}
+
         {activeTab === "tasks" && (
           <div className="card stack">
             <div className="card-header">
@@ -281,14 +358,14 @@ export default function App() {
                 placeholder="Kunde oder Aufgabe"
               />
             </div>
-            <div className="list scroll-area">
+            <div className="list scroll-area compact-list">
               {visibleTasks.map((task) => {
                 const elapsed =
                   task.running && task.startTime
                     ? (task.elapsed || 0) + Math.max(0, nowMs - task.startTime)
                     : task.elapsed || 0;
                 return (
-                  <div key={task.id} className="list-item">
+                  <div key={task.id} className="list-item compact-item">
                     <div className="list-row">
                       <div>
                         <div className="list-title">{task.title}</div>
@@ -414,6 +491,10 @@ export default function App() {
                 <div className="stat-value">
                   € {Number(stats?.sevdesk?.due?.sumEur ?? 0).toFixed(0)}
                 </div>
+              </div>
+              <div className="stat-tile">
+                <div className="stat-label">Verpasst</div>
+                <div className="stat-value">{stats?.telephony?.missed ?? 0}</div>
               </div>
             </div>
           </div>
