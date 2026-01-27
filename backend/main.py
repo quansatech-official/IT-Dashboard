@@ -1316,23 +1316,25 @@ def _extract_sevdesk_contact(invoice: Dict[str, Any]) -> Tuple[str, str]:
             or ""
         ).strip()
     if not contact_name:
-        contact_name = str(
-            invoice.get("contactName") or invoice.get("customerName") or "Unbekannt"
-        ).strip()
-    return contact_id or contact_name, contact_name or "Unbekannt"
+        contact_name = str(invoice.get("contactName") or invoice.get("customerName") or "").strip()
+    if not contact_name and contact_id:
+        contact_name = f"Kontakt #{contact_id}"
+    if not contact_name:
+        contact_name = "Unbekannt"
+    return contact_id or contact_name, contact_name
 
 
 def _invoice_is_due(invoice: Dict[str, Any], today: datetime) -> bool:
     status = _parse_int(invoice.get("status"))
     if status == 100:
         return False
+    if status == 400:
+        return False
     due_date = _parse_sevdesk_date(
         invoice.get("dueDate")
         or invoice.get("paymentDeadline")
         or invoice.get("paymentDeadlineDate")
     )
-    if not due_date or due_date.date() > today.date():
-        return False
     amount = _parse_sevdesk_amount(invoice)
     paid = _parse_float(invoice.get("sumPaid"), default=0.0)
     if amount > 0 and paid >= amount:
@@ -1340,6 +1342,10 @@ def _invoice_is_due(invoice: Dict[str, Any], today: datetime) -> bool:
     if invoice.get("paidDate") or invoice.get("paid"):
         return False
     if status is not None and status not in (200, 300):
+        return False
+    if status == 200:
+        return True
+    if due_date and due_date.date() > today.date():
         return False
     return True
 
@@ -1365,7 +1371,7 @@ def _top_customers_for_period(
         key, name = _extract_sevdesk_contact(invoice)
         entry = totals.get(key)
         if not entry:
-            entry = {"name": name, "total": 0.0, "count": 0}
+            entry = {"name": name, "total": 0.0, "count": 0, "contactId": key}
         entry["total"] += amount
         entry["count"] += 1
         if name and entry.get("name") in ("", "Unbekannt"):
@@ -1373,7 +1379,12 @@ def _top_customers_for_period(
         totals[key] = entry
     ranked = sorted(totals.values(), key=lambda item: item["total"], reverse=True)[:5]
     return [
-        {"name": item["name"], "totalEur": round(item["total"], 2), "count": item["count"]}
+        {
+            "name": item["name"],
+            "totalEur": round(item["total"], 2),
+            "count": item["count"],
+            "contactId": item.get("contactId", "")
+        }
         for item in ranked
     ]
 
@@ -1409,6 +1420,33 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
         "currentYear": _top_customers_for_period(all_invoices, start_current_year, now_dt),
         "lastYear": _top_customers_for_period(all_invoices, start_last_year, end_last_year),
     }
+
+    contact_ids: set[str] = set()
+    for bucket in top_customers.values():
+        for item in bucket:
+            contact_id = str(item.get("contactId") or "").strip()
+            if contact_id and (item.get("name") or "").startswith("Kontakt #"):
+                contact_ids.add(contact_id)
+    if contact_ids:
+        for contact_id in contact_ids:
+            try:
+                contact = client.get_contact(int(contact_id))
+            except (SevdeskError, ValueError):
+                continue
+            if not contact:
+                continue
+            contact_name = str(
+                contact.get("name")
+                or contact.get("customerName")
+                or contact.get("firstName")
+                or ""
+            ).strip()
+            if not contact_name:
+                continue
+            for bucket in top_customers.values():
+                for item in bucket:
+                    if str(item.get("contactId") or "") == contact_id:
+                        item["name"] = contact_name
 
     return {
         "connected": True,

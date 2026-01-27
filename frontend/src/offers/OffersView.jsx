@@ -1502,12 +1502,8 @@ function HandoverModal({
   summary,
   selectedLineItemIds,
   selectedDeviceItemIds,
-  text,
-  aiLoading,
   onClose,
   onConfirm,
-  onTextChange,
-  onGenerateAi,
   onToggleLineItem,
   onToggleDeviceItem
 }) {
@@ -1674,28 +1670,8 @@ function HandoverModal({
             ) : null}
           </div>
         </div>
-        <div className="border-t border-sand-100 px-6 py-4">
-          <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-            Positionstext für Aufgaben (Plaintext)
-            <textarea
-              className="mt-2 w-full min-h-[140px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-              value={text}
-              onChange={(event) => onTextChange(event.target.value)}
-              placeholder="Beschreiben Sie die erwarteten Aufgaben, Ergebnisse oder Hinweise."
-            />
-          </label>
-          <div className="mt-2 flex items-center justify-between text-[11px] text-sand-500">
-            <button
-              type="button"
-              onClick={onGenerateAi}
-              disabled={aiLoading}
-              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait"
-            >
-              <Sparkles size={12} />
-              {aiLoading ? "KI generiert..." : "KI-Text generieren"}
-            </button>
-            <p className="text-sand-400">{trackingText}</p>
-          </div>
+        <div className="border-t border-sand-100 px-6 py-4 text-[11px] text-sand-500">
+          <p>{trackingText}</p>
         </div>
         <div className="flex items-center justify-end gap-3 border-t border-sand-100 px-6 py-4">
           <button
@@ -1708,7 +1684,7 @@ function HandoverModal({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={aiLoading || !summary.accepted || summary.positions === 0}
+            disabled={!summary.accepted || summary.positions === 0}
             className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Übergabe an Faktura starten
@@ -2159,8 +2135,6 @@ export default function OffersView() {
   const [handoverModal, setHandoverModal] = useState({
     open: false,
     offerId: "",
-    text: "",
-    aiLoading: false,
     selectedLineItemIds: [],
     selectedDeviceItemIds: []
   });
@@ -3578,13 +3552,6 @@ export default function OffersView() {
     };
   }
 
-  const getHandoverDefaultText = (offer) => {
-    if (!offer) return "";
-    const fromDetail = stripHtml(offer.detailHtml);
-    if (fromDetail) return fromDetail;
-    return offer.introText || `Details zur Übergabe von Angebot ${offer.reference || ""}.`;
-  };
-
   const buildHandoverSelection = (offer) => {
     const lineItemIds = (offer?.lineItems || [])
       .filter((item) => !item?.optional)
@@ -3603,8 +3570,6 @@ export default function OffersView() {
     setHandoverModal({
       open: true,
       offerId: offer.id,
-      text: offer.handoverNote || getHandoverDefaultText(offer),
-      aiLoading: false,
       selectedLineItemIds: selection.lineItemIds,
       selectedDeviceItemIds: selection.deviceItemIds
     });
@@ -3612,10 +3577,6 @@ export default function OffersView() {
 
   const closeHandoverModal = () => {
     setHandoverModal((prev) => ({ ...prev, open: false }));
-  };
-
-  const handleHandoverTextChange = (value) => {
-    setHandoverModal((prev) => ({ ...prev, text: value }));
   };
 
   const toggleHandoverLineItem = (itemId) => {
@@ -3644,30 +3605,6 @@ export default function OffersView() {
       }
       return { ...prev, selectedDeviceItemIds: Array.from(current) };
     });
-  };
-
-  const handleHandoverAi = async () => {
-    const offer = offers.find((entry) => entry.id === handoverModal.offerId);
-    if (!offer) return;
-    const currentText = handoverModal.text;
-    setHandoverModal((prev) => ({ ...prev, aiLoading: true }));
-    try {
-      const aiText = await requestOfferAiText({
-        mode: "handover",
-        currentText,
-        context: buildOfferContext(offer),
-        fallback: () =>
-          generateAiText({
-            title: offer.reference || "Leistung",
-            keywords: []
-          })
-      });
-      if (aiText) {
-        setHandoverModal((prev) => ({ ...prev, text: aiText }));
-      }
-    } finally {
-      setHandoverModal((prev) => ({ ...prev, aiLoading: false }));
-    }
   };
 
   const handleHandoverConfirm = () => {
@@ -6076,12 +6013,8 @@ export default function OffersView() {
     summary={handoverSummary}
     selectedLineItemIds={handoverModal.selectedLineItemIds}
     selectedDeviceItemIds={handoverModal.selectedDeviceItemIds}
-    text={handoverModal.text}
-    aiLoading={handoverModal.aiLoading}
     onClose={closeHandoverModal}
     onConfirm={handleHandoverConfirm}
-    onTextChange={handleHandoverTextChange}
-    onGenerateAi={handleHandoverAi}
     onToggleLineItem={toggleHandoverLineItem}
     onToggleDeviceItem={toggleHandoverDeviceItem}
   />

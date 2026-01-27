@@ -101,6 +101,10 @@ class SevdeskClient:
         )
         return self._extract_first(payload)
 
+    def get_contact(self, contact_id: int) -> Optional[Dict[str, Any]]:
+        payload = self.request("GET", f"/Contact/{contact_id}")
+        return self._extract_first(payload)
+
     def find_draft_invoice(self, contact_id: int) -> Optional[Dict[str, Any]]:
         payload = self.request(
             "GET",

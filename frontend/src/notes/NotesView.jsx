@@ -48,6 +48,7 @@ export default function NotesView() {
   const textRef = useRef("");
   const [filterTag, setFilterTag] = useState("");
   const imageInputRef = useRef(null);
+  const [forceSaving, setForceSaving] = useState(false);
   const quickTags = ["todo", "urgent", "kunde", "telefon", "termin"];
 
   const editor = useEditor({
@@ -182,27 +183,66 @@ export default function NotesView() {
         .filter((line) => line && line.toLowerCase().includes(filterTag.toLowerCase()))
     : [];
 
+  const saveNow = async () => {
+    if (!note.id || forceSaving) return;
+    setForceSaving(true);
+    try {
+      const content = latestContentRef.current || note.content || "";
+      await api.savePinboard(note.id, content);
+      lastSavedContent.current = content;
+      setSaveState({ status: "saved", at: new Date().toLocaleTimeString("de-DE") });
+    } catch (error) {
+      setSaveState((prev) => ({ ...prev, status: "error" }));
+    } finally {
+      setForceSaving(false);
+    }
+  };
+
+  const revertChanges = () => {
+    if (!editor) return;
+    if (!window.confirm("Änderungen verwerfen?")) return;
+    const content = lastSavedContent.current || "";
+    latestContentRef.current = content;
+    setNote((prev) => ({ ...prev, content }));
+    hasLocalEdits.current = false;
+    editor.commands.setContent(content, false);
+    const plain = editor.getText().trim();
+    textRef.current = plain;
+    setIsEmpty(!plain);
+  };
+
+  const clearNote = () => {
+    if (!editor) return;
+    if (!window.confirm("Notiz wirklich leeren?")) return;
+    latestContentRef.current = "";
+    setNote((prev) => ({ ...prev, content: "" }));
+    hasLocalEdits.current = false;
+    editor.commands.clearContent(true);
+    textRef.current = "";
+    setIsEmpty(true);
+  };
+
   return (
-    <div className="min-h-screen bg-sand-50">
-      <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-3">
+    <div className="min-h-[100dvh] h-[100dvh] bg-sand-50 overflow-hidden">
+      <header className="border-b border-sand-200 bg-white/80 backdrop-blur shrink-0">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
           <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
             <StickyNote size={18} />
           </div>
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-            <h1 className="text-2xl font-display text-sand-900">Notizen</h1>
+            <h1 className="text-xl font-display text-sand-900">Notizen</h1>
           </div>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8">
-        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+      <main className="h-[calc(100dvh-68px)] max-w-6xl mx-auto px-4 py-4 flex flex-col">
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-4 flex flex-col h-full">
           <div className="flex items-center gap-2 text-sand-700 mb-4">
             <StickyNote size={18} />
             <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Pinboard</p>
           </div>
-          <div className="mb-3 text-xs text-sand-500">
+          <div className="mb-3 text-xs text-sand-500 flex items-center justify-between gap-2">
             {saveState.status === "saving"
               ? "Speichert..."
               : saveState.status === "saved"
@@ -210,6 +250,7 @@ export default function NotesView() {
               : saveState.status === "error"
               ? "Speichern fehlgeschlagen"
               : ""}
+            <span className="text-sand-400">{isEmpty ? "Leer" : "Bearbeitet"}</span>
           </div>
           <div className="mb-4 flex flex-wrap items-center gap-2">
             {quickTags.map((tag) => (
@@ -228,13 +269,13 @@ export default function NotesView() {
                 value={filterTag}
                 onChange={(event) => setFilterTag(event.target.value)}
                 placeholder="z. B. #todo"
-                className="ml-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs"
+                className="ml-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[16px] sm:text-xs"
               />
             </label>
           </div>
           <div
             id="pinboard-toolbar"
-            className="sticky top-0 z-10 -mx-6 px-6 py-3 flex flex-wrap items-center gap-2 bg-white/95 backdrop-blur border-b border-sand-200 mb-4"
+            className="sticky top-0 z-10 -mx-4 px-4 py-3 flex flex-wrap items-center gap-2 bg-white/95 backdrop-blur border-b border-sand-200 mb-4"
           >
             <select
               value={editor?.getAttributes("heading").level || 0}
@@ -404,42 +445,68 @@ export default function NotesView() {
             onChange={handleImageSelect}
             className="hidden"
           />
-          <div className="relative">
-            {isEmpty && isLoaded ? (
-              <div className="pointer-events-none absolute left-4 top-3 text-sm text-sand-400">
-                Notizen, Ideen und To-Dos hier sammeln...
-              </div>
-            ) : null}
-            {isLoaded ? (
-              <EditorContent
-                editor={editor}
-                onClick={() => editor?.chain().focus().run()}
-                className="min-h-[60vh] cursor-text rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-sm text-sand-900 focus-within:ring-2 focus-within:ring-sand-300 [&_.ProseMirror]:min-h-[60vh] [&_.ProseMirror]:outline-none [&_.ProseMirror]:whitespace-pre-wrap"
-              />
-            ) : (
-              <div className="min-h-[60vh] rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-6 text-sm text-sand-400">
-                Pinboard wird geladen...
-              </div>
-            )}
-          </div>
-          {filterTag ? (
-            <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500 mb-2">
-                Treffer für "{filterTag}"
-              </p>
-              {filteredLines.length ? (
-                <ul className="space-y-2 text-sm text-sand-700">
-                  {filteredLines.map((line, idx) => (
-                    <li key={`${line}-${idx}`} className="border-b border-sand-100 pb-2">
-                      {line}
-                    </li>
-                  ))}
-                </ul>
+          <div className="flex-1 overflow-auto space-y-4 pb-6">
+            <div className="relative">
+              {isEmpty && isLoaded ? (
+                <div className="pointer-events-none absolute left-4 top-3 text-[15px] text-sand-400">
+                  Notizen, Ideen und To-Dos hier sammeln...
+                </div>
+              ) : null}
+              {isLoaded ? (
+                <EditorContent
+                  editor={editor}
+                  onClick={() => editor?.chain().focus().run()}
+                  className="min-h-[40vh] h-full cursor-text rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-[16px] text-sand-900 focus-within:ring-2 focus-within:ring-sand-300 [&_.ProseMirror]:min-h-[40vh] [&_.ProseMirror]:outline-none [&_.ProseMirror]:whitespace-pre-wrap"
+                />
               ) : (
-                <p className="text-sm text-sand-500">Keine Treffer.</p>
+                <div className="min-h-[40vh] rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-6 text-sm text-sand-400">
+                  Pinboard wird geladen...
+                </div>
               )}
             </div>
-          ) : null}
+            {filterTag ? (
+              <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500 mb-2">
+                  Treffer für "{filterTag}"
+                </p>
+                {filteredLines.length ? (
+                  <ul className="space-y-2 text-sm text-sand-700">
+                    {filteredLines.map((line, idx) => (
+                      <li key={`${line}-${idx}`} className="border-b border-sand-100 pb-2">
+                        {line}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-sand-500">Keine Treffer.</p>
+                )}
+              </div>
+            ) : null}
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-sand-200 pt-3 pb-[env(safe-area-inset-bottom)]">
+            <button
+              type="button"
+              onClick={saveNow}
+              disabled={forceSaving || saveState.status === "saving"}
+              className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:opacity-50"
+            >
+              Speichern
+            </button>
+            <button
+              type="button"
+              onClick={revertChanges}
+              className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+            >
+              Verwerfen
+            </button>
+            <button
+              type="button"
+              onClick={clearNote}
+              className="inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+            >
+              Leeren
+            </button>
+          </div>
         </div>
       </main>
     </div>
