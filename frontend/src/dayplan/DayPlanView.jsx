@@ -656,7 +656,7 @@ export default function DayPlanView() {
     setSuggestionOpenId(null);
   };
 
-  const normalizeText = (value) => {
+  function normalizeText(value) {
     let text = String(value || "").toLowerCase();
     text = text
       .replace(/ä/g, "ae")
@@ -666,15 +666,34 @@ export default function DayPlanView() {
     text = text.replace(/ae/g, "a").replace(/oe/g, "o").replace(/ue/g, "u");
     text = text.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     return text;
-  };
+  }
 
-  const normalizeVariants = (value) => {
+  function normalizeVariants(value) {
     const base = normalizeText(value);
     const noH = base.replace(/([aeiou])h/g, "$1");
     return Array.from(new Set([base, noH])).filter(Boolean);
-  };
+  }
 
-  const matchesTask = (task, needle) => {
+  const customerShortCodeByName = useMemo(() => {
+    const map = new Map();
+    customers.forEach((customer) => {
+      const name = String(customer?.name || "").trim().toLowerCase();
+      if (!name) return;
+      const shortCode = String(customer?.short_code || customer?.shortCode || "").trim();
+      if (shortCode) {
+        map.set(name, shortCode);
+      }
+    });
+    return map;
+  }, [customers]);
+
+  function getCustomerShortCodeForTask(task) {
+    const name = String(task?.customer || "").trim().toLowerCase();
+    if (!name) return "";
+    return String(customerShortCodeByName.get(name) || "").trim();
+  }
+
+  function matchesTask(task, needle) {
     if (!needle) return true;
     const title = normalizeText(task?.title || "");
     const details = normalizeText(task?.details || "");
@@ -688,7 +707,7 @@ export default function DayPlanView() {
       (number && number.includes(needle)) ||
       (shortCode && shortCode.includes(needle))
     );
-  };
+  }
 
   const filteredTasks = useMemo(() => {
     const customerNeedle = normalizeText(customerFilter);
@@ -850,24 +869,6 @@ export default function DayPlanView() {
     return String(match?.creditor_number || "").trim();
   };
 
-  const customerShortCodeByName = useMemo(() => {
-    const map = new Map();
-    customers.forEach((customer) => {
-      const name = String(customer?.name || "").trim().toLowerCase();
-      if (!name) return;
-      const shortCode = String(customer?.short_code || customer?.shortCode || "").trim();
-      if (shortCode) {
-        map.set(name, shortCode);
-      }
-    });
-    return map;
-  }, [customers]);
-
-  const getCustomerShortCodeForTask = (task) => {
-    const name = String(task?.customer || "").trim().toLowerCase();
-    if (!name) return "";
-    return String(customerShortCodeByName.get(name) || "").trim();
-  };
 
   const buildSevdeskDraftDefaults = (task, defaultsOverride) => {
     const defaults = defaultsOverride || sevdeskDefaults;
