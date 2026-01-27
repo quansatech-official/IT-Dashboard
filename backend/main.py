@@ -125,6 +125,18 @@ class CustomerPhone(Base):
     customer = relationship("Customer", back_populates="phones")
 
 
+class DeliveryNote(Base):
+    __tablename__ = "delivery_notes"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    note = Column(String, default="")
+    signature_base64 = Column(String, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+    customer = relationship("Customer")
+
+
 class GeoCache(Base):
     __tablename__ = "geo_cache"
 
@@ -761,6 +773,12 @@ class DayTaskUpdate(BaseModel):
     running: Optional[bool] = None
     startTime: Optional[int] = None
     completed_at: Optional[int] = None
+
+
+class DeliveryNoteCreate(BaseModel):
+    customer_id: int
+    note: Optional[str] = ""
+    signature_base64: Optional[str] = ""
 
 
 class EmployeeCreate(BaseModel):
@@ -1508,6 +1526,16 @@ def serialize_customer_phone(p: CustomerPhone) -> Dict[str, Any]:
         "id": p.id,
         "label": p.label,
         "number": p.number,
+    }
+
+
+def serialize_delivery_note(note: DeliveryNote) -> Dict[str, Any]:
+    return {
+        "id": note.id,
+        "customer_id": note.customer_id,
+        "note": note.note,
+        "signature_base64": note.signature_base64,
+        "created_at": note.created_at,
     }
 
 
@@ -2587,6 +2615,44 @@ def get_day_tasks():
     with SessionLocal() as db:
         tasks = db.query(DayTask).order_by(DayTask.created_at.desc()).all()
         return [serialize_day_task(t) for t in tasks]
+
+
+@app.get("/api/delivery_notes")
+def get_delivery_notes(customer_id: Optional[int] = None):
+    with SessionLocal() as db:
+        query = db.query(DeliveryNote)
+        if customer_id:
+            query = query.filter(DeliveryNote.customer_id == customer_id)
+        notes = query.order_by(DeliveryNote.created_at.desc()).all()
+        return [serialize_delivery_note(note) for note in notes]
+
+
+@app.post("/api/delivery_notes")
+def create_delivery_note(data: DeliveryNoteCreate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(data.customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        note = DeliveryNote(
+            customer_id=data.customer_id,
+            note=(data.note or "").strip(),
+            signature_base64=(data.signature_base64 or "").strip(),
+        )
+        db.add(note)
+        db.commit()
+        db.refresh(note)
+        return serialize_delivery_note(note)
+
+
+@app.delete("/api/delivery_notes/{note_id}")
+def delete_delivery_note(note_id: int):
+    with SessionLocal() as db:
+        note = db.query(DeliveryNote).get(note_id)
+        if not note:
+            raise HTTPException(404, "Delivery note not found")
+        db.delete(note)
+        db.commit()
+    return {"status": "ok"}
 
 
 @app.get("/api/day_task_groups")

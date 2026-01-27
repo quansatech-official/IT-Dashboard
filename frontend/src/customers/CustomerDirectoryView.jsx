@@ -277,33 +277,22 @@ export default function CustomerDirectoryView() {
   }, [activeCustomer?.name]);
 
   useEffect(() => {
-    if (!activeCustomer?.name) {
+    if (!activeCustomer?.id) {
       setDeliveryNotes([]);
       return;
     }
     let active = true;
     setDeliveryStatus("loading");
-    fetch("/api/day_tasks")
+    fetch(`/api/delivery_notes?customer_id=${activeCustomer.id}`)
       .then((res) => {
-        if (!res.ok) throw new Error("tasks_failed");
+        if (!res.ok) throw new Error("delivery_failed");
         return res.json();
       })
       .then((data) => {
         if (!active) return;
         const list = Array.isArray(data) ? data : [];
-        const name = String(activeCustomer.name || "").trim().toLowerCase();
-        const number = String(activeCustomer.creditorNumber || "").trim();
-        const filtered = list.filter((task) => {
-          const taskCustomer = String(task.customer || "").trim().toLowerCase();
-          const taskNumber = String(task.customer_number || "").trim();
-          const matchesName = name && taskCustomer === name;
-          const matchesNumber = number && taskNumber === number;
-          const hasSignature = String(task.signature_base64 || "").trim() !== "";
-          const looksLikeDelivery = String(task.title || "").toLowerCase().includes("lieferschein");
-          return (matchesName || matchesNumber) && (hasSignature || looksLikeDelivery);
-        });
-        filtered.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-        setDeliveryNotes(filtered);
+        list.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+        setDeliveryNotes(list);
         setDeliveryStatus("ready");
       })
       .catch(() => {
@@ -313,7 +302,7 @@ export default function CustomerDirectoryView() {
     return () => {
       active = false;
     };
-  }, [activeCustomer?.name, activeCustomer?.creditorNumber]);
+  }, [activeCustomer?.id]);
 
   const scheduleSave = (customer) => {
     if (!customer) return;
@@ -371,8 +360,8 @@ export default function CustomerDirectoryView() {
     }
   };
 
-  const renderDeliveryHtml = (task) => {
-    const rawSignature = String(task.signature_base64 || "").trim();
+  const renderDeliveryHtml = (note) => {
+    const rawSignature = String(note.signature_base64 || "").trim();
     const signatureSrc = rawSignature
       ? rawSignature.startsWith("data:")
         ? rawSignature
@@ -391,10 +380,10 @@ export default function CustomerDirectoryView() {
               <div style="font-size:12px; color:#6b6358;">QT Workbench</div>
             </div>
           </div>
-          <div style="font-size:12px; color:#6b6358;">${new Date(task.created_at || Date.now()).toLocaleDateString("de-DE")}</div>
+          <div style="font-size:12px; color:#6b6358;">${new Date(note.created_at || Date.now()).toLocaleDateString("de-DE")}</div>
         </div>
         <p><strong>Kunde:</strong> ${activeCustomer?.name || ""}</p>
-        <p><strong>Leistung:</strong><br/>${String(task.title || "").replaceAll("\n", "<br/>")}</p>
+        <p><strong>Leistung:</strong><br/>${String(note.note || "Lieferschein").replaceAll("\n", "<br/>")}</p>
         <div style="margin-top: 16px;">
           <strong>Unterschrift:</strong><br/>
           ${signature}
@@ -403,16 +392,16 @@ export default function CustomerDirectoryView() {
     `;
   };
 
-  const openDeliveryPreview = (task) => {
+  const openDeliveryPreview = (note) => {
     setPreviewModal({
       open: true,
       title: "Lieferschein",
-      html: renderDeliveryHtml(task)
+      html: renderDeliveryHtml(note)
     });
   };
 
-  const exportDeliveryPdf = (task) => {
-    const html = renderDeliveryHtml(task);
+  const exportDeliveryPdf = (note) => {
+    const html = renderDeliveryHtml(note);
     const container = document.createElement("div");
     container.innerHTML = html;
     container.style.position = "fixed";
@@ -422,7 +411,7 @@ export default function CustomerDirectoryView() {
     container.style.background = "#ffffff";
     document.body.appendChild(container);
     const filename = `Lieferschein_${activeCustomer?.name || "Kunde"}_${
-      task?.created_at ? new Date(task.created_at).toLocaleDateString("de-DE") : "Datum"
+      note?.created_at ? new Date(note.created_at).toLocaleDateString("de-DE") : "Datum"
     }`
       .replaceAll(" ", "_")
       .replaceAll("/", "-");
@@ -482,11 +471,11 @@ export default function CustomerDirectoryView() {
       });
   };
 
-  const removeDeliveryNote = async (taskId) => {
-    if (!taskId) return;
+  const removeDeliveryNote = async (noteId) => {
+    if (!noteId) return;
     if (!confirm("Lieferschein löschen?")) return;
-    await fetch(`/api/day_tasks/${taskId}`, { method: "DELETE" });
-    setDeliveryNotes((prev) => prev.filter((item) => item.id !== taskId));
+    await fetch(`/api/delivery_notes/${noteId}`, { method: "DELETE" });
+    setDeliveryNotes((prev) => prev.filter((item) => item.id !== noteId));
   };
 
   const handleCreate = () => {
