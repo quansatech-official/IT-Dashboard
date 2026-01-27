@@ -45,6 +45,7 @@ class SevdeskClient:
     def __init__(self, config: SevdeskConfig, timeout: int = 20) -> None:
         self.config = config
         self.timeout = timeout
+        self._contact_person_id_cache: Optional[int] = None
 
     def request(
         self,
@@ -118,6 +119,19 @@ class SevdeskClient:
         payload = self.request("GET", f"/Invoice/{invoice_id}")
         return self._extract_first(payload)
 
+    def get_default_contact_person_id(self) -> Optional[int]:
+        if self._contact_person_id_cache:
+            return self._contact_person_id_cache
+        payload = self.request("GET", "/SevUser", params={"limit": 1, "offset": 0})
+        user = self._extract_first(payload)
+        try:
+            user_id = int(user.get("id")) if user and user.get("id") is not None else None
+        except (TypeError, ValueError):
+            user_id = None
+        if user_id:
+            self._contact_person_id_cache = user_id
+        return user_id
+
     def save_invoice(self, invoice_payload: Dict[str, Any], positions: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload = {
             "invoice": invoice_payload,
@@ -146,11 +160,13 @@ class SevdeskClient:
                 "objectName": "TaxRule",
             }
             contact_person = invoice_snapshot.get("contactPerson")
-            if not contact_person and self.config.contact_person_id:
-                contact_person = {
-                    "id": self.config.contact_person_id,
-                    "objectName": "SevUser",
-                }
+            if not contact_person:
+                contact_person_id = self.config.contact_person_id or self.get_default_contact_person_id()
+                if contact_person_id:
+                    contact_person = {
+                        "id": contact_person_id,
+                        "objectName": "SevUser",
+                    }
             address_country = invoice_snapshot.get("addressCountry") or {
                 "id": self.config.address_country_id or DEFAULT_ADDRESS_COUNTRY_ID,
                 "objectName": "StaticCountry",
@@ -167,9 +183,10 @@ class SevdeskClient:
             currency = self.config.currency or DEFAULT_CURRENCY
             tax_rule = {"id": str(self.config.tax_rule_id or DEFAULT_TAX_RULE_ID), "objectName": "TaxRule"}
             contact_person = None
-            if self.config.contact_person_id:
+            contact_person_id = self.config.contact_person_id or self.get_default_contact_person_id()
+            if contact_person_id:
                 contact_person = {
-                    "id": self.config.contact_person_id,
+                    "id": contact_person_id,
                     "objectName": "SevUser"
                 }
             address_country = {
@@ -196,6 +213,11 @@ class SevdeskClient:
             "contact": {"id": contact_id, "objectName": "Contact"},
             "addressCountry": address_country,
         }
+        if not contact_person:
+            raise SevdeskError(
+                "Missing Sevdesk contact person. Please configure sevdesk_contact_person_id.",
+                status_code=400,
+            )
         if contact_person:
             payload["contactPerson"] = contact_person
         if invoice_id is not None:
