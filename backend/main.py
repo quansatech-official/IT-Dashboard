@@ -18,7 +18,7 @@ import hmac
 import base64
 import requests
 from urllib.parse import quote, urlparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 
 from sevdesk_service import SevdeskClient, SevdeskConfig, SevdeskError
@@ -1119,7 +1119,7 @@ def _build_sevdesk_config(
 ) -> SevdeskConfig:
     base_url = (settings.sevdesk_base_url or "").strip() or "https://my.sevdesk.de/api/v1"
     tax_rate = _parse_float(settings.sevdesk_default_tax_rate, default=19.0)
-    unity_id = _parse_int(settings.sevdesk_unity_id) or 0
+    unity_id = _parse_int(settings.sevdesk_unity_id) or 1
     service_unity_id = _parse_int(settings.sevdesk_service_unity_id)
     device_unity_id = _parse_int(settings.sevdesk_device_unity_id)
     hourly_rate = _parse_float(settings.sevdesk_hourly_rate_eur, default=0.0)
@@ -1129,8 +1129,8 @@ def _build_sevdesk_config(
     return SevdeskConfig(
         base_url=base_url,
         api_token=(settings.sevdesk_api_token or "").strip(),
-        contact_person_id=_parse_int(settings.sevdesk_contact_person_id) or 0,
-        address_country_id=_parse_int(settings.sevdesk_address_country_id) or 0,
+        contact_person_id=_parse_int(settings.sevdesk_contact_person_id) or 1,
+        address_country_id=_parse_int(settings.sevdesk_address_country_id) or 1,
         tax_type=(settings.sevdesk_tax_type or "default").strip() or "default",
         tax_rule_id=_parse_int(settings.sevdesk_tax_rule_id) or 1,
         tax_text=(settings.sevdesk_tax_text or "zzgl. Umsatzsteuer").strip(),
@@ -1157,19 +1157,7 @@ def _require_sevdesk_config(
 
 
 def _require_sevdesk_invoice_fields(config: SevdeskConfig) -> None:
-    missing = []
-    if not config.contact_person_id:
-        missing.append("sevdesk_contact_person_id")
-    if not config.address_country_id:
-        missing.append("sevdesk_address_country_id")
-    if not config.tax_rule_id:
-        missing.append("sevdesk_tax_rule_id")
-    if not config.unity_id and not config.service_unity_id and not config.device_unity_id:
-        missing.append("sevdesk_unity_id")
-    if missing:
-        raise HTTPException(
-            400, f"Sevdesk invoice settings missing: {', '.join(missing)}"
-        )
+    return None
 
 
 def _ollama_generate_text(prompt: str) -> str:
@@ -3824,11 +3812,44 @@ def update_customer_metrics_settings(data: CustomerMetricsSettingsUpdate):
 def get_company_stats(days: int = 30):
     safe_days = max(1, min(int(days or 30), 365))
     now_ms = int(time.time() * 1000)
+    now_dt = datetime.now()
+    start_of_day = datetime(now_dt.year, now_dt.month, now_dt.day)
+    start_of_week = start_of_day - timedelta(days=start_of_day.weekday())
+    start_day_ms = int(start_of_day.timestamp() * 1000)
+    start_week_ms = int(start_of_week.timestamp() * 1000)
     start_ms = now_ms - safe_days * 24 * 60 * 60 * 1000
     with SessionLocal() as db:
         day_tasks_total = db.query(DayTask).count()
         day_tasks_open = db.query(DayTask).filter(DayTask.status != "done").count()
         day_tasks_done = db.query(DayTask).filter(DayTask.status == "done").count()
+        day_tasks_done_today = (
+            db.query(DayTask)
+            .filter(DayTask.completed_at >= start_day_ms)
+            .filter(DayTask.status == "done")
+            .count()
+        )
+        day_tasks_done_week = (
+            db.query(DayTask)
+            .filter(DayTask.completed_at >= start_week_ms)
+            .filter(DayTask.status == "done")
+            .count()
+        )
+        done_elapsed_today = (
+            db.query(func.coalesce(func.sum(DayTask.elapsed), 0))
+            .filter(DayTask.completed_at >= start_day_ms)
+            .filter(DayTask.status == "done")
+            .filter(DayTask.time_enabled == True)
+            .scalar()
+            or 0
+        )
+        done_elapsed_week = (
+            db.query(func.coalesce(func.sum(DayTask.elapsed), 0))
+            .filter(DayTask.completed_at >= start_week_ms)
+            .filter(DayTask.status == "done")
+            .filter(DayTask.time_enabled == True)
+            .scalar()
+            or 0
+        )
 
         total_time_ms = 0
         open_time_ms = 0
@@ -3881,12 +3902,18 @@ def get_company_stats(days: int = 30):
     open_time_hours = round(open_time_ms / 3600000, 2) if open_time_ms else 0
     open_time_minutes = round(open_time_ms / 60000, 1) if open_time_ms else 0
     revenue_estimate = round(open_time_hours * hourly_rate, 2) if hourly_rate else 0
+    done_time_today_hours = round(done_elapsed_today / 3600000, 2) if done_elapsed_today else 0
+    done_time_week_hours = round(done_elapsed_week / 3600000, 2) if done_elapsed_week else 0
+    revenue_estimate_today = round(done_time_today_hours * hourly_rate, 2) if hourly_rate else 0
+    revenue_estimate_week = round(done_time_week_hours * hourly_rate, 2) if hourly_rate else 0
 
     return {
         "dayTasks": {
             "total": day_tasks_total,
             "open": day_tasks_open,
             "done": day_tasks_done,
+            "doneToday": day_tasks_done_today,
+            "doneWeek": day_tasks_done_week,
         },
         "timeTracking": {
             "totalTasks": total_time_tasks,
@@ -3894,6 +3921,8 @@ def get_company_stats(days: int = 30):
             "totalHours": total_time_hours,
             "openHours": open_time_hours,
             "openMinutes": open_time_minutes,
+            "doneTodayHours": done_time_today_hours,
+            "doneWeekHours": done_time_week_hours,
         },
         "telephony": {
             "minutes": telephony_minutes,
@@ -3907,6 +3936,8 @@ def get_company_stats(days: int = 30):
             "confirmed": reports_confirmed,
         },
         "revenueEstimateEur": revenue_estimate,
+        "revenueEstimateTodayEur": revenue_estimate_today,
+        "revenueEstimateWeekEur": revenue_estimate_week,
         "hourlyRateEur": hourly_rate,
     }
 

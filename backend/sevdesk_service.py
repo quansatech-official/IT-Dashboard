@@ -32,6 +32,16 @@ class SevdeskConfig:
     hourly_rate_eur: Optional[float] = None
 
 
+DEFAULT_CONTACT_PERSON_ID = 1
+DEFAULT_ADDRESS_COUNTRY_ID = 1
+DEFAULT_UNITY_ID = 1
+DEFAULT_TAX_RULE_ID = 1
+DEFAULT_TAX_TYPE = "default"
+DEFAULT_TAX_TEXT = "zzgl. Umsatzsteuer"
+DEFAULT_CURRENCY = "EUR"
+DEFAULT_INVOICE_TYPE = "RE"
+
+
 class SevdeskClient:
     def __init__(self, config: SevdeskConfig, timeout: int = 20) -> None:
         self.config = config
@@ -129,35 +139,41 @@ class SevdeskClient:
         if invoice_snapshot:
             invoice_date = invoice_snapshot.get("invoiceDate")
             status = invoice_snapshot.get("status", 100)
-            tax_type = invoice_snapshot.get("taxType") or self.config.tax_type
-            tax_text = invoice_snapshot.get("taxText") or self.config.tax_text
-            currency = invoice_snapshot.get("currency") or self.config.currency
+            tax_type = invoice_snapshot.get("taxType") or self.config.tax_type or DEFAULT_TAX_TYPE
+            tax_text = invoice_snapshot.get("taxText") or self.config.tax_text or DEFAULT_TAX_TEXT
+            currency = invoice_snapshot.get("currency") or self.config.currency or DEFAULT_CURRENCY
             tax_rule = invoice_snapshot.get("taxRule") or {
-                "id": str(self.config.tax_rule_id),
+                "id": str(self.config.tax_rule_id or DEFAULT_TAX_RULE_ID),
                 "objectName": "TaxRule",
             }
             contact_person = invoice_snapshot.get("contactPerson") or {
-                "id": self.config.contact_person_id,
+                "id": self.config.contact_person_id or DEFAULT_CONTACT_PERSON_ID,
                 "objectName": "SevUser",
             }
             address_country = invoice_snapshot.get("addressCountry") or {
-                "id": self.config.address_country_id,
+                "id": self.config.address_country_id or DEFAULT_ADDRESS_COUNTRY_ID,
                 "objectName": "StaticCountry",
             }
-            invoice_type = invoice_snapshot.get("invoiceType") or self.config.invoice_type
+            invoice_type = invoice_snapshot.get("invoiceType") or self.config.invoice_type or DEFAULT_INVOICE_TYPE
             discount = invoice_snapshot.get("discount", 0)
             tax_rate = invoice_snapshot.get("taxRate", self.config.default_tax_rate)
             header_value = header or invoice_snapshot.get("header")
         else:
             invoice_date = datetime.now().strftime("%d.%m.%Y")
             status = 100
-            tax_type = self.config.tax_type
-            tax_text = self.config.tax_text
-            currency = self.config.currency
-            tax_rule = {"id": str(self.config.tax_rule_id), "objectName": "TaxRule"}
-            contact_person = {"id": self.config.contact_person_id, "objectName": "SevUser"}
-            address_country = {"id": self.config.address_country_id, "objectName": "StaticCountry"}
-            invoice_type = self.config.invoice_type
+            tax_type = self.config.tax_type or DEFAULT_TAX_TYPE
+            tax_text = self.config.tax_text or DEFAULT_TAX_TEXT
+            currency = self.config.currency or DEFAULT_CURRENCY
+            tax_rule = {"id": str(self.config.tax_rule_id or DEFAULT_TAX_RULE_ID), "objectName": "TaxRule"}
+            contact_person = {
+                "id": self.config.contact_person_id or DEFAULT_CONTACT_PERSON_ID,
+                "objectName": "SevUser"
+            }
+            address_country = {
+                "id": self.config.address_country_id or DEFAULT_ADDRESS_COUNTRY_ID,
+                "objectName": "StaticCountry"
+            }
+            invoice_type = self.config.invoice_type or DEFAULT_INVOICE_TYPE
             discount = 0
             tax_rate = self.config.default_tax_rate
             header_value = header
@@ -187,7 +203,7 @@ class SevdeskClient:
     def build_positions(self, items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         positions: List[Dict[str, Any]] = []
         for item in items:
-            unity_id = item.get("unity_id") or self.config.unity_id
+            unity_id = item.get("unity_id") or self.config.unity_id or DEFAULT_UNITY_ID
             position = {
                 "objectName": "InvoicePos",
                 "mapAll": True,

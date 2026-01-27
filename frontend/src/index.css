@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Roboto:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
 
 @tailwind base;
 @tailwind components;
@@ -34,7 +34,7 @@
   }
 
   body {
-    font-family: "Space Grotesk", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-family: "Roboto", "Helvetica Neue", Arial, sans-serif;
     color: var(--text-900);
     background: var(--bg-50);
     font-size: 15px;
@@ -110,6 +110,11 @@
 
   .bg-white {
     background-color: var(--card-bg);
+  }
+
+  .offers-view input,
+  .offers-view textarea {
+    font-family: "Roboto", "Helvetica Neue", Arial, sans-serif;
   }
 }
 

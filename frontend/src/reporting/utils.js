@@ -18,6 +18,14 @@ export const renderReportHTML = (report, options = {}) => {
     .map((action) => escapeHTML(action.title || ""))
     .filter(Boolean);
   const actionSummaryLine = actionSummary.length ? actionSummary.join(" · ") : "";
+  const summaryLine = summary ? escapeHTML(summary) : "";
+  const customerLabel = escapeHTML(report.customer || "");
+  const periodLabel = escapeHTML(period);
+  const headerSubline = summaryLine
+    ? customerLabel
+    : period
+      ? `${customerLabel} · ${periodLabel}`
+      : customerLabel;
   const introText =
     "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste mit Handlungsbedarf.";
   const statusBadge = (status = "") => {
@@ -50,7 +58,9 @@ export const renderReportHTML = (report, options = {}) => {
         <td style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif;">
           <table style="width: 100%; border-collapse: collapse;">
             <tr>
-              <td style="font-weight: 600; font-size: 14px;">${escapeHTML(action.title)}</td>
+              <td style="font-weight: 600; font-size: 12px; line-height: 1.35;">${escapeHTML(
+                action.title
+              )}</td>
               <td align="right" style="vertical-align: top;">${priorityBadge(action.priority)}</td>
             </tr>
           </table>
@@ -115,13 +125,13 @@ export const renderReportHTML = (report, options = {}) => {
                           </td>
                           <td>
                             <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 700; color: #ffffff; letter-spacing: 0.02em;">IT-Kundenbericht</div>
-                            <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #d9e2ea; margin-top: 4px;">${escapeHTML(
-                              report.customer
-                            )} · ${escapeHTML(period)}</div>
+                            <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #d9e2ea; margin-top: 4px;">
+                              ${headerSubline}
+                            </div>
                             ${
-                              actionSummaryLine
+                              summaryLine || actionSummaryLine
                                 ? `<div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #c6d1da; margin-top: 6px; line-height: 1.4;">
-                                  ${actionSummaryLine}
+                                  ${summaryLine || actionSummaryLine}
                                 </div>`
                                 : ""
                             }

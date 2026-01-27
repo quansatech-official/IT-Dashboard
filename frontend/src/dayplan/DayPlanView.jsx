@@ -875,14 +875,7 @@ export default function DayPlanView() {
 
   const hasRunningTimer = useMemo(() => tasks.some((task) => task?.running), [tasks]);
 
-  const missingSevdeskInvoiceFields = useMemo(() => {
-    const missing = [];
-    if (!String(sevdeskDefaults.contact_person_id || "").trim()) missing.push("Kontaktperson-ID");
-    if (!String(sevdeskDefaults.address_country_id || "").trim()) missing.push("Adressland-ID");
-    if (!String(sevdeskDefaults.tax_rule_id || "").trim()) missing.push("Steuerregel-ID");
-    if (!String(sevdeskDefaults.unity_id || "").trim()) missing.push("Standard-Unity-ID");
-    return missing;
-  }, [sevdeskDefaults]);
+  const missingSevdeskInvoiceFields = useMemo(() => [], []);
 
   useEffect(() => {
     if (!hasRunningTimer) return;
@@ -1930,8 +1923,8 @@ function FakturaTaskModal({
           ) : null}
           {hasToken && hasMissingInvoiceFields ? (
             <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-              In den sevdesk-Einstellungen fehlen: {missingInvoiceFields.join(", ")}. Bitte in den
-              Einstellungen ergänzen.
+              In den sevdesk-Einstellungen fehlen: Kontaktperson-ID, Adressland-ID,
+              Standard-Unity-ID. Bitte in den Einstellungen ergänzen.
             </div>
           ) : null}
           {!task.customer ? (

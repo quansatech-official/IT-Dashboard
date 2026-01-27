@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   BookmarkPlus,
   Check,
@@ -27,11 +27,11 @@ import jsPDF from "jspdf";
 const SMTP_STORAGE_KEY = "qt_smtp_settings_cache";
 
 const inputClass =
-  "w-full rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400";
+  "w-full rounded-xl border border-sand-200 bg-sand-50 px-2 py-1 text-[12px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400";
 
 const textareaClass =
-  "w-full min-h-[90px] rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400";
-const noteTextareaClass = `${textareaClass} min-h-[70px]`;
+  "w-full min-h-[70px] rounded-xl border border-sand-200 bg-sand-50 px-2 py-1.5 text-[12px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400";
+const noteTextareaClass = `${textareaClass} min-h-[60px]`;
 const selectClass = `${inputClass} appearance-none pr-10 bg-[url('data:image/svg+xml;utf8,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"%234B5563\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 7l5 5 5-5\"/></svg>')] bg-no-repeat bg-[right_0.9rem_center] bg-[length:18px]`;
 const priceInputClass = `${inputClass} pr-8 appearance-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 const quantityInputClass = `${inputClass} appearance-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
@@ -890,6 +890,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const rowsPerPage = isExport ? 8 : Number.POSITIVE_INFINITY;
   const previewRowsPerPage = 10;
   const pageSize = isExport ? rowsPerPage : previewRowsPerPage;
+  const [forceTotalsOwnPage, setForceTotalsOwnPage] = useState(false);
+  const lastPageContentRef = useRef(null);
   const pagedPositions = [];
   for (let i = 0; i < previewPositions.length; i += pageSize) {
     const chunk = previewPositions
@@ -906,7 +908,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
     index + 1 < previewPositions.length;
   const a4WidthPx = 210 * 3.7795275591;
   const a4HeightPx = 297 * 3.7795275591;
-  const renderTotalsInline = !isExport;
   const totalsContent = (
     <>
       {offer.calculationText ? (
@@ -995,7 +996,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       ) : null}
     </>
   );
-  const totalsOnOwnPage = isExport && (() => {
+  const autoTotalsOnOwnPage = isExport && (() => {
     const hasText = Boolean((offer.calculationText || "").trim());
     const hasAttachments = (offer.attachments || []).length > 0;
     const hasTotals = totalNet > 0 || optionalTotal > 0;
@@ -1006,6 +1007,31 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         (pagePositions.length >= rowsPerPage - 1 || hasText || hasAttachments)
     );
   })();
+  const totalsOnOwnPage = autoTotalsOnOwnPage || (!isExport && forceTotalsOwnPage);
+  const renderTotalsInline =
+    (isExport && !autoTotalsOnOwnPage) || (!isExport && !forceTotalsOwnPage);
+
+  useEffect(() => {
+    setForceTotalsOwnPage(false);
+  }, [
+    offer.id,
+    previewPositions.length,
+    offer.calculationText,
+    (offer.attachments || []).length,
+    totalNet,
+    optionalTotal,
+    scale
+  ]);
+
+  useLayoutEffect(() => {
+    if (isExport || forceTotalsOwnPage) return;
+    const el = lastPageContentRef.current;
+    if (!el) return;
+    const overflow = el.scrollHeight - el.clientHeight > 1;
+    if (overflow) {
+      setForceTotalsOwnPage(true);
+    }
+  }, [isExport, forceTotalsOwnPage, pagedPositions.length, previewPositions.length, scale]);
 
   return (
     <div
@@ -1092,6 +1118,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 pageBreakAfter:
                   isExport && pageIndex < pagedPositions.length - 1 ? "always" : "auto"
               }}
+              ref={pageIndex === pagedPositions.length - 1 ? lastPageContentRef : null}
             >
               <div className="flex items-center justify-between border-b border-sand-200 pb-4">
                 <div className="flex items-center gap-2">
@@ -1287,7 +1314,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                         </>
                       ) : null}
                     </div>
-                    {showTotals && (!totalsOnOwnPage || renderTotalsInline) ? (
+                    {showTotals && renderTotalsInline ? (
                       <>
                         <div
                           className="mt-2"
@@ -1313,23 +1340,23 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
 
       {totalsOnOwnPage ? (
         <>
-          <div className="html2pdf__page-break" />
+          {isExport ? <div className="html2pdf__page-break" /> : null}
           <div
             className="mx-auto"
             style={{
               width: `${a4WidthPx * scale}px`,
-              height: "auto",
-              minHeight: `${a4HeightPx}px`
+              height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+              minHeight: `${a4HeightPx * scale}px`
             }}
           >
             <div
               className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
               style={{
                 width: `${a4WidthPx}px`,
-                height: "auto",
+                height: isExport ? "auto" : `${a4HeightPx}px`,
                 minHeight: `${a4HeightPx}px`,
                 paddingBottom: "48px",
-                transform: "none",
+                transform: isExport ? "none" : `scale(${scale})`,
                 transformOrigin: "top left",
                 pageBreakAfter: "auto"
               }}
@@ -3794,9 +3821,9 @@ export default function OffersView() {
   };
 
   return (
-    <div className="min-h-screen bg-sand-50">
+    <div className="min-h-screen bg-sand-50 offers-view">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-2">
           <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
             <Receipt size={18} />
           </div>
@@ -3807,7 +3834,7 @@ export default function OffersView() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-6">
+      <main className="max-w-7xl mx-auto px-4 py-4">
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <button
             type="button"
@@ -3874,89 +3901,89 @@ export default function OffersView() {
         {mainTab === "new" ? (
           activeOffer ? (
             <>
-              <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-3 items-start">
-                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/80 backdrop-blur p-3 shadow-soft animate-fade-in">
-                  <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-3 items-start">
+              <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-2 items-start">
+                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/80 backdrop-blur p-2 shadow-soft animate-fade-in">
+                  <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-2 items-start">
                     <section
                       ref={offerHeaderRef}
-                      className="self-start rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-3"
+                      className="self-start rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-2"
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
                         <div>
-                          <h2 className="text-xl font-display text-sand-900 leading-tight">Angebotskopf</h2>
-                          <p className="text-sm text-sand-600">
+                          <h2 className="text-lg font-display text-sand-900 leading-tight">Angebotskopf</h2>
+                          <p className="text-xs text-sand-600">
                             Kunde, Anlass, Status und Referenzen.
                           </p>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                             {activeOffer.status}
                           </span>
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                             {positionCount} Positionen
                           </span>
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                             Gesamt {formatMoney(totals.total)}
                           </span>
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                             Einmal {formatMoney(costTotals.once)}
                           </span>
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                             Laufend {formatMoney(costTotals.monthly)} / {formatMoney(costTotals.yearly)}
                           </span>
                         </div>
                       </div>
 
-                      <div className="mt-4 grid gap-3 md:grid-cols-2 items-stretch">
-                        <div className="rounded-xl border border-sand-200 bg-sand-100 p-3 h-full">
+                      <div className="mt-3 grid gap-2 md:grid-cols-2 items-stretch">
+                        <div className="rounded-xl border border-sand-200 bg-sand-100 p-2 h-full">
                           <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
                             Referenz
                           </p>
-                          <p className="mt-2 text-sm font-semibold text-sand-900">
+                          <p className="mt-1 text-sm font-semibold text-sand-900">
                             {activeOffer.reference}
                           </p>
-                          <p className="mt-1 text-xs text-sand-500">
+                          <p className="mt-1 text-[11px] text-sand-500">
                             Erstellt {formatDate(activeOffer.createdAt)}
                           </p>
                         </div>
-                        <div className="rounded-xl border border-sand-200 bg-sand-100 p-3 h-full flex flex-col">
+                        <div className="rounded-xl border border-sand-200 bg-sand-100 p-2 h-full flex flex-col">
                           <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
                             Kunde
                           </p>
-                          <p className="mt-2 text-sm font-semibold text-sand-900">
+                          <p className="mt-1 text-sm font-semibold text-sand-900">
                             {activeOffer.customer || "Noch offen"}
                           </p>
                           {activeOffer.recipientCompany ? (
-                            <p className="mt-1 text-xs text-sand-500">
+                            <p className="mt-1 text-[11px] text-sand-500">
                               {activeOffer.recipientCompany}
                             </p>
                           ) : null}
                           {activeOffer.recipientStreet ? (
-                            <p className="text-xs text-sand-500">
+                            <p className="text-[11px] text-sand-500">
                               {activeOffer.recipientStreet}
                             </p>
                           ) : null}
                           {activeOffer.recipientPostalCity ? (
-                            <p className="text-xs text-sand-500">
+                            <p className="text-[11px] text-sand-500">
                               {activeOffer.recipientPostalCity}
                             </p>
                           ) : null}
                           {activeOffer.recipientCountry ? (
-                            <p className="text-xs text-sand-500">
+                            <p className="text-[11px] text-sand-500">
                               {activeOffer.recipientCountry}
                             </p>
                           ) : null}
                           {activeOffer.customerNumber ? (
-                            <p className="mt-1 text-xs text-sand-500">
+                            <p className="mt-1 text-[11px] text-sand-500">
                               Kundennummer {activeOffer.customerNumber}
                             </p>
                           ) : null}
                         </div>
                       </div>
 
-                      <div className="mt-4">
-                        <div className="rounded-2xl border border-sand-200 bg-sand-50/60 p-4">
-                          <div className="grid gap-3 md:grid-cols-2">
+                      <div className="mt-3">
+                        <div className="rounded-2xl border border-sand-200 bg-sand-50/60 p-3">
+                          <div className="grid gap-2 md:grid-cols-2">
                             <Field label="Kunde">
                               <input
                                 className={inputClass}
@@ -3989,7 +4016,7 @@ export default function OffersView() {
                               </SelectField>
                             </Field>
                           </div>
-                          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,220px)_140px]">
+                          <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,220px)_140px]">
                             <Field label="MwSt Modus">
                               <SelectField
                                 value={activeOffer.vatMode || "standard"}
@@ -4025,7 +4052,7 @@ export default function OffersView() {
                         </div>
                       </div>
 
-                      <div className="mt-3 space-y-3">
+                      <div className="mt-2 space-y-2">
                         <Field label="Anrede">
                           <input
                             className={inputClass}
@@ -4056,19 +4083,19 @@ export default function OffersView() {
                     </section>
 
                     <aside
-                      className="space-y-4 xl:sticky xl:top-4 self-start"
+                      className="space-y-3 xl:sticky xl:top-4 self-start"
                       ref={previewSectionRef}
                     >
-                      <section className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft">
-                        <div className="flex items-center justify-between mb-4">
+                      <section className="rounded-3xl border border-sand-200 bg-white p-2 shadow-soft">
+                        <div className="flex items-center justify-between mb-3">
                           <div>
                             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
                               Live Vorschau
                             </p>
-                            <h3 className="text-lg font-display text-sand-900">PDF Layout</h3>
+                            <h3 className="text-base font-display text-sand-900">PDF Layout</h3>
                           </div>
                           {activeOffer ? (
-                            <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600">
+                            <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600">
                               {activeOffer.status}
                             </span>
                           ) : null}
@@ -4096,32 +4123,32 @@ export default function OffersView() {
                   </div>
                 </section>
 
-                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-3 shadow-soft animate-fade-in">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-2 shadow-soft animate-fade-in">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
                         Positionen
                       </p>
-                      <h2 className="text-lg font-display text-sand-900">
+                      <h2 className="text-base font-display text-sand-900">
                         Positionen zusammenstellen
                       </h2>
-                      <p className="text-sm text-sand-600">
+                      <p className="text-xs text-sand-600">
                         Leistung oder Material anlegen, Vorlagen nutzen.
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                      <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                         {activeOffer.lineItems.filter((item) => !item?.optional).length} Leistungspositionen
                       </span>
-                      <span className="rounded-full border border-sand-200 bg-sand-100 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+                      <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                         {activeOffer.deviceItems.filter((item) => !item?.optional).length} Materialpositionen
                       </span>
                     </div>
                   </div>
 
-                  <div className="mt-4 space-y-3">
-                    <div className="grid gap-3 md:grid-cols-4">
-                      <div className="bg-white border border-sand-200 rounded-2xl p-3 shadow-sm flex flex-col gap-2">
+                  <div className="mt-3 space-y-2">
+                    <div className="grid gap-2 md:grid-cols-4">
+                      <div className="bg-white border border-sand-200 rounded-2xl p-2 shadow-sm flex flex-col gap-2">
                         <div className="flex items-center gap-2 text-sand-700">
                           <Plus size={16} />
                           <p className="text-xs uppercase tracking-wide text-sand-600">
