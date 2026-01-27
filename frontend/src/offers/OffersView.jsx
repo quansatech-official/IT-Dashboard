@@ -541,6 +541,7 @@ const internalNoteOptions = [
 
 const initialOffers = [];
 const AUTOSAVE_KEY = "qt_offer_autosave";
+const LAST_OFFER_INDEX_KEY = "qt_offer_last_index";
 
 const normalizeVersionId = (item) => {
   const first = item.aiVersions?.[0]?.id || null;
@@ -608,23 +609,33 @@ const makeReference = (format, index) => {
   return template.replace(match[0], number);
 };
 
-const getNextOfferIndex = (offers, format) => {
+const getOfferIndexFromReference = (reference, format) => {
   const template = (format || defaultOfferFormat).trim() || defaultOfferFormat;
   const match = template.match(/X+/);
-  if (!match) return offers.length + 1;
+  if (!match) return null;
   const width = match[0].length;
   const prefix = template.slice(0, match.index);
   const suffix = template.slice((match.index || 0) + width);
+  const value = String(reference || "");
+  if (!value.startsWith(prefix) || !value.endsWith(suffix)) return null;
+  const numberPart = value.slice(prefix.length, value.length - suffix.length);
+  if (numberPart.length !== width || !/^\d+$/.test(numberPart)) return null;
+  return Number(numberPart);
+};
+
+const getMaxOfferIndex = (offers, format) => {
   let max = 0;
   offers.forEach((offer) => {
-    const reference = String(offer?.reference || "");
-    if (!reference.startsWith(prefix) || !reference.endsWith(suffix)) return;
-    const numberPart = reference.slice(prefix.length, reference.length - suffix.length);
-    if (numberPart.length !== width || !/^\d+$/.test(numberPart)) return;
-    const value = Number(numberPart);
-    if (value > max) max = value;
+    const value = getOfferIndexFromReference(offer?.reference, format);
+    if (typeof value === "number" && value > max) max = value;
   });
-  return max ? max + 1 : offers.length + 1;
+  return max;
+};
+
+const getNextOfferIndex = (offers, format, lastIndex = 0) => {
+  const max = Math.max(lastIndex || 0, getMaxOfferIndex(offers, format) || 0);
+  if (!max) return offers.length + 1;
+  return max + 1;
 };
 
 const createEmptyOffer = (index, format) => ({
@@ -1990,6 +2001,7 @@ export default function OffersView() {
   const [offerNumberFormat, setOfferNumberFormat] = useState(defaultOfferFormat);
   const [offerSettingsLoaded, setOfferSettingsLoaded] = useState(false);
   const [blocksLoaded, setBlocksLoaded] = useState(false);
+  const [lastOfferIndex, setLastOfferIndex] = useState(0);
   const [previewOfferId, setPreviewOfferId] = useState("");
   const [previewMode, setPreviewMode] = useState("offer");
   const [exportOfferId, setExportOfferId] = useState("");
@@ -2023,6 +2035,7 @@ export default function OffersView() {
   const emailPdfRef = useRef(null);
   const emailExportPromiseRef = useRef(null);
   const offersFetchedRef = useRef(false);
+  const lastOfferIndexRef = useRef(0);
   const [previewScale, setPreviewScale] = useState(0.7);
   const [previewMaxHeight, setPreviewMaxHeight] = useState("70vh");
   const autosaveTimer = useRef(null);
@@ -2079,10 +2092,12 @@ export default function OffersView() {
       activeId,
       serviceBlocks,
       deviceBlocks,
-      calcBlocks
+      calcBlocks,
+      lastOfferIndex
     };
     try {
       window.localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
+      window.localStorage.setItem(LAST_OFFER_INDEX_KEY, String(lastOfferIndex || 0));
       if (withStatus) {
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus("idle"), 2000);
@@ -2260,6 +2275,14 @@ export default function OffersView() {
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         const fetched = Array.isArray(data) ? data.map(normalizeServerOffer).filter(Boolean) : [];
+        const maxIndex = getMaxOfferIndex(fetched, offerNumberFormat);
+        if (maxIndex) {
+          setLastOfferIndex((prev) => {
+            const next = Math.max(prev || 0, maxIndex);
+            lastOfferIndexRef.current = next;
+            return next;
+          });
+        }
         setOffers((prev) => {
           const drafts = prev.filter((offer) => !offer.serverId);
           const merged = dedupeOffers([...drafts, ...fetched]);
@@ -2276,22 +2299,42 @@ export default function OffersView() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
+      const storedIndex = window.localStorage.getItem(LAST_OFFER_INDEX_KEY);
       const raw = window.localStorage.getItem(AUTOSAVE_KEY);
-      if (!raw) return;
-      const stored = JSON.parse(raw);
-      if (Array.isArray(stored?.serviceBlocks) && stored.serviceBlocks.length) {
-        setServiceBlocks(stored.serviceBlocks);
+      const stored = raw ? JSON.parse(raw) : null;
+      if (stored) {
+        if (Array.isArray(stored?.serviceBlocks) && stored.serviceBlocks.length) {
+          setServiceBlocks(stored.serviceBlocks);
+        }
+        if (Array.isArray(stored?.deviceBlocks) && stored.deviceBlocks.length) {
+          setDeviceBlocks(stored.deviceBlocks);
+        }
+        if (Array.isArray(stored?.calcBlocks) && stored.calcBlocks.length) {
+          setCalcBlocks(stored.calcBlocks);
+        }
       }
-      if (Array.isArray(stored?.deviceBlocks) && stored.deviceBlocks.length) {
-        setDeviceBlocks(stored.deviceBlocks);
-      }
-      if (Array.isArray(stored?.calcBlocks) && stored.calcBlocks.length) {
-        setCalcBlocks(stored.calcBlocks);
+      const lastIndex = Number(stored?.lastOfferIndex) || Number(storedIndex) || 0;
+      if (lastIndex) {
+        setLastOfferIndex(lastIndex);
+        lastOfferIndexRef.current = lastIndex;
       }
     } catch (error) {
       // ignore load errors
     }
   }, []);
+
+  useEffect(() => {
+    lastOfferIndexRef.current = lastOfferIndex || 0;
+  }, [lastOfferIndex]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(LAST_OFFER_INDEX_KEY, String(lastOfferIndex || 0));
+    } catch (error) {
+      // ignore cache errors
+    }
+  }, [lastOfferIndex]);
 
   useEffect(() => {
     let active = true;
@@ -2345,8 +2388,26 @@ export default function OffersView() {
   }, [offerNumberFormat, offerSettingsLoaded, starterCreated]);
 
   useEffect(() => {
+    if (!offers.length) return;
+    const maxIndex = getMaxOfferIndex(offers, offerNumberFormat);
+    if (maxIndex > lastOfferIndexRef.current) {
+      setLastOfferIndex((prev) => {
+        const next = Math.max(prev || 0, maxIndex);
+        lastOfferIndexRef.current = next;
+        return next;
+      });
+    }
+  }, [offers, offerNumberFormat]);
+
+  useEffect(() => {
     if (starterCreated || !offerSettingsLoaded) return;
-    const starter = createEmptyOffer(offers.length + 1 || 1, offerNumberFormat);
+    const nextIndex = getNextOfferIndex(offers, offerNumberFormat, lastOfferIndexRef.current);
+    const starter = createEmptyOffer(nextIndex, offerNumberFormat);
+    setLastOfferIndex((prev) => {
+      const next = Math.max(prev || 0, nextIndex);
+      lastOfferIndexRef.current = next;
+      return next;
+    });
     setOffers((prev) => [starter, ...prev]);
     setActiveId(starter.id);
     setStarterCreated(true);
@@ -2727,7 +2788,13 @@ export default function OffersView() {
     setOffers((prev) => {
       const next = prev.filter((offer) => offer.id !== offerId);
       if (!next.length) {
-        const starter = createEmptyOffer(1, offerNumberFormat);
+        const nextIndex = getNextOfferIndex(prev, offerNumberFormat, lastOfferIndexRef.current);
+        const starter = createEmptyOffer(nextIndex, offerNumberFormat);
+        setLastOfferIndex((current) => {
+          const nextValue = Math.max(current || 0, nextIndex);
+          lastOfferIndexRef.current = nextValue;
+          return nextValue;
+        });
         setActiveId(starter.id);
         return [starter];
       }
@@ -2928,8 +2995,13 @@ export default function OffersView() {
 
   const addOffer = () => {
     setOffers((prev) => {
-      const nextIndex = getNextOfferIndex(prev, offerNumberFormat);
+      const nextIndex = getNextOfferIndex(prev, offerNumberFormat, lastOfferIndexRef.current);
       const next = createEmptyOffer(nextIndex, offerNumberFormat);
+      setLastOfferIndex((current) => {
+        const nextValue = Math.max(current || 0, nextIndex);
+        lastOfferIndexRef.current = nextValue;
+        return nextValue;
+      });
       setActiveId(next.id);
       return [next, ...prev];
     });
@@ -2944,7 +3016,8 @@ export default function OffersView() {
     if (!offer) return;
     const newId = uid();
     setOffers((prev) => {
-      const reference = makeReference(offerNumberFormat, getNextOfferIndex(prev, offerNumberFormat));
+      const nextIndex = getNextOfferIndex(prev, offerNumberFormat, lastOfferIndexRef.current);
+      const reference = makeReference(offerNumberFormat, nextIndex);
       const copy = {
         ...offer,
         id: newId,
@@ -2955,6 +3028,11 @@ export default function OffersView() {
         confirmGuid: "",
         trackingGuid: ""
       };
+      setLastOfferIndex((current) => {
+        const nextValue = Math.max(current || 0, nextIndex);
+        lastOfferIndexRef.current = nextValue;
+        return nextValue;
+      });
       return [copy, ...prev];
     });
     setActiveId(newId);
