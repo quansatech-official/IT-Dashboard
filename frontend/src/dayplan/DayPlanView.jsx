@@ -674,23 +674,13 @@ export default function DayPlanView() {
     return Array.from(new Set([base, noH])).filter(Boolean);
   }
 
-  const customerShortCodeByName = useMemo(() => {
-    const map = new Map();
-    customers.forEach((customer) => {
-      const name = String(customer?.name || "").trim().toLowerCase();
-      if (!name) return;
-      const shortCode = String(customer?.short_code || customer?.shortCode || "").trim();
-      if (shortCode) {
-        map.set(name, shortCode);
-      }
-    });
-    return map;
-  }, [customers]);
-
   function getCustomerShortCodeForTask(task) {
     const name = String(task?.customer || "").trim().toLowerCase();
     if (!name) return "";
-    return String(customerShortCodeByName.get(name) || "").trim();
+    const match = customers.find(
+      (customer) => String(customer?.name || "").trim().toLowerCase() === name
+    );
+    return String(match?.short_code || match?.shortCode || "").trim();
   }
 
   function matchesTask(task, needle) {
