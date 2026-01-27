@@ -174,7 +174,7 @@ class SevdeskClient:
             invoice_type = invoice_snapshot.get("invoiceType") or self.config.invoice_type or DEFAULT_INVOICE_TYPE
             discount = invoice_snapshot.get("discount", 0)
             tax_rate = invoice_snapshot.get("taxRate", self.config.default_tax_rate)
-            header_value = header or invoice_snapshot.get("header")
+            header_value = None
         else:
             invoice_date = datetime.now().strftime("%d.%m.%Y")
             status = 100
@@ -196,7 +196,7 @@ class SevdeskClient:
             invoice_type = self.config.invoice_type or DEFAULT_INVOICE_TYPE
             discount = 0
             tax_rate = self.config.default_tax_rate
-            header_value = header
+            header_value = None
 
         payload = {
             "objectName": "Invoice",
@@ -222,22 +222,35 @@ class SevdeskClient:
             payload["contactPerson"] = contact_person
         if invoice_id is not None:
             payload["id"] = invoice_id
-        if header_value:
-            payload["header"] = header_value
         return payload
 
     def build_positions(self, items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         positions: List[Dict[str, Any]] = []
         for item in items:
             unity_id = item.get("unity_id") or self.config.unity_id or DEFAULT_UNITY_ID
+            quantity = item.get("quantity")
+            price = item.get("price")
+            tax_rate = item.get("tax_rate", self.config.default_tax_rate)
+            try:
+                quantity = float(quantity) if quantity is not None else None
+            except (TypeError, ValueError):
+                quantity = None
+            try:
+                price = float(price) if price is not None else None
+            except (TypeError, ValueError):
+                price = None
+            try:
+                tax_rate = float(tax_rate) if tax_rate is not None else None
+            except (TypeError, ValueError):
+                tax_rate = None
             position = {
                 "objectName": "InvoicePos",
                 "mapAll": True,
-                "quantity": item.get("quantity"),
-                "price": item.get("price"),
+                "quantity": quantity,
+                "price": price,
                 "name": item.get("name"),
                 "text": item.get("text"),
-                "taxRate": item.get("tax_rate", self.config.default_tax_rate),
+                "taxRate": tax_rate,
                 "unity": {"id": unity_id, "objectName": "Unity"},
             }
             positions.append(position)
