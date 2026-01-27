@@ -3542,7 +3542,7 @@ export default function OffersView() {
     }
   };
 
-  const getHandoverSummary = (offer, selectedLineItemIds, selectedDeviceItemIds) => {
+  function getHandoverSummary(offer, selectedLineItemIds, selectedDeviceItemIds) {
     if (!offer) return null;
     const selectedLineSet = Array.isArray(selectedLineItemIds)
       ? new Set(selectedLineItemIds.map((id) => String(id)))
@@ -3576,7 +3576,7 @@ export default function OffersView() {
       accepted: isOfferAccepted(offer),
       serverId: offer.serverId || ""
     };
-  };
+  }
 
   const getHandoverDefaultText = (offer) => {
     if (!offer) return "";
