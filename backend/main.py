@@ -1475,6 +1475,8 @@ def _invoice_is_due(invoice: Dict[str, Any], today: datetime) -> bool:
     status = _parse_int(invoice.get("status"))
     if status == 100:
         return False
+    if status == 1000:
+        return False
     if status == 400:
         return False
     due_date = _parse_sevdesk_date(
@@ -1501,6 +1503,8 @@ def _invoice_is_paid(invoice: Dict[str, Any]) -> bool:
     status = _parse_int(invoice.get("status"))
     if status in (100, 400):
         return False
+    if status == 1000:
+        return True
     amount = _parse_sevdesk_amount(invoice)
     paid = _parse_float(invoice.get("sumPaid"), default=0.0)
     if amount > 0 and paid >= amount:
