@@ -162,6 +162,7 @@ button, input, textarea, select {
 .quick-card,
 .delivery-compact {
   padding-bottom: 16px;
+  margin-bottom: calc(72px + env(safe-area-inset-bottom));
 }
 
 .quick-actions-fixed,
