@@ -161,7 +161,7 @@ export default function App() {
               {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
               {theme === "dark" ? "Tag" : "Nacht"}
             </button>
-            <div className="text-xs text-sand-500">Version 1.1.5</div>
+            <div className="text-xs text-sand-500">Version 1.2</div>
           </div>
         </aside>
 
