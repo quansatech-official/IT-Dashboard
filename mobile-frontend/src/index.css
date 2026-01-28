@@ -162,7 +162,7 @@ button, input, textarea, select {
 .quick-card,
 .delivery-compact {
   padding-bottom: 16px;
-  margin-bottom: calc(72px + env(safe-area-inset-bottom));
+  margin-bottom: calc(120px + env(safe-area-inset-bottom));
 }
 
 .quick-actions-fixed,
@@ -256,6 +256,10 @@ button, input, textarea, select {
   background: #f8fafc;
   border-radius: 18px;
   padding: 12px;
+}
+
+.signature-modal__box canvas {
+  height: 100%;
 }
 
 .signature-modal__actions {
