@@ -159,6 +159,108 @@ button, input, textarea, select {
   letter-spacing: 0.2em;
 }
 
+.quick-card,
+.delivery-compact {
+  padding-bottom: 16px;
+}
+
+.quick-actions-fixed,
+.delivery-actions-fixed {
+  position: sticky;
+  bottom: calc(58px + env(safe-area-inset-bottom));
+  display: flex;
+  gap: 10px;
+  padding: 0 16px 10px;
+  width: 100%;
+  z-index: 10;
+  pointer-events: auto;
+}
+
+.fixed-action-bar .primary-btn,
+.fixed-action-bar .secondary-btn {
+  height: 44px;
+  flex: 1;
+}
+
+.signature-field {
+  margin-bottom: 0;
+}
+
+.signature-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.signature-status__text {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #6d7788;
+}
+
+.signature-trigger {
+  border: 1px solid #d6dde8;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  background: #fff;
+  color: #1f2d3d;
+}
+
+.signature-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(15, 23, 42, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.signature-modal__content {
+  background: #fff;
+  border-radius: 24px;
+  width: min(520px, 100%);
+  max-width: 520px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
+}
+
+.signature-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.signature-modal__close {
+  border: none;
+  background: transparent;
+  color: #6d7788;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.signature-modal__box {
+  height: 280px;
+  background: #f8fafc;
+  border-radius: 18px;
+  padding: 12px;
+}
+
+.signature-modal__actions {
+  padding: 0;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;

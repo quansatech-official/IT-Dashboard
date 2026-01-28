@@ -481,8 +481,12 @@ export default function DayPlanView() {
     return hours * 60 + minutes;
   };
 
-  const commitDetail = async (task, field) => {
-    const value = getDetailValue(task, field);
+  const commitDetail = async (task, field, overrideValue) => {
+    const value =
+      overrideValue === undefined ? getDetailValue(task, field) : overrideValue;
+    if (overrideValue !== undefined) {
+      setDetailValue(task.id, field, overrideValue);
+    }
     const currentValue = task?.[field];
     const isSameValue =
       typeof currentValue === "boolean"
@@ -1475,11 +1479,11 @@ export default function DayPlanView() {
                     <input
                       type="checkbox"
                       checked={Boolean(getDetailValue(task, "kulant"))}
-                      onChange={(event) => {
-                        const nextValue = event.target.checked;
-                        setDetailValue(task.id, "kulant", nextValue);
-                        commitDetail(task, "kulant");
-                      }}
+                  onChange={(event) => {
+                    const nextValue = event.target.checked;
+                    setDetailValue(task.id, "kulant", nextValue);
+                    commitDetail(task, "kulant", nextValue);
+                  }}
                       className="h-4 w-4 rounded border border-amber-200 text-amber-600 focus:ring-2 focus:ring-amber-200"
                     />
                     Kulant

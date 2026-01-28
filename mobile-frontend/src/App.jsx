@@ -69,6 +69,7 @@ export default function App() {
   const signatureCanvasRef = useRef(null);
   const signatureWrapRef = useRef(null);
   const drawingRef = useRef(false);
+  const [signatureModalOpen, setSignatureModalOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -228,6 +229,11 @@ export default function App() {
     resizeSignatureCanvas();
   }, [activeTab]);
 
+  useEffect(() => {
+    if (!signatureModalOpen) return;
+    resizeSignatureCanvas();
+  }, [signatureModalOpen]);
+
   const handlePointerDown = (event) => {
     event.preventDefault();
     const canvas = signatureCanvasRef.current;
@@ -295,6 +301,23 @@ export default function App() {
     setDeliveryNotes(Array.isArray(list) ? list : []);
   };
 
+  const handleSignatureAccept = () => {
+    if (!signatureData) {
+      setStatus("Bitte Unterschrift erfassen.");
+      return;
+    }
+    setSignatureModalOpen(false);
+  };
+
+  const clearDeliveryForm = () => {
+    setDeliveryCustomer("");
+    setDeliveryNote("");
+    setDeliveryTimeFrom("");
+    setDeliveryTimeTo("");
+    clearSignature();
+    setSignatureModalOpen(false);
+  };
+
   return (
     <div className="app-shell">
       <header className="header">
@@ -311,31 +334,33 @@ export default function App() {
         {status ? <div className="status-pill">{status}</div> : null}
 
         {activeTab === "quick" && (
-          <div className="card stack quick-card">
-            <div className="card-header">
-              <div className="section-title">Schnellerfassung</div>
-              <p className="hint">Eine Aufgabe pro Zeile. Fokus: schnell notieren.</p>
+          <>
+            <div className="card stack quick-card">
+              <div className="card-header">
+                <div className="section-title">Schnellerfassung</div>
+                <p className="hint">Eine Aufgabe pro Zeile. Fokus: schnell notieren.</p>
+              </div>
+              <div className="field">
+                <label>Kunde (optional)</label>
+                <input
+                  list="customer-list"
+                  value={quickCustomer}
+                  onChange={(event) => setQuickCustomer(event.target.value)}
+                  placeholder="Kunde auswaehlen (optional)"
+                />
+              </div>
+              <div className="field quick-field">
+                <label>Aufgaben</label>
+                <textarea
+                  rows={8}
+                  value={quickText}
+                  onChange={(event) => setQuickText(event.target.value)}
+                  placeholder="z.B. Backup pruefen\nRouter Neustart"
+                  ref={quickTextareaRef}
+                />
+              </div>
             </div>
-            <div className="field">
-              <label>Kunde (optional)</label>
-              <input
-                list="customer-list"
-                value={quickCustomer}
-                onChange={(event) => setQuickCustomer(event.target.value)}
-                placeholder="Kunde auswaehlen (optional)"
-              />
-            </div>
-            <div className="field quick-field">
-              <label>Aufgaben</label>
-              <textarea
-                rows={8}
-                value={quickText}
-                onChange={(event) => setQuickText(event.target.value)}
-                placeholder="z.B. Backup pruefen\nRouter Neustart"
-                ref={quickTextareaRef}
-              />
-            </div>
-            <div className="quick-actions">
+            <div className="quick-actions-fixed fixed-action-bar">
               <button className="primary-btn" type="button" onClick={addQuickTasks}>
                 Speichern
               </button>
@@ -347,7 +372,7 @@ export default function App() {
                 Leeren
               </button>
             </div>
-          </div>
+          </>
         )}
 
         {activeTab === "tasks" && (
@@ -399,87 +424,104 @@ export default function App() {
         )}
 
         {activeTab === "delivery" && (
-          <div className="card stack delivery-compact">
-            <div className="card-header">
-              <div className="section-title">Lieferschein</div>
-              <p className="hint">Kunde wählen, Notiz erfassen, unterschreiben.</p>
-            </div>
-            <div className="field">
-              <label>Kunde</label>
-              <input
-                list="customer-list"
-                value={deliveryCustomer}
-                onChange={(event) => setDeliveryCustomer(event.target.value)}
-                placeholder="Kunde auswaehlen"
-              />
-            </div>
-            <div className="field-row">
-              <div className="field">
-                <label>Arbeitszeit von</label>
-                <input
-                  type="time"
-                  value={deliveryTimeFrom}
-                  onChange={(event) => setDeliveryTimeFrom(event.target.value)}
-                />
+          <>
+            <div className="card stack delivery-compact">
+              <div className="card-header">
+                <div className="section-title">Lieferschein</div>
+                <p className="hint">Kunde wählen, Notiz erfassen, unterschreiben.</p>
               </div>
               <div className="field">
-                <label>Arbeitszeit bis</label>
+                <label>Kunde</label>
                 <input
-                  type="time"
-                  value={deliveryTimeTo}
-                  onChange={(event) => setDeliveryTimeTo(event.target.value)}
+                  list="customer-list"
+                  value={deliveryCustomer}
+                  onChange={(event) => setDeliveryCustomer(event.target.value)}
+                  placeholder="Kunde auswaehlen"
                 />
               </div>
+              <div className="field-row">
+                <div className="field">
+                  <label>Arbeitszeit von</label>
+                  <input
+                    type="time"
+                    value={deliveryTimeFrom}
+                    onChange={(event) => setDeliveryTimeFrom(event.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label>Arbeitszeit bis</label>
+                  <input
+                    type="time"
+                    value={deliveryTimeTo}
+                    onChange={(event) => setDeliveryTimeTo(event.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="field">
+                <label>Notiz</label>
+                <textarea
+                  rows={3}
+                  value={deliveryNote}
+                  onChange={(event) => setDeliveryNote(event.target.value)}
+                  placeholder="Kurzbeschreibung der Leistung"
+                />
+              </div>
+              <div className="signature-box" ref={signatureWrapRef}>
+                <canvas
+                  ref={signatureCanvasRef}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerLeave={handlePointerUp}
+                  onPointerCancel={handlePointerUp}
+                />
+              </div>
+              <div className="field signature-field">
+                <label>Unterschrift</label>
+                <div className="signature-status">
+                  <span className="signature-status__text">
+                    {signatureData ? "Unterschrift erfasst" : "Keine Unterschrift"}
+                  </span>
+                  <button
+                    className="signature-trigger"
+                    type="button"
+                    onClick={() => setSignatureModalOpen(true)}
+                  >
+                    {signatureData ? "Unterschrift ändern" : "Unterschreiben"}
+                  </button>
+                </div>
+              </div>
+              {deliveryCustomerMatch ? (
+                <div className="list scroll-area">
+                  <div className="section-title">Letzte Lieferscheine</div>
+                  {deliveryNotes.slice(0, 4).map((note) => (
+                    <div key={note.id} className="list-item">
+                      <div className="list-title">Lieferschein</div>
+                      <div className="list-sub">
+                        {note.created_at
+                          ? new Date(note.created_at).toLocaleDateString("de-DE")
+                          : ""}
+                        {note.time_from || note.time_to
+                          ? ` · ${note.time_from || "--:--"}–${note.time_to || "--:--"}`
+                          : ""}
+                      </div>
+                    </div>
+                  ))}
+                  {!deliveryNotes.length ? (
+                    <div className="hint">Keine Lieferscheine vorhanden.</div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
-            <div className="field">
-              <label>Notiz</label>
-              <textarea
-                rows={3}
-                value={deliveryNote}
-                onChange={(event) => setDeliveryNote(event.target.value)}
-                placeholder="Kurzbeschreibung der Leistung"
-              />
-            </div>
-            <div className="signature-box" ref={signatureWrapRef}>
-              <canvas
-                ref={signatureCanvasRef}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerLeave={handlePointerUp}
-                onPointerCancel={handlePointerUp}
-              />
-            </div>
-            <div className="inline delivery-actions">
-              <button className="secondary-btn" type="button" onClick={clearSignature}>
-                Leeren
-              </button>
+            <div className="delivery-actions-fixed fixed-action-bar">
               <button className="primary-btn" type="button" onClick={saveDeliveryNote}>
                 Lieferschein speichern
               </button>
+              <button className="secondary-btn" type="button" onClick={clearDeliveryForm}>
+                Leeren
+              </button>
             </div>
-            {deliveryCustomerMatch ? (
-              <div className="list scroll-area">
-                <div className="section-title">Letzte Lieferscheine</div>
-                {deliveryNotes.slice(0, 4).map((note) => (
-                  <div key={note.id} className="list-item">
-                    <div className="list-title">Lieferschein</div>
-                    <div className="list-sub">
-                      {note.created_at
-                        ? new Date(note.created_at).toLocaleDateString("de-DE")
-                        : ""}
-                      {note.time_from || note.time_to
-                        ? ` · ${note.time_from || "--:--"}–${note.time_to || "--:--"}`
-                        : ""}
-                    </div>
-                  </div>
-                ))}
-                {!deliveryNotes.length ? (
-                  <div className="hint">Keine Lieferscheine vorhanden.</div>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
+          </>
         )}
 
         {activeTab === "stats" && (
@@ -540,6 +582,43 @@ export default function App() {
             </div>
           </div>
         )}
+        {signatureModalOpen ? (
+          <div className="signature-modal">
+            <div className="signature-modal__content">
+              <div className="signature-modal__header">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Unterschrift</p>
+                  <h3 className="text-lg font-display text-sand-900">Unterschrift erfassen</h3>
+                </div>
+                <button
+                  type="button"
+                  className="signature-modal__close"
+                  onClick={() => setSignatureModalOpen(false)}
+                >
+                  Abbrechen
+                </button>
+              </div>
+              <div className="signature-box signature-modal__box" ref={signatureWrapRef}>
+                <canvas
+                  ref={signatureCanvasRef}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerLeave={handlePointerUp}
+                  onPointerCancel={handlePointerUp}
+                />
+              </div>
+              <div className="signature-modal__actions fixed-action-bar">
+                <button className="secondary-btn" type="button" onClick={clearSignature}>
+                  Wiederholen
+                </button>
+                <button className="primary-btn" type="button" onClick={handleSignatureAccept}>
+                  Übernehmen
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </main>
 
       <datalist id="customer-list">
