@@ -49,7 +49,7 @@ const TopCustomerCard = ({ title, items }) => {
 export default function StatsView() {
   const [stats, setStats] = useState(null);
   const [status, setStatus] = useState("loading");
-  const [days, setDays] = useState(30);
+  const days = 30;
 
   useEffect(() => {
     let active = true;
@@ -93,15 +93,6 @@ export default function StatsView() {
             </div>
           </div>
           <div className="flex items-center gap-3 text-xs text-sand-500">
-            <select
-              value={days}
-              onChange={(event) => setDays(Number(event.target.value))}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-sand-600"
-            >
-              <option value={7}>7 Tage</option>
-              <option value={30}>30 Tage</option>
-              <option value={90}>90 Tage</option>
-            </select>
             <span>Betriebsintern</span>
           </div>
         </div>

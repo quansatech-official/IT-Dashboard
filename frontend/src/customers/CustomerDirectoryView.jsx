@@ -9,6 +9,7 @@ import {
   FileDown,
   Mail,
   Phone,
+  PhoneOutgoing,
   Plus,
   Search,
   Trash2,
@@ -109,6 +110,12 @@ export default function CustomerDirectoryView() {
   const [settingsTab, setSettingsTab] = useState("details");
   const [pbxApiActive, setPbxApiActive] = useState(false);
   const [pbxEntries, setPbxEntries] = useState([]);
+  const [extensions, setExtensions] = useState([]);
+  const [telephonyHealthy, setTelephonyHealthy] = useState(false);
+  const [c2dTarget, setC2dTarget] = useState(null);
+  const [c2dExtension, setC2dExtension] = useState("");
+  const [c2dStatus, setC2dStatus] = useState("");
+  const [c2dBusy, setC2dBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [previewModal, setPreviewModal] = useState({
     open: false,
@@ -158,6 +165,34 @@ export default function CustomerDirectoryView() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    telephonyService.fetchExtensions().then((data) => {
+      if (!active) return;
+      setExtensions(Array.isArray(data) ? data : []);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    telephonyService.fetchHealth().then((ok) => {
+      if (!active) return;
+      setTelephonyHealthy(Boolean(ok));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!c2dExtension && extensions.length) {
+      setC2dExtension(extensions[0]?.extension_number || "");
+    }
+  }, [extensions, c2dExtension]);
+
   const normalizeDigits = (value) => String(value || "").replace(/\D/g, "");
 
   const pbxMatches = useMemo(() => {
@@ -170,6 +205,7 @@ export default function CustomerDirectoryView() {
     });
     return map;
   }, [pbxEntries]);
+  const isC2DReady = telephonyHealthy && extensions.length > 0;
 
   useEffect(() => {
     if (!toast) return;
@@ -964,6 +1000,50 @@ export default function CustomerDirectoryView() {
     }
   };
 
+  const openClickToDial = (phone) => {
+    const number = String(phone?.number || "").trim();
+    if (!number || !isC2DReady) return;
+    setC2dTarget({
+      number,
+      label: phone.label || activeCustomer?.name || ""
+    });
+    setC2dStatus("");
+    setC2dBusy(false);
+    setC2dExtension(extensions[0]?.extension_number || "");
+  };
+
+  const closeClickToDial = () => {
+    setC2dTarget(null);
+    setC2dStatus("");
+    setC2dBusy(false);
+  };
+
+  const handleStartClickToDial = async () => {
+    if (!c2dTarget) return;
+    if (!c2dExtension) {
+      setC2dStatus("Bitte Nebenstelle wählen.");
+      return;
+    }
+    setC2dBusy(true);
+    setC2dStatus("Rückruf wird gestartet...");
+    try {
+      const result = await telephonyService.clickToDial({
+        extension: c2dExtension,
+        number: c2dTarget.number
+      });
+      if (result) {
+        setC2dStatus("Rückruf gestartet.");
+        setTimeout(() => closeClickToDial(), 900);
+      } else {
+        setC2dStatus("Rückruf fehlgeschlagen.");
+      }
+    } catch (error) {
+      setC2dStatus("Rückruf fehlgeschlagen.");
+    } finally {
+      setC2dBusy(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-sand-50">
       {toast ? (
@@ -989,6 +1069,61 @@ export default function CustomerDirectoryView() {
             <div className="max-h-[70vh] overflow-y-auto p-6 bg-sand-50">
               <div className="bg-white border border-sand-200 rounded-2xl p-4">
                 <div dangerouslySetInnerHTML={{ __html: previewModal.html }} />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {c2dTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-md rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="border-b border-sand-200 px-5 py-4">
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Click to Dial</p>
+              <h3 className="text-lg font-display text-sand-900">{c2dTarget.number}</h3>
+              {c2dTarget.label ? (
+                <p className="text-[11px] text-sand-500">{c2dTarget.label}</p>
+              ) : null}
+            </div>
+            <div className="p-5 space-y-4">
+              <label className="text-xs uppercase tracking-wide text-sand-500">
+                Nebenstelle auswählen
+                <select
+                  value={c2dExtension}
+                  onChange={(event) => setC2dExtension(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                >
+                  {extensions.length ? (
+                    extensions.map((item) => (
+                      <option key={item.uuid || item.extension_number} value={item.extension_number}>
+                        {item.extension_number} {item.name ? `– ${item.name}` : ""}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">Keine Nebenstellen</option>
+                  )}
+                </select>
+              </label>
+              {c2dStatus ? <p className="text-xs text-sand-500">{c2dStatus}</p> : null}
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={closeClickToDial}
+                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartClickToDial}
+                  disabled={c2dBusy || !isC2DReady}
+                  className={`rounded-full px-4 py-2 text-xs uppercase tracking-wide ${
+                    c2dBusy || !isC2DReady
+                      ? "border border-sand-300 bg-sand-100 text-sand-400 cursor-not-allowed"
+                      : "border border-sand-900 bg-sand-900 text-white hover:opacity-90"
+                  }`}
+                >
+                  Jetzt anrufen
+                </button>
               </div>
             </div>
           </div>
@@ -1441,6 +1576,27 @@ export default function CustomerDirectoryView() {
                             <BookPlus size={12} />
                           </button>
                         )}
+                        {String(phone.number || "").trim() ? (
+                          <button
+                            type="button"
+                            onClick={() => openClickToDial(phone)}
+                            disabled={!isC2DReady}
+                            className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs ${
+                              isC2DReady
+                                ? "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                                : "border-sand-200 bg-sand-100 text-sand-400 opacity-60 cursor-not-allowed"
+                            }`}
+                            title={
+                              !telephonyHealthy
+                                ? "Telefonie-API nicht erreichbar"
+                                : !extensions.length
+                                ? "Keine Nebenstelle verfügbar"
+                                : "Click-to-dial starten"
+                            }
+                          >
+                            <PhoneOutgoing size={12} />
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => removePhone(phone.id)}

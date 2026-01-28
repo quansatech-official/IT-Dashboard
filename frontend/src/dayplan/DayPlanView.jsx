@@ -97,6 +97,7 @@ export default function DayPlanView() {
   const [openSort, setOpenSort] = useState("name");
   const [doneFilter, setDoneFilter] = useState("");
   const [billedFilter, setBilledFilter] = useState("");
+  const [showKulantDone, setShowKulantDone] = useState(false);
   const [detailOpenId, setDetailOpenId] = useState(null);
   const [detailEdits, setDetailEdits] = useState({});
   const [sevdeskDefaults, setSevdeskDefaults] = useState({
@@ -482,8 +483,22 @@ export default function DayPlanView() {
 
   const commitDetail = async (task, field) => {
     const value = getDetailValue(task, field);
-    if (value === (task?.[field] || "")) return;
-    const patch = { [field]: value };
+    const currentValue = task?.[field];
+    const isSameValue =
+      typeof currentValue === "boolean"
+        ? Boolean(value) === currentValue
+        : value === (currentValue ?? "");
+    if (isSameValue) return;
+    const patch = {};
+    if (field === "kulant") {
+      const boolValue = Boolean(value);
+      patch.kulant = boolValue;
+      if (boolValue && task.aberechnet) {
+        patch.aberechnet = false;
+      }
+    } else {
+      patch[field] = value;
+    }
     if (field === "arrival_time" || field === "departure_time") {
       const arrival = field === "arrival_time" ? value : getDetailValue(task, "arrival_time");
       const departure =
@@ -514,6 +529,7 @@ export default function DayPlanView() {
         departure_time: task.departure_time || "",
         deadline: task.deadline || "",
         randzeit: Boolean(task.randzeit),
+        kulant: Boolean(task.kulant),
         details: task.details || ""
       }
     }));
@@ -784,8 +800,9 @@ export default function DayPlanView() {
     () =>
       grouped.done
         .filter((task) => !task.aberechnet)
+        .filter((task) => showKulantDone || !task.kulant)
         .sort((a, b) => (b.created_at || 0) - (a.created_at || 0)),
-    [grouped.done]
+    [grouped.done, showKulantDone]
   );
 
   const filteredDoneTasks = useMemo(() => {
@@ -1032,7 +1049,8 @@ export default function DayPlanView() {
     const canPromote = !task.time_enabled;
     const isDone = task.status === "done";
     const customerNumber = getCustomerNumberForTask(task);
-    const canInvoice = Boolean(customerNumber);
+    const isKulant = Boolean(task.kulant);
+    const canInvoice = Boolean(customerNumber) && !isKulant;
     const isBilled = Boolean(task.aberechnet);
     const knownCustomer = isKnownCustomer(task.customer);
     const assignedEmployee = employees.find((employee) => employee.id === task.employee_id);
@@ -1093,6 +1111,11 @@ export default function DayPlanView() {
                     {task.title}
                   </button>
                 )}
+                {isKulant ? (
+                  <p className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-amber-600">
+                    Kulant
+                  </p>
+                ) : null}
                 {isDone && task.completed_at ? (
                   <p className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-sand-400">
                     Erledigt {formatDoneDate(task.completed_at)}
@@ -1205,6 +1228,8 @@ export default function DayPlanView() {
                   title={
                     !hasCustomer
                       ? "Kunde zuweisen"
+                      : isKulant
+                      ? "Kulante Aufgaben werden nicht fakturiert"
                       : !customerNumber
                       ? "Kundennummer im Kundenstamm fehlt"
                       : sevdeskTokenAvailable
@@ -1432,6 +1457,8 @@ export default function DayPlanView() {
                       className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
                     />
                   </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-4">
                   <label className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-sand-500">
                     <input
                       type="checkbox"
@@ -1444,18 +1471,31 @@ export default function DayPlanView() {
                     />
                     Randzeit
                   </label>
-                  <div className="md:col-span-3">
-                    <label className="text-[10px] uppercase tracking-wide text-sand-500">
-                      Notiz
-                    </label>
-                    <textarea
-                      value={getDetailValue(task, "details")}
-                      onChange={(event) => setDetailValue(task.id, "details", event.target.value)}
-                      onBlur={() => commitDetail(task, "details")}
-                      placeholder="Interne Notiz zur Aufgabe"
-                      className="mt-1 w-full min-h-[80px] rounded-lg border border-amber-200 bg-white px-2 py-2 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  <label className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-sand-500">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(getDetailValue(task, "kulant"))}
+                      onChange={(event) => {
+                        const nextValue = event.target.checked;
+                        setDetailValue(task.id, "kulant", nextValue);
+                        commitDetail(task, "kulant");
+                      }}
+                      className="h-4 w-4 rounded border border-amber-200 text-amber-600 focus:ring-2 focus:ring-amber-200"
                     />
-                  </div>
+                    Kulant
+                  </label>
+                </div>
+                <div>
+                  <label className="text-[10px] uppercase tracking-wide text-sand-500">
+                    Notiz
+                  </label>
+                  <textarea
+                    value={getDetailValue(task, "details")}
+                    onChange={(event) => setDetailValue(task.id, "details", event.target.value)}
+                    onBlur={() => commitDetail(task, "details")}
+                    placeholder="Interne Notiz zur Aufgabe"
+                    className="mt-1 w-full min-h-[80px] rounded-lg border border-amber-200 bg-white px-2 py-2 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  />
                 </div>
               </div>
             ) : null}
@@ -1785,7 +1825,7 @@ export default function DayPlanView() {
               <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">Erledigt</h2>
               <p className="text-xs text-sand-400 mt-1">Ziehe Aufgaben hierher</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <div className="relative w-full md:w-52">
                 <input
                   value={doneFilter}
@@ -1804,11 +1844,22 @@ export default function DayPlanView() {
                   </button>
                 ) : null}
               </div>
-              <span className="text-xs text-sand-500">
-                {doneFilter.trim()
-                  ? `${filteredDoneTasks.length} / ${doneTasks.length}`
-                  : doneTasks.length}
-              </span>
+              <div className="flex items-center gap-3 text-xs text-sand-500">
+                <span>
+                  {doneFilter.trim()
+                    ? `${filteredDoneTasks.length} / ${doneTasks.length}`
+                    : doneTasks.length}
+                </span>
+                <label className="flex items-center gap-1 text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                  <input
+                    type="checkbox"
+                    checked={showKulantDone}
+                    onChange={(event) => setShowKulantDone(event.target.checked)}
+                    className="h-3 w-3 rounded border border-sand-300 text-amber-600 focus:ring-2 focus:ring-amber-200"
+                  />
+                  Kulante anzeigen
+                </label>
+              </div>
             </div>
           </div>
           <div

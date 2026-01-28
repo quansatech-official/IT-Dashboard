@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FileDown, FileText, Flag, Plus, Save, Sparkles, Users2, PenLine } from "lucide-react";
+import { AlertTriangle, FileDown, FileText, Flag, Plus, Save, Sparkles, Users2, PenLine } from "lucide-react";
 import html2pdf from "html2pdf.js";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
@@ -412,6 +412,17 @@ export default function ReportView() {
     if (fallbackItems.length) groups.push({ label: "Vorschläge", items: fallbackItems });
     return groups;
   }, [archiveItems, customerDirectory]);
+
+  const selectedCustomer = useMemo(() => {
+    if (!customerDirectory.length) return null;
+    const targetId = report.customer_id;
+    if (targetId == null) return null;
+    return customerDirectory.find((item) => item.id === targetId) || null;
+  }, [customerDirectory, report.customer_id]);
+
+  const customerReportDisabled = Boolean(
+    selectedCustomer && selectedCustomer.customer_report === false
+  );
 
   useEffect(() => {
     if (!toast) return;
@@ -1679,21 +1690,30 @@ export default function ReportView() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <label className="text-xs uppercase tracking-wide text-sand-600">
-                  Kunde
-                  <CustomerCombobox
-                    groups={customerGroups}
-                    value={customerInput}
-                    onChange={(nextValue, meta) => {
-                      setCustomerInput(nextValue);
-                      setReport((prev) => ({
-                        ...prev,
-                        customer: nextValue,
-                        customer_id: meta?.id ?? null
-                      }));
-                    }}
-                  />
-                </label>
+              <label className="text-xs uppercase tracking-wide text-sand-600">
+                Kunde
+                <CustomerCombobox
+                  groups={customerGroups}
+                  value={customerInput}
+                  onChange={(nextValue, meta) => {
+                    setCustomerInput(nextValue);
+                    setReport((prev) => ({
+                      ...prev,
+                      customer: nextValue,
+                      customer_id: meta?.id ?? null
+                    }));
+                  }}
+                />
+                {customerReportDisabled ? (
+                  <div className="mt-3 flex items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                    <AlertTriangle size={14} className="text-amber-600" />
+                    <span>
+                      Kundenberichte sind für diesen Kunden deaktiviert.
+                      Aktiviere den Bericht im Kundenstamm, wenn du trotzdem senden willst.
+                    </span>
+                  </div>
+                ) : null}
+              </label>
                 <label className="text-xs uppercase tracking-wide text-sand-600 md:col-span-2">
                   Zeitraum (optional)
                   <input
