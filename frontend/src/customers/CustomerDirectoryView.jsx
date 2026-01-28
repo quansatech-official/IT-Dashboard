@@ -1547,7 +1547,7 @@ export default function CustomerDirectoryView() {
                     {activeCustomer.phones?.map((phone) => (
                       <div
                         key={phone.id}
-                        className="grid gap-2 md:grid-cols-[140px_minmax(0,1fr)_auto_auto] items-center"
+                        className="grid gap-2 md:grid-cols-[140px_180px_repeat(3,auto)] items-center"
                       >
                         <input
                           value={phone.label}
@@ -1559,7 +1559,7 @@ export default function CustomerDirectoryView() {
                           value={phone.number}
                           onChange={(event) => updatePhone(phone.id, { number: event.target.value })}
                           placeholder="+49 40 123456"
-                          className="rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                          className="rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300 max-w-[180px]"
                         />
                         {pbxMatches.has(normalizeDigits(phone.number)) ? null : (
                           <button

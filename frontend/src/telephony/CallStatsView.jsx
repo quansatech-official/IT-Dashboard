@@ -20,8 +20,19 @@ const formatDurationHms = (seconds) => {
 
 const normalizeNumber = (value) => String(value || "").replace(/\D/g, "");
 
+const normalizeDuration = (value) => {
+  if (value === undefined || value === null) return 0;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  if (numeric > 86400) {
+    return Math.floor(numeric / 1000);
+  }
+  return Math.floor(numeric);
+};
+
 const durationSeconds = (call) => {
-  if (call.duration) return call.duration;
+  const duration = normalizeDuration(call.duration);
+  if (duration) return duration;
   if (call.startTime && call.endTime && call.endTime >= call.startTime) {
     return Math.floor((call.endTime - call.startTime) / 1000);
   }

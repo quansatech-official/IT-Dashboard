@@ -1212,10 +1212,27 @@ def serialize_employee(e: Employee) -> Dict[str, Any]:
 
 
 def _parse_float(value: Optional[str], default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
+    if value is None:
         return default
+    text = str(value).strip()
+    if not text:
+        return default
+    normalized = text.replace(" ", "")
+    if normalized.count(",") and normalized.count("."):
+        if normalized.rfind(",") > normalized.rfind("."):
+            normalized = normalized.replace(".", "")
+        normalized = normalized.replace(",", ".")
+    elif normalized.count(",") > 1 and normalized.count(".") == 0:
+        normalized = normalized.replace(",", "")
+    elif normalized.count(",") == 1 and normalized.count(".") == 0:
+        normalized = normalized.replace(",", ".")
+    try:
+        return float(normalized)
+    except (TypeError, ValueError):
+        try:
+            return float(normalized.replace(",", "."))
+        except (TypeError, ValueError):
+            return default
 
 
 def _parse_int(value: Optional[str]) -> Optional[int]:
