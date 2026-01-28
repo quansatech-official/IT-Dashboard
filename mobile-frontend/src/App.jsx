@@ -450,7 +450,7 @@ export default function App() {
                 onPointerCancel={handlePointerUp}
               />
             </div>
-            <div className="inline">
+            <div className="inline delivery-actions">
               <button className="secondary-btn" type="button" onClick={clearSignature}>
                 Leeren
               </button>

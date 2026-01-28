@@ -66,7 +66,8 @@ button, input, textarea, select {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  overflow: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .card {
@@ -357,11 +358,24 @@ button, input, textarea, select {
   min-height: 180px;
 }
 
+.quick-card {
+  flex: 1;
+}
+
 .quick-actions {
   position: sticky;
-  bottom: 18px;
+  bottom: calc(10px + env(safe-area-inset-bottom));
   display: flex;
   gap: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.98));
+  padding: 10px 0;
+  margin-top: auto;
+  z-index: 5;
+}
+
+.delivery-actions {
+  position: sticky;
+  bottom: calc(10px + env(safe-area-inset-bottom));
   background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.98));
   padding: 10px 0;
   z-index: 5;
