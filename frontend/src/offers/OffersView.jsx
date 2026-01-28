@@ -234,6 +234,33 @@ const normalizeBlockListWithNotes = (list = []) =>
     internalNotes: normalizeBlockInternalNotes(block)
   }));
 
+const normalizeItemNotesForSave = (item = {}) => {
+  const hasLegacyNote = Boolean(item.internalNoteType || item.internalNoteText);
+  const baseNotes =
+    Array.isArray(item.internalNotes) && item.internalNotes.length
+      ? item.internalNotes
+      : hasLegacyNote
+        ? [
+            {
+              id: item.internalNoteId || uid(),
+              type: item.internalNoteType || "anmerkungen",
+              text: item.internalNoteText || ""
+            }
+          ]
+        : [];
+  const normalizedNotes = baseNotes.map((note) => ({
+    id: note.id || uid(),
+    type: note.type || "anmerkungen",
+    text: note.text || ""
+  }));
+  return {
+    ...item,
+    internalNotes: normalizedNotes,
+    internalNoteType: "",
+    internalNoteText: ""
+  };
+};
+
 const formatDate = (value) => {
   if (!value) return "";
   const date = new Date(value);
@@ -713,6 +740,8 @@ const createEmptyOffer = (index, format) => ({
 const sanitizeOffersForSave = (offers) =>
   offers.map((offer) => ({
     ...offer,
+    lineItems: (offer.lineItems || []).map((item) => normalizeItemNotesForSave(item)),
+    deviceItems: (offer.deviceItems || []).map((item) => normalizeItemNotesForSave(item)),
     attachments: (offer.attachments || []).map((item) => {
       if (item.url && item.url.startsWith("blob:")) {
         return { ...item, url: "", source: "upload" };
@@ -4324,7 +4353,8 @@ export default function OffersView() {
         unit: item.unit || "hours",
         researchHours: Number(item.researchHours || 0),
         keywords: item.keywords || [],
-        billingCycle: item.billingCycle || "once"
+        billingCycle: item.billingCycle || "once",
+        internalNotes: normalizeInternalNotes(item)
       },
       ...prev
     ]);
@@ -4342,7 +4372,8 @@ export default function OffersView() {
         description: item.description || "",
         price: Number(item.price || 0),
         quantity: normalizeQuantityInput(item.quantity, 1),
-        billingCycle: item.billingCycle || "once"
+        billingCycle: item.billingCycle || "once",
+        internalNotes: normalizeInternalNotes(item)
       },
       ...prev
     ]);

@@ -14,6 +14,12 @@ export const renderReportHTML = (report, options = {}) => {
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
+  const thirdPartyPayload = report.third_party_payload || {};
+  const thirdPartyTop = Array.isArray(thirdPartyPayload.top) ? thirdPartyPayload.top : [];
+  const thirdPartyTitle = thirdPartyPayload.title || "Sicherheitsreport";
+  const thirdPartySource = thirdPartyPayload.sourceName || "";
+  const thirdPartyText =
+    "Unsere monatliche Systemauswertung hat folgende Schwachstellen gefunden. Wir empfehlen, diese so bald wie möglich zu beheben.";
   const actionSummary = (report.actions || [])
     .map((action) => escapeHTML(action.title || ""))
     .filter(Boolean);
@@ -52,38 +58,102 @@ export const renderReportHTML = (report, options = {}) => {
     const label = escapeHTML(priority || "Priorität");
     return `<span style="display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border: 1px solid ${style.border}; background: ${style.bg}; color: ${style.text};">${label}</span>`;
   };
-  const actionBlockContent = (action) => `
-    <table style="width: 100%; border-collapse: collapse;">
-      <tr>
-        <td style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif;">
-          <table style="width: 100%; border-collapse: collapse;">
-            <tr>
-              <td style="font-weight: 600; font-size: 12px; line-height: 1.35;">${escapeHTML(
-                action.title
-              )}</td>
-              <td align="right" style="vertical-align: top;">${priorityBadge(action.priority)}</td>
-            </tr>
-          </table>
-          <div style="color: #6b665f; font-size: 12px; margin-top: 2px;">${escapeHTML(
-            action.system
+  const actionBlockContent = (action) => {
+    if (action.action_type === "security_report") {
+      const customText = String(action.custom_text || "").trim();
+      const items = Array.isArray(action.custom_data?.items) ? action.custom_data.items : [];
+      const microsoftItems = Array.isArray(action.custom_data?.microsoftItems)
+        ? action.custom_data.microsoftItems
+        : [];
+      const renderChipList = (list, title) => {
+        if (!list.length) return "";
+        return `<div style="margin-top: 10px;">
+          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">${escapeHTML(
+            title
           )}</div>
-          <div style="margin-top: 8px; font-size: 13px;">${escapeHTML(action.why_text)}</div>
-          <table style="margin-top: 10px; width: 100%; font-size: 12px;">
-            <tr>
-              <td style="padding: 6px 0;" colspan="3"><strong>Auswirkung:</strong> ${escapeHTML(
-                action.impact
-              )}</td>
-            </tr>
-            <tr>
-              <td style="padding: 6px 0;"><strong>Dauer:</strong> ${escapeHTML(action.duration)}</td>
-              <td style="padding: 6px 0;"><strong>Kosten:</strong> ${escapeHTML(action.cost)}</td>
-              <td style="padding: 6px 0;"></td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  `;
+          <div style="margin-top: 8px;">
+            ${list
+              .map((entry, index) => {
+                const name = escapeHTML(entry.name || "Programm");
+                const prio = entry.priority ? escapeHTML(entry.priority) : "Priorität n/a";
+                return `<div style="display:flex; align-items:center; justify-content:space-between; border:1px solid #e2e8f0; background:#ffffff; border-radius:12px; padding:8px 12px; margin-bottom:8px; font-size:12px; color:#334155;">
+                  <div style="display:flex; align-items:center; gap:10px;">
+                    <span style="font-size:11px; font-weight:600; color:#94a3b8;">${index + 1}.</span>
+                    <strong>${name}</strong>
+                  </div>
+                  <span style="font-size:11px; color:#64748b;">${prio}</span>
+                </div>`;
+              })
+              .join("")}
+          </div>
+        </div>`;
+      };
+      return `
+        <table style="width: 100%; border-collapse: collapse;">
+          <tr>
+            <td style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="font-weight: 600; font-size: 12px; line-height: 1.35;">${escapeHTML(
+                    action.title || "Sicherheitsreport"
+                  )}</td>
+                  <td align="right" style="vertical-align: top;">${priorityBadge("Hinweis")}</td>
+                </tr>
+              </table>
+              ${
+                customText
+                  ? `<div style="margin-top: 8px; font-size: 13px; color:#3f3a33;">${escapeHTML(
+                      customText
+                    )}</div>`
+                  : ""
+              }
+              ${
+                items.length || (action.custom_data?.includeMicrosoft && microsoftItems.length)
+                  ? `${renderChipList(items, "Top 3 Updatebedarf")}${
+                      action.custom_data?.includeMicrosoft && microsoftItems.length
+                        ? renderChipList(microsoftItems, "Top 3 Microsoft")
+                        : ""
+                    }`
+                  : `<div style="margin-top: 10px; font-size: 12px; color:#6b665f;">Keine Einträge erkannt.</div>`
+              }
+            </td>
+          </tr>
+        </table>
+      `;
+    }
+    return `
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="font-weight: 600; font-size: 12px; line-height: 1.35;">${escapeHTML(
+                  action.title
+                )}</td>
+                <td align="right" style="vertical-align: top;">${priorityBadge(action.priority)}</td>
+              </tr>
+            </table>
+            <div style="color: #6b665f; font-size: 12px; margin-top: 2px;">${escapeHTML(
+              action.system
+            )}</div>
+            <div style="margin-top: 8px; font-size: 13px;">${escapeHTML(action.why_text)}</div>
+            <table style="margin-top: 10px; width: 100%; font-size: 12px;">
+              <tr>
+                <td style="padding: 6px 0;" colspan="3"><strong>Auswirkung:</strong> ${escapeHTML(
+                  action.impact
+                )}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0;"><strong>Dauer:</strong> ${escapeHTML(action.duration)}</td>
+                <td style="padding: 6px 0;"><strong>Kosten:</strong> ${escapeHTML(action.cost)}</td>
+                <td style="padding: 6px 0;"></td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    `;
+  };
   const actionBlocks = report.actions
     .map((action) => {
       const content = actionBlockContent(action);
@@ -98,6 +168,55 @@ export const renderReportHTML = (report, options = {}) => {
       `;
     })
     .join("");
+
+  const thirdPartyBlock =
+    thirdPartyPayload && (thirdPartyTop.length || thirdPartySource)
+      ? `<tr>
+            <td style="padding: 10px 24px;">
+              <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">${escapeHTML(
+                thirdPartyTitle
+              )}</div>
+              <div style="margin-top: 10px; padding: 14px; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 14px;">
+                <div style="font-size: 12px; color: #6b665f; margin-bottom: 10px;">${escapeHTML(
+                  thirdPartyText
+                )}</div>
+                ${
+                  thirdPartyTop.length
+                    ? `<table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                      ${thirdPartyTop
+                        .map((entry) => {
+                          const name = escapeHTML(entry.name || "");
+                          const installed = escapeHTML(entry.installedVersion || "Version unbekannt");
+                          const latest = entry.latestVersion
+                            ? ` → ${escapeHTML(entry.latestVersion)}`
+                            : "";
+                          const severity = entry.severity ? escapeHTML(entry.severity) : "";
+                          const cveCount = entry.cveCount ? `${entry.cveCount} CVE` : "";
+                          return `<tr>
+                            <td style="padding: 6px 0;">
+                              <strong>${name}</strong><br/>
+                              <span style="color:#6b665f;">${installed}${latest}</span>
+                            </td>
+                            <td align="right" style="padding: 6px 0; color:#6b665f; white-space: nowrap;">
+                              ${[severity, cveCount].filter(Boolean).join(" · ")}
+                            </td>
+                          </tr>`;
+                        })
+                        .join("")}
+                    </table>`
+                    : `<div style="font-size: 12px; color: #6b665f;">Keine Update-Kandidaten erkannt.</div>`
+                }
+                ${
+                  thirdPartySource
+                    ? `<div style="margin-top: 8px; font-size: 11px; color: #8b8073;">Quelle: ${escapeHTML(
+                        thirdPartySource
+                      )}</div>`
+                    : ""
+                }
+              </div>
+            </td>
+          </tr>`
+      : "";
 
   const containerStyle = isEmail
     ? "width: 640px; max-width: 100%;"
@@ -165,6 +284,7 @@ export const renderReportHTML = (report, options = {}) => {
             </tr>`
                 : ""
             }
+            ${thirdPartyBlock}
             <tr>
               <td style="padding: 16px 24px 6px;">
                 <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">Maßnahmen</div>
@@ -215,6 +335,8 @@ export const buildPlainText = (report) => {
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
+  const thirdPartyPayload = report.third_party_payload || {};
+  const thirdPartyTop = Array.isArray(thirdPartyPayload.top) ? thirdPartyPayload.top : [];
   const introText =
     "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste mit Handlungsbedarf.";
   const lines = [
@@ -233,9 +355,59 @@ export const buildPlainText = (report) => {
     lines.push("Was wir vom Kunden benötigen:", customerAction, "");
   }
 
+  if (thirdPartyPayload && (thirdPartyTop.length || thirdPartyPayload.sourceName)) {
+    lines.push(thirdPartyPayload.title || "Sicherheitsreport");
+    lines.push(
+      "Unsere monatliche Systemauswertung hat folgende Schwachstellen gefunden. Wir empfehlen, diese so bald wie möglich zu beheben."
+    );
+    if (thirdPartyTop.length) {
+      thirdPartyTop.forEach((entry) => {
+        const name = entry.name || "Programm";
+        const installed = entry.installedVersion || "Version unbekannt";
+        const latest = entry.latestVersion ? ` -> ${entry.latestVersion}` : "";
+        const severity = entry.severity ? ` | ${entry.severity}` : "";
+        const cves = entry.cveCount ? ` | ${entry.cveCount} CVE` : "";
+        lines.push(`- ${name}: ${installed}${latest}${severity}${cves}`);
+      });
+    } else {
+      lines.push("Keine Update-Kandidaten erkannt.");
+    }
+    if (thirdPartyPayload.sourceName) {
+      lines.push(`Quelle: ${thirdPartyPayload.sourceName}`);
+    }
+    lines.push("");
+  }
+
   lines.push("Maßnahmen:");
 
   report.actions.forEach((action, idx) => {
+    if (action.action_type === "security_report") {
+      const items = Array.isArray(action.custom_data?.items) ? action.custom_data.items : [];
+      const microsoftItems = Array.isArray(action.custom_data?.microsoftItems)
+        ? action.custom_data.microsoftItems
+        : [];
+      lines.push(
+        "",
+        `${idx + 1}. ${action.title || "Sicherheitsreport"}`
+      );
+      if (action.custom_text) {
+        lines.push(action.custom_text);
+      }
+      if (items.length) {
+        items.forEach((item) => {
+          const name = item.name || "Programm";
+          lines.push(`- ${name}`);
+        });
+      }
+      if (action.custom_data?.includeMicrosoft && microsoftItems.length) {
+        lines.push("Top 3 Microsoft:");
+        microsoftItems.forEach((item) => {
+          const name = item.name || "Programm";
+          lines.push(`- ${name}`);
+        });
+      }
+      return;
+    }
     lines.push(
       "",
       `${idx + 1}. ${action.title} (${action.system}, ${action.priority})`,

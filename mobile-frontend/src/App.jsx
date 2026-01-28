@@ -63,6 +63,8 @@ export default function App() {
 
   const [deliveryCustomer, setDeliveryCustomer] = useState("");
   const [deliveryNote, setDeliveryNote] = useState("");
+  const [deliveryTimeFrom, setDeliveryTimeFrom] = useState("");
+  const [deliveryTimeTo, setDeliveryTimeTo] = useState("");
   const [signatureData, setSignatureData] = useState("");
   const signatureCanvasRef = useRef(null);
   const signatureWrapRef = useRef(null);
@@ -280,9 +282,13 @@ export default function App() {
     await api.createDeliveryNote({
       customer_id: deliveryCustomerMatch.id,
       note: deliveryNote,
-      signature_base64: signatureData
+      signature_base64: signatureData,
+      time_from: deliveryTimeFrom,
+      time_to: deliveryTimeTo
     });
     setDeliveryNote("");
+    setDeliveryTimeFrom("");
+    setDeliveryTimeTo("");
     clearSignature();
     setStatus("Lieferschein gespeichert.");
     const list = await api.deliveryNotes(deliveryCustomerMatch.id);
@@ -393,7 +399,7 @@ export default function App() {
         )}
 
         {activeTab === "delivery" && (
-          <div className="card stack">
+          <div className="card stack delivery-compact">
             <div className="card-header">
               <div className="section-title">Lieferschein</div>
               <p className="hint">Kunde wählen, Notiz erfassen, unterschreiben.</p>
@@ -407,10 +413,28 @@ export default function App() {
                 placeholder="Kunde auswaehlen"
               />
             </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Arbeitszeit von</label>
+                <input
+                  type="time"
+                  value={deliveryTimeFrom}
+                  onChange={(event) => setDeliveryTimeFrom(event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Arbeitszeit bis</label>
+                <input
+                  type="time"
+                  value={deliveryTimeTo}
+                  onChange={(event) => setDeliveryTimeTo(event.target.value)}
+                />
+              </div>
+            </div>
             <div className="field">
               <label>Notiz</label>
               <textarea
-                rows={4}
+                rows={3}
                 value={deliveryNote}
                 onChange={(event) => setDeliveryNote(event.target.value)}
                 placeholder="Kurzbeschreibung der Leistung"
@@ -444,6 +468,9 @@ export default function App() {
                       {note.created_at
                         ? new Date(note.created_at).toLocaleDateString("de-DE")
                         : ""}
+                      {note.time_from || note.time_to
+                        ? ` · ${note.time_from || "--:--"}–${note.time_to || "--:--"}`
+                        : ""}
                     </div>
                   </div>
                 ))}
@@ -459,7 +486,7 @@ export default function App() {
           <div className="card stack">
             <div className="card-header">
               <div className="section-title">Statistik</div>
-              <p className="hint">Kompakt fuer unterwegs.</p>
+              <p className="hint">Ueberblick der wichtigsten Kennzahlen.</p>
             </div>
             <div className="stat-grid">
               <div className="stat-tile">
@@ -471,9 +498,25 @@ export default function App() {
                 <div className="stat-value">{stats?.dayTasks?.doneToday ?? 0}</div>
               </div>
               <div className="stat-tile">
+                <div className="stat-label">Erledigt Woche</div>
+                <div className="stat-value">{stats?.dayTasks?.doneWeek ?? 0}</div>
+              </div>
+              <div className="stat-tile">
+                <div className="stat-label">Zeit heute</div>
+                <div className="stat-value">
+                  {Number(stats?.timeTracking?.doneTodayHours ?? 0).toFixed(1)} h
+                </div>
+              </div>
+              <div className="stat-tile">
                 <div className="stat-label">Zeit Woche</div>
                 <div className="stat-value">
                   {Number(stats?.timeTracking?.doneWeekHours ?? 0).toFixed(1)} h
+                </div>
+              </div>
+              <div className="stat-tile">
+                <div className="stat-label">Umsatz heute</div>
+                <div className="stat-value">
+                  € {Number(stats?.revenueEstimateTodayEur ?? 0).toFixed(0)}
                 </div>
               </div>
               <div className="stat-tile">
@@ -488,9 +531,7 @@ export default function App() {
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Faellig</div>
-                <div className="stat-value">
-                  € {Number(stats?.sevdesk?.due?.sumEur ?? 0).toFixed(0)}
-                </div>
+                <div className="stat-value">{stats?.sevdesk?.due?.count ?? 0}</div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Verpasst</div>

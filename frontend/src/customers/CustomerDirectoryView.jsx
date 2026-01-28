@@ -1308,7 +1308,7 @@ export default function CustomerDirectoryView() {
 
                 <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Vermerke</p>
+                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kommunikation</p>
                     {!activeCustomer.customerReport ? (
                       <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600">
                         Kundenbericht deaktiviert

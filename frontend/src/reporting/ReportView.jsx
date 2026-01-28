@@ -185,7 +185,8 @@ const defaultReport = {
   status: "Gelb",
   summary: "",
   customer_action_text: "",
-  actions: []
+  actions: [],
+  third_party_payload: null
 };
 
 const ensureCatalogIds = (items) =>
@@ -275,6 +276,10 @@ const parseActionFromText = (rawText) => {
 
   return fields;
 };
+
+const THIRD_PARTY_BLOCK_TITLE = "Sicherheitsreport";
+const SECURITY_REPORT_PICK = "security_report";
+
 
 const buildSentInfo = ({ sentAt, sentVia, openedAt, openedCount }) => {
   if (!sentAt) return "Nicht gesendet";
@@ -869,6 +874,7 @@ export default function ReportView() {
         ...prev.actions,
         {
           id: uid(),
+          action_type: "standard",
           priority: "Planbar",
           title: "Neue Maßnahme",
           system: "",
@@ -876,6 +882,9 @@ export default function ReportView() {
           impact: "Keine Unterbrechung",
           duration: "",
           cost: "",
+          custom_html: "",
+          custom_text: "",
+          custom_data: null,
           ...payload
         }
       ]
@@ -884,6 +893,18 @@ export default function ReportView() {
 
   const addFromCatalog = () => {
     const pick = catalogPick || normalizeId(catalogItems[0]?.id ?? "");
+    if (pick === SECURITY_REPORT_PICK) {
+      addAction({
+        action_type: "security_report",
+        title: THIRD_PARTY_BLOCK_TITLE,
+        priority: "Hinweis",
+        custom_text:
+          "Unsere monatliche Systemauswertung hat unter anderem folgende Schwachstellen gefunden. Wir empfehlen, diese so bald wie möglich zu beheben.",
+        custom_html: "",
+        custom_data: { includeMicrosoft: false, rawItems: [], items: [] }
+      });
+      return;
+    }
     const item = catalogItems.find((entry) => normalizeId(entry.id) === pick);
     if (item) {
       const { id, ...payload } = item;
@@ -968,6 +989,10 @@ export default function ReportView() {
   };
 
   const addActionToCatalog = async (action) => {
+    if (action?.action_type === "security_report") {
+      setToast("Sicherheitsreport kann nicht als Baustein gespeichert werden.");
+      return;
+    }
     if (!action?.title?.trim()) {
       setToast("Titel fehlt.");
       return;
@@ -1046,6 +1071,7 @@ export default function ReportView() {
       status: report.status,
       summary: report.summary,
       customer_action_text: report.customer_action_text,
+      third_party_payload: report.third_party_payload || null,
       items: report.actions
     };
     if (editReportId) {
@@ -1150,7 +1176,8 @@ export default function ReportView() {
     status: data.status || "Gelb",
     summary: data.summary,
     customer_action_text: data.customer_action_text,
-    actions: data.items || []
+    actions: data.items || [],
+    third_party_payload: data.third_party_payload || null
   });
 
   const updateArchiveStatus = async (item, status) => {
@@ -1799,6 +1826,9 @@ export default function ReportView() {
                     onChange={(event) => setCatalogPick(event.target.value)}
                     className="rounded-full border border-sand-200 px-4 py-2 text-sm bg-white"
                   >
+                    <option value={SECURITY_REPORT_PICK}>
+                      Sicherheitsreport (HTML + Text)
+                    </option>
                     {Object.entries(
                       catalogItems.reduce((groups, item) => {
                         const key = (item.group || item.system || "Allgemein").trim() || "Allgemein";

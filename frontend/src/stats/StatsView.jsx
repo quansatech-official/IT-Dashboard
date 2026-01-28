@@ -194,6 +194,31 @@ export default function StatsView() {
                       value={stats.sevdesk?.due?.count ?? 0}
                       subtitle={`Summe ${formatEur(stats.sevdesk?.due?.sumEur ?? 0)}`}
                     />
+                    <StatCard
+                      title="Überfällige Rechnungen"
+                      value={stats.sevdesk?.overdue?.count ?? 0}
+                      subtitle={`Summe ${formatEur(stats.sevdesk?.overdue?.sumEur ?? 0)}`}
+                    />
+                    <StatCard
+                      title="Umsatz laufendes Jahr (bezahlt)"
+                      value={formatEur(stats.sevdesk?.paidCurrentYear?.sumEur ?? 0)}
+                      subtitle={`Rechnungen ${stats.sevdesk?.paidCurrentYear?.count ?? 0}`}
+                    />
+                    <StatCard
+                      title="Bezahlt (Monat)"
+                      value={formatEur(stats.sevdesk?.paidCurrentMonth?.sumEur ?? 0)}
+                      subtitle={`Rechnungen ${stats.sevdesk?.paidCurrentMonth?.count ?? 0}`}
+                    />
+                    <StatCard
+                      title="Bezahlt gesamt"
+                      value={formatEur(stats.sevdesk?.paid?.sumEur ?? 0)}
+                      subtitle={`Rechnungen ${stats.sevdesk?.paid?.count ?? 0}`}
+                    />
+                    <StatCard
+                      title="Ø Rechnungswert (bezahlt)"
+                      value={formatEur(stats.sevdesk?.paidAverage?.sumEur ?? 0)}
+                      subtitle="Ø aller bezahlten Rechnungen"
+                    />
                   </div>
                   <div className="mt-4 grid gap-3 lg:grid-cols-2">
                     <TopCustomerCard

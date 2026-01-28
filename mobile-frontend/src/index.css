@@ -62,7 +62,7 @@ button, input, textarea, select {
 
 .main {
   flex: 1;
-  padding: 14px 16px 20px;
+  padding: 14px 16px calc(110px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -99,6 +99,16 @@ button, input, textarea, select {
   flex-direction: column;
   gap: 6px;
   margin-bottom: 12px;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.delivery-compact .field {
+  margin-bottom: 8px;
 }
 
 .field label {
@@ -397,7 +407,7 @@ button, input, textarea, select {
 
 .signature-box canvas {
   width: 100%;
-  height: auto;
+  height: 120px;
   touch-action: none;
 }
 

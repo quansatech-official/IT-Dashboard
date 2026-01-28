@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List, Tuple
 from sqlalchemy import (
-    create_engine, Column, Integer, String,
+    create_engine, Column, Integer, String, Text,
     Boolean, BigInteger, ForeignKey, inspect, text, func, or_
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -52,6 +52,8 @@ class Customer(Base):
     short_code = Column(String, default="")
     email = Column(String, default="")
     time_tracking_enabled = Column(Boolean, default=False)
+    customer_report = Column(Boolean, default=True)
+    newsletter = Column(Boolean, default=True)
     street = Column(String, default="")
     postal_code = Column(String, default="")
     city = Column(String, default="")
@@ -132,6 +134,8 @@ class DeliveryNote(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     note = Column(String, default="")
     signature_base64 = Column(String, default="")
+    time_from = Column(String, default="")
+    time_to = Column(String, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
     customer = relationship("Customer")
@@ -202,6 +206,7 @@ class Report(Base):
     status = Column(String, default="")
     summary = Column(String, default="")
     customer_action_text = Column(String, default="")
+    third_party_payload = Column(String, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     sent_at = Column(BigInteger, default=0)
     sent_via = Column(String, default="")
@@ -230,6 +235,10 @@ class ReportItem(Base):
     impact = Column(String, default="")
     duration = Column(String, default="")
     cost = Column(String, default="")
+    action_type = Column(String, default="standard")
+    custom_html = Column(Text, default="")
+    custom_text = Column(Text, default="")
+    custom_data = Column(Text, default="")
 
     report = relationship("Report", back_populates="items")
 
@@ -566,6 +575,30 @@ def _ensure_report_catalog_group_column() -> None:
 _ensure_report_catalog_group_column()
 
 
+def _ensure_report_item_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("report_items"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("report_items")}
+    statements = []
+    if "action_type" not in columns:
+        statements.append("ALTER TABLE report_items ADD COLUMN action_type VARCHAR DEFAULT 'standard'")
+    if "custom_html" not in columns:
+        statements.append("ALTER TABLE report_items ADD COLUMN custom_html TEXT DEFAULT ''")
+    if "custom_text" not in columns:
+        statements.append("ALTER TABLE report_items ADD COLUMN custom_text TEXT DEFAULT ''")
+    if "custom_data" not in columns:
+        statements.append("ALTER TABLE report_items ADD COLUMN custom_data TEXT DEFAULT ''")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_report_item_columns()
+
+
 def _ensure_smtp_settings_columns() -> None:
     inspector = inspect(engine)
     if not inspector.has_table("smtp_settings"):
@@ -600,6 +633,10 @@ def _ensure_customer_columns() -> None:
         statements.append("ALTER TABLE customers ADD COLUMN email VARCHAR DEFAULT ''")
     if "time_tracking_enabled" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN time_tracking_enabled BOOLEAN DEFAULT FALSE")
+    if "customer_report" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN customer_report BOOLEAN DEFAULT TRUE")
+    if "newsletter" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN newsletter BOOLEAN DEFAULT TRUE")
     if "street" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN street VARCHAR DEFAULT ''")
     if "postal_code" not in columns:
@@ -619,9 +656,55 @@ def _ensure_customer_columns() -> None:
                     "AND id IN (SELECT DISTINCT customer_id FROM tasks)"
                 )
             )
+        if "customer_report" in columns:
+            connection.execute(
+                text("UPDATE customers SET customer_report = TRUE WHERE customer_report IS NULL")
+            )
+        if "newsletter" in columns:
+            connection.execute(
+                text("UPDATE customers SET newsletter = TRUE WHERE newsletter IS NULL")
+            )
 
 
 _ensure_customer_columns()
+
+
+def _ensure_delivery_note_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("delivery_notes"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("delivery_notes")}
+    statements = []
+    if "time_from" not in columns:
+        statements.append("ALTER TABLE delivery_notes ADD COLUMN time_from VARCHAR DEFAULT ''")
+    if "time_to" not in columns:
+        statements.append("ALTER TABLE delivery_notes ADD COLUMN time_to VARCHAR DEFAULT ''")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_delivery_note_columns()
+
+
+def _ensure_report_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("reports"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("reports")}
+    statements = []
+    if "third_party_payload" not in columns:
+        statements.append("ALTER TABLE reports ADD COLUMN third_party_payload VARCHAR DEFAULT ''")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_report_columns()
 
 
 def _ensure_day_tasks_columns() -> None:
@@ -706,6 +789,8 @@ class CustomerCreate(BaseModel):
     short_code: Optional[str] = ""
     email: Optional[str] = ""
     time_tracking_enabled: Optional[bool] = None
+    customer_report: Optional[bool] = None
+    newsletter: Optional[bool] = None
     street: Optional[str] = ""
     postal_code: Optional[str] = ""
     city: Optional[str] = ""
@@ -719,6 +804,8 @@ class CustomerUpdate(BaseModel):
     short_code: Optional[str] = None
     email: Optional[str] = None
     time_tracking_enabled: Optional[bool] = None
+    customer_report: Optional[bool] = None
+    newsletter: Optional[bool] = None
     street: Optional[str] = None
     postal_code: Optional[str] = None
     city: Optional[str] = None
@@ -779,6 +866,8 @@ class DeliveryNoteCreate(BaseModel):
     customer_id: int
     note: Optional[str] = ""
     signature_base64: Optional[str] = ""
+    time_from: Optional[str] = ""
+    time_to: Optional[str] = ""
 
 
 class EmployeeCreate(BaseModel):
@@ -862,6 +951,10 @@ class ReportItemSchema(BaseModel):
     impact: Optional[str] = ""
     duration: Optional[str] = ""
     cost: Optional[str] = ""
+    action_type: Optional[str] = "standard"
+    custom_html: Optional[str] = ""
+    custom_text: Optional[str] = ""
+    custom_data: Optional[Dict[str, Any]] = None
 
 class ReportCreate(BaseModel):
     customer: str
@@ -871,6 +964,7 @@ class ReportCreate(BaseModel):
     summary: Optional[str] = ""
     customer_action_text: Optional[str] = ""
     customer_status: Optional[str] = ""
+    third_party_payload: Optional[Dict[str, Any]] = None
     items: List[ReportItemSchema] = []
 
 
@@ -888,6 +982,7 @@ class ReportEdit(BaseModel):
     summary: Optional[str] = None
     customer_action_text: Optional[str] = None
     customer_status: Optional[str] = None
+    third_party_payload: Optional[Dict[str, Any]] = None
     items: Optional[List[ReportItemSchema]] = None
 
 class IntegrationSettingsUpdate(BaseModel):
@@ -1385,6 +1480,37 @@ def _invoice_is_due(invoice: Dict[str, Any], today: datetime) -> bool:
     return True
 
 
+def _invoice_is_paid(invoice: Dict[str, Any]) -> bool:
+    status = _parse_int(invoice.get("status"))
+    if status in (100, 400):
+        return False
+    amount = _parse_sevdesk_amount(invoice)
+    paid = _parse_float(invoice.get("sumPaid"), default=0.0)
+    if amount > 0 and paid >= amount:
+        return True
+    if invoice.get("paidDate") or invoice.get("paid"):
+        return True
+    if status == 300:
+        return True
+    return False
+
+
+def _invoice_paid_amount(invoice: Dict[str, Any]) -> float:
+    amount = _parse_sevdesk_amount(invoice)
+    paid = _parse_float(invoice.get("sumPaid"), default=0.0)
+    if paid > 0:
+        if amount > 0:
+            return min(paid, amount)
+        return paid
+    return amount
+
+
+def _invoice_date_for_paid(invoice: Dict[str, Any]) -> Optional[datetime]:
+    return _parse_sevdesk_date(invoice.get("paidDate")) or _parse_sevdesk_date(
+        invoice.get("invoiceDate")
+    )
+
+
 def _top_customers_for_period(
     invoices: List[Dict[str, Any]],
     start_dt: datetime,
@@ -1449,6 +1575,44 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
     start_last_year = datetime(now_dt.year - 1, 1, 1)
     end_last_year = datetime(now_dt.year - 1, 12, 31, 23, 59, 59)
 
+    paid_invoices = [item for item in all_invoices if _invoice_is_paid(item)]
+    paid_sum_total = round(sum(_invoice_paid_amount(item) for item in paid_invoices), 2)
+
+    paid_current_year = []
+    paid_current_month = []
+    for item in paid_invoices:
+        paid_date = _invoice_date_for_paid(item)
+        if not paid_date:
+            continue
+        if paid_date >= start_current_year and paid_date <= now_dt:
+            paid_current_year.append(item)
+        if paid_date >= start_month and paid_date <= now_dt:
+            paid_current_month.append(item)
+
+    paid_year_sum = round(sum(_invoice_paid_amount(item) for item in paid_current_year), 2)
+    paid_month_sum = round(sum(_invoice_paid_amount(item) for item in paid_current_month), 2)
+
+    overdue_invoices: List[Dict[str, Any]] = []
+    for item in all_invoices:
+        if _invoice_is_paid(item):
+            continue
+        status = _parse_int(item.get("status"))
+        if status == 100 or status == 400:
+            continue
+        due_date = _parse_sevdesk_date(
+            item.get("dueDate")
+            or item.get("paymentDeadline")
+            or item.get("paymentDeadlineDate")
+        )
+        if status == 300 and due_date is None:
+            overdue_invoices.append(item)
+            continue
+        if due_date and due_date.date() < now_dt.date():
+            overdue_invoices.append(item)
+
+    overdue_sum = round(sum(_parse_sevdesk_amount(item) for item in overdue_invoices), 2)
+    paid_avg = round(paid_sum_total / len(paid_invoices), 2) if paid_invoices else 0.0
+
     top_customers = {
         "thisMonth": _top_customers_for_period(all_invoices, start_month, now_dt),
         "halfYear": _top_customers_for_period(all_invoices, start_half_year, now_dt),
@@ -1482,6 +1646,11 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
         "connected": True,
         "drafts": {"count": len(drafts), "sumEur": draft_sum},
         "due": {"count": len(due_invoices), "sumEur": due_sum},
+        "paid": {"count": len(paid_invoices), "sumEur": paid_sum_total},
+        "paidCurrentYear": {"count": len(paid_current_year), "sumEur": paid_year_sum},
+        "paidCurrentMonth": {"count": len(paid_current_month), "sumEur": paid_month_sum},
+        "paidAverage": {"sumEur": paid_avg},
+        "overdue": {"count": len(overdue_invoices), "sumEur": overdue_sum},
         "topCustomers": top_customers,
     }
 
@@ -1525,6 +1694,8 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
         "short_code": c.short_code,
         "email": c.email,
         "time_tracking_enabled": c.time_tracking_enabled,
+        "customer_report": c.customer_report,
+        "newsletter": c.newsletter,
         "street": c.street,
         "postal_code": c.postal_code,
         "city": c.city,
@@ -1547,6 +1718,8 @@ def serialize_delivery_note(note: DeliveryNote) -> Dict[str, Any]:
         "customer_id": note.customer_id,
         "note": note.note,
         "signature_base64": note.signature_base64,
+        "time_from": note.time_from,
+        "time_to": note.time_to,
         "created_at": note.created_at,
     }
 
@@ -1712,6 +1885,15 @@ def serialize_report_summary(item: ReportSummarySuggestion) -> Dict[str, Any]:
     }
 
 def serialize_report_item(item: ReportItem) -> Dict[str, Any]:
+    custom_data = {}
+    raw_data = (item.custom_data or "").strip()
+    if raw_data:
+        try:
+            parsed = json.loads(raw_data)
+            if isinstance(parsed, dict):
+                custom_data = parsed
+        except ValueError:
+            custom_data = {}
     return {
         "id": item.id,
         "priority": item.priority,
@@ -1721,9 +1903,22 @@ def serialize_report_item(item: ReportItem) -> Dict[str, Any]:
         "impact": item.impact,
         "duration": item.duration,
         "cost": item.cost,
+        "action_type": item.action_type,
+        "custom_html": item.custom_html,
+        "custom_text": item.custom_text,
+        "custom_data": custom_data,
     }
 
 def serialize_report(report: Report) -> Dict[str, Any]:
+    third_party_payload = {}
+    raw_payload = (report.third_party_payload or "").strip()
+    if raw_payload:
+        try:
+            parsed = json.loads(raw_payload)
+            if isinstance(parsed, dict):
+                third_party_payload = parsed
+        except ValueError:
+            third_party_payload = {}
     return {
         "id": report.id,
         "guid": report.guid,
@@ -1733,6 +1928,7 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "status": report.status,
         "summary": report.summary,
         "customer_action_text": report.customer_action_text,
+        "third_party_payload": third_party_payload,
         "customer_status": report.customer_status,
         "created_at": report.created_at,
         "sent_at": report.sent_at,
@@ -2423,6 +2619,8 @@ def create_customer(data: CustomerCreate):
             short_code=data.short_code or "",
             email=data.email or "",
             time_tracking_enabled=bool(data.time_tracking_enabled),
+            customer_report=True if data.customer_report is None else bool(data.customer_report),
+            newsletter=True if data.newsletter is None else bool(data.newsletter),
             street=data.street or "",
             postal_code=data.postal_code or "",
             city=data.city or "",
@@ -2649,6 +2847,8 @@ def create_delivery_note(data: DeliveryNoteCreate):
             customer_id=data.customer_id,
             note=(data.note or "").strip(),
             signature_base64=(data.signature_base64 or "").strip(),
+            time_from=(data.time_from or "").strip(),
+            time_to=(data.time_to or "").strip(),
         )
         db.add(note)
         db.commit()
@@ -3881,6 +4081,9 @@ def create_report(data: ReportCreate):
                 .first()
             )
             customer_id = customer.id if customer else None
+        third_party_payload = ""
+        if isinstance(data.third_party_payload, dict) and data.third_party_payload:
+            third_party_payload = json.dumps(data.third_party_payload)
         report = Report(
             guid=str(uuid.uuid4()),
             customer=data.customer,
@@ -3890,11 +4093,15 @@ def create_report(data: ReportCreate):
             summary=data.summary or "",
             customer_action_text=data.customer_action_text or "",
             customer_status=data.customer_status or "",
+            third_party_payload=third_party_payload,
         )
         db.add(report)
         db.flush()
 
         for item in data.items:
+            custom_data = ""
+            if isinstance(item.custom_data, dict) and item.custom_data:
+                custom_data = json.dumps(item.custom_data)
             report_item = ReportItem(
                 report_id=report.id,
                 priority=item.priority or "Planbar",
@@ -3904,6 +4111,10 @@ def create_report(data: ReportCreate):
                 impact=item.impact or "",
                 duration=item.duration or "",
                 cost=item.cost or "",
+                action_type=item.action_type or "standard",
+                custom_html=item.custom_html or "",
+                custom_text=item.custom_text or "",
+                custom_data=custom_data,
             )
             db.add(report_item)
 
@@ -4543,9 +4754,14 @@ def edit_report(report_id: int, data: ReportEdit):
         report = db.query(Report).get(report_id)
         if not report:
             raise HTTPException(404, "Report not found")
-        payload = data.dict(exclude_unset=True, exclude={"items", "customer_id"})
+        payload = data.dict(exclude_unset=True, exclude={"items", "customer_id", "third_party_payload"})
         for field, value in payload.items():
             setattr(report, field, value if value is not None else "")
+        if data.third_party_payload is not None:
+            if isinstance(data.third_party_payload, dict) and data.third_party_payload:
+                report.third_party_payload = json.dumps(data.third_party_payload)
+            else:
+                report.third_party_payload = ""
         if data.customer_id is not None:
             report.customer_id = data.customer_id
         elif data.customer:
@@ -4559,6 +4775,9 @@ def edit_report(report_id: int, data: ReportEdit):
         if data.items is not None:
             report.items.clear()
             for item in data.items:
+                custom_data = ""
+                if isinstance(item.custom_data, dict) and item.custom_data:
+                    custom_data = json.dumps(item.custom_data)
                 report_item = ReportItem(
                     report_id=report.id,
                     priority=item.priority or "Planbar",
@@ -4568,6 +4787,10 @@ def edit_report(report_id: int, data: ReportEdit):
                     impact=item.impact or "",
                     duration=item.duration or "",
                     cost=item.cost or "",
+                    action_type=item.action_type or "standard",
+                    custom_html=item.custom_html or "",
+                    custom_text=item.custom_text or "",
+                    custom_data=custom_data,
                 )
                 report.items.append(report_item)
         db.commit()

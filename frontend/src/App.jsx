@@ -80,14 +80,14 @@ export default function App() {
               Kundenorientierung
             </p>
             <button
-              onClick={() => setActiveView("report")}
+              onClick={() => setActiveView("customers")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "report"
+                activeView === "customers"
                   ? "bg-sand-900 text-white border-sand-900"
                   : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
               } flex items-center gap-3`}
             >
-              <FileText size={18} /> Kundenbericht
+              <Users size={18} /> Kundenstamm
             </button>
             <button
               onClick={() => setActiveView("offers")}
@@ -100,14 +100,14 @@ export default function App() {
               <Receipt size={18} /> Angebote
             </button>
             <button
-              onClick={() => setActiveView("customers")}
+              onClick={() => setActiveView("report")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "customers"
+                activeView === "report"
                   ? "bg-sand-900 text-white border-sand-900"
                   : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
               } flex items-center gap-3`}
             >
-              <Users size={18} /> Kundenstamm
+              <FileText size={18} /> Kundenbericht
             </button>
             <TelephonyMenu
               active={activeView === "telephony"}
