@@ -2605,6 +2605,7 @@ export default function OffersView() {
   const [exportMode, setExportMode] = useState("offer");
   const [emailExportOfferId, setEmailExportOfferId] = useState("");
   const [emailExportMode, setEmailExportMode] = useState("offer");
+  const [emailExportReadyTick, setEmailExportReadyTick] = useState(0);
   const [sendTo, setSendTo] = useState("");
   const [sendSubject, setSendSubject] = useState("");
   const [sendStatus, setSendStatus] = useState("idle");
@@ -3238,11 +3239,19 @@ export default function OffersView() {
   useEffect(() => {
     if (!emailExportOfferId) return;
     const offer = offers.find((item) => item.id === emailExportOfferId);
-    if (!offer || !emailPdfRef.current) return;
+    if (!offer || !emailPdfRef.current) {
+      const timer = setTimeout(() => {
+        setEmailExportReadyTick((tick) => tick + 1);
+      }, 50);
+      return () => clearTimeout(timer);
+    }
     const element = emailPdfRef.current;
     const handlers = emailExportPromiseRef.current;
     const run = async () => {
       try {
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve))
+        );
         const options = {
           margin: [8, 0, 8, 0],
           image: { type: "jpeg", quality: 0.98 },
@@ -3256,7 +3265,13 @@ export default function OffersView() {
           .toPdf()
           .get("pdf")
           .then((pdf) => pdf.output("arraybuffer"));
-        const blob = new Blob([buffer], { type: "application/pdf" });
+        let blob = new Blob([buffer], { type: "application/pdf" });
+        if (blob.size < 4000) {
+          const fallbackBlob = await buildPdfBlobFromElement(element);
+          if (fallbackBlob?.size > blob.size) {
+            blob = fallbackBlob;
+          }
+        }
         handlers?.resolve?.(blob);
       } catch (error) {
         try {
@@ -3272,7 +3287,7 @@ export default function OffersView() {
       }
     };
     run();
-  }, [emailExportOfferId, offers, emailExportMode]);
+  }, [emailExportOfferId, offers, emailExportMode, emailExportReadyTick]);
 
   useEffect(() => {
     let active = true;
