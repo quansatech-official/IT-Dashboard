@@ -3714,7 +3714,33 @@ export default function OffersView() {
       [key]: !prev[key]
     }));
 
+  const isOfferDraftEmpty = (offer) => {
+    if (!offer || offer.serverId) return false;
+    const hasMeta =
+      String(offer.customer || "").trim() ||
+      String(offer.recipientName || "").trim() ||
+      String(offer.recipientCompany || "").trim() ||
+      String(offer.recipientStreet || "").trim() ||
+      String(offer.recipientPostalCity || "").trim() ||
+      String(offer.customerNumber || "").trim() ||
+      String(offer.orderNumber || "").trim() ||
+      String(offer.overviewText || "").trim() ||
+      String(offer.calculationText || "").trim() ||
+      String(offer.detailHtml || "").trim() ||
+      String(offer.coverHeadline || "").trim() ||
+      String(offer.coverSubheadline || "").trim() ||
+      String(offer.coverIntro || "").trim();
+    const hasItems =
+      (offer.lineItems || []).length > 0 ||
+      (offer.deviceItems || []).length > 0 ||
+      (offer.attachments || []).length > 0;
+    return !hasMeta && !hasItems;
+  };
+
   const addOffer = () => {
+    if (isOfferDraftEmpty(activeOffer)) {
+      return;
+    }
     setOffers((prev) => {
       const nextIndex = getNextOfferIndex(prev, offerNumberFormat, lastOfferIndexRef.current);
       const next = createEmptyOffer(nextIndex, offerNumberFormat);
@@ -4775,7 +4801,10 @@ export default function OffersView() {
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <button
             type="button"
-            onClick={() => setMainTab("new")}
+            onClick={() => {
+              addOffer();
+              setMainTab("new");
+            }}
             className={`rounded-full px-4 py-1 text-xs uppercase tracking-wide ${
               mainTab === "new"
                 ? "bg-sand-900 text-white"
