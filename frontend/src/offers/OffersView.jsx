@@ -273,6 +273,27 @@ const formatDate = (value) => {
 };
 
 const getOfferSentAt = (offer) => offer?.sentAt || offer?.sent_at || "";
+const getOfferOpenedAt = (offer) => offer?.openedAt || offer?.opened_at || "";
+const getOfferOpenedCount = (offer) =>
+  Number(offer?.openedCount ?? offer?.opened_count ?? 0);
+
+const renderOfferReadBadge = (offer) => {
+  const openedCount = getOfferOpenedCount(offer);
+  const hasTracking = Boolean(offer?.trackingGuid);
+  if (!hasTracking && openedCount <= 0 && !getOfferOpenedAt(offer)) return null;
+  if (openedCount > 0) {
+    return (
+      <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] uppercase tracking-wide text-sky-700">
+        {openedCount > 1 ? `Gelesen (${openedCount}x)` : "Gelesen"}
+      </span>
+    );
+  }
+  return (
+    <span className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-500">
+      Ungelesen
+    </span>
+  );
+};
 
 const formatMoney = (value) => {
   const number = Number(value || 0);
@@ -3787,7 +3808,7 @@ export default function OffersView() {
     setEmailOfferId(offer.id);
     setRecipientTouched(false);
     const defaultText = `Angebot ${offer.reference || ""}`.trim();
-    setSendSubject((prev) => prev || defaultText);
+    setSendSubject(defaultText);
     setOfferEmailBody(DEFAULT_OFFER_EMAIL_BODY);
     const customer = customersByName.get(String(offer.customer || "").toLowerCase());
     if (!sendTo && customer?.email) {
@@ -3808,6 +3829,8 @@ export default function OffersView() {
     setEmailOfferId("");
     setEmailHelperText("");
     setOfferEmailBody("");
+    setSendSubject("");
+    setSendTo("");
     setRecipientTouched(false);
   };
 
@@ -5504,6 +5527,7 @@ export default function OffersView() {
                             Versendet
                           </span>
                         ) : null}
+                        {renderOfferReadBadge(offer)}
                         <button
                           type="button"
                           onClick={() => toggleOfferExpanded(offer.id)}
@@ -5627,6 +5651,7 @@ export default function OffersView() {
                             Versendet
                           </span>
                         ) : null}
+                        {renderOfferReadBadge(offer)}
                         <button
                           type="button"
                           onClick={() => toggleOfferExpanded(offer.id)}
@@ -5813,6 +5838,7 @@ export default function OffersView() {
                             Versendet
                           </span>
                         ) : null}
+                        {renderOfferReadBadge(offer)}
                         <button
                           type="button"
                           onClick={() => toggleOfferExpanded(offer.id)}
@@ -6795,12 +6821,12 @@ export default function OffersView() {
       </div>
     ) : null}
     {exportOffer ? (
-      <div className="fixed -left-[9999px] top-0 opacity-0 pointer-events-none">
+      <div className="fixed -left-[9999px] top-0 pointer-events-none">
         <OfferPreview offer={exportOffer} scale={1} containerRef={exportRef} mode={exportMode} />
       </div>
     ) : null}
     {emailExportOffer ? (
-      <div className="fixed -left-[9999px] top-0 opacity-0 pointer-events-none">
+      <div className="fixed -left-[9999px] top-0 pointer-events-none">
         <OfferPreview
           offer={emailExportOffer}
           scale={1}
@@ -6814,7 +6840,7 @@ export default function OffersView() {
     open={offerEmailModalOpen}
     title="Angebot per E-Mail senden"
     recipient={sendTo}
-    subject={sendSubject || emailDefaultSubject || offerDefaultSubject}
+    subject={sendSubject}
     body={offerEmailBody}
     helperText={emailHelperText || "HTML wird gesendet, Plaintext wird automatisch erstellt."}
     trackingText={emailTrackingText}

@@ -43,6 +43,9 @@ export default function EmailComposerModal({
               value={recipient}
               onChange={(event) => onRecipientChange?.(event.target.value)}
               placeholder="kunde@example.com"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
             />
           </label>
           <label className="text-xs text-sand-500">
@@ -52,6 +55,8 @@ export default function EmailComposerModal({
               value={subject}
               onChange={(event) => onSubjectChange?.(event.target.value)}
               placeholder="Betreff"
+              autoCapitalize="none"
+              autoCorrect="off"
             />
           </label>
           {showBody ? (
