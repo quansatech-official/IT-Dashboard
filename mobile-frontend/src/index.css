@@ -261,7 +261,14 @@ button, input, textarea, select {
   height: 280px;
   background: #f8fafc;
   border-radius: 18px;
+  padding: 0;
+  display: flex;
+}
+
+.signature-modal__pad {
+  flex: 1;
   padding: 12px;
+  display: flex;
 }
 
 .signature-modal__box canvas {

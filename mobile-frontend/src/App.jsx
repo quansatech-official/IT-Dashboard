@@ -217,12 +217,13 @@ export default function App() {
     const canvas = signatureCanvasRef.current;
     const wrap = signatureWrapRef.current;
     if (!canvas || !wrap) return;
-    const rect = wrap.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     const ratio = window.devicePixelRatio || 1;
     canvas.width = rect.width * ratio;
     canvas.height = rect.height * ratio;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.scale(ratio, ratio);
     ctx.lineWidth = 2;
     ctx.lineCap = "round";
@@ -692,14 +693,16 @@ function SignatureModal({
           </button>
         </div>
         <div className="signature-box signature-modal__box" ref={wrapRef}>
-          <canvas
-            ref={canvasRef}
-            onPointerDown={pointerHandlers.onPointerDown}
-            onPointerMove={pointerHandlers.onPointerMove}
-            onPointerUp={pointerHandlers.onPointerUp}
-            onPointerLeave={pointerHandlers.onPointerLeave}
-            onPointerCancel={pointerHandlers.onPointerCancel}
-          />
+          <div className="signature-modal__pad">
+            <canvas
+              ref={canvasRef}
+              onPointerDown={pointerHandlers.onPointerDown}
+              onPointerMove={pointerHandlers.onPointerMove}
+              onPointerUp={pointerHandlers.onPointerUp}
+              onPointerLeave={pointerHandlers.onPointerLeave}
+              onPointerCancel={pointerHandlers.onPointerCancel}
+            />
+          </div>
         </div>
         <div className="signature-modal__actions fixed-action-bar">
           <button className="secondary-btn" type="button" onClick={onClear}>
