@@ -3270,6 +3270,17 @@ export default function OffersView() {
           .then((pdf) => pdf.output("arraybuffer"));
         let blob = new Blob([buffer], { type: "application/pdf" });
         if (blob.size < 4000) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const retryBuffer = await html2pdf()
+            .set(options)
+            .from(element)
+            .toPdf()
+            .get("pdf")
+            .then((pdf) => pdf.output("arraybuffer"));
+          const retryBlob = new Blob([retryBuffer], { type: "application/pdf" });
+          blob = retryBlob.size > blob.size ? retryBlob : blob;
+        }
+        if (blob.size < 4000) {
           const fallbackBlob = await buildPdfBlobFromElement(element);
           if (fallbackBlob?.size > blob.size) {
             blob = fallbackBlob;
@@ -3756,21 +3767,27 @@ export default function OffersView() {
     setExportOfferId(offer.id);
   };
 
-const generateOfferPdfBlob = (offer, mode = "offer") =>
-  new Promise((resolve, reject) => {
-    if (!offer) {
-      reject(new Error("offer_missing"));
-      return;
-    }
-    emailExportPromiseRef.current = { resolve, reject };
-    setEmailExportMode(mode);
-    setEmailExportOfferId(offer.id);
-  });
+  const generateOfferPdfBlob = (offer, mode = "offer") =>
+    new Promise((resolve, reject) => {
+      if (!offer) {
+        reject(new Error("offer_missing"));
+        return;
+      }
+      emailExportPromiseRef.current = { resolve, reject };
+      setEmailExportMode(mode);
+      setEmailExportOfferId(offer.id);
+    });
 
-const withTimeout = (promise, ms, label = "timeout") =>
-  new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(label)), ms);
-    promise
+  const cancelEmailExport = () => {
+    emailExportPromiseRef.current = null;
+    setEmailExportOfferId("");
+    setEmailExportMode("offer");
+  };
+
+  const withTimeout = (promise, ms, label = "timeout") =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(label)), ms);
+      promise
       .then((value) => {
         clearTimeout(timer);
         resolve(value);
@@ -3998,8 +4015,10 @@ const withTimeout = (promise, ms, label = "timeout") =>
       closeOfferEmailComposer();
     } catch (error) {
       if (error?.message === "pdf_timeout") {
+        cancelEmailExport();
         setToast("PDF Erstellung dauert zu lange.");
       } else {
+        cancelEmailExport();
         setToast("E-Mail Versand fehlgeschlagen.");
       }
       setSendStatus("error");
