@@ -4631,6 +4631,7 @@ def send_offer(data: OfferSendRequest):
         settings = _get_smtp_settings(db)
         if not settings.host or not settings.sender_email:
             raise HTTPException(400, "SMTP settings missing")
+        logger.info("offer_send start offer_id=%s to=%s", data.offer_id, data.to)
 
         subject = data.subject or "Angebot"
         from_addr = settings.sender_email
@@ -4706,6 +4707,7 @@ def send_offer(data: OfferSendRequest):
                 offer.updated_at = sent_at
                 db.commit()
 
+        logger.info("offer_send done offer_id=%s tracking_guid=%s", data.offer_id, tracking_guid)
         return {"status": "sent", "tracking_guid": tracking_guid, "sent_at": sent_at}
 
 

@@ -3953,7 +3953,19 @@ export default function OffersView() {
       return;
     }
     setSendStatus("preparing");
+    const sendStarted = Date.now();
+    console.log("[offer-email] start", {
+      offerId: offer.serverId,
+      mode: "offer",
+      to: sendTo
+    });
+    const guard = setTimeout(() => {
+      cancelEmailExport();
+      setSendStatus("error");
+      setToast("E-Mail Versand abgebrochen.");
+    }, 25000);
     try {
+      const pdfStarted = Date.now();
       const confirmUrl = buildOfferConfirmUrl(offer.confirmGuid);
       const introHtml = ensureHtmlBody(offerEmailBody || "");
       const signatureHtml = String(smtpSignatureHtml || "").trim();
@@ -3975,7 +3987,14 @@ export default function OffersView() {
         20000,
         "pdf_timeout"
       );
+      console.log("[offer-email] pdf-ready", {
+        ms: Date.now() - pdfStarted,
+        size: pdfBlob?.size || 0
+      });
       const { attachments } = await buildEmailAttachments(offer, pdfBlob);
+      console.log("[offer-email] attachments", {
+        count: attachments?.length || 0
+      });
       setSendStatus("sending");
       const res = await fetch("/api/offers/send", {
         method: "POST",
@@ -3990,6 +4009,7 @@ export default function OffersView() {
           reset_tracking: resetTracking
         })
       });
+      console.log("[offer-email] send-response", { status: res.status });
       if (!res.ok) throw new Error("send_failed");
       const responsePayload = await res.json();
       if (responsePayload?.tracking_guid) {
@@ -4014,6 +4034,7 @@ export default function OffersView() {
       setToast("E-Mail gesendet.");
       closeOfferEmailComposer();
     } catch (error) {
+      console.error("[offer-email] send-error", error);
       if (error?.message === "pdf_timeout") {
         cancelEmailExport();
         setToast("PDF Erstellung dauert zu lange.");
@@ -4022,6 +4043,9 @@ export default function OffersView() {
         setToast("E-Mail Versand fehlgeschlagen.");
       }
       setSendStatus("error");
+    } finally {
+      console.log("[offer-email] done", { ms: Date.now() - sendStarted });
+      clearTimeout(guard);
     }
     setTimeout(() => setSendStatus("idle"), 3000);
   };
@@ -4033,6 +4057,16 @@ export default function OffersView() {
       return;
     }
     setSendStatus("sending");
+    const sendStarted = Date.now();
+    console.log("[offer-email] start", {
+      offerId: offer.serverId,
+      mode: "confirmation",
+      to: sendTo
+    });
+    const guard = setTimeout(() => {
+      setSendStatus("error");
+      setToast("E-Mail Versand abgebrochen.");
+    }, 25000);
     try {
       const confirmUrl = buildOfferConfirmUrl(offer.confirmGuid);
       const introHtml = ensureHtmlBody(offerEmailBody || "");
@@ -4057,6 +4091,7 @@ export default function OffersView() {
           text
         })
       });
+      console.log("[offer-email] send-response", { status: res.status });
       if (!res.ok) throw new Error("send_failed");
       const responsePayload = await res.json();
       if (responsePayload?.tracking_guid) {
@@ -4081,7 +4116,11 @@ export default function OffersView() {
       setToast("E-Mail gesendet.");
       closeOfferEmailComposer();
     } catch (error) {
+      console.error("[offer-email] send-error", error);
       setSendStatus("error");
+    } finally {
+      console.log("[offer-email] done", { ms: Date.now() - sendStarted });
+      clearTimeout(guard);
     }
     setTimeout(() => setSendStatus("idle"), 3000);
   };
