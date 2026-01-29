@@ -17,7 +17,8 @@ export default function NotesRichTextEditor({
   onChange,
   placeholder = "",
   minHeight = "140px",
-  disabled = false
+  disabled = false,
+  fontFamily = ""
 }) {
   const [isEmpty, setIsEmpty] = useState(true);
   const lastValueRef = useRef("");
@@ -237,7 +238,10 @@ export default function NotesRichTextEditor({
         onChange={handleImageSelect}
         className="hidden"
       />
-      <div className="relative rounded-2xl border border-sand-200 bg-white px-4 py-3">
+      <div
+        className="relative rounded-2xl border border-sand-200 bg-white px-4 py-3"
+        style={fontFamily ? { fontFamily } : undefined}
+      >
         {placeholder && isEmpty ? (
           <div className="pointer-events-none absolute left-4 top-3 text-sm text-sand-400">
             {placeholder}
@@ -247,7 +251,7 @@ export default function NotesRichTextEditor({
           editor={editor}
           onClick={() => editor?.chain().focus().run()}
           className="cursor-text text-sm text-sand-900 [&_.ProseMirror]:min-h-[120px] [&_.ProseMirror]:outline-none [&_.ProseMirror]:whitespace-pre-wrap"
-          style={{ minHeight }}
+          style={{ minHeight, fontFamily: fontFamily || undefined }}
         />
       </div>
     </div>

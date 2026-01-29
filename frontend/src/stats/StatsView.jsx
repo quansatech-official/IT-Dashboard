@@ -6,7 +6,7 @@ const API = "/api";
 const StatCard = ({ title, value, subtitle }) => (
   <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
     <p className="text-[9px] uppercase tracking-[0.28em] text-sand-500">{title}</p>
-    <p className="text-lg font-display text-sand-900 mt-1.5">{value}</p>
+    <p className="text-lg font-metrics text-sand-900 mt-1.5">{value}</p>
     {subtitle ? <p className="text-[11px] text-sand-500 mt-1">{subtitle}</p> : null}
   </div>
 );
@@ -23,7 +23,7 @@ const TopCustomerCard = ({ title, items }) => {
             <div key={`${title}-${item.name || "unknown"}-${index}`} className="space-y-1">
               <div className="flex items-center justify-between text-[11px] text-sand-600">
                 <span className="truncate pr-2">{item.name || "Unbekannt"}</span>
-                <span>{`€ ${Number(item.totalEur || 0).toFixed(2)}`}</span>
+                <span className="font-metrics">{formatEur(item.totalEur || 0)}</span>
               </div>
               <div className="h-2 w-full rounded-full bg-sand-100">
                 <div
@@ -34,7 +34,7 @@ const TopCustomerCard = ({ title, items }) => {
                 />
               </div>
               <div className="text-[10px] text-sand-400">
-                {item.count || 0} Rechnungen
+                {formatNumber(item.count || 0)} Rechnungen
               </div>
             </div>
           ))}
@@ -77,7 +77,13 @@ export default function StatsView() {
     return `${Math.round((part / total) * 100)}%`;
   };
 
-  const formatEur = (value) => `€ ${Number(value || 0).toFixed(2)}`;
+  const formatNumber = (value, options = {}) =>
+    Number(value || 0).toLocaleString("de-DE", options);
+  const formatEur = (value) =>
+    `€ ${Number(value || 0).toLocaleString("de-DE", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    })}`;
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
@@ -118,42 +124,48 @@ export default function StatsView() {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <StatCard
                   title="Offen (Tagesplan)"
-                  value={stats.dayTasks?.open ?? 0}
-                  subtitle={`Erledigt gesamt: ${stats.dayTasks?.done ?? 0}`}
+                  value={formatNumber(stats.dayTasks?.open ?? 0)}
+                  subtitle={`Erledigt gesamt: ${formatNumber(stats.dayTasks?.done ?? 0)}`}
                 />
                 <StatCard
                   title="Erledigt heute"
-                  value={stats.dayTasks?.doneToday ?? 0}
+                  value={formatNumber(stats.dayTasks?.doneToday ?? 0)}
                   subtitle="Abschlusszeit heute"
                 />
                 <StatCard
                   title="Erledigt diese Woche"
-                  value={stats.dayTasks?.doneWeek ?? 0}
+                  value={formatNumber(stats.dayTasks?.doneWeek ?? 0)}
                   subtitle="Seit Wochenstart"
                 />
                 <StatCard
                   title="Gesamt (Tagesplan)"
-                  value={stats.dayTasks?.total ?? 0}
+                  value={formatNumber(stats.dayTasks?.total ?? 0)}
                   subtitle="Alle Einträge"
                 />
                 <StatCard
                   title="Erfasste Zeit heute"
-                  value={`${Number(stats.timeTracking?.doneTodayHours ?? 0).toFixed(2)} h`}
+                  value={`${formatNumber(stats.timeTracking?.doneTodayHours ?? 0, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })} h`}
                   subtitle="Basis: erledigte Aufgaben"
                 />
                 <StatCard
                   title="Erfasste Zeit Woche"
-                  value={`${Number(stats.timeTracking?.doneWeekHours ?? 0).toFixed(2)} h`}
+                  value={`${formatNumber(stats.timeTracking?.doneWeekHours ?? 0, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                  })} h`}
                   subtitle="Basis: erledigte Aufgaben"
                 />
                 <StatCard
                   title="Umsatzschätzung heute"
-                  value={`€ ${Number(stats.revenueEstimateTodayEur ?? 0).toFixed(2)}`}
+                  value={formatEur(stats.revenueEstimateTodayEur ?? 0)}
                   subtitle="Basis: erfasste Zeit erledigter Aufgaben"
                 />
                 <StatCard
                   title="Umsatzschätzung Woche"
-                  value={`€ ${Number(stats.revenueEstimateWeekEur ?? 0).toFixed(2)}`}
+                  value={formatEur(stats.revenueEstimateWeekEur ?? 0)}
                   subtitle="Basis: erfasste Zeit erledigter Aufgaben"
                 />
               </div>
@@ -177,33 +189,37 @@ export default function StatsView() {
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <StatCard
                       title="Entwurfsrechnungen"
-                      value={stats.sevdesk?.drafts?.count ?? 0}
+                      value={formatNumber(stats.sevdesk?.drafts?.count ?? 0)}
                       subtitle={`Summe ${formatEur(stats.sevdesk?.drafts?.sumEur ?? 0)}`}
                     />
                     <StatCard
                       title="Fällige Rechnungen"
-                      value={stats.sevdesk?.due?.count ?? 0}
+                      value={formatNumber(stats.sevdesk?.due?.count ?? 0)}
                       subtitle={`Summe ${formatEur(stats.sevdesk?.due?.sumEur ?? 0)}`}
                     />
                     <StatCard
                       title="Überfällige Rechnungen"
-                      value={stats.sevdesk?.overdue?.count ?? 0}
+                      value={formatNumber(stats.sevdesk?.overdue?.count ?? 0)}
                       subtitle={`Summe ${formatEur(stats.sevdesk?.overdue?.sumEur ?? 0)}`}
                     />
                     <StatCard
                       title="Umsatz laufendes Jahr (bezahlt)"
                       value={formatEur(stats.sevdesk?.paidCurrentYear?.sumEur ?? 0)}
-                      subtitle={`Rechnungen ${stats.sevdesk?.paidCurrentYear?.count ?? 0}`}
+                      subtitle={`Rechnungen ${formatNumber(
+                        stats.sevdesk?.paidCurrentYear?.count ?? 0
+                      )}`}
                     />
                     <StatCard
                       title="Bezahlt (Monat)"
                       value={formatEur(stats.sevdesk?.paidCurrentMonth?.sumEur ?? 0)}
-                      subtitle={`Rechnungen ${stats.sevdesk?.paidCurrentMonth?.count ?? 0}`}
+                      subtitle={`Rechnungen ${formatNumber(
+                        stats.sevdesk?.paidCurrentMonth?.count ?? 0
+                      )}`}
                     />
                     <StatCard
                       title="Bezahlt gesamt"
                       value={formatEur(stats.sevdesk?.paid?.sumEur ?? 0)}
-                      subtitle={`Rechnungen ${stats.sevdesk?.paid?.count ?? 0}`}
+                      subtitle={`Rechnungen ${formatNumber(stats.sevdesk?.paid?.count ?? 0)}`}
                     />
                     <StatCard
                       title="Ø Rechnungswert (bezahlt)"
@@ -243,12 +259,12 @@ export default function StatsView() {
               <div className="grid gap-3 sm:grid-cols-3">
                 <StatCard
                   title="Gesprächsminuten"
-                  value={`${stats.telephony?.minutes ?? 0} Min`}
+                  value={`${formatNumber(stats.telephony?.minutes ?? 0)} Min`}
                   subtitle="Summe Anrufe"
                 />
                 <StatCard
                   title="Verpasste Anrufe"
-                  value={stats.telephony?.missed ?? 0}
+                  value={formatNumber(stats.telephony?.missed ?? 0)}
                   subtitle="Anrufe nicht beantwortet"
                 />
               </div>

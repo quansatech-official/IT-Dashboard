@@ -48,6 +48,12 @@
     letter-spacing: -0.01em;
   }
 
+  .font-metrics {
+    font-family: "Roboto", "Helvetica Neue", Arial, sans-serif;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "lnum" 1;
+  }
+
   .shadow-soft {
     box-shadow: 0 18px 40px rgba(36, 27, 18, 0.12);
   }

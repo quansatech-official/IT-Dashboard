@@ -258,6 +258,9 @@ class Offer(Base):
     opened_at = Column(BigInteger, default=0)
     opened_count = Column(Integer, default=0)
     tracking_guid = Column(String, default="")
+    sent_at = Column(BigInteger, default=0)
+    sent_via = Column(String, default="")
+    sent_to = Column(String, default="")
     customer_name = Column(String, default="")
     customer_email = Column(String, default="")
     customer_note = Column(String, default="")
@@ -551,6 +554,12 @@ def _ensure_offer_opened_columns() -> None:
         statements.append("ALTER TABLE offers ADD COLUMN opened_count INTEGER DEFAULT 0")
     if "tracking_guid" not in columns:
         statements.append("ALTER TABLE offers ADD COLUMN tracking_guid VARCHAR DEFAULT ''")
+    if "sent_at" not in columns:
+        statements.append("ALTER TABLE offers ADD COLUMN sent_at BIGINT DEFAULT 0")
+    if "sent_via" not in columns:
+        statements.append("ALTER TABLE offers ADD COLUMN sent_via VARCHAR DEFAULT ''")
+    if "sent_to" not in columns:
+        statements.append("ALTER TABLE offers ADD COLUMN sent_to VARCHAR DEFAULT ''")
     if not statements:
         return
     with engine.begin() as connection:
@@ -1070,6 +1079,7 @@ class EmailAttachment(BaseModel):
 
 
 class OfferSendRequest(BaseModel):
+    offer_id: Optional[int] = None
     to: str
     subject: Optional[str] = None
     html: str
@@ -2238,6 +2248,8 @@ def serialize_offer(offer: Offer) -> Dict[str, Any]:
         data["openedAt"] = _offer_iso_timestamp(offer.opened_at)
     if offer.opened_count and not data.get("openedCount"):
         data["openedCount"] = offer.opened_count
+    if offer.sent_at and not data.get("sentAt"):
+        data["sentAt"] = _offer_iso_timestamp(offer.sent_at)
     if not data.get("createdAt"):
         data["createdAt"] = _offer_iso_timestamp(offer.created_at)
     return data
@@ -3311,7 +3323,11 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
 
         price = payload.price if payload.price is not None else (config.hourly_rate_eur or 0.0)
         tax_rate = payload.tax_rate if payload.tax_rate is not None else config.default_tax_rate
-        unity_id = payload.unity_id or config.service_unity_id or config.unity_id
+        unity_id = config.service_unity_id or config.unity_id
+        if payload.unity_id:
+            unity_id = payload.unity_id
+            if config.service_unity_id and payload.unity_id == config.unity_id:
+                unity_id = config.service_unity_id
         if not unity_id:
             raise HTTPException(400, "Missing unity_id")
 
@@ -4667,7 +4683,19 @@ def send_offer(data: OfferSendRequest):
         finally:
             server.quit()
 
-        return {"status": "sent", "tracking_guid": tracking_guid}
+        sent_at = int(time.time() * 1000)
+        if data.offer_id:
+            offer = db.query(Offer).get(data.offer_id)
+            if offer:
+                offer.sent_at = sent_at
+                offer.sent_via = "smtp"
+                offer.sent_to = data.to
+                if tracking_guid:
+                    offer.tracking_guid = tracking_guid
+                offer.updated_at = sent_at
+                db.commit()
+
+        return {"status": "sent", "tracking_guid": tracking_guid, "sent_at": sent_at}
 
 
 @app.get("/offers/confirm/{guid}", response_class=HTMLResponse)

@@ -45,6 +45,11 @@ const tabs = [
   { id: "stats", label: "Statistik", icon: BarChart3 }
 ];
 
+const formatNumber = (value, options = {}) =>
+  Number(value || 0).toLocaleString("de-DE", options);
+const formatEur = (value, options = {}) =>
+  `€ ${Number(value || 0).toLocaleString("de-DE", options)}`;
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("quick");
   const [customers, setCustomers] = useState([]);
@@ -441,51 +446,75 @@ export default function App() {
             <div className="stat-grid">
               <div className="stat-tile">
                 <div className="stat-label">Offen</div>
-                <div className="stat-value">{stats?.dayTasks?.open ?? 0}</div>
+                <div className="stat-value">
+                  {formatNumber(stats?.dayTasks?.open ?? 0)}
+                </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Erledigt heute</div>
-                <div className="stat-value">{stats?.dayTasks?.doneToday ?? 0}</div>
+                <div className="stat-value">
+                  {formatNumber(stats?.dayTasks?.doneToday ?? 0)}
+                </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Erledigt Woche</div>
-                <div className="stat-value">{stats?.dayTasks?.doneWeek ?? 0}</div>
+                <div className="stat-value">
+                  {formatNumber(stats?.dayTasks?.doneWeek ?? 0)}
+                </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Zeit heute</div>
                 <div className="stat-value">
-                  {Number(stats?.timeTracking?.doneTodayHours ?? 0).toFixed(1)} h
+                  {formatNumber(stats?.timeTracking?.doneTodayHours ?? 0, {
+                    minimumFractionDigits: 1,
+                    maximumFractionDigits: 1
+                  })}{" "}
+                  h
                 </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Zeit Woche</div>
                 <div className="stat-value">
-                  {Number(stats?.timeTracking?.doneWeekHours ?? 0).toFixed(1)} h
+                  {formatNumber(stats?.timeTracking?.doneWeekHours ?? 0, {
+                    minimumFractionDigits: 1,
+                    maximumFractionDigits: 1
+                  })}{" "}
+                  h
                 </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Umsatz heute</div>
                 <div className="stat-value">
-                  € {Number(stats?.revenueEstimateTodayEur ?? 0).toFixed(0)}
+                  {formatEur(stats?.revenueEstimateTodayEur ?? 0, {
+                    maximumFractionDigits: 0
+                  })}
                 </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Umsatz Woche</div>
                 <div className="stat-value">
-                  € {Number(stats?.revenueEstimateWeekEur ?? 0).toFixed(0)}
+                  {formatEur(stats?.revenueEstimateWeekEur ?? 0, {
+                    maximumFractionDigits: 0
+                  })}
                 </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Entwurf</div>
-                <div className="stat-value">{stats?.sevdesk?.drafts?.count ?? 0}</div>
+                <div className="stat-value">
+                  {formatNumber(stats?.sevdesk?.drafts?.count ?? 0)}
+                </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Faellig</div>
-                <div className="stat-value">{stats?.sevdesk?.due?.count ?? 0}</div>
+                <div className="stat-value">
+                  {formatNumber(stats?.sevdesk?.due?.count ?? 0)}
+                </div>
               </div>
               <div className="stat-tile">
                 <div className="stat-label">Verpasst</div>
-                <div className="stat-value">{stats?.telephony?.missed ?? 0}</div>
+                <div className="stat-value">
+                  {formatNumber(stats?.telephony?.missed ?? 0)}
+                </div>
               </div>
             </div>
           </div>

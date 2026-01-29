@@ -417,24 +417,61 @@ export default function CustomerDirectoryView() {
         : `data:image/png;base64,${rawSignature}`
       : "";
     const signature = signatureSrc
-      ? `<img src="${signatureSrc}" alt="Unterschrift" style="max-width: 260px; border: 1px solid #e2e8f0; border-radius: 12px;" />`
-      : "<p>Keine Unterschrift gespeichert.</p>";
+      ? `<img src="${signatureSrc}" alt="Unterschrift" style="max-width: 240px; border: 1px solid #e2e8f0; border-radius: 10px; padding: 6px;" />`
+      : "<span style=\"color:#94a3b8;\">Keine Unterschrift gespeichert.</span>";
+    const createdDate = new Date(note.created_at || Date.now()).toLocaleDateString("de-DE");
+    const timeFrom = String(note.time_from || "").trim();
+    const timeTo = String(note.time_to || "").trim();
+    const timeRange =
+      timeFrom || timeTo ? `${timeFrom || "--:--"} - ${timeTo || "--:--"}` : "—";
+    const customerLines = [
+      activeCustomer?.name,
+      activeCustomer?.street,
+      [activeCustomer?.postalCode, activeCustomer?.city].filter(Boolean).join(" "),
+      activeCustomer?.country
+    ].filter(Boolean);
     return `
-      <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; color: #2f2a24;">
-        <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:16px;">
+      <div style="font-family: Arial, Helvetica, sans-serif; color:#1f2937; padding: 18px 24px; max-width: 180mm; margin: 0 auto;">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; border-bottom:2px solid #e2e8f0; padding-bottom:12px; margin-bottom:18px;">
           <div style="display:flex; align-items:center; gap:12px;">
-            <img src="/QTLogo.jpg" alt="Quansatech" width="44" height="44" style="height:44px; width:44px; object-fit:contain;" />
+            <img src="/QTLogo.jpg" alt="Quansatech" width="48" height="48" style="height:48px; width:48px; object-fit:contain;" />
             <div>
-              <div style="font-size:16px; font-weight:700;">Lieferschein</div>
-              <div style="font-size:12px; color:#6b6358;">QT Workbench</div>
+              <div style="font-size:18px; font-weight:700;">Lieferschein</div>
+              <div style="font-size:12px; color:#64748b;">QT Workbench</div>
             </div>
           </div>
-          <div style="font-size:12px; color:#6b6358;">${new Date(note.created_at || Date.now()).toLocaleDateString("de-DE")}</div>
+          <div style="text-align:right;">
+            <div style="font-size:12px; color:#64748b;">Datum</div>
+            <div style="font-size:13px; font-weight:600;">${createdDate}</div>
+          </div>
         </div>
-        <p><strong>Kunde:</strong> ${activeCustomer?.name || ""}</p>
-        <p><strong>Leistung:</strong><br/>${String(note.note || "Lieferschein").replaceAll("\n", "<br/>")}</p>
-        <div style="margin-top: 16px;">
-          <strong>Unterschrift:</strong><br/>
+
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px;">
+          <div>
+            <div style="font-size:11px; letter-spacing:0.16em; text-transform:uppercase; color:#94a3b8; margin-bottom:6px;">Empfänger</div>
+            ${customerLines.map((line) => `<div style="font-size:13px; font-weight:600;">${line}</div>`).join("")}
+            ${
+              activeCustomer?.creditorNumber
+                ? `<div style="font-size:11px; color:#64748b; margin-top:4px;">Kundennummer ${activeCustomer.creditorNumber}</div>`
+                : ""
+            }
+          </div>
+          <div>
+            <div style="font-size:11px; letter-spacing:0.16em; text-transform:uppercase; color:#94a3b8; margin-bottom:6px;">Leistungszeit</div>
+            <div style="font-size:14px; font-weight:600;">${timeRange}</div>
+            <div style="font-size:11px; color:#64748b; margin-top:4px;">Erfasst am ${createdDate}</div>
+          </div>
+        </div>
+
+        <div style="border:1px solid #e2e8f0; border-radius:12px; padding:14px 16px; margin-bottom: 18px;">
+          <div style="font-size:11px; letter-spacing:0.16em; text-transform:uppercase; color:#94a3b8; margin-bottom:6px;">Leistung</div>
+          <div style="font-size:13px; line-height:1.5; white-space:pre-line;">
+            ${String(note.note || "Lieferschein").replaceAll("\n", "<br/>")}
+          </div>
+        </div>
+
+        <div style="border-top:1px solid #e2e8f0; padding-top:12px;">
+          <div style="font-size:11px; letter-spacing:0.16em; text-transform:uppercase; color:#94a3b8; margin-bottom:8px;">Unterschrift</div>
           ${signature}
         </div>
       </div>

@@ -14,6 +14,7 @@ export default function EmailComposerModal({
   trackingText = "",
   isSending = false,
   sendLabel = "Senden",
+  bodyFontFamily = "Arial, Helvetica, sans-serif",
   onClose,
   onSend,
   onRecipientChange,
@@ -62,6 +63,7 @@ export default function EmailComposerModal({
                   onChange={onBodyChange}
                   placeholder="Sehr geehrte Damen und Herren,"
                   minHeight="140px"
+                  fontFamily={bodyFontFamily}
                 />
               </div>
             </label>

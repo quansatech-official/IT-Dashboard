@@ -272,6 +272,8 @@ const formatDate = (value) => {
   });
 };
 
+const getOfferSentAt = (offer) => offer?.sentAt || offer?.sent_at || "";
+
 const formatMoney = (value) => {
   const number = Number(value || 0);
   return number.toLocaleString("de-DE", {
@@ -762,6 +764,9 @@ const htmlToPlainText = (html = "") =>
     .trim();
 
 const normalizeHtmlBody = (html = "") => (htmlToPlainText(html) ? String(html).trim() : "");
+
+const DEFAULT_OFFER_EMAIL_BODY =
+  "<p>Sehr geehrte Damen und Herren,</p><p>vielen Dank f\u00fcr Ihre Anfrage. Gerne unterbreiten wir Ihnen das gew\u00fcnschte freibleibende Angebot (siehe Anhang).</p>";
 
 const normalizeServerOffer = (payload) => {
   if (!payload || typeof payload !== "object") return null;
@@ -3781,7 +3786,7 @@ export default function OffersView() {
     setEmailOfferId(offer.id);
     const defaultText = `Angebot ${offer.reference || ""}`.trim();
     setSendSubject((prev) => prev || defaultText);
-    setOfferEmailBody((prev) => prev || defaultText);
+    setOfferEmailBody(DEFAULT_OFFER_EMAIL_BODY);
     const customer = customersByName.get(String(offer.customer || "").toLowerCase());
     if (!sendTo && customer?.email) {
       setSendTo(customer.email);
@@ -3800,6 +3805,7 @@ export default function OffersView() {
     setOfferEmailModalOpen(false);
     setEmailOfferId("");
     setEmailHelperText("");
+    setOfferEmailBody("");
   };
 
   const handleOfferEmailSend = async () => {
@@ -3833,6 +3839,7 @@ export default function OffersView() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          offer_id: offer.serverId,
           to: sendTo,
           subject: sendSubject || `Angebot ${offer.reference || ""}`.trim(),
           html,
@@ -3845,7 +3852,8 @@ export default function OffersView() {
       if (responsePayload?.tracking_guid) {
         const nextOffer = {
           ...offer,
-          trackingGuid: responsePayload.tracking_guid
+          trackingGuid: responsePayload.tracking_guid,
+          sentAt: responsePayload.sent_at ? new Date(responsePayload.sent_at).toISOString() : offer.sentAt
         };
         updateOffer(offer.id, () => nextOffer);
         try {
@@ -3853,6 +3861,11 @@ export default function OffersView() {
         } catch (error) {
           // Ignore tracking persist errors.
         }
+      } else if (responsePayload?.sent_at) {
+        updateOffer(offer.id, (current) => ({
+          ...current,
+          sentAt: new Date(responsePayload.sent_at).toISOString()
+        }));
       }
       setSendStatus("sent");
       closeOfferEmailComposer();
@@ -3881,6 +3894,7 @@ export default function OffersView() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          offer_id: offer.serverId,
           to: sendTo,
           subject: `Auftragsbestätigung ${offer.reference || ""}`.trim(),
           html: buildOfferEmailHtml(offer, confirmUrl, "confirmation", {
@@ -3894,7 +3908,8 @@ export default function OffersView() {
       if (responsePayload?.tracking_guid) {
         const nextOffer = {
           ...offer,
-          trackingGuid: responsePayload.tracking_guid
+          trackingGuid: responsePayload.tracking_guid,
+          sentAt: responsePayload.sent_at ? new Date(responsePayload.sent_at).toISOString() : offer.sentAt
         };
         updateOffer(offer.id, () => nextOffer);
         try {
@@ -3902,6 +3917,11 @@ export default function OffersView() {
         } catch (error) {
           // Ignore tracking persist errors.
         }
+      } else if (responsePayload?.sent_at) {
+        updateOffer(offer.id, (current) => ({
+          ...current,
+          sentAt: new Date(responsePayload.sent_at).toISOString()
+        }));
       }
       setSendStatus("sent");
     } catch (error) {
@@ -4671,6 +4691,11 @@ export default function OffersView() {
                           <p className="mt-1 text-[11px] text-sand-500">
                             Erstellt {formatDate(activeOffer.createdAt)}
                           </p>
+                          {getOfferSentAt(activeOffer) ? (
+                            <p className="mt-1 text-[11px] text-emerald-600">
+                              Versendet {formatDate(getOfferSentAt(activeOffer))}
+                            </p>
+                          ) : null}
                         </div>
                         <div className="rounded-xl border border-sand-200 bg-sand-100 p-2 h-full flex flex-col">
                           <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
@@ -5471,6 +5496,11 @@ export default function OffersView() {
                         </p>
                       </button>
                       <div className="flex items-center gap-2">
+                        {getOfferSentAt(offer) ? (
+                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
+                            Versendet
+                          </span>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => toggleOfferExpanded(offer.id)}
@@ -5557,6 +5587,9 @@ export default function OffersView() {
                           <span>
                             Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
                           </span>
+                          {getOfferSentAt(offer) ? (
+                            <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
+                          ) : null}
                         </div>
                       </div>
                     ) : null}
@@ -5586,6 +5619,11 @@ export default function OffersView() {
                         </p>
                       </button>
                       <div className="flex items-center gap-2">
+                        {getOfferSentAt(offer) ? (
+                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
+                            Versendet
+                          </span>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => toggleOfferExpanded(offer.id)}
@@ -5699,6 +5737,9 @@ export default function OffersView() {
                           <span>
                             Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
                           </span>
+                          {getOfferSentAt(offer) ? (
+                            <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
+                          ) : null}
                         </div>
                         {sevdeskStatus[offer.serverId || offer.id] ? (
                           <div className="mt-2 text-xs">
@@ -5764,6 +5805,11 @@ export default function OffersView() {
                         </p>
                       </button>
                       <div className="flex items-center gap-2">
+                        {getOfferSentAt(offer) ? (
+                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
+                            Versendet
+                          </span>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => toggleOfferExpanded(offer.id)}
@@ -5817,6 +5863,9 @@ export default function OffersView() {
                           <span>
                             Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
                           </span>
+                          {getOfferSentAt(offer) ? (
+                            <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
+                          ) : null}
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <button
