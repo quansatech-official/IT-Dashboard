@@ -929,6 +929,8 @@ const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer", options = {}) =>
   const signatureBlock = signatureHtml
     ? `<div style="margin-top:20px;border-top:1px solid #e5e7eb;padding-top:12px;">${signatureHtml}</div>`
     : "";
+  const closingBlock =
+    "<p>Für Fragen oder Änderungswünsche stehen wir Ihnen jederzeit gerne zur Verfügung.</p>";
   const detailsBlock = showDetails && rows
     ? `
       <table style="width:100%;border-collapse:collapse;margin-top:12px;">
@@ -949,8 +951,8 @@ const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer", options = {}) =>
   return `
     <div style="font-family:Arial,sans-serif;color:#1f2937">
       <h2>${headline} ${offer.reference || ""}</h2>
-      <p>Kunde: ${offer.customer || "Kunde offen"}</p>
       ${introBlock}
+      ${closingBlock}
       ${showDetails && offer.overviewText ? `<p>${offer.overviewText.replace(/\n/g, "<br/>")}</p>` : ""}
       ${confirmBlock}
       ${detailsBlock}
@@ -2612,6 +2614,7 @@ export default function OffersView() {
   const [offerEmailBody, setOfferEmailBody] = useState("");
   const [offerEmailModalOpen, setOfferEmailModalOpen] = useState(false);
   const [emailOfferId, setEmailOfferId] = useState("");
+  const [emailMode, setEmailMode] = useState("offer");
   const [toast, setToast] = useState("");
   const [resetTracking, setResetTracking] = useState(false);
   const [emailHelperText, setEmailHelperText] = useState("");
@@ -3388,12 +3391,28 @@ export default function OffersView() {
     );
   };
 
-  const updateOfferStatus = (offerId, status) => {
+  const updateOfferStatus = async (offerId, status) => {
     const offer = offers.find((entry) => entry.id === offerId);
     if (!offer) return;
     if (offer.handoverLocked && status === "Entwurf") return;
     const nextOffer = { ...offer, status };
     updateOffer(offerId, () => nextOffer);
+    if (!nextOffer.serverId) return;
+    try {
+      const payload = {
+        reference: nextOffer.reference || "",
+        customer: nextOffer.customer || "",
+        status: nextOffer.status || "",
+        data: sanitizeOfferForSave(nextOffer)
+      };
+      await fetch(`/api/offers/${nextOffer.serverId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+    } catch (error) {
+      setToast("Status speichern fehlgeschlagen.");
+    }
   };
 
   const updateLineItem = (offerId, itemId, patch) => {
@@ -3856,6 +3875,7 @@ const withTimeout = (promise, ms, label = "timeout") =>
       setSendStatus("error");
       return;
     }
+    setEmailMode("offer");
     setEmailOfferId(offer.id);
     setRecipientTouched(false);
     const defaultText = `Angebot ${offer.reference || ""}`.trim();
@@ -3876,9 +3896,30 @@ const withTimeout = (promise, ms, label = "timeout") =>
     openOfferEmailComposerForOffer(activeOffer);
   };
 
+  const openConfirmationEmailComposerForOffer = (offer) => {
+    if (!offer) return;
+    if (!offer.serverId) {
+      setSendStatus("error");
+      return;
+    }
+    setEmailMode("confirmation");
+    setEmailOfferId(offer.id);
+    setRecipientTouched(false);
+    setSendSubject(`Auftragsbestätigung ${offer.reference || ""}`.trim());
+    setOfferEmailBody("");
+    setResetTracking(false);
+    const customer = customersByName.get(String(offer.customer || "").toLowerCase());
+    if (!sendTo && customer?.email) {
+      setSendTo(customer.email);
+    }
+    setEmailHelperText("HTML wird gesendet, Plaintext wird automatisch erstellt.");
+    setOfferEmailModalOpen(true);
+  };
+
   const closeOfferEmailComposer = () => {
     setOfferEmailModalOpen(false);
     setEmailOfferId("");
+    setEmailMode("offer");
     setEmailHelperText("");
     setOfferEmailBody("");
     setSendSubject("");
@@ -3975,9 +4016,11 @@ const withTimeout = (promise, ms, label = "timeout") =>
     setSendStatus("sending");
     try {
       const confirmUrl = buildOfferConfirmUrl(offer.confirmGuid);
+      const introHtml = ensureHtmlBody(offerEmailBody || "");
       const signatureHtml = String(smtpSignatureHtml || "").trim();
       const signatureText = htmlToPlainText(signatureHtml);
-      let text = `Auftragsbestätigung ${offer.reference || ""}`.trim();
+      let text =
+        htmlToPlainText(introHtml) || `Auftragsbestätigung ${offer.reference || ""}`.trim();
       if (signatureText) {
         text = `${text}\n\n${signatureText}`;
       }
@@ -3987,9 +4030,10 @@ const withTimeout = (promise, ms, label = "timeout") =>
         body: JSON.stringify({
           offer_id: offer.serverId,
           to: sendTo,
-          subject: `Auftragsbestätigung ${offer.reference || ""}`.trim(),
+          subject: sendSubject || `Auftragsbestätigung ${offer.reference || ""}`.trim(),
           html: buildOfferEmailHtml(offer, confirmUrl, "confirmation", {
-            signatureHtml
+            signatureHtml,
+            introHtml
           }),
           text
         })
@@ -4015,6 +4059,8 @@ const withTimeout = (promise, ms, label = "timeout") =>
         }));
       }
       setSendStatus("sent");
+      setToast("E-Mail gesendet.");
+      closeOfferEmailComposer();
     } catch (error) {
       setSendStatus("error");
     }
@@ -5806,10 +5852,13 @@ const withTimeout = (promise, ms, label = "timeout") =>
                                 type="button"
                                 onClick={() => {
                                   setActiveId(offer.id);
-                                  sendConfirmationEmail(offer);
+                                  openConfirmationEmailComposerForOffer(offer);
                                   setConfirmationMenuOfferId("");
                                 }}
-                          disabled={(sendStatus === "sending" || sendStatus === "preparing") || !offer.serverId}
+                                disabled={
+                                  (sendStatus === "sending" || sendStatus === "preparing") ||
+                                  !offer.serverId
+                                }
                                 className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50 disabled:opacity-50"
                               >
                                 E-Mail senden
@@ -6908,7 +6957,11 @@ const withTimeout = (promise, ms, label = "timeout") =>
   </main>
   <EmailComposerModal
     open={offerEmailModalOpen}
-    title="Angebot per E-Mail senden"
+    title={
+      emailMode === "confirmation"
+        ? "Auftragsbestätigung per E-Mail senden"
+        : "Angebot per E-Mail senden"
+    }
     recipient={sendTo}
     subject={sendSubject}
     body={offerEmailBody}
@@ -6917,10 +6970,17 @@ const withTimeout = (promise, ms, label = "timeout") =>
     isSending={sendStatus === "sending" || sendStatus === "preparing"}
     busyText={sendStatus === "preparing" ? "PDF wird erstellt..." : "E-Mail wird versendet..."}
     trackingResetChecked={resetTracking}
-    onTrackingResetChange={setResetTracking}
+    onTrackingResetChange={emailMode === "confirmation" ? undefined : setResetTracking}
     previewSignatureHtml={smtpSignatureHtml}
     onClose={closeOfferEmailComposer}
-    onSend={handleOfferEmailSend}
+    onSend={() => {
+      const offer = emailOffer || activeOffer;
+      if (emailMode === "confirmation") {
+        sendConfirmationEmail(offer);
+      } else {
+        handleOfferEmailSend();
+      }
+    }}
     onRecipientChange={(value) => {
       setRecipientTouched(true);
       setSendTo(value);
