@@ -720,8 +720,7 @@ const getMaxOfferIndex = (offers, format) => {
 
 const getNextOfferIndex = (offers, format, lastIndex = 0) => {
   const max = Math.max(lastIndex || 0, getMaxOfferIndex(offers, format) || 0);
-  if (!max) return offers.length + 1;
-  return max + 1;
+  return max + 1 || 1;
 };
 
 const createEmptyOffer = (index, format) => ({

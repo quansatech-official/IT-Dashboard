@@ -240,6 +240,15 @@ export default function App() {
     resizeSignatureCanvas();
   }, [signatureModalOpen]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (signatureModalOpen) {
+      document.body.classList.add("modal-open");
+      return () => document.body.classList.remove("modal-open");
+    }
+    document.body.classList.remove("modal-open");
+  }, [signatureModalOpen]);
+
   const handlePointerDown = (event) => {
     event.preventDefault();
     const canvas = signatureCanvasRef.current;
