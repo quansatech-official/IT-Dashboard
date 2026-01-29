@@ -786,8 +786,22 @@ const htmlToPlainText = (html = "") =>
 
 const normalizeHtmlBody = (html = "") => (htmlToPlainText(html) ? String(html).trim() : "");
 
+const escapeHtml = (value = "") =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+const ensureHtmlBody = (value = "") => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  if (/<[a-z][\s\S]*>/i.test(trimmed)) return trimmed;
+  const safe = escapeHtml(trimmed).replace(/\n/g, "<br/>");
+  return `<p>${safe}</p>`;
+};
+
 const DEFAULT_OFFER_EMAIL_BODY =
-  "<p>Sehr geehrte Damen und Herren,</p><p>vielen Dank f\u00fcr Ihre Anfrage. Gerne unterbreiten wir Ihnen das gew\u00fcnschte freibleibende Angebot (siehe Anhang).</p>";
+  "Sehr geehrte Damen und Herren,\n\nvielen Dank f\u00fcr Ihre Anfrage. Gerne unterbreiten wir Ihnen das gew\u00fcnschte freibleibende Angebot (siehe Anhang).";
 
 const normalizeServerOffer = (payload) => {
   if (!payload || typeof payload !== "object") return null;
@@ -2597,6 +2611,7 @@ export default function OffersView() {
   const [offerEmailBody, setOfferEmailBody] = useState("");
   const [offerEmailModalOpen, setOfferEmailModalOpen] = useState(false);
   const [emailOfferId, setEmailOfferId] = useState("");
+  const [toast, setToast] = useState("");
   const [emailHelperText, setEmailHelperText] = useState("");
   const [smtpSignatureHtml, setSmtpSignatureHtml] = useState(loadCachedSignature);
   const [recipientTouched, setRecipientTouched] = useState(false);
@@ -3150,6 +3165,12 @@ export default function OffersView() {
   useEffect(() => {
     setDetailDraft(activeOffer?.detailHtml || "");
   }, [activeOffer?.id]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(""), 1800);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     if (!activeOffer?.id) return;
@@ -3841,10 +3862,10 @@ export default function OffersView() {
       setSendStatus("error");
       return;
     }
-    setSendStatus("sending");
+    setSendStatus("preparing");
     try {
       const confirmUrl = buildOfferConfirmUrl(offer.confirmGuid);
-      const introHtml = normalizeHtmlBody(offerEmailBody || "");
+      const introHtml = ensureHtmlBody(offerEmailBody || "");
       const signatureHtml = String(smtpSignatureHtml || "").trim();
       let html = buildOfferEmailHtml(offer, confirmUrl, "offer", {
         introHtml,
@@ -3861,6 +3882,7 @@ export default function OffersView() {
       }
       const pdfBlob = await generateOfferPdfBlob(offer, "offer");
       const { attachments } = await buildEmailAttachments(offer, pdfBlob);
+      setSendStatus("sending");
       const res = await fetch("/api/offers/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3894,6 +3916,7 @@ export default function OffersView() {
         }));
       }
       setSendStatus("sent");
+      setToast("E-Mail gesendet.");
       closeOfferEmailComposer();
     } catch (error) {
       setSendStatus("error");
@@ -4586,6 +4609,11 @@ export default function OffersView() {
 
   return (
     <div className="min-h-screen bg-sand-50 offers-view">
+      {toast ? (
+        <div className="fixed top-5 right-6 z-50 bg-sand-900 text-white text-xs uppercase tracking-wide px-4 py-2 rounded-full shadow-soft">
+          {toast}
+        </div>
+      ) : null}
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-2">
           <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
@@ -5739,7 +5767,7 @@ export default function OffersView() {
                                   sendConfirmationEmail(offer);
                                   setConfirmationMenuOfferId("");
                                 }}
-                                disabled={sendStatus === "sending" || !offer.serverId}
+                          disabled={(sendStatus === "sending" || sendStatus === "preparing") || !offer.serverId}
                                 className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50 disabled:opacity-50"
                               >
                                 E-Mail senden
@@ -6844,7 +6872,8 @@ export default function OffersView() {
     body={offerEmailBody}
     helperText={emailHelperText || "HTML wird gesendet, Plaintext wird automatisch erstellt."}
     trackingText={emailTrackingText}
-    isSending={sendStatus === "sending"}
+    isSending={sendStatus === "sending" || sendStatus === "preparing"}
+    busyText={sendStatus === "preparing" ? "PDF wird erstellt..." : "E-Mail wird versendet..."}
     onClose={closeOfferEmailComposer}
     onSend={handleOfferEmailSend}
     onRecipientChange={(value) => {

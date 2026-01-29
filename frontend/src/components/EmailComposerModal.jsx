@@ -1,5 +1,5 @@
+import { useState } from "react";
 import { X } from "lucide-react";
-import NotesRichTextEditor from "./NotesRichTextEditor";
 
 const inputClass =
   "w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200";
@@ -13,6 +13,7 @@ export default function EmailComposerModal({
   helperText = "",
   trackingText = "",
   isSending = false,
+  busyText = "",
   sendLabel = "Senden",
   bodyFontFamily = "Arial, Helvetica, sans-serif",
   onClose,
@@ -22,9 +23,19 @@ export default function EmailComposerModal({
   onBodyChange
 }) {
   if (!open) return null;
+  const [showPreview, setShowPreview] = useState(true);
+  const busyLabel = busyText || "Bitte warten...";
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
-      <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+      <div className="relative w-full max-w-lg overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+        {isSending ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 backdrop-blur">
+            <div className="flex flex-col items-center gap-3 text-xs uppercase tracking-wide text-sand-600">
+              <span className="h-6 w-6 animate-spin rounded-full border-2 border-sand-300 border-t-transparent" />
+              <span>{busyLabel}</span>
+            </div>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between border-b border-sand-100 px-6 py-4">
           <h3 className="text-lg font-display text-sand-900">{title}</h3>
           <button
@@ -62,15 +73,32 @@ export default function EmailComposerModal({
           {showBody ? (
             <label className="text-xs text-sand-500">
               Nachricht
-              <div className="mt-2">
-                <NotesRichTextEditor
-                  value={body}
-                  onChange={onBodyChange}
-                  placeholder="Sehr geehrte Damen und Herren,"
-                  minHeight="140px"
-                  fontFamily={bodyFontFamily}
-                />
+              <textarea
+                className={`${inputClass} mt-2 min-h-[140px] resize-y`}
+                value={body}
+                onChange={(event) => onBodyChange?.(event.target.value)}
+                placeholder="Sehr geehrte Damen und Herren,"
+                style={bodyFontFamily ? { fontFamily: bodyFontFamily } : undefined}
+              />
+              <div className="mt-3 flex items-center justify-between">
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  Vorschau
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowPreview((current) => !current)}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+                >
+                  {showPreview ? "Ausblenden" : "Anzeigen"}
+                </button>
               </div>
+              {showPreview ? (
+                <div
+                  className="mt-2 rounded-2xl border border-sand-200 bg-sand-50 p-3 text-sm text-sand-800"
+                  style={bodyFontFamily ? { fontFamily: bodyFontFamily } : undefined}
+                  dangerouslySetInnerHTML={{ __html: body || "" }}
+                />
+              ) : null}
             </label>
           ) : null}
         </div>
