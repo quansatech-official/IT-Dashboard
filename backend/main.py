@@ -1085,6 +1085,7 @@ class OfferSendRequest(BaseModel):
     html: str
     text: Optional[str] = None
     attachments: Optional[List[EmailAttachment]] = None
+    reset_tracking: Optional[bool] = False
 
 
 ReportSendRequest.update_forward_refs()
@@ -4182,6 +4183,7 @@ def offer_open(guid: str):
         if offer:
             offer.opened_at = int(time.time() * 1000)
             offer.opened_count = (offer.opened_count or 0) + 1
+            offer.updated_at = offer.opened_at
             db.commit()
     pixel = (
         b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
@@ -4637,8 +4639,17 @@ def send_offer(data: OfferSendRequest):
 
         tracking_guid = ""
         html = data.html or ""
+        existing_tracking = ""
+        if data.offer_id:
+            existing = db.query(Offer).get(data.offer_id)
+            if existing:
+                existing_tracking = existing.tracking_guid or ""
         if settings.beacon_base_url:
-            tracking_guid = str(uuid.uuid4())
+            should_reset = bool(data.reset_tracking)
+            if should_reset or not existing_tracking:
+                tracking_guid = str(uuid.uuid4())
+            else:
+                tracking_guid = existing_tracking
             pixel_url = _build_offer_beacon_url(settings.beacon_base_url, tracking_guid)
             if pixel_url:
                 html += f'<img src="{pixel_url}" alt="" width="1" height="1" style="display:none;" />'

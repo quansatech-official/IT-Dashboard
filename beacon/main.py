@@ -38,7 +38,8 @@ def _touch_report(guid: str) -> None:
             text(
                 "UPDATE reports "
                 "SET opened_at = :opened_at, "
-                "opened_count = COALESCE(opened_count, 0) + 1 "
+                "opened_count = COALESCE(opened_count, 0) + 1, "
+                "updated_at = :opened_at "
                 "WHERE guid = :guid"
             ),
             {"opened_at": int(time.time() * 1000), "guid": guid},
@@ -54,7 +55,8 @@ def _touch_offer(guid: str) -> None:
             text(
                 "UPDATE offers "
                 "SET opened_at = :opened_at, "
-                "opened_count = COALESCE(opened_count, 0) + 1 "
+                "opened_count = COALESCE(opened_count, 0) + 1, "
+                "updated_at = :opened_at "
                 "WHERE guid = :guid OR tracking_guid = :guid"
             ),
             {"opened_at": int(time.time() * 1000), "guid": guid},

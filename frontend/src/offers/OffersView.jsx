@@ -2612,6 +2612,7 @@ export default function OffersView() {
   const [offerEmailModalOpen, setOfferEmailModalOpen] = useState(false);
   const [emailOfferId, setEmailOfferId] = useState("");
   const [toast, setToast] = useState("");
+  const [resetTracking, setResetTracking] = useState(false);
   const [emailHelperText, setEmailHelperText] = useState("");
   const [smtpSignatureHtml, setSmtpSignatureHtml] = useState(loadCachedSignature);
   const [recipientTouched, setRecipientTouched] = useState(false);
@@ -3721,16 +3722,30 @@ export default function OffersView() {
     setExportOfferId(offer.id);
   };
 
-  const generateOfferPdfBlob = (offer, mode = "offer") =>
-    new Promise((resolve, reject) => {
-      if (!offer) {
-        reject(new Error("offer_missing"));
-        return;
-      }
-      emailExportPromiseRef.current = { resolve, reject };
-      setEmailExportMode(mode);
-      setEmailExportOfferId(offer.id);
-    });
+const generateOfferPdfBlob = (offer, mode = "offer") =>
+  new Promise((resolve, reject) => {
+    if (!offer) {
+      reject(new Error("offer_missing"));
+      return;
+    }
+    emailExportPromiseRef.current = { resolve, reject };
+    setEmailExportMode(mode);
+    setEmailExportOfferId(offer.id);
+  });
+
+const withTimeout = (promise, ms, label = "timeout") =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(label)), ms);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
 
   const blobToBase64 = async (blob) => {
     const buffer = await blob.arrayBuffer();
@@ -3831,6 +3846,7 @@ export default function OffersView() {
     const defaultText = `Angebot ${offer.reference || ""}`.trim();
     setSendSubject(defaultText);
     setOfferEmailBody(DEFAULT_OFFER_EMAIL_BODY);
+    setResetTracking(false);
     const customer = customersByName.get(String(offer.customer || "").toLowerCase());
     if (!sendTo && customer?.email) {
       setSendTo(customer.email);
@@ -3852,6 +3868,7 @@ export default function OffersView() {
     setOfferEmailBody("");
     setSendSubject("");
     setSendTo("");
+    setResetTracking(false);
     setRecipientTouched(false);
   };
 
@@ -3880,7 +3897,11 @@ export default function OffersView() {
       if (signatureText) {
         text = `${text}\n\n${signatureText}`;
       }
-      const pdfBlob = await generateOfferPdfBlob(offer, "offer");
+      const pdfBlob = await withTimeout(
+        generateOfferPdfBlob(offer, "offer"),
+        20000,
+        "pdf_timeout"
+      );
       const { attachments } = await buildEmailAttachments(offer, pdfBlob);
       setSendStatus("sending");
       const res = await fetch("/api/offers/send", {
@@ -3892,7 +3913,8 @@ export default function OffersView() {
           subject: sendSubject || `Angebot ${offer.reference || ""}`.trim(),
           html,
           text,
-          attachments
+          attachments,
+          reset_tracking: resetTracking
         })
       });
       if (!res.ok) throw new Error("send_failed");
@@ -3919,6 +3941,11 @@ export default function OffersView() {
       setToast("E-Mail gesendet.");
       closeOfferEmailComposer();
     } catch (error) {
+      if (error?.message === "pdf_timeout") {
+        setToast("PDF Erstellung dauert zu lange.");
+      } else {
+        setToast("E-Mail Versand fehlgeschlagen.");
+      }
       setSendStatus("error");
     }
     setTimeout(() => setSendStatus("idle"), 3000);
@@ -6874,6 +6901,9 @@ export default function OffersView() {
     trackingText={emailTrackingText}
     isSending={sendStatus === "sending" || sendStatus === "preparing"}
     busyText={sendStatus === "preparing" ? "PDF wird erstellt..." : "E-Mail wird versendet..."}
+    trackingResetChecked={resetTracking}
+    onTrackingResetChange={setResetTracking}
+    previewSignatureHtml={smtpSignatureHtml}
     onClose={closeOfferEmailComposer}
     onSend={handleOfferEmailSend}
     onRecipientChange={(value) => {

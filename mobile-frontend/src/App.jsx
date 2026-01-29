@@ -428,7 +428,7 @@ export default function App() {
             />
             <div className="delivery-actions-fixed fixed-action-bar">
               <button className="primary-btn" type="button" onClick={saveDeliveryNote}>
-                Lieferschein speichern
+                Speichern
               </button>
               <button className="secondary-btn" type="button" onClick={clearDeliveryForm}>
                 Leeren
@@ -665,27 +665,6 @@ function DeliverySection({
           </button>
         </div>
       </div>
-      {deliveryCustomerMatch ? (
-        <div className="list scroll-area">
-          <div className="section-title">Letzte Lieferscheine</div>
-          {deliveryNotes.slice(0, 4).map((note) => (
-            <div key={note.id} className="list-item">
-              <div className="list-title">Lieferschein</div>
-              <div className="list-sub">
-                {note.created_at
-                  ? new Date(note.created_at).toLocaleDateString("de-DE")
-                  : ""}
-                {note.time_from || note.time_to
-                  ? ` · ${note.time_from || "--:--"}–${note.time_to || "--:--"}`
-                  : ""}
-              </div>
-            </div>
-          ))}
-          {!deliveryNotes.length ? (
-            <div className="hint">Keine Lieferscheine vorhanden.</div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 }
