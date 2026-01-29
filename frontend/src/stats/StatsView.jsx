@@ -3,6 +3,14 @@ import { BarChart3, FileText, PhoneCall, ClipboardList, Receipt } from "lucide-r
 
 const API = "/api";
 
+const formatNumber = (value, options = {}) =>
+  Number(value || 0).toLocaleString("de-DE", options);
+const formatEur = (value) =>
+  `€ ${Number(value || 0).toLocaleString("de-DE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`;
+
 const StatCard = ({ title, value, subtitle }) => (
   <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
     <p className="text-[9px] uppercase tracking-[0.28em] text-sand-500">{title}</p>
@@ -76,14 +84,6 @@ export default function StatsView() {
     if (!total) return "0%";
     return `${Math.round((part / total) * 100)}%`;
   };
-
-  const formatNumber = (value, options = {}) =>
-    Number(value || 0).toLocaleString("de-DE", options);
-  const formatEur = (value) =>
-    `€ ${Number(value || 0).toLocaleString("de-DE", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    })}`;
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">

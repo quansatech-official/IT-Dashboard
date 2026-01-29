@@ -21,6 +21,7 @@ export default function NotesRichTextEditor({
   fontFamily = ""
 }) {
   const [isEmpty, setIsEmpty] = useState(true);
+  const [headingLevel, setHeadingLevel] = useState(0);
   const lastValueRef = useRef("");
   const imageInputRef = useRef(null);
 
@@ -46,7 +47,11 @@ export default function NotesRichTextEditor({
       const html = editor.getHTML();
       lastValueRef.current = html;
       setIsEmpty(editor.isEmpty);
+      setHeadingLevel(editor.getAttributes("heading").level || 0);
       onChange?.(html);
+    },
+    onSelectionUpdate: ({ editor }) => {
+      setHeadingLevel(editor.getAttributes("heading").level || 0);
     }
   });
 
@@ -90,7 +95,7 @@ export default function NotesRichTextEditor({
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <select
-          value={editor?.getAttributes("heading").level || 0}
+          value={headingLevel}
           onChange={(event) => {
             if (!editor) return;
             const level = Number(event.target.value);

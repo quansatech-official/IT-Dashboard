@@ -36,7 +36,7 @@ export default function EmailComposerModal({
           </button>
         </div>
         <div className="space-y-4 px-6 py-4">
-          <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+          <label className="text-xs text-sand-500">
             Empfänger E-Mail
             <input
               className={inputClass}
@@ -45,7 +45,7 @@ export default function EmailComposerModal({
               placeholder="kunde@example.com"
             />
           </label>
-          <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+          <label className="text-xs text-sand-500">
             Betreff
             <input
               className={inputClass}
@@ -55,7 +55,7 @@ export default function EmailComposerModal({
             />
           </label>
           {showBody ? (
-            <label className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+            <label className="text-xs text-sand-500">
               Nachricht
               <div className="mt-2">
                 <NotesRichTextEditor
@@ -76,7 +76,7 @@ export default function EmailComposerModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-full border border-sand-200 px-4 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+              className="rounded-full border border-sand-200 px-4 py-1.5 text-xs text-sand-600 hover:bg-sand-50"
             >
               Abbrechen
             </button>
@@ -84,7 +84,7 @@ export default function EmailComposerModal({
               type="button"
               onClick={onSend}
               disabled={isSending || !recipient}
-              className={`inline-flex items-center justify-center gap-2 rounded-full px-4 py-1.5 text-xs uppercase tracking-wide text-white ${
+              className={`inline-flex items-center justify-center gap-2 rounded-full px-4 py-1.5 text-xs text-white ${
                 isSending
                   ? "bg-sand-400 cursor-wait"
                   : "bg-sand-900 hover:opacity-90 disabled:cursor-not-allowed"

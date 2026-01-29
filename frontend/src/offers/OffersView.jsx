@@ -2578,6 +2578,7 @@ export default function OffersView() {
   const [emailOfferId, setEmailOfferId] = useState("");
   const [emailHelperText, setEmailHelperText] = useState("");
   const [smtpSignatureHtml, setSmtpSignatureHtml] = useState(loadCachedSignature);
+  const [recipientTouched, setRecipientTouched] = useState(false);
   const [handoverModal, setHandoverModal] = useState({
     open: false,
     offerId: "",
@@ -3102,10 +3103,10 @@ export default function OffersView() {
       }
       return changed ? next : offer;
     });
-    if (!sendTo && match.email) {
+    if (!sendTo && match.email && !recipientTouched) {
       setSendTo(match.email);
     }
-  }, [activeOffer?.id, activeOffer?.customer, customersByName, sendTo]);
+  }, [activeOffer?.id, activeOffer?.customer, customersByName, sendTo, recipientTouched]);
 
   useEffect(() => {
     if (!serviceBlocks.length) return;
@@ -3784,6 +3785,7 @@ export default function OffersView() {
       return;
     }
     setEmailOfferId(offer.id);
+    setRecipientTouched(false);
     const defaultText = `Angebot ${offer.reference || ""}`.trim();
     setSendSubject((prev) => prev || defaultText);
     setOfferEmailBody(DEFAULT_OFFER_EMAIL_BODY);
@@ -3806,6 +3808,7 @@ export default function OffersView() {
     setEmailOfferId("");
     setEmailHelperText("");
     setOfferEmailBody("");
+    setRecipientTouched(false);
   };
 
   const handleOfferEmailSend = async () => {
@@ -6818,7 +6821,10 @@ export default function OffersView() {
     isSending={sendStatus === "sending"}
     onClose={closeOfferEmailComposer}
     onSend={handleOfferEmailSend}
-    onRecipientChange={setSendTo}
+    onRecipientChange={(value) => {
+      setRecipientTouched(true);
+      setSendTo(value);
+    }}
     onSubjectChange={setSendSubject}
     onBodyChange={setOfferEmailBody}
     sendLabel="Senden"
