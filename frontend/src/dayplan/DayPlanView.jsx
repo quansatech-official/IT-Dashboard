@@ -1065,7 +1065,24 @@ export default function DayPlanView() {
       : 0;
     const timeInputValue = timeEdits[task.id] ?? msToHHMMSS(elapsedMs);
     const isTimerCollapsed = Boolean(collapsedTimers[task.id]);
-    const hasDeadline = Boolean(String(task?.deadline || "").trim());
+    const rawDeadline = String(task?.deadline || "").trim();
+    const hasDeadline = Boolean(rawDeadline);
+    const deadlineMs = hasDeadline ? new Date(rawDeadline).getTime() : NaN;
+    const deadlineDiffMs = Number.isFinite(deadlineMs) ? deadlineMs - nowMs : NaN;
+    const deadlineCornerClass = !Number.isFinite(deadlineMs)
+      ? ""
+      : deadlineDiffMs < 0
+      ? "border-t-rose-500"
+      : deadlineDiffMs <= 2 * 24 * 60 * 60 * 1000
+      ? "border-t-amber-400"
+      : "border-t-emerald-500";
+    const deadlineTooltip = !Number.isFinite(deadlineMs)
+      ? ""
+      : deadlineDiffMs < 0
+      ? `Deadline überschritten (${Math.ceil(Math.abs(deadlineDiffMs) / 86400000)} Tage)`
+      : deadlineDiffMs <= 2 * 24 * 60 * 60 * 1000
+      ? `Deadline in ${Math.max(1, Math.ceil(deadlineDiffMs / 86400000))} Tagen`
+      : `Deadline in ${Math.ceil(deadlineDiffMs / 86400000)} Tagen`;
     const isDetailsCollapsed = detailOpenId !== task.id;
     return (
       <div
@@ -1076,8 +1093,11 @@ export default function DayPlanView() {
           event.dataTransfer.setData("text/plain", `task:${task.id}`);
         }}
       >
-        {hasDeadline && isDetailsCollapsed ? (
-          <div className="pointer-events-none absolute right-0 top-0 h-0 w-0 border-l-[14px] border-t-[14px] border-l-transparent border-t-rose-500" />
+        {hasDeadline && isDetailsCollapsed && deadlineCornerClass ? (
+          <div
+            className={`pointer-events-none absolute right-0 top-0 h-0 w-0 border-l-[14px] border-t-[14px] border-l-transparent ${deadlineCornerClass}`}
+            title={deadlineTooltip}
+          />
         ) : null}
         <div className="flex items-start gap-1.5">
           <div className="flex-1 min-w-0">

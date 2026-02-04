@@ -325,6 +325,7 @@ export default function ReportView() {
   const [smtpSignatureHtml, setSmtpSignatureHtml] = useState(loadCachedSignature);
   const [freeText, setFreeText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isPdfExporting, setIsPdfExporting] = useState(false);
   const [integrationSettings, setIntegrationSettings] = useState({
     rmm_host: "",
@@ -955,6 +956,32 @@ export default function ReportView() {
       setFreeText("");
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const addFromFreeTextWithAi = async () => {
+    if (!freeText.trim()) {
+      setToast("Bitte Freitext eingeben.");
+      return;
+    }
+    setIsAiGenerating(true);
+    try {
+      const res = await fetch("/api/ai_action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: freeText })
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data && typeof data === "object") {
+        addAction(data);
+        setFreeText("");
+        return;
+      }
+      const payload = parseActionFromText(freeText);
+      addAction(payload);
+      setFreeText("");
+    } finally {
+      setIsAiGenerating(false);
     }
   };
 
@@ -1889,23 +1916,42 @@ export default function ReportView() {
                     className="w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     placeholder="z. B. Server-Updates einspielen, um kritische Sicherheitslücken zu schließen. Wartungsfenster nötig. Dauer 1h."
                   />
-                  <button
-                    type="button"
-                    onClick={addFromFreeText}
-                    disabled={isGenerating}
-                    className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isGenerating ? (
-                      <span className="inline-flex items-center gap-2">
-                        <span className="h-3.5 w-3.5 rounded-full border-2 border-sand-300 border-t-sand-700 animate-spin" />
-                        Übernehme ...
-                      </span>
-                    ) : (
-                      <>
-                        <Plus size={14} /> Übernehmen
-                      </>
-                    )}
-                  </button>
+                  <div className="mt-auto flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={addFromFreeTextWithAi}
+                      disabled={isGenerating || isAiGenerating}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isAiGenerating ? (
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-3.5 w-3.5 rounded-full border-2 border-sand-300 border-t-sand-700 animate-spin" />
+                          KI generiert ...
+                        </span>
+                      ) : (
+                        <>
+                          <Sparkles size={14} /> KI generieren
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={addFromFreeText}
+                      disabled={isGenerating || isAiGenerating}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isGenerating ? (
+                        <span className="inline-flex items-center gap-2">
+                          <span className="h-3.5 w-3.5 rounded-full border-2 border-sand-300 border-t-sand-700 animate-spin" />
+                          Übernehme ...
+                        </span>
+                      ) : (
+                        <>
+                          <Plus size={14} /> Übernehmen
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
 

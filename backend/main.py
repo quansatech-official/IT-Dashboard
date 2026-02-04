@@ -1392,7 +1392,8 @@ def _build_sevdesk_draft_header(
     if not invoice_number:
         invoice_number = client.get_next_invoice_number(config.invoice_type)
     if not invoice_number:
-        raise SevdeskError("Could not determine Sevdesk invoice number.", status_code=502)
+        logger.warning("Sevdesk invoice number unavailable, falling back to generic header.")
+        return "Rechnung"
     return f"Rechnung RE-Nr. {invoice_number}"
 
 
@@ -3907,6 +3908,7 @@ def generate_action(data: ActionAiRequest):
     action = parse_action_json(payload.get("response"))
     if not action:
         raise HTTPException(502, "Invalid AI response")
+    return action
 
 
 @app.post("/api/offer_ai_text")
@@ -4441,9 +4443,66 @@ def get_company_stats(days: int = 30):
         reports_confirmed = (
             db.query(Report).filter(Report.customer_status == "Bestätigt").count()
         )
-        reports_opened = db.query(Report).filter(Report.opened_count > 0).count()
-        reports_unread = db.query(Report).filter(Report.opened_count == 0).count()
+        reports_opened = (
+            db.query(Report)
+            .filter(
+                or_(
+                    Report.opened_count > 0,
+                    func.lower(Report.customer_status).in_(["gelesen", "bestätigt"]),
+                )
+            )
+            .count()
+        )
+        reports_unread = max(0, reports_total - reports_opened)
         reports_sent = db.query(Report).filter(Report.sent_at > 0).count()
+
+        month_cursor = datetime(now_dt.year, now_dt.month, 1)
+        month_starts = []
+        for _ in range(6):
+            month_starts.append(month_cursor)
+            prev = month_cursor - timedelta(days=1)
+            month_cursor = datetime(prev.year, prev.month, 1)
+        month_starts.reverse()
+        first_month_start = month_starts[0]
+        first_month_start_ms = int(first_month_start.timestamp() * 1000)
+        month_stats = {
+            f"{m.year:04d}-{m.month:02d}": {
+                "key": f"{m.year:04d}-{m.month:02d}",
+                "year": m.year,
+                "month": m.month,
+                "total": 0,
+                "sent": 0,
+                "opened": 0,
+                "unread": 0,
+                "confirmed": 0,
+            }
+            for m in month_starts
+        }
+        report_rows = (
+            db.query(Report)
+            .filter(Report.created_at >= first_month_start_ms)
+            .all()
+        )
+        for report in report_rows:
+            created_at = report.created_at or 0
+            created_dt = datetime.fromtimestamp(created_at / 1000) if created_at else now_dt
+            key = f"{created_dt.year:04d}-{created_dt.month:02d}"
+            bucket = month_stats.get(key)
+            if not bucket:
+                continue
+            is_sent = (report.sent_at or 0) > 0
+            is_read = (report.opened_count or 0) > 0 or (
+                (report.customer_status or "").strip().lower() in {"gelesen", "bestätigt"}
+            )
+            bucket["total"] += 1
+            if is_sent:
+                bucket["sent"] += 1
+            if is_read:
+                bucket["opened"] += 1
+            else:
+                bucket["unread"] += 1
+            if (report.customer_status or "").strip() == "Bestätigt":
+                bucket["confirmed"] += 1
 
         settings = _get_customer_metrics_settings(db)
         try:
@@ -4525,6 +4584,7 @@ def get_company_stats(days: int = 30):
             "unread": reports_unread,
             "confirmed": reports_confirmed,
         },
+        "reportsMonthly": list(month_stats.values()),
         "sevdesk": sevdesk_stats,
         "revenueEstimateEur": revenue_estimate,
         "revenueEstimateTodayEur": revenue_estimate_today,

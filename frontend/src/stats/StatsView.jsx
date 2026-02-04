@@ -10,6 +10,16 @@ const formatEur = (value) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   })}`;
+const formatMonthLabel = (year, month) =>
+  new Date(year, month - 1, 1).toLocaleDateString("de-DE", {
+    month: "short",
+    year: "numeric"
+  });
+const formatDelta = (value) => {
+  if (value === null || typeof value === "undefined") return "—";
+  if (!value) return "±0";
+  return `${value > 0 ? "+" : ""}${value}`;
+};
 
 const StatCard = ({ title, value, subtitle }) => (
   <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
@@ -84,6 +94,7 @@ export default function StatsView() {
     if (!total) return "0%";
     return `${Math.round((part / total) * 100)}%`;
   };
+  const reportMonthly = Array.isArray(stats?.reportsMonthly) ? stats.reportsMonthly : [];
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
@@ -297,6 +308,44 @@ export default function StatsView() {
                   value={stats.reports?.confirmed ?? 0}
                   subtitle={percent(stats.reports?.confirmed ?? 0, stats.reports?.total ?? 0)}
                 />
+              </div>
+              <div className="mt-4">
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500 mb-2">
+                  Berichte pro Monat
+                </p>
+                {reportMonthly.length ? (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {reportMonthly.map((item, index) => {
+                      const prev = reportMonthly[index - 1];
+                      const deltaTotal = prev ? (item.total || 0) - (prev.total || 0) : null;
+                      return (
+                        <div
+                          key={item.key || `${item.year}-${item.month}`}
+                          className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft"
+                        >
+                          <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">
+                            {formatMonthLabel(item.year, item.month)}
+                          </p>
+                          <p className="text-lg font-metrics text-sand-900 mt-1.5">
+                            {formatNumber(item.total ?? 0)}
+                          </p>
+                          <p className="text-[11px] text-sand-500 mt-1">
+                            Veränderung zum Vormonat: {formatDelta(deltaTotal)}
+                          </p>
+                          <div className="mt-2 text-[11px] text-sand-500 flex flex-wrap gap-x-3 gap-y-1">
+                            <span>Gesendet: {formatNumber(item.sent ?? 0)}</span>
+                            <span>Gelesen: {formatNumber(item.opened ?? 0)}</span>
+                            <span>Bestätigt: {formatNumber(item.confirmed ?? 0)}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-sand-200 bg-sand-50 px-4 py-4 text-sm text-sand-500">
+                    Keine Monatsdaten vorhanden.
+                  </div>
+                )}
               </div>
             </section>
           </>

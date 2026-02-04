@@ -23,6 +23,7 @@ import {
   X
 } from "lucide-react";
 import EmailComposerModal from "../components/EmailComposerModal";
+import NotesRichTextEditor from "../components/NotesRichTextEditor";
 import html2pdf from "html2pdf.js";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
@@ -608,7 +609,15 @@ const formatUnitQuantity = (quantity, unit) => {
   return `${Number(quantity || 0)} ${label}`;
 };
 
-const parseNumberInput = (value) => (value === "" ? "" : Number(value));
+const parseNumberInput = (value) => {
+  if (value === "") return "";
+  const raw = String(value).trim();
+  if (raw === "") return "";
+  const normalized = raw.includes(",")
+    ? raw.replace(/\./g, "").replace(",", ".")
+    : raw;
+  return Number(normalized);
+};
 
 const normalizeQuantityInput = (value, fallback = 1) => {
   if (value === "" || value === null || typeof value === "undefined") return "";
@@ -993,6 +1002,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const hasPositionText = previewPositions.some((item) => item.text);
   const hasProductPhotos = previewPositions.some((item) => item.images?.length);
   const isExport = Boolean(containerRef);
+  const detailHtml = ensureHtmlBody(offer.detailHtml || "");
   const rowsPerPage = isExport ? 8 : Number.POSITIVE_INFINITY;
   const previewRowsPerPage = 10;
   const pageSize = isExport ? rowsPerPage : previewRowsPerPage;
@@ -1551,10 +1561,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         </div>
       ) : null}
 
-                      {offer.detailHtml ? (
+                      {detailHtml ? (
                         <div className="html2pdf__page-break" />
                       ) : null}
-                      {offer.detailHtml ? (
+                      {detailHtml ? (
                         <div
                           className="mx-auto"
                           style={{
@@ -1587,9 +1597,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                   Angebotsdetails
                 </p>
-                <p className="mt-2 text-sm text-sand-700 whitespace-pre-line">
-                  {offer.detailHtml}
-                </p>
+                <div
+                  className="offer-detail-html mt-2 text-sm text-sand-700"
+                  dangerouslySetInnerHTML={{ __html: detailHtml }}
+                />
               </div>
             </div>
             <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
@@ -3167,7 +3178,7 @@ export default function OffersView() {
   }, [calcBlocks, calcPick]);
 
   useEffect(() => {
-    setDetailDraft(activeOffer?.detailHtml || "");
+    setDetailDraft(ensureHtmlBody(activeOffer?.detailHtml || ""));
   }, [activeOffer?.id]);
 
   useEffect(() => {
@@ -5545,14 +5556,17 @@ export default function OffersView() {
                         </p>
                       </div>
                     </div>
-                    <textarea
-                      className="mt-3 w-full min-h-[160px] rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-[13px] text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400"
-                      value={detailDraft}
-                      onChange={(event) => setDetailDraft(event.target.value)}
-                      placeholder="Projektablauf, Hintergrund, Vorgehen..."
-                />
-                {!detailDraft ? (
-                  <p className="mt-2 text-xs text-sand-500">
+                    <div className="mt-3">
+                      <NotesRichTextEditor
+                        value={detailDraft}
+                        onChange={setDetailDraft}
+                        placeholder="Projektablauf, Hintergrund, Vorgehen..."
+                        minHeight="160px"
+                        fontFamily="inherit"
+                      />
+                    </div>
+                    {!detailDraft ? (
+                      <p className="mt-2 text-xs text-sand-500">
                         Formatierter Text aus Word/anderen Tools kann hier eingefügt werden.
                       </p>
                     ) : null}

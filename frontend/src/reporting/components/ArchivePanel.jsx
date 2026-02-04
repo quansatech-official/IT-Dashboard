@@ -47,9 +47,13 @@ export default function ArchivePanel({
     const periodNeedle = periodFilter.trim().toLowerCase();
     const matchesStatus = (item) =>
       !statusFilter || String(item.status || "").toLowerCase() === statusFilter.toLowerCase();
+    const isRead = (item) =>
+      item.openedCount > 0 ||
+      String(item.customerStatus || "").toLowerCase() === "gelesen" ||
+      String(item.customerStatus || "").toLowerCase() === "bestätigt";
     const matchesRead = (item) => {
-      if (readFilter === "read") return item.openedCount > 0;
-      if (readFilter === "unread") return !item.openedCount;
+      if (readFilter === "read") return isRead(item);
+      if (readFilter === "unread") return !isRead(item);
       return true;
     };
     const matchesConfirmed = (item) =>
@@ -136,6 +140,15 @@ export default function ArchivePanel({
                   <p className="text-xs text-sand-500">{item.period}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                  {item.sentAt ? (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide border px-3 py-1 rounded-full border-emerald-200 bg-emerald-50 text-emerald-700">
+                      Gesendet
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide border px-3 py-1 rounded-full border-sand-200 bg-white text-sand-500">
+                      Nicht gesendet
+                    </span>
+                  )}
                   {item.customerStatus ? (
                     <span
                       className={`text-[10px] font-semibold uppercase tracking-wide border px-3 py-1 rounded-full ${

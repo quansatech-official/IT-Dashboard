@@ -4,6 +4,11 @@
 @tailwind components;
 @tailwind utilities;
 
+.offer-detail-html {
+  break-inside: auto;
+  page-break-inside: auto;
+}
+
 @layer base {
   :root {
     --bg-50: #f2f5f8;
