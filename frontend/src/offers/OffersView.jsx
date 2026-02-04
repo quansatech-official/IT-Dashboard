@@ -1088,6 +1088,9 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   };
   const a4WidthPx = 210 * 3.7795275591;
   const a4HeightPx = 297 * 3.7795275591;
+  const pdfMarginMm = 8;
+  const pdfMarginPx = pdfMarginMm * 3.7795275591;
+  const exportPageHeightPx = a4HeightPx - pdfMarginPx * 2;
   const totalsContent = (
     <>
       {offer.calculationText ? (
@@ -1237,7 +1240,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           style={{
             width: `${a4WidthPx * scale}px`,
             height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-            minHeight: `${a4HeightPx * scale}px`
+            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
           }}
         >
           <div
@@ -1245,7 +1248,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               style={{
                 width: `${a4WidthPx}px`,
                 height: isExport ? "auto" : `${a4HeightPx}px`,
-                minHeight: `${a4HeightPx}px`,
+                minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 transform: `scale(${scale})`,
                 transformOrigin: "top left",
                 ...(isExport ? { transform: "none" } : {}),
@@ -1295,7 +1298,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             style={{
               width: `${a4WidthPx * scale}px`,
               height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-              minHeight: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`
+              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
             }}
           >
             <div
@@ -1303,7 +1306,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               style={{
                 width: `${a4WidthPx}px`,
                 height: isExport ? "auto" : `${a4HeightPx}px`,
-                minHeight: `${a4HeightPx}px`,
+                minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 paddingBottom: isExport ? "48px" : undefined,
                 transform: isExport ? "none" : `scale(${scale})`,
                 transformOrigin: "top left",
@@ -1542,7 +1545,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             style={{
               width: `${a4WidthPx * scale}px`,
               height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-              minHeight: `${a4HeightPx * scale}px`
+              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
             }}
           >
             <div
@@ -1550,7 +1553,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               style={{
                 width: `${a4WidthPx}px`,
                 height: isExport ? "auto" : `${a4HeightPx}px`,
-                minHeight: `${a4HeightPx}px`,
+                minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 paddingBottom: "48px",
                 transform: isExport ? "none" : `scale(${scale})`,
                 transformOrigin: "top left",
@@ -1584,7 +1587,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           style={{
             width: `${a4WidthPx * scale}px`,
             height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-            minHeight: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`
+            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
           }}
         >
           <div
@@ -1592,7 +1595,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             style={{
               width: `${a4WidthPx}px`,
               height: isExport ? "auto" : `${a4HeightPx}px`,
-              minHeight: `${a4HeightPx}px`,
+              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
               transform: `scale(${scale})`,
               transformOrigin: "top left"
             }}
@@ -1656,7 +1659,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                           style={{
                             width: `${a4WidthPx * scale}px`,
                             height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-                            minHeight: isExport ? `${a4HeightPx}px` : `${a4HeightPx * scale}px`
+                            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
           }}
         >
           <div
@@ -1664,7 +1667,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             style={{
               width: `${a4WidthPx}px`,
               height: isExport ? "auto" : `${a4HeightPx}px`,
-              minHeight: `${a4HeightPx}px`,
+              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
               transform: `scale(${scale})`,
               transformOrigin: "top left"
             }}
