@@ -305,8 +305,56 @@ const formatMoney = (value) => {
   });
 };
 
-const formatLineTotal = (price, quantity) =>
-  formatMoney(Number(price || 0) * Number(quantity || 0));
+const normalizeDiscountType = (value) => {
+  if (value === "percent" || value === "absolute") return value;
+  return "";
+};
+
+const calculateLineBase = (item) =>
+  Number(item?.price || 0) * Number(item?.quantity || 0);
+
+const calculateLineDiscount = (item) => {
+  const base = calculateLineBase(item);
+  if (base <= 0) return 0;
+  const type = normalizeDiscountType(item?.discountType);
+  const rawValue = Number(item?.discountValue || 0);
+  if (!type || rawValue <= 0) return 0;
+  if (type === "percent") {
+    const percent = Math.min(Math.max(rawValue, 0), 100);
+    return (base * percent) / 100;
+  }
+  const absolute = Math.max(rawValue, 0);
+  return Math.min(absolute, base);
+};
+
+const calculateLineNet = (item) => calculateLineBase(item) - calculateLineDiscount(item);
+
+const formatLineTotal = (item) => formatMoney(calculateLineNet(item));
+
+const calculateOfferDiscount = (offer, net) => {
+  const base = Number(net || 0);
+  if (base <= 0) return 0;
+  const type = normalizeDiscountType(offer?.discountType);
+  const rawValue = Number(offer?.discountValue || 0);
+  if (!type || rawValue <= 0) return 0;
+  if (type === "percent") {
+    const percent = Math.min(Math.max(rawValue, 0), 100);
+    return (base * percent) / 100;
+  }
+  const absolute = Math.max(rawValue, 0);
+  return Math.min(absolute, base);
+};
+
+const getLineDiscountNote = (item) => {
+  const discount = calculateLineDiscount(item);
+  if (!discount) return "";
+  const type = normalizeDiscountType(item?.discountType);
+  const rawValue = Number(item?.discountValue || 0);
+  if (type === "percent") {
+    return `Rabatt ${rawValue}% (-${formatMoney(discount)})`;
+  }
+  return `Rabatt -${formatMoney(discount)}`;
+};
 
 const calculatePriceFromInputs = ({
   base,
@@ -345,7 +393,7 @@ const getCostTotalsByCycle = (offer) => {
   allItems.forEach((item) => {
     if (item?.optional) return;
     const cycle = normalizeBillingCycle(item.billingCycle);
-    totals[cycle] += Number(item.price || 0) * Number(item.quantity || 0);
+    totals[cycle] += calculateLineNet(item);
   });
   return totals;
 };
@@ -670,6 +718,8 @@ const buildLineItemFromBlock = (block = {}) => ({
   unit: block.unit || "hours",
   researchHours: Number(block.researchHours || 0),
   billingCycle: block.billingCycle || "once",
+  discountType: normalizeDiscountType(block.discountType),
+  discountValue: Number(block.discountValue || 0),
   internalNotes: normalizeBlockInternalNotes(block),
   aiVersions: [],
   activeAiVersionId: null,
@@ -689,6 +739,8 @@ const buildDeviceItemFromBlock = (block = {}) => ({
   price: Number(block.price || 0),
   quantity: normalizeQuantityInput(block.quantity, 1),
   billingCycle: block.billingCycle || "once",
+  discountType: normalizeDiscountType(block.discountType),
+  discountValue: Number(block.discountValue || 0),
   images: Array.isArray(block.images) ? [...block.images] : [],
   internalNotes: normalizeBlockInternalNotes(block),
   optional: false
@@ -759,6 +811,8 @@ const createEmptyOffer = (index, format) => ({
   overviewText: "",
   calculationText: "",
   detailHtml: "",
+  discountType: "",
+  discountValue: 0,
   attachments: [],
   lineItems: [],
   deviceItems: [],
@@ -870,6 +924,8 @@ const buildPreviewPositions = (offer) => {
       title: item.title || "Position",
       quantity: item.quantity,
       price: item.price,
+      discountType: item.discountType,
+      discountValue: item.discountValue,
       unit: item.unit || "hours",
       billingCycle: item.billingCycle || "once",
       text: item.aiDraft || activeVersion?.text || "",
@@ -887,6 +943,8 @@ const buildPreviewPositions = (offer) => {
       title: formatDeviceTitle(item),
       quantity: item.quantity,
       price: item.price,
+      discountType: item.discountType,
+      discountValue: item.discountValue,
       unit: "piece",
       billingCycle: item.billingCycle || "once",
       text: item.description || "",
@@ -911,19 +969,19 @@ const buildOfferEmailHtml = (offer, confirmUrl, mode = "offer", options = {}) =>
     .map((item) => {
       const isOptional = Boolean(item.optional);
       const label = isOptional ? "Optional" : `${(emailIndex += 1)}`;
-      return `
+    const discountNote = getLineDiscountNote(item);
+    return `
       <tr>
         <td style="padding:6px 8px;border-bottom:1px solid #eee;">${label}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #eee;">${item.title} (${formatBillingCycleLabel(
           item.billingCycle
-        )})</td>
+        )})${discountNote ? `<br/><span style="color:#dc2626;font-size:12px;">${discountNote}</span>` : ""}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">${formatUnitQuantity(
           item.quantity,
           item.unit
         )}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;">${formatLineTotal(
-          item.price,
-          item.quantity
+          item
         )}</td>
       </tr>
       ${item.text ? `<tr><td></td><td colspan="3" style="padding:4px 8px;color:#666;">${item.text.replace(/\n/g, "<br/>")}</td></tr>` : ""}
@@ -979,21 +1037,20 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   }
   const previewPositions = buildPreviewPositions(offer);
   const serviceTotal = (offer.lineItems || []).reduce(
-    (sum, item) =>
-      sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
+    (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
     0
   );
   const deviceTotal = (offer.deviceItems || []).reduce(
-    (sum, item) =>
-      sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
+    (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
     0
   );
   const optionalTotal = [...(offer.lineItems || []), ...(offer.deviceItems || [])].reduce(
-    (sum, item) =>
-      sum + (item?.optional ? Number(item.price || 0) * Number(item.quantity || 0) : 0),
+    (sum, item) => sum + (item?.optional ? calculateLineNet(item) : 0),
     0
   );
-  const totalNet = serviceTotal + deviceTotal;
+  const totalNetBeforeDiscount = serviceTotal + deviceTotal;
+  const overallDiscount = calculateOfferDiscount(offer, totalNetBeforeDiscount);
+  const totalNet = totalNetBeforeDiscount - overallDiscount;
   const totalVat = calcVat(totalNet, offer);
   const recipientName = offer.recipientName || offer.customer || "Kunde offen";
   const recipientCompany = (offer.recipientCompany || "").trim();
@@ -1010,18 +1067,24 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const lastPageContentRef = useRef(null);
   const pagedPositions = [];
   for (let i = 0; i < previewPositions.length; i += pageSize) {
-    const chunk = previewPositions
-      .slice(i, i + pageSize)
-      .map((item, index) => ({ ...item, overallIndex: i + index }));
+    const chunk = previewPositions.slice(i, i + pageSize);
     pagedPositions.push(chunk);
   }
   if (!pagedPositions.length) {
     pagedPositions.push([]);
   }
-  const shouldInsertBreak = (index) =>
-    isExport &&
-    (index + 1) % rowsPerPage === 0 &&
-    index + 1 < previewPositions.length;
+  const getPhotoLayout = (count) => {
+    if (count <= 1) {
+      return { grid: "grid grid-cols-1 gap-4", image: "h-[340px]" };
+    }
+    if (count === 2) {
+      return { grid: "grid grid-cols-2 gap-4", image: "h-[280px]" };
+    }
+    if (count === 3) {
+      return { grid: "grid grid-cols-3 gap-3", image: "h-[240px]" };
+    }
+    return { grid: "grid grid-cols-3 gap-3", image: "h-[210px]" };
+  };
   const a4WidthPx = 210 * 3.7795275591;
   const a4HeightPx = 297 * 3.7795275591;
   const totalsContent = (
@@ -1076,6 +1139,18 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           </div>
         </div>
         <div className="border-t border-sand-200 pt-3 space-y-2">
+          {overallDiscount > 0 ? (
+            <div className="flex items-center justify-between text-sand-600">
+              <span>Zwischensumme netto</span>
+              <span>{formatMoney(totalNetBeforeDiscount)}</span>
+            </div>
+          ) : null}
+          {overallDiscount > 0 ? (
+            <div className="flex items-center justify-between text-sand-600">
+              <span>Rabatt gesamt</span>
+              <span>-{formatMoney(overallDiscount)}</span>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between font-semibold text-sand-900">
             <span>Gesamt netto</span>
             <span>{formatMoney(totalNet)}</span>
@@ -1334,6 +1409,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                   </span>
                                   <div>
                                     <p className="font-semibold text-sand-800">{item.title}</p>
+                                    {getLineDiscountNote(item) ? (
+                                      <p className="mt-1 text-[10px] text-rose-600">
+                                        {getLineDiscountNote(item)}
+                                      </p>
+                                    ) : null}
                                     {item.text ? (
                                       <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
                                         {item.text}
@@ -1350,13 +1430,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                     {formatMoney(Number(item.price || 0))}
                                   </span>
                                   <span className="text-right">
-                                    {formatLineTotal(item.price, item.quantity)}
+                                    {formatLineTotal(item)}
                                   </span>
                                 </div>
                               </div>
-                              {shouldInsertBreak(item.overallIndex) ? (
-                                <div className="html2pdf__page-break" />
-                              ) : null}
                             </div>
                           ))}
                           {showTotals ? (
@@ -1390,6 +1467,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                   </span>
                                   <div>
                                     <p className="font-semibold text-sand-800">{item.title}</p>
+                                    {getLineDiscountNote(item) ? (
+                                      <p className="mt-1 text-[10px] text-rose-600">
+                                        {getLineDiscountNote(item)}
+                                      </p>
+                                    ) : null}
                                     {item.text ? (
                                       <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
                                         {item.text}
@@ -1406,13 +1488,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                     {formatMoney(Number(item.price || 0))}
                                   </span>
                                   <span className="text-right">
-                                    {formatLineTotal(item.price, item.quantity)}
+                                    {formatLineTotal(item)}
                                   </span>
                                 </div>
                               </div>
-                              {shouldInsertBreak(item.overallIndex) ? (
-                                <div className="html2pdf__page-break" />
-                              ) : null}
                             </div>
                           ))}
                           {showTotals ? (
@@ -1532,25 +1611,31 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   Produktfotos
                 </p>
                 <div className="mt-2 space-y-3">
-                  {previewPositions.map((item, index) =>
-                    item.images?.length ? (
+                  {previewPositions.map((item, index) => {
+                    if (!item.images?.length) return null;
+                    const layout = getPhotoLayout(item.images.length);
+                    return (
                       <div key={item.id} className="rounded-xl border border-sand-200 p-3">
                         <p className="text-xs font-semibold text-sand-900">
                           Pos. {index + 1}: {item.title}
                         </p>
-                        <div className="mt-2 flex flex-wrap gap-3">
+                        <div className={`mt-2 ${layout.grid}`}>
                           {item.images.map((url) => (
-                            <img
+                            <div
                               key={url}
-                              src={url}
-                              alt="Produkt"
-                              className="h-28 w-40 rounded-xl object-cover"
-                            />
+                              className="rounded-xl border border-sand-200 bg-sand-50 p-2 flex items-center justify-center"
+                            >
+                              <img
+                                src={url}
+                                alt="Produkt"
+                                className={`w-full ${layout.image} rounded-lg object-contain`}
+                              />
+                            </div>
                           ))}
                         </div>
                       </div>
-                    ) : null
-                  )}
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -1696,7 +1781,7 @@ function HandoverModal({
                   {lineItems.map((item, index) => {
                     const itemId = String(item?.id || "");
                     const checked = itemId ? lineSelectedSet.has(itemId) : false;
-                    const total = Number(item.price || 0) * Number(item.quantity || 0);
+                    const total = calculateLineNet(item);
                     return (
                       <label
                         key={`line-${itemId || index}`}
@@ -1740,7 +1825,7 @@ function HandoverModal({
                   {deviceItems.map((item, index) => {
                     const itemId = String(item?.id || "");
                     const checked = itemId ? deviceSelectedSet.has(itemId) : false;
-                    const total = Number(item.price || 0) * Number(item.quantity || 0);
+                    const total = calculateLineNet(item);
                     return (
                       <label
                         key={`device-${itemId || index}`}
@@ -2134,6 +2219,44 @@ function PositionCard({
                 Optional
               </label>
             </div>
+            <div className="grid gap-2 md:grid-cols-[160px_1fr]">
+              <Field label="Positionsrabatt">
+                <SelectField
+                  value={item.discountType || ""}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    onUpdate({
+                      discountType: value,
+                      discountValue: value ? Number(item.discountValue || 0) : 0
+                    });
+                  }}
+                >
+                  <option value="">Kein Rabatt</option>
+                  <option value="percent">%</option>
+                  <option value="absolute">€</option>
+                </SelectField>
+              </Field>
+              <Field label="Rabattwert">
+                <div className="flex items-center rounded-xl border border-sand-200 bg-white px-2">
+                  {item.discountType === "absolute" ? (
+                    <span className="text-sand-500 mr-1 text-xs">€</span>
+                  ) : null}
+                  <input
+                    className={`${inlinePriceInputClass} !bg-transparent`}
+                    type="number"
+                    value={item.discountValue ?? ""}
+                    onChange={(event) =>
+                      onUpdate({ discountValue: parseNumberInput(event.target.value) })
+                    }
+                    disabled={!item.discountType}
+                    placeholder="0"
+                  />
+                  {item.discountType === "percent" ? (
+                    <span className="text-sand-500 ml-1 text-xs">%</span>
+                  ) : null}
+                </div>
+              </Field>
+            </div>
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-sand-500">
                 <span className="inline-flex items-center gap-1">
@@ -2409,6 +2532,44 @@ function DeviceCard({
                 Optional
               </label>
             </div>
+          </div>
+          <div className="grid gap-2 md:grid-cols-[160px_1fr]">
+            <Field label="Positionsrabatt">
+              <SelectField
+                value={item.discountType || ""}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  onUpdate({
+                    discountType: value,
+                    discountValue: value ? Number(item.discountValue || 0) : 0
+                  });
+                }}
+              >
+                <option value="">Kein Rabatt</option>
+                <option value="percent">%</option>
+                <option value="absolute">€</option>
+              </SelectField>
+            </Field>
+            <Field label="Rabattwert">
+              <div className="flex items-center rounded-xl border border-sand-200 bg-white px-2">
+                {item.discountType === "absolute" ? (
+                  <span className="text-sand-500 mr-1 text-xs">€</span>
+                ) : null}
+                <input
+                  className={`${inlinePriceInputClass} !bg-transparent`}
+                  type="number"
+                  value={item.discountValue ?? ""}
+                  onChange={(event) =>
+                    onUpdate({ discountValue: parseNumberInput(event.target.value) })
+                  }
+                  disabled={!item.discountType}
+                  placeholder="0"
+                />
+                {item.discountType === "percent" ? (
+                  <span className="text-sand-500 ml-1 text-xs">%</span>
+                ) : null}
+              </div>
+            </Field>
           </div>
           <div className="space-y-1">
             <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Bilder</p>
@@ -3352,7 +3513,7 @@ export default function OffersView() {
       activeOffer
         ? activeOffer.lineItems.reduce(
     (sum, item) =>
-            sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
+            sum + (item?.optional ? 0 : calculateLineNet(item)),
             0
           )
         : 0,
@@ -3364,7 +3525,7 @@ export default function OffersView() {
       activeOffer
         ? activeOffer.deviceItems.reduce(
     (sum, item) =>
-            sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
+            sum + (item?.optional ? 0 : calculateLineNet(item)),
             0
           )
         : 0,
@@ -3376,7 +3537,9 @@ export default function OffersView() {
     [activeOffer]
   );
 
-  const totalNet = serviceTotal + deviceTotal;
+  const totalNetBeforeDiscount = serviceTotal + deviceTotal;
+  const overallDiscount = calculateOfferDiscount(activeOffer, totalNetBeforeDiscount);
+  const totalNet = totalNetBeforeDiscount - overallDiscount;
   const totalVat = calcVat(totalNet, activeOffer);
   const totalGross = totalNet + totalVat;
 
@@ -3883,16 +4046,15 @@ export default function OffersView() {
 
   const getOfferTotal = (offer) => {
     const serviceTotal = (offer.lineItems || []).reduce(
-      (sum, item) =>
-        sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
+      (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
       0
     );
     const deviceTotal = (offer.deviceItems || []).reduce(
-      (sum, item) =>
-        sum + (item?.optional ? 0 : Number(item.price || 0) * Number(item.quantity || 0)),
+      (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
       0
     );
-    return serviceTotal + deviceTotal;
+    const subtotal = serviceTotal + deviceTotal;
+    return subtotal - calculateOfferDiscount(offer, subtotal);
   };
 
   const persistOfferForCustomer = async (offer) => {
@@ -4272,14 +4434,15 @@ export default function OffersView() {
       return selectedDeviceSet.has(String(item?.id || ""));
     });
     const serviceTotal = serviceItems.reduce(
-      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+      (sum, item) => sum + calculateLineNet(item),
       0
     );
     const deviceTotal = deviceItems.reduce(
-      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0),
+      (sum, item) => sum + calculateLineNet(item),
       0
     );
-    const net = serviceTotal + deviceTotal;
+    const subtotal = serviceTotal + deviceTotal;
+    const net = subtotal - calculateOfferDiscount(offer, subtotal);
     const vat = calcVat(net, offer);
     return {
       positions: serviceItems.length + deviceItems.length,
@@ -4910,6 +5073,11 @@ export default function OffersView() {
                           <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                             Gesamt {formatMoney(totals.total)}
                           </span>
+                          {overallDiscount > 0 ? (
+                            <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] uppercase tracking-wide text-rose-700">
+                              Rabatt -{formatMoney(overallDiscount)}
+                            </span>
+                          ) : null}
                           <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                             Einmal {formatMoney(costTotals.once)}
                           </span>
@@ -5037,6 +5205,49 @@ export default function OffersView() {
                                 }
                                 disabled={activeOffer.vatMode !== "standard"}
                               />
+                            </Field>
+                          </div>
+                          <div className="mt-2 grid gap-2 md:grid-cols-[180px_1fr]">
+                            <Field label="Gesamtrabatt">
+                              <SelectField
+                                value={activeOffer.discountType || ""}
+                                onChange={(event) =>
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    discountType: event.target.value,
+                                    discountValue: event.target.value
+                                      ? Number(offer.discountValue || 0)
+                                      : 0
+                                  }))
+                                }
+                              >
+                                <option value="">Kein Rabatt</option>
+                                <option value="percent">%</option>
+                                <option value="absolute">€</option>
+                              </SelectField>
+                            </Field>
+                            <Field label="Rabattwert">
+                              <div className="flex items-center rounded-xl border border-sand-200 bg-white px-2">
+                                {activeOffer.discountType === "absolute" ? (
+                                  <span className="text-sand-500 mr-1 text-xs">€</span>
+                                ) : null}
+                                <input
+                                  className={`${inlinePriceInputClass} !bg-transparent`}
+                                  type="number"
+                                  value={activeOffer.discountValue ?? ""}
+                                  onChange={(event) =>
+                                    updateOffer(activeOffer.id, (offer) => ({
+                                      ...offer,
+                                      discountValue: parseNumberInput(event.target.value)
+                                    }))
+                                  }
+                                  disabled={!activeOffer.discountType}
+                                  placeholder="0"
+                                />
+                                {activeOffer.discountType === "percent" ? (
+                                  <span className="text-sand-500 ml-1 text-xs">%</span>
+                                ) : null}
+                              </div>
                             </Field>
                           </div>
                         </div>

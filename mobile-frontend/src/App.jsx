@@ -217,8 +217,12 @@ export default function App() {
     const canvas = signatureCanvasRef.current;
     const wrap = signatureWrapRef.current;
     if (!canvas || !wrap) return;
-    const rect = canvas.getBoundingClientRect();
+    const pad = canvas.parentElement || wrap;
+    const rect = pad.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
     const ratio = window.devicePixelRatio || 1;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
     canvas.width = rect.width * ratio;
     canvas.height = rect.height * ratio;
     const ctx = canvas.getContext("2d");
@@ -227,6 +231,7 @@ export default function App() {
     ctx.scale(ratio, ratio);
     ctx.lineWidth = 2;
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.strokeStyle = "#2f2a24";
   };
 
@@ -237,7 +242,10 @@ export default function App() {
 
   useEffect(() => {
     if (!signatureModalOpen) return;
-    resizeSignatureCanvas();
+    const frame = window.requestAnimationFrame(() => {
+      resizeSignatureCanvas();
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [signatureModalOpen]);
 
   useEffect(() => {
