@@ -1060,6 +1060,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const hasProductPhotos = previewPositions.some((item) => item.images?.length);
   const isExport = Boolean(containerRef);
   const detailHtml = ensureHtmlBody(offer.detailHtml || "");
+  const hasDetailHtml = Boolean(htmlToPlainText(detailHtml || ""));
   const rowsPerPage = isExport ? 8 : Number.POSITIVE_INFINITY;
   const previewRowsPerPage = 10;
   const pageSize = isExport ? rowsPerPage : previewRowsPerPage;
@@ -1147,7 +1148,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           ) : null}
           {overallDiscount > 0 ? (
             <div className="flex items-center justify-between text-sand-600">
-              <span>Rabatt gesamt</span>
+              <span>Angebotsrabatt</span>
               <span>-{formatMoney(overallDiscount)}</span>
             </div>
           ) : null}
@@ -1313,7 +1314,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             >
               <div className="flex items-center justify-between border-b border-sand-200 pb-4">
                 <div className="flex items-center gap-2">
-                  <img src="/QTLogo.jpg" alt="QT" className="h-8 w-auto" />
+                  <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
                   <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                     Angebot
                   </span>
@@ -1409,11 +1410,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                   </span>
                                   <div>
                                     <p className="font-semibold text-sand-800">{item.title}</p>
-                                    {getLineDiscountNote(item) ? (
-                                      <p className="mt-1 text-[10px] text-rose-600">
-                                        {getLineDiscountNote(item)}
-                                      </p>
-                                    ) : null}
                                     {item.text ? (
                                       <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
                                         {item.text}
@@ -1431,6 +1427,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                   </span>
                                   <span className="text-right">
                                     {formatLineTotal(item)}
+                                    {calculateLineDiscount(item) > 0 ? (
+                                      <span className="mt-0.5 block text-[10px] text-rose-600">
+                                        Rabatt -{formatMoney(calculateLineDiscount(item))}
+                                      </span>
+                                    ) : null}
                                   </span>
                                 </div>
                               </div>
@@ -1467,11 +1468,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                   </span>
                                   <div>
                                     <p className="font-semibold text-sand-800">{item.title}</p>
-                                    {getLineDiscountNote(item) ? (
-                                      <p className="mt-1 text-[10px] text-rose-600">
-                                        {getLineDiscountNote(item)}
-                                      </p>
-                                    ) : null}
                                     {item.text ? (
                                       <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">
                                         {item.text}
@@ -1489,6 +1485,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                   </span>
                                   <span className="text-right">
                                     {formatLineTotal(item)}
+                                    {calculateLineDiscount(item) > 0 ? (
+                                      <span className="mt-0.5 block text-[10px] text-rose-600">
+                                        Rabatt -{formatMoney(calculateLineDiscount(item))}
+                                      </span>
+                                    ) : null}
                                   </span>
                                 </div>
                               </div>
@@ -1558,7 +1559,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             >
               <div className="flex items-center justify-between border-b border-sand-200 pb-4">
                 <div className="flex items-center gap-2">
-                  <img src="/QTLogo.jpg" alt="QT" className="h-8 w-auto" />
+                  <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
                   <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                     Angebot
                   </span>
@@ -1598,7 +1599,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           >
             <div className="flex items-center justify-between border-b border-sand-200 pb-4">
               <div className="flex items-center gap-2">
-                <img src="/QTLogo.jpg" alt="QT" className="h-6 w-auto" />
+                <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
                 <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                   Angebot
                 </span>
@@ -1646,10 +1647,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         </div>
       ) : null}
 
-                      {detailHtml ? (
+      {hasDetailHtml ? (
                         <div className="html2pdf__page-break" />
                       ) : null}
-                      {detailHtml ? (
+                      {hasDetailHtml ? (
                         <div
                           className="mx-auto"
                           style={{
@@ -1670,7 +1671,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           >
             <div className="flex items-center justify-between border-b border-sand-200 pb-4">
               <div className="flex items-center gap-2">
-                <img src="/QTLogo.jpg" alt="QT" className="h-6 w-auto" />
+                <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
                 <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                   Angebot
                 </span>
@@ -2174,52 +2175,31 @@ function PositionCard({
             />
           </Field>
           <div className="space-y-1.5">
-            <div className="flex flex-wrap gap-1.5">
-              <div className="min-w-[150px] flex-1">
-                <Field label="Einheit">
-                  <SelectField
-                    value={item.unit || "hours"}
-                    onChange={(event) => onUpdate({ unit: event.target.value })}
-                  >
-                    {unitOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </SelectField>
-                </Field>
-              </div>
-              <div className="min-w-[150px] flex-1">
-                <Field label="Abrechnung">
-                  <SelectField
-                    value={item.billingCycle || "once"}
-                    onChange={(event) => onUpdate({ billingCycle: event.target.value })}
-                  >
-                    {billingOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </SelectField>
-                </Field>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 pt-0.5">
-              <input
-                id={`line-optional-${item.id}`}
-                type="checkbox"
-                checked={Boolean(item.optional)}
-                onChange={(event) => onUpdate({ optional: event.target.checked })}
-                className="h-4 w-4"
-              />
-              <label
-                htmlFor={`line-optional-${item.id}`}
-                className="text-sm text-sand-700"
-              >
-                Optional
-              </label>
-            </div>
-            <div className="grid gap-2 md:grid-cols-[160px_1fr]">
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.1fr)_160px_1fr]">
+              <Field label="Einheit">
+                <SelectField
+                  value={item.unit || "hours"}
+                  onChange={(event) => onUpdate({ unit: event.target.value })}
+                >
+                  {unitOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </SelectField>
+              </Field>
+              <Field label="Abrechnung">
+                <SelectField
+                  value={item.billingCycle || "once"}
+                  onChange={(event) => onUpdate({ billingCycle: event.target.value })}
+                >
+                  {billingOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </SelectField>
+              </Field>
               <Field label="Positionsrabatt">
                 <SelectField
                   value={item.discountType || ""}
@@ -2256,6 +2236,21 @@ function PositionCard({
                   ) : null}
                 </div>
               </Field>
+            </div>
+            <div className="flex items-center gap-2 pt-0.5">
+              <input
+                id={`line-optional-${item.id}`}
+                type="checkbox"
+                checked={Boolean(item.optional)}
+                onChange={(event) => onUpdate({ optional: event.target.checked })}
+                className="h-4 w-4"
+              />
+              <label
+                htmlFor={`line-optional-${item.id}`}
+                className="text-sm text-sand-700"
+              >
+                Optional
+              </label>
             </div>
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.2em] text-sand-500">
@@ -2504,7 +2499,7 @@ function DeviceCard({
               placeholder="Beschreibung"
             />
           </Field>
-          <div className="grid gap-2 md:grid-cols-2">
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1.1fr)_140px_160px_1fr]">
             <Field label="Abrechnung">
               <SelectField
                 value={item.billingCycle || "once"}
@@ -2517,23 +2512,23 @@ function DeviceCard({
                 ))}
               </SelectField>
             </Field>
-            <div className="flex items-center gap-3 pt-6">
-              <input
-                id={`device-optional-${item.id}`}
-                type="checkbox"
-                checked={Boolean(item.optional)}
-                onChange={(event) => onUpdate({ optional: event.target.checked })}
-                className="h-4 w-4"
-              />
-              <label
-                htmlFor={`device-optional-${item.id}`}
-                className="text-sm text-sand-700"
-              >
-                Optional
-              </label>
-            </div>
-          </div>
-          <div className="grid gap-2 md:grid-cols-[160px_1fr]">
+            <Field label="Optional">
+              <div className="flex items-center gap-3 pt-2">
+                <input
+                  id={`device-optional-${item.id}`}
+                  type="checkbox"
+                  checked={Boolean(item.optional)}
+                  onChange={(event) => onUpdate({ optional: event.target.checked })}
+                  className="h-4 w-4"
+                />
+                <label
+                  htmlFor={`device-optional-${item.id}`}
+                  className="text-sm text-sand-700"
+                >
+                  Ja
+                </label>
+              </div>
+            </Field>
             <Field label="Positionsrabatt">
               <SelectField
                 value={item.discountType || ""}
@@ -5174,7 +5169,7 @@ export default function OffersView() {
                               </SelectField>
                             </Field>
                           </div>
-                          <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,220px)_140px]">
+                          <div className="mt-2 grid gap-1 md:grid-cols-[minmax(0,200px)_120px_160px_1fr]">
                             <Field label="MwSt Modus">
                               <SelectField
                                 value={activeOffer.vatMode || "standard"}
@@ -5206,9 +5201,8 @@ export default function OffersView() {
                                 disabled={activeOffer.vatMode !== "standard"}
                               />
                             </Field>
-                          </div>
-                          <div className="mt-2 grid gap-2 md:grid-cols-[180px_1fr]">
-                            <Field label="Gesamtrabatt">
+                          
+                            <Field label="Angebotsrabatt">
                               <SelectField
                                 value={activeOffer.discountType || ""}
                                 onChange={(event) =>
