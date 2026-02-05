@@ -102,8 +102,9 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const maxHeight = pageHeight - marginTopMm - marginBottomMm;
-  for (let i = 0; i < pages.length; i += 1) {
-    const page = pages[i];
+  let isFirst = true;
+
+  const renderFullPage = async (page) => {
     const canvas = await html2canvas(page, {
       scale: 2,
       useCORS: true,
@@ -115,10 +116,11 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
     const renderWidth = canvas.width * scale;
     const renderHeight = canvas.height * scale;
     const xOffset = (pageWidth - renderWidth) / 2;
-    if (i > 0) pdf.addPage();
+    if (!isFirst) pdf.addPage();
     if (renderHeight <= maxHeight + 0.5) {
       pdf.addImage(imgData, "JPEG", xOffset, marginTopMm, renderWidth, renderHeight);
-      continue;
+      isFirst = false;
+      return;
     }
     pdf.addImage(imgData, "JPEG", xOffset, marginTopMm, renderWidth, renderHeight);
     let heightLeft = renderHeight - maxHeight;
@@ -129,7 +131,105 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
       heightLeft -= maxHeight;
       offset += maxHeight;
     }
+    isFirst = false;
+  };
+
+  const renderPagedContent = async (page) => {
+    const headerEl = page.querySelector("[data-pdf-header]");
+    const footerEl = page.querySelector("[data-pdf-footer]");
+    const bodyEl = page.querySelector("[data-pdf-body]");
+    if (!headerEl || !footerEl || !bodyEl) {
+      await renderFullPage(page);
+      return;
+    }
+
+    const [headerCanvas, footerCanvas, bodyCanvas] = await Promise.all([
+      html2canvas(headerEl, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false
+      }),
+      html2canvas(footerEl, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false
+      }),
+      html2canvas(bodyEl, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false
+      })
+    ]);
+
+    const ratio = pageWidth / bodyCanvas.width;
+    const headerHeightMm = headerCanvas.height * ratio;
+    const footerHeightMm = footerCanvas.height * ratio;
+    const availableBodyMm = maxHeight - headerHeightMm - footerHeightMm;
+    if (availableBodyMm <= 10) {
+      await renderFullPage(page);
+      return;
+    }
+
+    const headerData = headerCanvas.toDataURL("image/jpeg", 0.98);
+    const footerData = footerCanvas.toDataURL("image/jpeg", 0.98);
+    const bodySliceHeightPx = availableBodyMm / ratio;
+    let offsetY = 0;
+    let sliceIndex = 0;
+    while (offsetY < bodyCanvas.height - 1) {
+      const sliceHeightPx = Math.min(bodySliceHeightPx, bodyCanvas.height - offsetY);
+      const sliceCanvas = document.createElement("canvas");
+      sliceCanvas.width = bodyCanvas.width;
+      sliceCanvas.height = sliceHeightPx;
+      const ctx = sliceCanvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(
+          bodyCanvas,
+          0,
+          offsetY,
+          bodyCanvas.width,
+          sliceHeightPx,
+          0,
+          0,
+          bodyCanvas.width,
+          sliceHeightPx
+        );
+      }
+      const sliceData = sliceCanvas.toDataURL("image/jpeg", 0.98);
+      if (!isFirst) pdf.addPage();
+      pdf.addImage(headerData, "JPEG", 0, marginTopMm, pageWidth, headerHeightMm);
+      const sliceHeightMm = sliceHeightPx * ratio;
+      pdf.addImage(
+        sliceData,
+        "JPEG",
+        0,
+        marginTopMm + headerHeightMm,
+        pageWidth,
+        sliceHeightMm
+      );
+      pdf.addImage(
+        footerData,
+        "JPEG",
+        0,
+        pageHeight - marginBottomMm - footerHeightMm,
+        pageWidth,
+        footerHeightMm
+      );
+      isFirst = false;
+      offsetY += sliceHeightPx;
+      sliceIndex += 1;
+      if (sliceIndex > 50) {
+        break;
+      }
+    }
+  };
+
+  for (const page of pages) {
+    await renderPagedContent(page);
   }
+
   const arrayBuffer = pdf.output("arraybuffer");
   return new Blob([arrayBuffer], { type: "application/pdf" });
 };
@@ -1381,7 +1481,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             }}
             ref={pageIndex === pagedPositions.length - 1 ? lastPageContentRef : null}
           >
-              <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+              <div
+                className="flex items-center justify-between border-b border-sand-200 pb-4"
+                data-pdf-header
+              >
                 <div className="flex items-center gap-2">
                   <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
                   <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
@@ -1390,7 +1493,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 </div>
                 <span className="text-xs text-sand-500">{offer.reference}</span>
               </div>
-              <div className="mt-4 flex-1 space-y-6">
+              <div className="mt-4 flex-1 space-y-6" data-pdf-body>
                 {pageIndex === 0 ? (
                   <div className="grid gap-4 md:grid-cols-2 text-xs text-sand-600">
                     <div>
@@ -1595,7 +1698,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   </div>
                 ) : null}
               </div>
-              <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+              <div
+                className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
+                data-pdf-footer
+              >
                 Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
               </div>
             </div>
@@ -1627,7 +1733,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   isExport && (hasPhotosPage || hasDetailsPage) ? "always" : "auto"
               }}
             >
-              <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+              <div
+                className="flex items-center justify-between border-b border-sand-200 pb-4"
+                data-pdf-header
+              >
                 <div className="flex items-center gap-2">
                   <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
                   <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
@@ -1636,8 +1745,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 </div>
                 <span className="text-xs text-sand-500">{offer.reference}</span>
               </div>
-              <div className="mt-4 flex-1 space-y-6">{totalsContent}</div>
-              <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+              <div className="mt-4 flex-1 space-y-6" data-pdf-body>{totalsContent}</div>
+              <div
+                className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
+                data-pdf-footer
+              >
                 Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
               </div>
             </div>
@@ -1669,7 +1781,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               ...(isExport ? { overflow: "hidden" } : {})
             }}
           >
-            <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+            <div
+              className="flex items-center justify-between border-b border-sand-200 pb-4"
+              data-pdf-header
+            >
               <div className="flex items-center gap-2">
                 <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
                 <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
@@ -1678,7 +1793,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               </div>
               <span className="text-xs text-sand-500">{offer.reference}</span>
             </div>
-            <div className={`mt-4 flex-1 ${isExport ? "space-y-3" : "space-y-4"}`}>
+            <div
+              className={`mt-4 flex-1 ${isExport ? "space-y-3" : "space-y-4"}`}
+              data-pdf-body
+            >
               <div>
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                   Produktfotos
@@ -1717,7 +1835,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 </div>
               </div>
             </div>
-            <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+            <div
+              className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
+              data-pdf-footer
+            >
               Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
             </div>
           </div>
@@ -1744,7 +1865,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               transformOrigin: "top left"
             }}
           >
-            <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+            <div
+              className="flex items-center justify-between border-b border-sand-200 pb-4"
+              data-pdf-header
+            >
               <div className="flex items-center gap-2">
                 <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
                 <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
@@ -1753,7 +1877,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               </div>
               <span className="text-xs text-sand-500">{offer.reference}</span>
             </div>
-            <div className="mt-4 flex-1 space-y-4">
+            <div className="mt-4 flex-1 space-y-4" data-pdf-body>
               <div>
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                   Angebotsdetails
@@ -1764,7 +1888,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 />
               </div>
             </div>
-            <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+            <div
+              className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
+              data-pdf-footer
+            >
               Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
             </div>
           </div>
