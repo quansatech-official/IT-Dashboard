@@ -1609,8 +1609,9 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           className="mx-auto"
           style={{
             width: `${a4WidthPx * scale}px`,
-            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
+            height: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx * scale}px`,
+            minHeight: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx * scale}px`,
+            pageBreakAfter: isExport && hasDetailsPage ? "always" : "auto"
           }}
         >
           <div
@@ -1623,8 +1624,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               minHeight: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx}px`,
               transform: `scale(${scale})`,
               transformOrigin: "top left",
-              ...(isExport ? { overflow: "hidden" } : {}),
-              pageBreakAfter: isExport && hasDetailsPage ? "always" : "auto"
+              ...(isExport ? { overflow: "hidden" } : {})
             }}
           >
             <div className="flex items-center justify-between border-b border-sand-200 pb-4">
