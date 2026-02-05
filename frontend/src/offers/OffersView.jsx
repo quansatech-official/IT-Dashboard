@@ -98,10 +98,13 @@ const buildPdfBlobFromElement = async (element) => {
 const buildPdfBlobFromPages = async (pages, options = {}) => {
   const marginTopMm = Number(options.marginTopMm ?? 8);
   const marginBottomMm = Number(options.marginBottomMm ?? 8);
+  const marginLeftMm = Number(options.marginLeftMm ?? 8);
+  const marginRightMm = Number(options.marginRightMm ?? 8);
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const maxHeight = pageHeight - marginTopMm - marginBottomMm;
+  const usableWidth = pageWidth - marginLeftMm - marginRightMm;
   let isFirst = true;
 
   const renderFullPage = async (page) => {
@@ -112,10 +115,10 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
       logging: false
     });
     const imgData = canvas.toDataURL("image/jpeg", 0.98);
-    const scale = pageWidth / canvas.width;
+    const scale = usableWidth / canvas.width;
     const renderWidth = canvas.width * scale;
     const renderHeight = canvas.height * scale;
-    const xOffset = (pageWidth - renderWidth) / 2;
+    const xOffset = marginLeftMm + (usableWidth - renderWidth) / 2;
     if (!isFirst) pdf.addPage();
     if (renderHeight <= maxHeight + 0.5) {
       pdf.addImage(imgData, "JPEG", xOffset, marginTopMm, renderWidth, renderHeight);
@@ -143,34 +146,72 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
       return;
     }
 
-    const [headerCanvas, footerCanvas, bodyCanvas] = await Promise.all([
-      html2canvas(headerEl, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-        logging: false
-      }),
-      html2canvas(footerEl, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-        logging: false
-      }),
-      html2canvas(bodyEl, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-        logging: false
-      })
-    ]);
+    const pageRect = page.getBoundingClientRect();
+    const headerRect = headerEl.getBoundingClientRect();
+    const footerRect = footerEl.getBoundingClientRect();
+    const headerStartPx = 0;
+    const headerEndPx = Math.max(0, headerRect.bottom - pageRect.top);
+    const footerStartPx = Math.max(headerEndPx, footerRect.top - pageRect.top);
+    const footerEndPx = Math.max(footerStartPx, pageRect.height);
+    const bodyTopPx = headerEndPx;
+    const bodyBottomPx = footerStartPx;
+    const headerHeightPx = Math.max(0, headerEndPx - headerStartPx);
+    const footerHeightPx = Math.max(0, footerEndPx - footerStartPx);
+    const bodyHeightPx = Math.max(0, bodyBottomPx - bodyTopPx);
+    if (!bodyHeightPx || bodyBottomPx <= bodyTopPx) {
+      await renderFullPage(page);
+      return;
+    }
 
-    const ratio = pageWidth / bodyCanvas.width;
-    const headerHeightMm = headerCanvas.height * ratio;
-    const footerHeightMm = footerCanvas.height * ratio;
+    const pageCanvas = await html2canvas(page, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#ffffff",
+      logging: false
+    });
+    const ratio = usableWidth / pageCanvas.width;
+    const headerHeightMm = headerHeightPx * ratio;
+    const footerHeightMm = footerHeightPx * ratio;
     const availableBodyMm = maxHeight - headerHeightMm - footerHeightMm;
     if (availableBodyMm <= 10) {
       await renderFullPage(page);
       return;
+    }
+
+    const headerCanvas = document.createElement("canvas");
+    headerCanvas.width = pageCanvas.width;
+    headerCanvas.height = Math.max(1, Math.round(headerHeightPx));
+    const headerCtx = headerCanvas.getContext("2d");
+    if (headerCtx) {
+      headerCtx.drawImage(
+        pageCanvas,
+        0,
+        Math.round(headerStartPx),
+        pageCanvas.width,
+        headerCanvas.height,
+        0,
+        0,
+        headerCanvas.width,
+        headerCanvas.height
+      );
+    }
+
+    const footerCanvas = document.createElement("canvas");
+    footerCanvas.width = pageCanvas.width;
+    footerCanvas.height = Math.max(1, Math.round(footerHeightPx));
+    const footerCtx = footerCanvas.getContext("2d");
+    if (footerCtx) {
+      footerCtx.drawImage(
+        pageCanvas,
+        0,
+        Math.round(footerStartPx),
+        pageCanvas.width,
+        footerCanvas.height,
+        0,
+        0,
+        footerCanvas.width,
+        footerCanvas.height
+      );
     }
 
     const headerData = headerCanvas.toDataURL("image/jpeg", 0.98);
@@ -178,43 +219,45 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
     const bodySliceHeightPx = availableBodyMm / ratio;
     let offsetY = 0;
     let sliceIndex = 0;
-    while (offsetY < bodyCanvas.height - 1) {
-      const sliceHeightPx = Math.min(bodySliceHeightPx, bodyCanvas.height - offsetY);
+    while (offsetY < bodyHeightPx - 1) {
+      const sliceHeightPx = Math.min(bodySliceHeightPx, bodyHeightPx - offsetY);
       const sliceCanvas = document.createElement("canvas");
-      sliceCanvas.width = bodyCanvas.width;
+      sliceCanvas.width = pageCanvas.width;
       sliceCanvas.height = sliceHeightPx;
       const ctx = sliceCanvas.getContext("2d");
       if (ctx) {
         ctx.drawImage(
-          bodyCanvas,
+          pageCanvas,
           0,
-          offsetY,
-          bodyCanvas.width,
+          Math.round(bodyTopPx + offsetY),
+          pageCanvas.width,
           sliceHeightPx,
           0,
           0,
-          bodyCanvas.width,
+          pageCanvas.width,
           sliceHeightPx
         );
       }
       const sliceData = sliceCanvas.toDataURL("image/jpeg", 0.98);
       if (!isFirst) pdf.addPage();
-      pdf.addImage(headerData, "JPEG", 0, marginTopMm, pageWidth, headerHeightMm);
+      pdf.addImage(headerData, "JPEG", marginLeftMm, marginTopMm, usableWidth, headerHeightMm);
       const sliceHeightMm = sliceHeightPx * ratio;
+      const sliceWidthMm = pageCanvas.width * ratio;
+      const sliceXOffset = marginLeftMm + (usableWidth - sliceWidthMm) / 2;
       pdf.addImage(
         sliceData,
         "JPEG",
-        0,
+        sliceXOffset,
         marginTopMm + headerHeightMm,
-        pageWidth,
+        sliceWidthMm,
         sliceHeightMm
       );
       pdf.addImage(
         footerData,
         "JPEG",
-        0,
+        marginLeftMm,
         pageHeight - marginBottomMm - footerHeightMm,
-        pageWidth,
+        usableWidth,
         footerHeightMm
       );
       isFirst = false;
@@ -3593,7 +3636,12 @@ export default function OffersView() {
     const run = async () => {
       const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
       const blob = pages.length
-        ? await buildPdfBlobFromPages(pages, { marginTopMm: 8, marginBottomMm: 8 })
+        ? await buildPdfBlobFromPages(pages, {
+            marginTopMm: 8,
+            marginBottomMm: 8,
+            marginLeftMm: 8,
+            marginRightMm: 8
+          })
         : await buildPdfBlobFromElement(element);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -3630,7 +3678,12 @@ export default function OffersView() {
         );
         const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
         const blob = pages.length
-          ? await buildPdfBlobFromPages(pages, { marginTopMm: 8, marginBottomMm: 8 })
+          ? await buildPdfBlobFromPages(pages, {
+              marginTopMm: 8,
+              marginBottomMm: 8,
+              marginLeftMm: 8,
+              marginRightMm: 8
+            })
           : await buildPdfBlobFromElement(element);
         handlers?.resolve?.(blob);
       } catch (error) {
