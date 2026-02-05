@@ -1287,17 +1287,29 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const exportPageHeightPx = a4HeightPx - pdfMarginPx * 2;
   const exportPageSafeHeightPx = exportPageHeightPx - 2;
   const exportPhotoSafeHeightPx = exportPageHeightPx - 8;
+  const totalsCardClass = isExport
+    ? "mt-3 rounded-xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-700 space-y-3"
+    : "mt-3 rounded-xl border border-sand-200 bg-sand-50 p-4 text-sm text-sand-700 space-y-4";
+  const totalsGridClass = isExport ? "grid gap-3 md:grid-cols-[1fr_auto_1fr]" : "grid gap-4 md:grid-cols-[1fr_auto_1fr]";
+  const totalsSectionClass = isExport ? "space-y-2.5" : "space-y-3";
+  const totalsTitleClass = isExport
+    ? "text-[10px] font-semibold uppercase tracking-[0.32em] text-sand-600"
+    : "text-[11px] font-semibold uppercase tracking-[0.35em] text-sand-600";
+  const totalsDividerClass = isExport
+    ? "border-t border-sand-200 pt-2 space-y-1.5"
+    : "border-t border-sand-200 pt-3 space-y-2";
+  const totalsGrossClass = isExport
+    ? "flex items-center justify-between text-sm font-semibold text-sand-900"
+    : "flex items-center justify-between text-base font-semibold text-sand-900";
   const totalsContent = (
     <>
       {offer.calculationText ? (
         <p className="text-xs text-sand-600 whitespace-pre-line">{offer.calculationText}</p>
       ) : null}
-      <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-4 text-sm text-sand-700 space-y-4">
-        <div className="grid gap-4 md:grid-cols-[1fr_auto_1fr]">
-          <div className="space-y-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-sand-600">
-              Netto nach Bereich
-            </p>
+      <div className={totalsCardClass}>
+        <div className={totalsGridClass}>
+          <div className={totalsSectionClass}>
+            <p className={totalsTitleClass}>Netto nach Bereich</p>
             <div className="flex items-center justify-between">
               <span>Leistungen</span>
               <span className="font-semibold text-sand-900">{formatMoney(serviceTotal)}</span>
@@ -1308,10 +1320,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             </div>
           </div>
           <div className="hidden md:block w-px bg-sand-200" aria-hidden="true" />
-          <div className="space-y-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.35em] text-sand-600">
-              Laufende Kosten
-            </p>
+          <div className={totalsSectionClass}>
+            <p className={totalsTitleClass}>Laufende Kosten</p>
             {costTotals.monthly ? (
               <div className="flex items-center justify-between">
                 <span>Monatlich</span>
@@ -1338,7 +1348,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             ) : null}
           </div>
         </div>
-        <div className="border-t border-sand-200 pt-3 space-y-2">
+        <div className={totalsDividerClass}>
           {overallDiscount > 0 ? (
             <div className="flex items-center justify-between text-sand-600">
               <span>Zwischensumme netto</span>
@@ -1361,11 +1371,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               <span>{formatMoney(optionalTotal)}</span>
             </div>
           ) : null}
-          <div className="flex items-center justify-between">
-            <span>{formatVatLabel(offer)}</span>
-            <span>{formatMoney(totalVat)}</span>
-          </div>
-          <div className="flex items-center justify-between text-base font-semibold text-sand-900">
+            <div className="flex items-center justify-between">
+              <span>{formatVatLabel(offer)}</span>
+              <span>{formatMoney(totalVat)}</span>
+            </div>
+          <div className={totalsGrossClass}>
             <span>Gesamt brutto</span>
             <span>{formatMoney(totalGross)}</span>
           </div>
