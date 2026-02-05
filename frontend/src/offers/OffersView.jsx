@@ -1205,6 +1205,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const totalsOnOwnPage = autoTotalsOnOwnPage || (!isExport && forceTotalsOwnPage);
   const renderTotalsInline =
     (isExport && !autoTotalsOnOwnPage) || (!isExport && !forceTotalsOwnPage);
+  const hasTotalsPage = Boolean(totalsOnOwnPage);
+  const hasPhotosPage = Boolean(hasProductPhotos);
+  const hasDetailsPage = Boolean(hasDetailHtml);
+  const hasPostCoverContent =
+    previewPositions.length > 0 || hasTotalsPage || hasPhotosPage || hasDetailsPage;
 
   useEffect(() => {
     setForceTotalsOwnPage(false);
@@ -1252,7 +1257,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 transform: `scale(${scale})`,
                 transformOrigin: "top left",
                 ...(isExport ? { transform: "none" } : {}),
-                pageBreakAfter: isExport ? "always" : "auto"
+                pageBreakAfter:
+                  isExport && hasPostCoverContent ? "always" : "auto"
               }}
           >
             <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
@@ -1301,20 +1307,25 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
             }}
           >
-            <div
-              className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-              style={{
-                width: `${a4WidthPx}px`,
-                height: isExport ? "auto" : `${a4HeightPx}px`,
-                minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-                paddingBottom: isExport ? "48px" : undefined,
-                transform: isExport ? "none" : `scale(${scale})`,
-                transformOrigin: "top left",
-                pageBreakAfter:
-                  isExport && pageIndex < pagedPositions.length - 1 ? "always" : "auto"
-              }}
-              ref={pageIndex === pagedPositions.length - 1 ? lastPageContentRef : null}
-            >
+          <div
+            className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+            style={{
+              width: `${a4WidthPx}px`,
+              height: isExport ? "auto" : `${a4HeightPx}px`,
+              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+              paddingBottom: isExport ? "48px" : undefined,
+              transform: isExport ? "none" : `scale(${scale})`,
+              transformOrigin: "top left",
+              pageBreakAfter:
+                  isExport &&
+                  (pageIndex < pagedPositions.length - 1 ||
+                    (pageIndex === pagedPositions.length - 1 &&
+                      (hasTotalsPage || hasPhotosPage || hasDetailsPage)))
+                    ? "always"
+                    : "auto"
+            }}
+            ref={pageIndex === pagedPositions.length - 1 ? lastPageContentRef : null}
+          >
               <div className="flex items-center justify-between border-b border-sand-200 pb-4">
                 <div className="flex items-center gap-2">
                   <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
@@ -1544,8 +1555,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             style={{
               width: `${a4WidthPx * scale}px`,
               height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
-              pageBreakBefore: isExport ? "always" : "auto"
+              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
             }}
           >
             <div
@@ -1557,7 +1567,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 paddingBottom: "48px",
                 transform: isExport ? "none" : `scale(${scale})`,
                 transformOrigin: "top left",
-                pageBreakAfter: "auto"
+                pageBreakAfter:
+                  isExport && (hasPhotosPage || hasDetailsPage) ? "always" : "auto"
               }}
             >
               <div className="flex items-center justify-between border-b border-sand-200 pb-4">
@@ -1584,8 +1595,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           style={{
             width: `${a4WidthPx * scale}px`,
             height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
-            pageBreakBefore: isExport ? "always" : "auto"
+            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
           }}
         >
           <div
@@ -1595,7 +1605,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               height: isExport ? "auto" : `${a4HeightPx}px`,
               minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
               transform: `scale(${scale})`,
-              transformOrigin: "top left"
+              transformOrigin: "top left",
+              pageBreakAfter: isExport && hasDetailsPage ? "always" : "auto"
             }}
           >
             <div className="flex items-center justify-between border-b border-sand-200 pb-4">
@@ -1654,8 +1665,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           style={{
             width: `${a4WidthPx * scale}px`,
             height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
-            pageBreakBefore: isExport ? "always" : "auto"
+            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
           }}
         >
           <div
@@ -2805,6 +2815,7 @@ export default function OffersView() {
   const [priceCalcDrafts, setPriceCalcDrafts] = useState({});
   const [sevdeskStatus, setSevdeskStatus] = useState({});
   const [expandedOffers, setExpandedOffers] = useState({});
+  const [expandedOfferDetails, setExpandedOfferDetails] = useState({});
   const [confirmationMenuOfferId, setConfirmationMenuOfferId] = useState("");
   const [aiLoading, setAiLoading] = useState({});
   const previewWrapperRef = useRef(null);
@@ -4068,6 +4079,27 @@ export default function OffersView() {
       ...prev,
       [offerId]: !prev[offerId]
     }));
+  };
+
+  const toggleOfferDetails = (offerId) => {
+    setExpandedOfferDetails((prev) => ({
+      ...prev,
+      [offerId]: !prev[offerId]
+    }));
+  };
+
+  const getOfferKeywords = (offer) => {
+    const keywords = [];
+    (offer.lineItems || []).forEach((item) => {
+      (item.keywords || []).forEach((word) => {
+        if (!word) return;
+        const value = String(word).trim();
+        if (value && !keywords.includes(value)) {
+          keywords.push(value);
+        }
+      });
+    });
+    return keywords;
   };
 
   const getOfferTotal = (offer) => {
@@ -5962,129 +5994,208 @@ export default function OffersView() {
             </p>
             <div className="mt-3 space-y-2">
               {offerBuckets.open.length ? (
-                offerBuckets.open.map((offer) => (
-                  <div key={offer.id}>
-                    <div className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
-                      <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                        <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                          {offer.reference}
-                        </p>
-                        <p className="text-sm font-semibold">
-                          {offer.customer || "Neues Angebot"}
-                        </p>
-                      </button>
-                      <div className="flex items-center gap-2">
-                        {getOfferSentAt(offer) ? (
-                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                            Versendet
-                          </span>
-                        ) : null}
-                        {renderOfferReadBadge(offer)}
-                        <button
-                          type="button"
-                          onClick={() => toggleOfferExpanded(offer.id)}
-                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                          title="Details"
-                        >
-                          {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                offerBuckets.open.map((offer) => {
+                  const netTotal = getOfferTotal(offer);
+                  const vatTotal = calcVat(netTotal, offer);
+                  const grossTotal = netTotal + vatTotal;
+                  const keywords = getOfferKeywords(offer);
+                  const overviewText = String(offer.overviewText || "").trim();
+                  const calculationText = String(offer.calculationText || "").trim();
+                  const detailText = stripHtml(offer.detailHtml || "");
+                  const showDetails = Boolean(expandedOfferDetails[offer.id]);
+                  const detailPreview = detailText
+                    ? showDetails
+                      ? detailText
+                      : shorten(detailText, 220)
+                    : "";
+                  const hasMoreDetails =
+                    detailText.length > 220 || overviewText || calculationText;
+                  return (
+                    <div key={offer.id}>
+                      <div className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
+                        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                            {offer.reference}
+                          </p>
+                          <p className="text-sm font-semibold">
+                            {offer.customer || "Neues Angebot"}
+                          </p>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateOfferStatus(offer.id, "angenommen")
-                          }
-                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-600 hover:bg-emerald-50"
-                          title="Akzeptieren"
-                        >
-                          <Check size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateOfferStatus(offer.id, "abgelehnt")
-                          }
-                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
-                          title="Ablehnen"
-                        >
-                          <X size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteArchivedOffer(offer)}
-                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                          title="Löschen"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => editOfferFromArchive(offer.id)}
-                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                          title="Bearbeiten"
-                        >
-                          <Pencil size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPreviewMode("offer");
-                            setPreviewOfferId(offer.id);
-                          }}
-                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                          title="Vorschau"
-                        >
-                          <Eye size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => exportOfferPdf(offer)}
-                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                          title="PDF exportieren"
-                        >
-                          <FileDown size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openOfferEmailComposerForOffer(offer)}
-                          disabled={!offer.serverId}
-                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                          title={
-                            offer.serverId
-                              ? "Angebot per E-Mail senden"
-                              : "Bitte zuerst speichern"
-                          }
-                        >
-                          <Send size={14} />
-                        </button>
-                      </div>
-                    </div>
-                    {expandedOffers[offer.id] ? (
-                      <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-600">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <span>Summe: {formatMoney(getOfferTotal(offer))}</span>
-                          <span>Datum: {formatDate(offer.createdAt)}</span>
-                          <span>
-                            Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
-                          </span>
+                        <div className="flex items-center gap-2">
                           {getOfferSentAt(offer) ? (
-                            <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
+                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
+                              Versendet
+                            </span>
+                          ) : null}
+                          {renderOfferReadBadge(offer)}
+                          <button
+                            type="button"
+                            onClick={() => toggleOfferExpanded(offer.id)}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="Details"
+                          >
+                            {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateOfferStatus(offer.id, "angenommen")
+                            }
+                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-600 hover:bg-emerald-50"
+                            title="Akzeptieren"
+                          >
+                            <Check size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateOfferStatus(offer.id, "abgelehnt")
+                            }
+                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
+                            title="Ablehnen"
+                          >
+                            <X size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteArchivedOffer(offer)}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="Löschen"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => editOfferFromArchive(offer.id)}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="Bearbeiten"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPreviewMode("offer");
+                              setPreviewOfferId(offer.id);
+                            }}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="Vorschau"
+                          >
+                            <Eye size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => exportOfferPdf(offer)}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="PDF exportieren"
+                          >
+                            <FileDown size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openOfferEmailComposerForOffer(offer)}
+                            disabled={!offer.serverId}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title={
+                              offer.serverId
+                                ? "Angebot per E-Mail senden"
+                                : "Bitte zuerst speichern"
+                            }
+                          >
+                            <Send size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      {expandedOffers[offer.id] ? (
+                        <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-600">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <span>Summe netto: {formatMoney(netTotal)}</span>
+                            <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
+                            <span>Summe brutto: {formatMoney(grossTotal)}</span>
+                            <span>Datum: {formatDate(offer.createdAt)}</span>
+                            <span>
+                              Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
+                            </span>
+                            {getOfferSentAt(offer) ? (
+                              <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
+                            ) : null}
+                          </div>
+                          {keywords.length ? (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                                Schlagworte
+                              </span>
+                              {keywords.map((word) => (
+                                <span
+                                  key={word}
+                                  className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600"
+                                >
+                                  {word}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {detailPreview || overviewText || calculationText ? (
+                            <div className="mt-2 space-y-2">
+                              {detailPreview ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                                    Angebotsdetail
+                                  </p>
+                                  <p className="text-xs text-sand-600 whitespace-pre-line">
+                                    {detailPreview}
+                                  </p>
+                                </div>
+                              ) : null}
+                              {showDetails && overviewText ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                                    Überblick
+                                  </p>
+                                  <p className="text-xs text-sand-600 whitespace-pre-line">
+                                    {overviewText}
+                                  </p>
+                                </div>
+                              ) : null}
+                              {showDetails && calculationText ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                                    Kalkulation
+                                  </p>
+                                  <p className="text-xs text-sand-600 whitespace-pre-line">
+                                    {calculationText}
+                                  </p>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {hasMoreDetails ? (
+                            <div className="mt-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleOfferDetails(offer.id)}
+                                className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                              >
+                                {showDetails ? "Weniger Details" : "Mehr Details anzeigen"}
+                              </button>
+                            </div>
+                          ) : null}
+                          {!getOfferSentAt(offer) ? (
+                            <div className="mt-2">
+                              <button
+                                type="button"
+                                onClick={() => markOfferSent(offer.id)}
+                                className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                              >
+                                Als gesendet markieren
+                              </button>
+                            </div>
                           ) : null}
                         </div>
-                        {!getOfferSentAt(offer) ? (
-                          <div className="mt-2">
-                            <button
-                              type="button"
-                              onClick={() => markOfferSent(offer.id)}
-                              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                            >
-                              Als gesendet markieren
-                            </button>
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                ))
+                      ) : null}
+                    </div>
+                  );
+                })
               ) : (
                 <p className="text-xs text-sand-500">Keine offenen Angebote.</p>
               )}
@@ -6097,182 +6208,261 @@ export default function OffersView() {
             </p>
             <div className="mt-3 space-y-2">
               {offerBuckets.accepted.length ? (
-                offerBuckets.accepted.map((offer) => (
-                  <div key={offer.id}>
-                    <div className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
-                      <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                        <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
-                          {offer.reference}
-                        </p>
-                        <p className="text-sm font-semibold">
-                          {offer.customer || "Angebot"}
-                        </p>
-                      </button>
-                      <div className="flex items-center gap-2">
-                        {getOfferSentAt(offer) ? (
-                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                            Versendet
-                          </span>
-                        ) : null}
-                        {renderOfferReadBadge(offer)}
-                        <button
-                          type="button"
-                          onClick={() => toggleOfferExpanded(offer.id)}
-                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                          title="Details"
-                        >
-                          {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                offerBuckets.accepted.map((offer) => {
+                  const netTotal = getOfferTotal(offer);
+                  const vatTotal = calcVat(netTotal, offer);
+                  const grossTotal = netTotal + vatTotal;
+                  const keywords = getOfferKeywords(offer);
+                  const overviewText = String(offer.overviewText || "").trim();
+                  const calculationText = String(offer.calculationText || "").trim();
+                  const detailText = stripHtml(offer.detailHtml || "");
+                  const showDetails = Boolean(expandedOfferDetails[offer.id]);
+                  const detailPreview = detailText
+                    ? showDetails
+                      ? detailText
+                      : shorten(detailText, 220)
+                    : "";
+                  const hasMoreDetails =
+                    detailText.length > 220 || overviewText || calculationText;
+                  return (
+                    <div key={offer.id}>
+                      <div className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
+                        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
+                            {offer.reference}
+                          </p>
+                          <p className="text-sm font-semibold">
+                            {offer.customer || "Angebot"}
+                          </p>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => openHandoverModal(offer)}
-                          disabled={sevdeskStatus[offer.serverId || offer.id]?.status === "sending"}
-                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50 disabled:opacity-50"
-                          title="Rechnungsentwurf in sevdesk"
-                        >
-                          <FilePlus size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => duplicateOffer(offer)}
-                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                          title="Duplizieren"
-                        >
-                          <Copy size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPreviewMode("offer");
-                            setPreviewOfferId(offer.id);
-                          }}
-                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                          title="Vorschau"
-                        >
-                          <Eye size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => exportOfferPdf(offer)}
-                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                          title="PDF exportieren"
-                        >
-                          <FileDown size={14} />
-                        </button>
-                        <div className="relative">
+                        <div className="flex items-center gap-2">
+                          {getOfferSentAt(offer) ? (
+                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
+                              Versendet
+                            </span>
+                          ) : null}
+                          {renderOfferReadBadge(offer)}
                           <button
                             type="button"
-                            onClick={() =>
-                              setConfirmationMenuOfferId((prev) =>
-                                prev === offer.id ? "" : offer.id
-                              )
-                            }
+                            onClick={() => toggleOfferExpanded(offer.id)}
                             className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                            title="Auftragsbestätigung"
+                            title="Details"
                           >
-                            <Receipt size={14} />
+                            {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                           </button>
-                          {confirmationMenuOfferId === offer.id ? (
-                            <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-emerald-200 bg-white p-2 shadow-soft text-xs text-sand-700 z-30">
+                          <button
+                            type="button"
+                            onClick={() => openHandoverModal(offer)}
+                            disabled={sevdeskStatus[offer.serverId || offer.id]?.status === "sending"}
+                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50 disabled:opacity-50"
+                            title="Rechnungsentwurf in sevdesk"
+                          >
+                            <FilePlus size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => duplicateOffer(offer)}
+                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                            title="Duplizieren"
+                          >
+                            <Copy size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPreviewMode("offer");
+                              setPreviewOfferId(offer.id);
+                            }}
+                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                            title="Vorschau"
+                          >
+                            <Eye size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => exportOfferPdf(offer)}
+                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                            title="PDF exportieren"
+                          >
+                            <FileDown size={14} />
+                          </button>
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setConfirmationMenuOfferId((prev) =>
+                                  prev === offer.id ? "" : offer.id
+                                )
+                              }
+                              className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                              title="Auftragsbestätigung"
+                            >
+                              <Receipt size={14} />
+                            </button>
+                            {confirmationMenuOfferId === offer.id ? (
+                              <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-emerald-200 bg-white p-2 shadow-soft text-xs text-sand-700 z-30">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPreviewMode("confirmation");
+                                    setPreviewOfferId(offer.id);
+                                    setConfirmationMenuOfferId("");
+                                  }}
+                                  className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50"
+                                >
+                                  Vorschau
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    exportOfferPdf(offer, "confirmation");
+                                    setConfirmationMenuOfferId("");
+                                  }}
+                                  className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50"
+                                >
+                                  PDF exportieren
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveId(offer.id);
+                                    openConfirmationEmailComposerForOffer(offer);
+                                    setConfirmationMenuOfferId("");
+                                  }}
+                                  disabled={
+                                    (sendStatus === "sending" || sendStatus === "preparing") ||
+                                    !offer.serverId
+                                  }
+                                  className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50 disabled:opacity-50"
+                                >
+                                  E-Mail senden
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => deleteArchivedOffer(offer)}
+                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
+                            title="Löschen"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      {expandedOffers[offer.id] ? (
+                        <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-xs text-emerald-700">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <span>Summe netto: {formatMoney(netTotal)}</span>
+                            <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
+                            <span>Summe brutto: {formatMoney(grossTotal)}</span>
+                            <span>Datum: {formatDate(offer.createdAt)}</span>
+                            <span>
+                              Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
+                            </span>
+                            {getOfferSentAt(offer) ? (
+                              <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
+                            ) : null}
+                          </div>
+                          {keywords.length ? (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <span className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
+                                Schlagworte
+                              </span>
+                              {keywords.map((word) => (
+                                <span
+                                  key={word}
+                                  className="rounded-full border border-emerald-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700"
+                                >
+                                  {word}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {detailPreview || overviewText || calculationText ? (
+                            <div className="mt-2 space-y-2">
+                              {detailPreview ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
+                                    Angebotsdetail
+                                  </p>
+                                  <p className="text-xs text-emerald-700 whitespace-pre-line">
+                                    {detailPreview}
+                                  </p>
+                                </div>
+                              ) : null}
+                              {showDetails && overviewText ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
+                                    Überblick
+                                  </p>
+                                  <p className="text-xs text-emerald-700 whitespace-pre-line">
+                                    {overviewText}
+                                  </p>
+                                </div>
+                              ) : null}
+                              {showDetails && calculationText ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
+                                    Kalkulation
+                                  </p>
+                                  <p className="text-xs text-emerald-700 whitespace-pre-line">
+                                    {calculationText}
+                                  </p>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {hasMoreDetails ? (
+                            <div className="mt-2">
                               <button
                                 type="button"
-                                onClick={() => {
-                                  setPreviewMode("confirmation");
-                                  setPreviewOfferId(offer.id);
-                                  setConfirmationMenuOfferId("");
-                                }}
-                                className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50"
+                                onClick={() => toggleOfferDetails(offer.id)}
+                                className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-600 hover:bg-emerald-50"
                               >
-                                Vorschau
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  exportOfferPdf(offer, "confirmation");
-                                  setConfirmationMenuOfferId("");
-                                }}
-                                className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50"
-                              >
-                                PDF exportieren
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveId(offer.id);
-                                  openConfirmationEmailComposerForOffer(offer);
-                                  setConfirmationMenuOfferId("");
-                                }}
-                                disabled={
-                                  (sendStatus === "sending" || sendStatus === "preparing") ||
-                                  !offer.serverId
-                                }
-                                className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50 disabled:opacity-50"
-                              >
-                                E-Mail senden
+                                {showDetails ? "Weniger Details" : "Mehr Details anzeigen"}
                               </button>
                             </div>
                           ) : null}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => deleteArchivedOffer(offer)}
-                          className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                          title="Löschen"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                    {expandedOffers[offer.id] ? (
-                      <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-xs text-emerald-700">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <span>Summe: {formatMoney(getOfferTotal(offer))}</span>
-                          <span>Datum: {formatDate(offer.createdAt)}</span>
-                          <span>
-                            Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
-                          </span>
-                          {getOfferSentAt(offer) ? (
-                            <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
+                          {sevdeskStatus[offer.serverId || offer.id] ? (
+                            <div className="mt-2 text-xs">
+                              {sevdeskStatus[offer.serverId || offer.id].status === "sending" && (
+                                <span className="text-emerald-700">Erstelle Rechnungsentwurf...</span>
+                              )}
+                              {sevdeskStatus[offer.serverId || offer.id].status === "sent" && (
+                                <span className="text-emerald-700">
+                                  {sevdeskStatus[offer.serverId || offer.id].message}
+                                </span>
+                              )}
+                              {sevdeskStatus[offer.serverId || offer.id].status === "error" && (
+                                <span className="text-rose-600">
+                                  {sevdeskStatus[offer.serverId || offer.id].message}
+                                </span>
+                              )}
+                            </div>
+                          ) : null}
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateOfferStatus(offer.id, "Entwurf")
+                            }
+                            disabled={offer.handoverLocked}
+                            className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-600 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Wieder öffnen
+                          </button>
+                          {offer.handoverLocked ? (
+                            <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                              an Faktura übergeben
+                            </span>
                           ) : null}
                         </div>
-                        {sevdeskStatus[offer.serverId || offer.id] ? (
-                          <div className="mt-2 text-xs">
-                            {sevdeskStatus[offer.serverId || offer.id].status === "sending" && (
-                              <span className="text-emerald-700">Erstelle Rechnungsentwurf...</span>
-                            )}
-                            {sevdeskStatus[offer.serverId || offer.id].status === "sent" && (
-                              <span className="text-emerald-700">
-                                {sevdeskStatus[offer.serverId || offer.id].message}
-                              </span>
-                            )}
-                            {sevdeskStatus[offer.serverId || offer.id].status === "error" && (
-                              <span className="text-rose-600">
-                                {sevdeskStatus[offer.serverId || offer.id].message}
-                              </span>
-                            )}
-                          </div>
-                        ) : null}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateOfferStatus(offer.id, "Entwurf")
-                          }
-                          disabled={offer.handoverLocked}
-                          className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-600 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          Wieder öffnen
-                        </button>
-                        {offer.handoverLocked ? (
-                          <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                            an Faktura übergeben
-                          </span>
-                        ) : null}
                       </div>
+                      ) : null}
                     </div>
-                    ) : null}
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <p className="text-xs text-emerald-600">
                   Keine akzeptierten Angebote.
@@ -6287,96 +6477,175 @@ export default function OffersView() {
             </p>
             <div className="mt-3 space-y-2">
               {offerBuckets.declined.length ? (
-                offerBuckets.declined.map((offer) => (
-                  <div key={offer.id}>
-                    <div className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
-                      <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                        <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
-                          {offer.reference}
-                        </p>
-                        <p className="text-sm font-semibold">
-                          {offer.customer || "Angebot"}
-                        </p>
-                      </button>
-                      <div className="flex items-center gap-2">
-                        {getOfferSentAt(offer) ? (
-                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                            Versendet
-                          </span>
-                        ) : null}
-                        {renderOfferReadBadge(offer)}
-                        <button
-                          type="button"
-                          onClick={() => toggleOfferExpanded(offer.id)}
-                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                          title="Details"
-                        >
-                          {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                offerBuckets.declined.map((offer) => {
+                  const netTotal = getOfferTotal(offer);
+                  const vatTotal = calcVat(netTotal, offer);
+                  const grossTotal = netTotal + vatTotal;
+                  const keywords = getOfferKeywords(offer);
+                  const overviewText = String(offer.overviewText || "").trim();
+                  const calculationText = String(offer.calculationText || "").trim();
+                  const detailText = stripHtml(offer.detailHtml || "");
+                  const showDetails = Boolean(expandedOfferDetails[offer.id]);
+                  const detailPreview = detailText
+                    ? showDetails
+                      ? detailText
+                      : shorten(detailText, 220)
+                    : "";
+                  const hasMoreDetails =
+                    detailText.length > 220 || overviewText || calculationText;
+                  return (
+                    <div key={offer.id}>
+                      <div className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
+                        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
+                            {offer.reference}
+                          </p>
+                          <p className="text-sm font-semibold">
+                            {offer.customer || "Angebot"}
+                          </p>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => duplicateOffer(offer)}
-                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                          title="Duplizieren"
-                        >
-                          <Copy size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPreviewMode("offer");
-                            setPreviewOfferId(offer.id);
-                          }}
-                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                          title="Vorschau"
-                        >
-                          <Eye size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => exportOfferPdf(offer)}
-                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                          title="PDF exportieren"
-                        >
-                          <FileDown size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteArchivedOffer(offer)}
-                          className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                          title="Löschen"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                    {expandedOffers[offer.id] ? (
-                      <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50/60 p-3 text-xs text-rose-700">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <span>Summe: {formatMoney(getOfferTotal(offer))}</span>
-                          <span>Datum: {formatDate(offer.createdAt)}</span>
-                          <span>
-                            Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
-                          </span>
+                        <div className="flex items-center gap-2">
                           {getOfferSentAt(offer) ? (
-                            <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
+                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
+                              Versendet
+                            </span>
                           ) : null}
-                        </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {renderOfferReadBadge(offer)}
                           <button
                             type="button"
-                            onClick={() =>
-                              updateOfferStatus(offer.id, "Entwurf")
-                            }
-                            className="rounded-full border border-rose-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                            onClick={() => toggleOfferExpanded(offer.id)}
+                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                            title="Details"
                           >
-                            Wieder öffnen
+                            {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => duplicateOffer(offer)}
+                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                            title="Duplizieren"
+                          >
+                            <Copy size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPreviewMode("offer");
+                              setPreviewOfferId(offer.id);
+                            }}
+                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                            title="Vorschau"
+                          >
+                            <Eye size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => exportOfferPdf(offer)}
+                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                            title="PDF exportieren"
+                          >
+                            <FileDown size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteArchivedOffer(offer)}
+                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
+                            title="Löschen"
+                          >
+                            <Trash2 size={14} />
                           </button>
                         </div>
                       </div>
-                    ) : null}
-                  </div>
-                ))
+                      {expandedOffers[offer.id] ? (
+                        <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50/60 p-3 text-xs text-rose-700">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <span>Summe netto: {formatMoney(netTotal)}</span>
+                            <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
+                            <span>Summe brutto: {formatMoney(grossTotal)}</span>
+                            <span>Datum: {formatDate(offer.createdAt)}</span>
+                            <span>
+                              Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
+                            </span>
+                            {getOfferSentAt(offer) ? (
+                              <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
+                            ) : null}
+                          </div>
+                          {keywords.length ? (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <span className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
+                                Schlagworte
+                              </span>
+                              {keywords.map((word) => (
+                                <span
+                                  key={word}
+                                  className="rounded-full border border-rose-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700"
+                                >
+                                  {word}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {detailPreview || overviewText || calculationText ? (
+                            <div className="mt-2 space-y-2">
+                              {detailPreview ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
+                                    Angebotsdetail
+                                  </p>
+                                  <p className="text-xs text-rose-700 whitespace-pre-line">
+                                    {detailPreview}
+                                  </p>
+                                </div>
+                              ) : null}
+                              {showDetails && overviewText ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
+                                    Überblick
+                                  </p>
+                                  <p className="text-xs text-rose-700 whitespace-pre-line">
+                                    {overviewText}
+                                  </p>
+                                </div>
+                              ) : null}
+                              {showDetails && calculationText ? (
+                                <div>
+                                  <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
+                                    Kalkulation
+                                  </p>
+                                  <p className="text-xs text-rose-700 whitespace-pre-line">
+                                    {calculationText}
+                                  </p>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {hasMoreDetails ? (
+                            <div className="mt-2">
+                              <button
+                                type="button"
+                                onClick={() => toggleOfferDetails(offer.id)}
+                                className="rounded-full border border-rose-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                              >
+                                {showDetails ? "Weniger Details" : "Mehr Details anzeigen"}
+                              </button>
+                            </div>
+                          ) : null}
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateOfferStatus(offer.id, "Entwurf")
+                              }
+                              className="rounded-full border border-rose-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                            >
+                              Wieder öffnen
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })
               ) : (
                 <p className="text-xs text-rose-500">
                   Keine abgelehnten Angebote.
