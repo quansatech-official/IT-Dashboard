@@ -93,6 +93,17 @@ const customerPayload = (customer) => ({
     }))
 });
 
+const formatEur = (value) => {
+  if (value === null || typeof value === "undefined") return "n/a";
+  const number = Number(value);
+  if (Number.isNaN(number)) return "n/a";
+  return number.toLocaleString("de-DE", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 0
+  });
+};
+
 export default function CustomerDirectoryView() {
   const [customers, setCustomers] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -1656,7 +1667,7 @@ export default function CustomerDirectoryView() {
                   ) : metricsStatus === "error" ? (
                     <p className="text-sm text-rose-600">Kennzahlen konnten nicht geladen werden.</p>
                   ) : metrics ? (
-                    <div className="grid gap-3 sm:grid-cols-4 text-sm text-sand-700">
+                    <div className="grid gap-3 sm:grid-cols-5 text-sm text-sand-700">
                       <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Entfernung</p>
                         <p className="text-base font-semibold">
@@ -1684,6 +1695,28 @@ export default function CustomerDirectoryView() {
                         </p>
                         <p className="text-xs text-sand-500">
                           Umsatz: € {Number(metrics.estimatedRevenueEur ?? 0).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">
+                          Umsatz (Sevdesk)
+                        </p>
+                        <p className="text-base font-semibold">
+                          {formatEur(metrics.revenueCurrentYearEur)}
+                        </p>
+                        <p className="text-xs text-sand-500">
+                          Vorjahr: {formatEur(metrics.revenueLastYearEur)}
+                        </p>
+                        <p className="text-xs text-sand-500">
+                          Veränderung:{" "}
+                          {metrics.revenueDeltaEur == null
+                            ? "n/a"
+                            : `${metrics.revenueDeltaEur >= 0 ? "+" : ""}${formatEur(
+                                metrics.revenueDeltaEur
+                              )}`}
+                          {metrics.revenueDeltaPct != null
+                            ? ` (${metrics.revenueDeltaPct >= 0 ? "+" : ""}${metrics.revenueDeltaPct}%)`
+                            : ""}
                         </p>
                       </div>
                       <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">

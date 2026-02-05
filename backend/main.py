@@ -2778,6 +2778,7 @@ def get_customer_metrics(customer_id: int):
 
     with SessionLocal() as db:
         metrics_settings = _get_customer_metrics_settings(db)
+        integration_settings = db.query(IntegrationSettings).first()
     office_coords = _geocode(metrics_settings.office_address)
     customer_coords = _geocode(address) if address else None
     distance_km = None
@@ -2841,6 +2842,66 @@ def get_customer_metrics(customer_id: int):
     open_time_hours = round(open_time_ms / 3600000, 2) if open_time_ms else 0
     estimated_revenue = round(open_time_hours * hourly_rate, 2) if hourly_rate else 0
 
+    revenue_current_year = None
+    revenue_last_year = None
+    revenue_delta = None
+    revenue_delta_pct = None
+    if integration_settings:
+        sevdesk_config = _build_sevdesk_config(integration_settings, metrics_settings)
+        if sevdesk_config.api_token:
+            customer_number = (customer.creditor_number or customer.short_code or "").strip()
+            contact = None
+            if customer_number:
+                try:
+                    contact = SevdeskClient(sevdesk_config).get_contact_by_customer_number(customer_number)
+                except SevdeskError:
+                    contact = None
+            contact_id = None
+            if isinstance(contact, dict):
+                try:
+                    contact_id = int(contact.get("id"))
+                except (TypeError, ValueError):
+                    contact_id = None
+            if contact_id:
+                try:
+                    client = SevdeskClient(sevdesk_config)
+                    invoices = client.list_invoices(
+                        params={
+                            "contact[id]": contact_id,
+                            "contact[objectName]": "Contact"
+                        },
+                        max_pages=25
+                    )
+                    now_dt = datetime.now()
+                    start_current_year = datetime(now_dt.year, 1, 1)
+                    start_last_year = datetime(now_dt.year - 1, 1, 1)
+                    end_last_year = datetime(now_dt.year - 1, 12, 31, 23, 59, 59)
+                    sum_current = 0.0
+                    sum_last = 0.0
+                    for invoice in invoices:
+                        if not _invoice_is_paid(invoice):
+                            continue
+                        paid_date = _invoice_date_for_paid(invoice)
+                        if not paid_date:
+                            continue
+                        amount = _invoice_paid_amount(invoice)
+                        if amount <= 0:
+                            continue
+                        if start_current_year <= paid_date <= now_dt:
+                            sum_current += amount
+                        elif start_last_year <= paid_date <= end_last_year:
+                            sum_last += amount
+                    revenue_current_year = round(sum_current, 2)
+                    revenue_last_year = round(sum_last, 2)
+                    revenue_delta = round(revenue_current_year - revenue_last_year, 2)
+                    if revenue_last_year and revenue_last_year > 0:
+                        revenue_delta_pct = round((revenue_delta / revenue_last_year) * 100, 1)
+                except SevdeskError:
+                    revenue_current_year = None
+                    revenue_last_year = None
+                    revenue_delta = None
+                    revenue_delta_pct = None
+
     return {
         "openTasks": open_tasks,
         "openTimeTasks": open_time_tasks,
@@ -2850,7 +2911,11 @@ def get_customer_metrics(customer_id: int):
         "distanceKm": distance_km,
         "mileageEur": mileage_eur,
         "missedCalls": missed_calls,
-        "totalMinutes": total_minutes
+        "totalMinutes": total_minutes,
+        "revenueCurrentYearEur": revenue_current_year,
+        "revenueLastYearEur": revenue_last_year,
+        "revenueDeltaEur": revenue_delta,
+        "revenueDeltaPct": revenue_delta_pct
     }
 
 
