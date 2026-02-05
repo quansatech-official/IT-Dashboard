@@ -1092,6 +1092,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const pdfMarginPx = pdfMarginMm * 3.7795275591;
   const exportPageHeightPx = a4HeightPx - pdfMarginPx * 2;
   const exportPageSafeHeightPx = exportPageHeightPx - 2;
+  const exportPhotoSafeHeightPx = exportPageHeightPx - 8;
   const totalsContent = (
     <>
       {offer.calculationText ? (
@@ -1603,8 +1604,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
             style={{
               width: `${a4WidthPx}px`,
-              height: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
-              minHeight: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
+              height: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx}px`,
+              minHeight: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx}px`,
               transform: `scale(${scale})`,
               transformOrigin: "top left",
               ...(isExport ? { overflow: "hidden" } : {}),
