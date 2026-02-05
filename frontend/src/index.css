@@ -7,6 +7,28 @@
 .offer-detail-html {
   break-inside: auto;
   page-break-inside: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.offer-detail-html * {
+  max-width: 100%;
+}
+
+.offer-detail-html img,
+.offer-detail-html video,
+.offer-detail-html iframe {
+  max-width: 100%;
+  height: auto;
+}
+
+.offer-detail-html table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.offer-detail-html pre {
+  white-space: pre-wrap;
 }
 
 @layer base {

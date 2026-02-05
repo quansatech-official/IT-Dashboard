@@ -380,6 +380,16 @@ const formatBillingCycleLabel = (value) => {
   return "Einmalig";
 };
 
+const buildInitialPagedPositions = (positions, isExport, previewRowsPerPage) => {
+  if (!positions.length) return [[]];
+  if (isExport) return [positions];
+  const pages = [];
+  for (let i = 0; i < positions.length; i += previewRowsPerPage) {
+    pages.push(positions.slice(i, i + previewRowsPerPage));
+  }
+  return pages.length ? pages : [[]];
+};
+
 const buildOfferConfirmUrl = (guid) => {
   if (!guid) return "";
   if (typeof window === "undefined") return `/offers/confirm/${guid}`;
@@ -1061,30 +1071,27 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const isExport = Boolean(containerRef);
   const detailHtml = ensureHtmlBody(offer.detailHtml || "");
   const hasDetailHtml = Boolean(htmlToPlainText(detailHtml || ""));
-  const rowsPerPage = isExport ? 8 : Number.POSITIVE_INFINITY;
   const previewRowsPerPage = 10;
-  const pageSize = isExport ? rowsPerPage : previewRowsPerPage;
   const [forceTotalsOwnPage, setForceTotalsOwnPage] = useState(false);
   const lastPageContentRef = useRef(null);
-  const pagedPositions = [];
-  for (let i = 0; i < previewPositions.length; i += pageSize) {
-    const chunk = previewPositions.slice(i, i + pageSize);
-    pagedPositions.push(chunk);
-  }
-  if (!pagedPositions.length) {
-    pagedPositions.push([]);
-  }
+  const pageContentRefs = useRef([]);
+  const detailMeasureRef = useRef(null);
+  const detailContentMeasureRef = useRef(null);
+  const [detailPages, setDetailPages] = useState([]);
+  const [pagedPositions, setPagedPositions] = useState(() =>
+    buildInitialPagedPositions(previewPositions, isExport, previewRowsPerPage)
+  );
   const getPhotoLayout = (count) => {
     if (count <= 1) {
-      return { grid: "grid grid-cols-1 gap-4", image: "h-[340px]" };
+      return { grid: "grid grid-cols-1 gap-4", image: "h-[380px]" };
     }
     if (count === 2) {
-      return { grid: "grid grid-cols-2 gap-4", image: "h-[280px]" };
+      return { grid: "grid grid-cols-2 gap-4", image: "h-[320px]" };
     }
     if (count === 3) {
-      return { grid: "grid grid-cols-3 gap-3", image: "h-[240px]" };
+      return { grid: "grid grid-cols-3 gap-3", image: "h-[260px]" };
     }
-    return { grid: "grid grid-cols-3 gap-3", image: "h-[210px]" };
+    return { grid: "grid grid-cols-3 gap-3", image: "h-[220px]" };
   };
   const a4WidthPx = 210 * 3.7795275591;
   const a4HeightPx = 297 * 3.7795275591;
@@ -1191,7 +1198,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       ) : null}
     </>
   );
-  const autoTotalsOnOwnPage = isExport && (() => {
+  const autoTotalsOnOwnPage = !isExport && (() => {
     const hasText = Boolean((offer.calculationText || "").trim());
     const hasAttachments = (offer.attachments || []).length > 0;
     const hasTotals = totalNet > 0 || optionalTotal > 0;
@@ -1199,12 +1206,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
     return pagedPositions.some(
       (pagePositions, pageIndex) =>
         pageIndex === pagedPositions.length - 1 &&
-        (pagePositions.length >= rowsPerPage - 1 || hasText || hasAttachments)
+        (pagePositions.length >= previewRowsPerPage - 1 || hasText || hasAttachments)
     );
   })();
-  const totalsOnOwnPage = autoTotalsOnOwnPage || (!isExport && forceTotalsOwnPage);
-  const renderTotalsInline =
-    (isExport && !autoTotalsOnOwnPage) || (!isExport && !forceTotalsOwnPage);
+  const totalsOnOwnPage = autoTotalsOnOwnPage || forceTotalsOwnPage;
+  const renderTotalsInline = !totalsOnOwnPage;
 
   useEffect(() => {
     setForceTotalsOwnPage(false);
@@ -1219,14 +1225,72 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   ]);
 
   useLayoutEffect(() => {
-    if (isExport || forceTotalsOwnPage) return;
+    if (forceTotalsOwnPage) return;
     const el = lastPageContentRef.current;
     if (!el) return;
     const overflow = el.scrollHeight - el.clientHeight > 1;
     if (overflow) {
       setForceTotalsOwnPage(true);
     }
-  }, [isExport, forceTotalsOwnPage, pagedPositions.length, previewPositions.length, scale]);
+  }, [forceTotalsOwnPage, pagedPositions.length, previewPositions.length, scale]);
+
+  useEffect(() => {
+    setPagedPositions(buildInitialPagedPositions(previewPositions, isExport, previewRowsPerPage));
+  }, [previewPositions, isExport, previewRowsPerPage]);
+
+  useLayoutEffect(() => {
+    if (!isExport) return;
+    if (!pagedPositions.length) return;
+    for (let i = 0; i < pagedPositions.length; i += 1) {
+      const el = pageContentRefs.current[i];
+      if (!el) continue;
+      const overflow = el.scrollHeight - el.clientHeight > 1;
+      if (overflow && pagedPositions[i].length > 1) {
+        const next = pagedPositions.map((page) => [...page]);
+        const moved = next[i].pop();
+        if (!next[i + 1]) {
+          next[i + 1] = [];
+        }
+        next[i + 1].unshift(moved);
+        const pruned = next.filter((page, index) => page.length || index === 0);
+        setPagedPositions(pruned);
+        return;
+      }
+    }
+  }, [isExport, pagedPositions]);
+
+  useLayoutEffect(() => {
+    if (!hasDetailHtml) {
+      setDetailPages([]);
+      return;
+    }
+    const contentEl = detailContentMeasureRef.current;
+    const measureEl = detailMeasureRef.current;
+    if (!contentEl || !measureEl) return;
+    const maxHeight = contentEl.clientHeight;
+    if (!maxHeight) return;
+    const children = Array.from(measureEl.children);
+    if (!children.length) {
+      setDetailPages([detailHtml]);
+      return;
+    }
+    const pages = [];
+    let current = [];
+    let height = 0;
+    children.forEach((child) => {
+      const childHeight = child.offsetHeight;
+      if (height + childHeight > maxHeight && current.length) {
+        pages.push(current.join(""));
+        current = [child.outerHTML];
+        height = childHeight;
+      } else {
+        current.push(child.outerHTML);
+        height += childHeight;
+      }
+    });
+    if (current.length) pages.push(current.join(""));
+    setDetailPages(pages);
+  }, [hasDetailHtml, detailHtml, a4WidthPx, exportPageHeightPx, a4HeightPx, scale, isExport]);
 
   return (
     <div
@@ -1234,6 +1298,47 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       className={isExport ? "space-y-6 bg-white" : "space-y-6 overflow-auto"}
       style={isExport ? { backgroundColor: "#ffffff" } : undefined}
     >
+      {hasDetailHtml ? (
+        <div
+          className="pointer-events-none absolute left-[-9999px] top-0 opacity-0"
+          aria-hidden="true"
+        >
+          <div
+            className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+            style={{
+              width: `${a4WidthPx}px`,
+              height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+              <div className="flex items-center gap-2">
+                <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
+                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  Angebot
+                </span>
+              </div>
+              <span className="text-xs text-sand-500">{offer.reference}</span>
+            </div>
+            <div className="mt-4 flex-1 space-y-4" ref={detailContentMeasureRef}>
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  Angebotsdetails
+                </p>
+                <div
+                  ref={detailMeasureRef}
+                  className="offer-detail-html mt-2 text-sm text-sand-700"
+                  dangerouslySetInnerHTML={{ __html: detailHtml }}
+                />
+              </div>
+            </div>
+            <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+              Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {offer.coverEnabled ? (
         <div
           className="mx-auto"
@@ -1305,15 +1410,21 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
               style={{
                 width: `${a4WidthPx}px`,
-                height: isExport ? "auto" : `${a4HeightPx}px`,
+                height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 paddingBottom: isExport ? "48px" : undefined,
                 transform: isExport ? "none" : `scale(${scale})`,
                 transformOrigin: "top left",
+                overflow: isExport ? "hidden" : undefined,
                 pageBreakAfter:
                   isExport && pageIndex < pagedPositions.length - 1 ? "always" : "auto"
               }}
-              ref={pageIndex === pagedPositions.length - 1 ? lastPageContentRef : null}
+              ref={(el) => {
+                pageContentRefs.current[pageIndex] = el;
+                if (pageIndex === pagedPositions.length - 1) {
+                  lastPageContentRef.current = el;
+                }
+              }}
             >
               <div className="flex items-center justify-between border-b border-sand-200 pb-4">
                 <div className="flex items-center gap-2">
@@ -1650,54 +1761,59 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         </div>
       ) : null}
 
-      {hasDetailHtml ? (
-                        <div className="html2pdf__page-break" />
-                      ) : null}
-                      {hasDetailHtml ? (
-                        <div
-                          className="mx-auto"
-                          style={{
-                            width: `${a4WidthPx * scale}px`,
-                            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-                            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
-          }}
-        >
-          <div
-            className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-            style={{
-              width: `${a4WidthPx}px`,
-              height: isExport ? "auto" : `${a4HeightPx}px`,
-              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-              transform: `scale(${scale})`,
-              transformOrigin: "top left"
-            }}
-          >
-            <div className="flex items-center justify-between border-b border-sand-200 pb-4">
-              <div className="flex items-center gap-2">
-                <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
-                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Angebot
-                </span>
-              </div>
-              <span className="text-xs text-sand-500">{offer.reference}</span>
-            </div>
-            <div className="mt-4 flex-1 space-y-4">
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Angebotsdetails
-                </p>
+      {detailPages.length
+        ? detailPages.map((page, pageIndex) => (
+            <div key={`detail-page-${pageIndex}`}>
+              {isExport || pageIndex > 0 ? <div className="html2pdf__page-break" /> : null}
+              <div
+                className="mx-auto"
+                style={{
+                  width: `${a4WidthPx * scale}px`,
+                  height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+                  minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
+                }}
+              >
                 <div
-                  className="offer-detail-html mt-2 text-sm text-sand-700"
-                  dangerouslySetInnerHTML={{ __html: detailHtml }}
-                />
+                  className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                  style={{
+                    width: `${a4WidthPx}px`,
+                    height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+                    minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+                    transform: `scale(${scale})`,
+                    transformOrigin: "top left",
+                    overflow: "hidden",
+                    pageBreakAfter:
+                      isExport && pageIndex < detailPages.length - 1 ? "always" : "auto"
+                  }}
+                >
+                  <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+                    <div className="flex items-center gap-2">
+                      <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
+                      <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                        Angebot
+                      </span>
+                    </div>
+                    <span className="text-xs text-sand-500">{offer.reference}</span>
+                  </div>
+                  <div className="mt-4 flex-1 space-y-4">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                        Angebotsdetails
+                      </p>
+                      <div
+                        className="offer-detail-html mt-2 text-sm text-sand-700"
+                        dangerouslySetInnerHTML={{ __html: page }}
+                      />
+                    </div>
+                  </div>
+                  <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+                    Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
-              Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
-            </div>
-          </div>
-        </div>
-      ) : null}
+          ))
+        : null}
     </div>
   );
 }
@@ -3592,6 +3708,38 @@ export default function OffersView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
+    } catch (error) {
+      setToast("Status speichern fehlgeschlagen.");
+    }
+  };
+
+  const markOfferSent = async (offerId) => {
+    const offer = offers.find((entry) => entry.id === offerId);
+    if (!offer) return;
+    const status =
+      offer.status === "angenommen" || offer.status === "abgelehnt"
+        ? offer.status
+        : "gesendet";
+    const nextOffer = {
+      ...offer,
+      status,
+      sentAt: new Date().toISOString()
+    };
+    updateOffer(offerId, () => nextOffer);
+    if (!nextOffer.serverId) return;
+    try {
+      const payload = {
+        reference: nextOffer.reference || "",
+        customer: nextOffer.customer || "",
+        status: nextOffer.status || "",
+        data: sanitizeOfferForSave(nextOffer)
+      };
+      await fetch(`/api/offers/${nextOffer.serverId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      setToast("Als gesendet markiert.");
     } catch (error) {
       setToast("Status speichern fehlgeschlagen.");
     }
@@ -6042,6 +6190,17 @@ export default function OffersView() {
                             <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
                           ) : null}
                         </div>
+                        {!getOfferSentAt(offer) ? (
+                          <div className="mt-2">
+                            <button
+                              type="button"
+                              onClick={() => markOfferSent(offer.id)}
+                              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                            >
+                              Als gesendet markieren
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
