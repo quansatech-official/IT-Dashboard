@@ -111,10 +111,24 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
       logging: false
     });
     const imgData = canvas.toDataURL("image/jpeg", 0.98);
-    const imgHeight = canvas.height * (pageWidth / canvas.width);
-    const renderHeight = Math.min(imgHeight, maxHeight);
+    const scale = pageWidth / canvas.width;
+    const renderWidth = canvas.width * scale;
+    const renderHeight = canvas.height * scale;
+    const xOffset = (pageWidth - renderWidth) / 2;
     if (i > 0) pdf.addPage();
-    pdf.addImage(imgData, "JPEG", 0, marginTopMm, pageWidth, renderHeight);
+    if (renderHeight <= maxHeight + 0.5) {
+      pdf.addImage(imgData, "JPEG", xOffset, marginTopMm, renderWidth, renderHeight);
+      continue;
+    }
+    pdf.addImage(imgData, "JPEG", xOffset, marginTopMm, renderWidth, renderHeight);
+    let heightLeft = renderHeight - maxHeight;
+    let offset = maxHeight;
+    while (heightLeft > 0.5) {
+      pdf.addPage();
+      pdf.addImage(imgData, "JPEG", xOffset, marginTopMm - offset, renderWidth, renderHeight);
+      heightLeft -= maxHeight;
+      offset += maxHeight;
+    }
   }
   const arrayBuffer = pdf.output("arraybuffer");
   return new Blob([arrayBuffer], { type: "application/pdf" });
