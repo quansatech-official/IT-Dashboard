@@ -1091,6 +1091,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const pdfMarginMm = 8;
   const pdfMarginPx = pdfMarginMm * 3.7795275591;
   const exportPageHeightPx = a4HeightPx - pdfMarginPx * 2;
+  const exportPageSafeHeightPx = exportPageHeightPx - 2;
   const totalsContent = (
     <>
       {offer.calculationText ? (
@@ -1252,11 +1253,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
               style={{
                 width: `${a4WidthPx}px`,
-                height: isExport ? "auto" : `${a4HeightPx}px`,
-                minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+                height: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
+                minHeight: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
                 transform: `scale(${scale})`,
                 transformOrigin: "top left",
-                ...(isExport ? { transform: "none" } : {}),
+                ...(isExport ? { transform: "none", overflow: "hidden" } : {}),
                 pageBreakAfter:
                   isExport && hasPostCoverContent ? "always" : "auto"
               }}
@@ -1602,10 +1603,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
             style={{
               width: `${a4WidthPx}px`,
-              height: isExport ? "auto" : `${a4HeightPx}px`,
-              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+              height: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
+              minHeight: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
               transform: `scale(${scale})`,
               transformOrigin: "top left",
+              ...(isExport ? { overflow: "hidden" } : {}),
               pageBreakAfter: isExport && hasDetailsPage ? "always" : "auto"
             }}
           >
