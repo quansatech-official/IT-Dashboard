@@ -1251,7 +1251,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 transform: `scale(${scale})`,
                 transformOrigin: "top left",
-                ...(isExport ? { transform: "none" } : {})
+                ...(isExport ? { transform: "none" } : {}),
+                pageBreakAfter: isExport ? "always" : "auto"
               }}
           >
             <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
@@ -1281,7 +1282,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           </div>
         </div>
       ) : null}
-      {offer.coverEnabled && isExport ? <div className="html2pdf__page-break" /> : null}
 
       {pagedPositions.map((pagePositions, pageIndex) => {
         const pageServicePositions = pagePositions.filter(
@@ -1539,13 +1539,13 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
 
       {totalsOnOwnPage ? (
         <>
-          {isExport ? <div className="html2pdf__page-break" /> : null}
           <div
             className="mx-auto"
             style={{
               width: `${a4WidthPx * scale}px`,
               height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
+              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
+              pageBreakBefore: isExport ? "always" : "auto"
             }}
           >
             <div
@@ -1579,15 +1579,13 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       ) : null}
 
       {hasProductPhotos ? (
-        <div className="html2pdf__page-break" />
-      ) : null}
-      {hasProductPhotos ? (
         <div
           className="mx-auto"
           style={{
             width: `${a4WidthPx * scale}px`,
             height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
+            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
+            pageBreakBefore: isExport ? "always" : "auto"
           }}
         >
           <div
@@ -1651,52 +1649,50 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       ) : null}
 
       {hasDetailHtml ? (
-        <>
-          <div className="html2pdf__page-break" />
+        <div
+          className="mx-auto"
+          style={{
+            width: `${a4WidthPx * scale}px`,
+            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
+            pageBreakBefore: isExport ? "always" : "auto"
+          }}
+        >
           <div
-            className="mx-auto"
+            className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
             style={{
-              width: `${a4WidthPx * scale}px`,
-              height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
+              width: `${a4WidthPx}px`,
+              height: isExport ? "auto" : `${a4HeightPx}px`,
+              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+              transform: `scale(${scale})`,
+              transformOrigin: "top left"
             }}
           >
-            <div
-              className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-              style={{
-                width: `${a4WidthPx}px`,
-                height: isExport ? "auto" : `${a4HeightPx}px`,
-                minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-                transform: `scale(${scale})`,
-                transformOrigin: "top left"
-              }}
-            >
-              <div className="flex items-center justify-between border-b border-sand-200 pb-4">
-                <div className="flex items-center gap-2">
-                  <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
-                  <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                    Angebot
-                  </span>
-                </div>
-                <span className="text-xs text-sand-500">{offer.reference}</span>
+            <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+              <div className="flex items-center gap-2">
+                <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
+                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  Angebot
+                </span>
               </div>
-              <div className="mt-4 flex-1 space-y-4">
-                <div>
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                    Angebotsdetails
-                  </p>
-                  <div
-                    className="offer-detail-html mt-2 text-sm text-sand-700"
-                    dangerouslySetInnerHTML={{ __html: detailHtml }}
-                  />
-                </div>
-              </div>
-              <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
-                Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+              <span className="text-xs text-sand-500">{offer.reference}</span>
+            </div>
+            <div className="mt-4 flex-1 space-y-4">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  Angebotsdetails
+                </p>
+                <div
+                  className="offer-detail-html mt-2 text-sm text-sand-700"
+                  dangerouslySetInnerHTML={{ __html: detailHtml }}
+                />
               </div>
             </div>
+            <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+              Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+            </div>
           </div>
-        </>
+        </div>
       ) : null}
     </div>
   );
