@@ -1074,17 +1074,30 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   if (!pagedPositions.length) {
     pagedPositions.push([]);
   }
-  const getPhotoLayout = (count) => {
+  const getPhotoLayout = (count, exportMode) => {
+    const compact = Boolean(exportMode);
     if (count <= 1) {
-      return { grid: "grid grid-cols-1 gap-4", image: "h-[380px]" };
+      return {
+        grid: `grid grid-cols-1 ${compact ? "gap-3" : "gap-4"}`,
+        image: compact ? "h-[300px]" : "h-[380px]"
+      };
     }
     if (count === 2) {
-      return { grid: "grid grid-cols-2 gap-4", image: "h-[320px]" };
+      return {
+        grid: `grid grid-cols-2 ${compact ? "gap-3" : "gap-4"}`,
+        image: compact ? "h-[260px]" : "h-[320px]"
+      };
     }
     if (count === 3) {
-      return { grid: "grid grid-cols-3 gap-3", image: "h-[260px]" };
+      return {
+        grid: `grid grid-cols-3 ${compact ? "gap-2" : "gap-3"}`,
+        image: compact ? "h-[220px]" : "h-[260px]"
+      };
     }
-    return { grid: "grid grid-cols-3 gap-3", image: "h-[220px]" };
+    return {
+      grid: `grid grid-cols-3 ${compact ? "gap-2" : "gap-3"}`,
+      image: compact ? "h-[200px]" : "h-[220px]"
+    };
   };
   const a4WidthPx = 210 * 3.7795275591;
   const a4HeightPx = 297 * 3.7795275591;
@@ -1238,7 +1251,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   return (
     <div
       ref={containerRef}
-      className={isExport ? "space-y-6 bg-white" : "space-y-6 overflow-auto"}
+      className={isExport ? "bg-white" : "space-y-6 overflow-auto"}
       style={isExport ? { backgroundColor: "#ffffff" } : undefined}
     >
       {offer.coverEnabled ? (
@@ -1601,7 +1614,9 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           }}
         >
           <div
-            className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+            className={`rounded-2xl border border-sand-200 bg-white ${
+              isExport ? "p-6 shadow-none" : "p-8 shadow-soft"
+            } flex flex-col`}
             style={{
               width: `${a4WidthPx}px`,
               height: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx}px`,
@@ -1621,17 +1636,22 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               </div>
               <span className="text-xs text-sand-500">{offer.reference}</span>
             </div>
-            <div className="mt-4 flex-1 space-y-4">
+            <div className={`mt-4 flex-1 ${isExport ? "space-y-3" : "space-y-4"}`}>
               <div>
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
                   Produktfotos
                 </p>
-                <div className="mt-2 space-y-3">
+                <div className={`mt-2 ${isExport ? "space-y-2" : "space-y-3"}`}>
                   {previewPositions.map((item, index) => {
                     if (!item.images?.length) return null;
-                    const layout = getPhotoLayout(item.images.length);
+                    const layout = getPhotoLayout(item.images.length, isExport);
                     return (
-                      <div key={item.id} className="rounded-xl border border-sand-200 p-3">
+                      <div
+                        key={item.id}
+                        className={`rounded-xl border border-sand-200 ${
+                          isExport ? "p-2" : "p-3"
+                        }`}
+                      >
                         <p className="text-xs font-semibold text-sand-900">
                           Pos. {index + 1}: {item.title}
                         </p>
