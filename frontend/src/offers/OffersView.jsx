@@ -169,9 +169,16 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
       backgroundColor: "#ffffff",
       logging: false
     });
+    const canvasScale = pageRect.width ? pageCanvas.width / pageRect.width : 1;
+    const headerStartCanvasPx = headerStartPx * canvasScale;
+    const headerHeightCanvasPx = headerHeightPx * canvasScale;
+    const footerStartCanvasPx = footerStartPx * canvasScale;
+    const footerHeightCanvasPx = footerHeightPx * canvasScale;
+    const bodyTopCanvasPx = bodyTopPx * canvasScale;
+    const bodyHeightCanvasPx = bodyHeightPx * canvasScale;
     const ratio = usableWidth / pageCanvas.width;
-    const headerHeightMm = headerHeightPx * ratio;
-    const footerHeightMm = footerHeightPx * ratio;
+    const headerHeightMm = headerHeightCanvasPx * ratio;
+    const footerHeightMm = footerHeightCanvasPx * ratio;
     const availableBodyMm = maxHeight - headerHeightMm - footerHeightMm;
     if (availableBodyMm <= 10) {
       await renderFullPage(page);
@@ -180,13 +187,13 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
 
     const headerCanvas = document.createElement("canvas");
     headerCanvas.width = pageCanvas.width;
-    headerCanvas.height = Math.max(1, Math.round(headerHeightPx));
+    headerCanvas.height = Math.max(1, Math.round(headerHeightCanvasPx));
     const headerCtx = headerCanvas.getContext("2d");
     if (headerCtx) {
       headerCtx.drawImage(
         pageCanvas,
         0,
-        Math.round(headerStartPx),
+        Math.round(headerStartCanvasPx),
         pageCanvas.width,
         headerCanvas.height,
         0,
@@ -198,13 +205,13 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
 
     const footerCanvas = document.createElement("canvas");
     footerCanvas.width = pageCanvas.width;
-    footerCanvas.height = Math.max(1, Math.round(footerHeightPx));
+    footerCanvas.height = Math.max(1, Math.round(footerHeightCanvasPx));
     const footerCtx = footerCanvas.getContext("2d");
     if (footerCtx) {
       footerCtx.drawImage(
         pageCanvas,
         0,
-        Math.round(footerStartPx),
+        Math.round(footerStartCanvasPx),
         pageCanvas.width,
         footerCanvas.height,
         0,
@@ -219,8 +226,8 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
     const bodySliceHeightPx = availableBodyMm / ratio;
     let offsetY = 0;
     let sliceIndex = 0;
-    while (offsetY < bodyHeightPx - 1) {
-      const sliceHeightPx = Math.min(bodySliceHeightPx, bodyHeightPx - offsetY);
+    while (offsetY < bodyHeightCanvasPx - 1) {
+      const sliceHeightPx = Math.min(bodySliceHeightPx, bodyHeightCanvasPx - offsetY);
       const sliceCanvas = document.createElement("canvas");
       sliceCanvas.width = pageCanvas.width;
       sliceCanvas.height = sliceHeightPx;
@@ -229,7 +236,7 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
         ctx.drawImage(
           pageCanvas,
           0,
-          Math.round(bodyTopPx + offsetY),
+          Math.round(bodyTopCanvasPx + offsetY),
           pageCanvas.width,
           sliceHeightPx,
           0,
