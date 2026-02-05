@@ -24,7 +24,6 @@ import {
 } from "lucide-react";
 import EmailComposerModal from "../components/EmailComposerModal";
 import NotesRichTextEditor from "../components/NotesRichTextEditor";
-import html2pdf from "html2pdf.js";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
@@ -91,6 +90,31 @@ const buildPdfBlobFromElement = async (element) => {
     pdf.addPage();
     pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
     heightLeft -= pageHeight;
+  }
+  const arrayBuffer = pdf.output("arraybuffer");
+  return new Blob([arrayBuffer], { type: "application/pdf" });
+};
+
+const buildPdfBlobFromPages = async (pages, options = {}) => {
+  const marginTopMm = Number(options.marginTopMm ?? 8);
+  const marginBottomMm = Number(options.marginBottomMm ?? 8);
+  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const maxHeight = pageHeight - marginTopMm - marginBottomMm;
+  for (let i = 0; i < pages.length; i += 1) {
+    const page = pages[i];
+    const canvas = await html2canvas(page, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#ffffff",
+      logging: false
+    });
+    const imgData = canvas.toDataURL("image/jpeg", 0.98);
+    const imgHeight = canvas.height * (pageWidth / canvas.width);
+    const renderHeight = Math.min(imgHeight, maxHeight);
+    if (i > 0) pdf.addPage();
+    pdf.addImage(imgData, "JPEG", 0, marginTopMm, pageWidth, renderHeight);
   }
   const arrayBuffer = pdf.output("arraybuffer");
   return new Blob([arrayBuffer], { type: "application/pdf" });
@@ -1257,6 +1281,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       {offer.coverEnabled ? (
         <div
           className="mx-auto"
+          data-pdf-page
           style={{
             width: `${a4WidthPx * scale}px`,
             height: isExport ? "auto" : `${a4HeightPx * scale}px`,
@@ -1316,6 +1341,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           <div
             key={`page-${pageIndex}`}
             className="mx-auto"
+            data-pdf-page
             style={{
               width: `${a4WidthPx * scale}px`,
               height: isExport ? "auto" : `${a4HeightPx * scale}px`,
@@ -1567,6 +1593,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         <>
           <div
             className="mx-auto"
+            data-pdf-page
             style={{
               width: `${a4WidthPx * scale}px`,
               height: isExport ? "auto" : `${a4HeightPx * scale}px`,
@@ -1607,6 +1634,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       {hasProductPhotos ? (
         <div
           className="mx-auto"
+          data-pdf-page
           style={{
             width: `${a4WidthPx * scale}px`,
             height: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx * scale}px`,
@@ -1685,6 +1713,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       {hasDetailHtml ? (
         <div
           className="mx-auto"
+          data-pdf-page
           style={{
             width: `${a4WidthPx * scale}px`,
             height: isExport ? "auto" : `${a4HeightPx * scale}px`,
@@ -3420,18 +3449,22 @@ export default function OffersView() {
       exportMode === "confirmation"
         ? `auftragsbestaetigung_${offer.reference || "angebot"}`
         : offer.reference || "angebot";
-    const options = {
-      margin: [8, 0, 8, 0],
-      filename: `${filenameBase}.pdf`,
-      image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      pagebreak: { mode: ["css"] }
+    const run = async () => {
+      const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
+      const blob = pages.length
+        ? await buildPdfBlobFromPages(pages, { marginTopMm: 8, marginBottomMm: 8 })
+        : await buildPdfBlobFromElement(element);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${filenameBase}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
     };
-    html2pdf()
-      .set(options)
-      .from(element)
-      .save()
+    run()
+      .catch(() => setToast("PDF Export fehlgeschlagen."))
       .finally(() => {
         setExportOfferId("");
         setExportMode("offer");
@@ -3454,37 +3487,10 @@ export default function OffersView() {
         await new Promise((resolve) =>
           requestAnimationFrame(() => requestAnimationFrame(resolve))
         );
-        const options = {
-          margin: [8, 0, 8, 0],
-          image: { type: "jpeg", quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false },
-          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-          pagebreak: { mode: ["css"] }
-        };
-        const buffer = await html2pdf()
-          .set(options)
-          .from(element)
-          .toPdf()
-          .get("pdf")
-          .then((pdf) => pdf.output("arraybuffer"));
-        let blob = new Blob([buffer], { type: "application/pdf" });
-        if (blob.size < 4000) {
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          const retryBuffer = await html2pdf()
-            .set(options)
-            .from(element)
-            .toPdf()
-            .get("pdf")
-            .then((pdf) => pdf.output("arraybuffer"));
-          const retryBlob = new Blob([retryBuffer], { type: "application/pdf" });
-          blob = retryBlob.size > blob.size ? retryBlob : blob;
-        }
-        if (blob.size < 4000) {
-          const fallbackBlob = await buildPdfBlobFromElement(element);
-          if (fallbackBlob?.size > blob.size) {
-            blob = fallbackBlob;
-          }
-        }
+        const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
+        const blob = pages.length
+          ? await buildPdfBlobFromPages(pages, { marginTopMm: 8, marginBottomMm: 8 })
+          : await buildPdfBlobFromElement(element);
         handlers?.resolve?.(blob);
       } catch (error) {
         try {
