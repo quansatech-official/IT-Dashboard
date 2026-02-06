@@ -1898,7 +1898,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               width: `${a4WidthPx}px`,
               height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
               minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-              paddingBottom: isExport ? "48px" : undefined,
               transform: isExport ? "none" : `scale(${scale})`,
               transformOrigin: "top left",
               pageBreakAfter:
@@ -2164,7 +2163,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 width: `${a4WidthPx}px`,
                 height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-                paddingBottom: "48px",
                 transform: isExport ? "none" : `scale(${scale})`,
                 transformOrigin: "top left",
                 pageBreakAfter:
@@ -2373,8 +2371,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
                 style={{
                   width: `${a4WidthPx}px`,
-                  height: `${exportPageHeightPx}px`,
-                  paddingBottom: "48px"
+                  height: `${exportPageHeightPx}px`
                 }}
               >
                 <div className="flex items-center justify-between border-b border-sand-200 pb-4">
@@ -2420,8 +2417,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
                 style={{
                   width: `${a4WidthPx}px`,
-                  height: `${exportPageHeightPx}px`,
-                  paddingBottom: "48px"
+                  height: `${exportPageHeightPx}px`
                 }}
               >
                 <div className="flex items-center justify-between border-b border-sand-200 pb-4">
