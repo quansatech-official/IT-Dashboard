@@ -243,8 +243,9 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
 
     const headerData = headerCanvas.toDataURL("image/jpeg", 0.98);
     const footerData = footerCanvas.toDataURL("image/jpeg", 0.98);
+    const isDetailPage = page.hasAttribute("data-detail-page");
     const overlapCanvasPx = Math.max(1, Math.round(canvasScale));
-    const overlapMm = overlapCanvasPx * ratio;
+    const overlapMm = isDetailPage ? 0 : overlapCanvasPx * ratio;
     const bodySliceHeightPx = Math.max(1, (availableBodyMm - overlapMm) / ratio);
     let offsetY = 0;
     let sliceIndex = 0;
@@ -2308,6 +2309,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               key={`detail-page-${pageIndex}`}
               className="mx-auto"
               data-pdf-page
+              data-detail-page
               style={{
                 width: `${a4WidthPx * scale}px`,
                 height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
