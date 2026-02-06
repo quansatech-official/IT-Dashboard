@@ -1072,11 +1072,6 @@ class ReportPdfRequest(BaseModel):
     html: str
     filename: Optional[str] = None
 
-class HtmlPdfRequest(BaseModel):
-    html: str
-    filename: Optional[str] = None
-    base_url: Optional[str] = None
-
 class EmailAttachment(BaseModel):
     filename: str
     content_base64: str
@@ -4751,25 +4746,6 @@ def build_report_pdf(payload: ReportPdfRequest):
         logger.exception("Report PDF render failed: %s", exc)
         raise HTTPException(500, f"PDF render failed: {exc}") from exc
     filename = (payload.filename or "report.pdf").strip() or "report.pdf"
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-    return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
-
-
-@app.post("/api/html/pdf")
-def build_html_pdf(payload: HtmlPdfRequest, request: Request):
-    try:
-        from weasyprint import HTML  # type: ignore
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(500, f"PDF renderer unavailable: {exc}") from exc
-    if not payload.html:
-        raise HTTPException(400, "Missing HTML")
-    base_url = payload.base_url or str(request.base_url)
-    try:
-        pdf_bytes = HTML(string=payload.html, base_url=base_url).write_pdf()
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("HTML PDF render failed: %s", exc)
-        raise HTTPException(500, f"PDF render failed: {exc}") from exc
-    filename = (payload.filename or "document.pdf").strip() or "document.pdf"
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
 
