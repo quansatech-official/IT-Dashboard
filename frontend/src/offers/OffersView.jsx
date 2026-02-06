@@ -1291,6 +1291,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const [detailPages, setDetailPages] = useState([detailHtml]);
   const [detailMeasureTick, setDetailMeasureTick] = useState(0);
   const lastPageContentRef = useRef(null);
+  const lastPageBodyRef = useRef(null);
+  const totalsInlineRef = useRef(null);
   const detailMeasureRef = useRef(null);
   const detailMeasureRafRef = useRef(0);
   const positionsMeasureFirstRef = useRef(null);
@@ -1514,20 +1516,9 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       ) : null}
     </>
   );
-  const autoTotalsOnOwnPage = isExport && (() => {
-    const hasText = Boolean((offer.calculationText || "").trim());
-    const hasAttachments = (offer.attachments || []).length > 0;
-    const hasTotals = totalNet > 0 || optionalTotal > 0;
-    if (!hasText && !hasAttachments && !hasTotals) return false;
-    return pagedPositions.some(
-      (pagePositions, pageIndex) =>
-        pageIndex === pagedPositions.length - 1 &&
-        (pagePositions.length >= rowsPerPage - 1 || hasText || hasAttachments)
-    );
-  })();
-  const totalsOnOwnPage = autoTotalsOnOwnPage || (!isExport && forceTotalsOwnPage);
-  const renderTotalsInline =
-    (isExport && !autoTotalsOnOwnPage) || (!isExport && !forceTotalsOwnPage);
+  const [exportTotalsOwnPage, setExportTotalsOwnPage] = useState(false);
+  const totalsOnOwnPage = isExport ? exportTotalsOwnPage : forceTotalsOwnPage;
+  const renderTotalsInline = isExport ? !totalsOnOwnPage : !forceTotalsOwnPage;
   const hasTotalsPage = Boolean(totalsOnOwnPage);
   const hasPhotosPage = Boolean(hasProductPhotos);
   const hasDetailsPage = Boolean(hasDetailHtml);
@@ -1555,6 +1546,32 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       setForceTotalsOwnPage(true);
     }
   }, [isExport, forceTotalsOwnPage, pagedPositions.length, previewPositions.length, scale]);
+
+  useLayoutEffect(() => {
+    if (!isExport) return;
+    if (!renderTotalsInline) return;
+    const bodyEl = lastPageBodyRef.current;
+    const totalsEl = totalsInlineRef.current;
+    if (!bodyEl || !totalsEl) {
+      if (exportTotalsOwnPage) setExportTotalsOwnPage(false);
+      return;
+    }
+    const bodyRect = bodyEl.getBoundingClientRect();
+    const totalsRect = totalsEl.getBoundingClientRect();
+    const fits = totalsRect.bottom <= bodyRect.bottom - 1;
+    if (exportTotalsOwnPage === !fits) return;
+    setExportTotalsOwnPage(!fits);
+  }, [
+    isExport,
+    renderTotalsInline,
+    pagedPositions.length,
+    previewPositions.length,
+    totalNet,
+    optionalTotal,
+    overallDiscount,
+    offer.calculationText,
+    (offer.attachments || []).length
+  ]);
 
   useLayoutEffect(() => {
     if (!hasDetailHtml) {
@@ -1691,7 +1708,25 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
     if (!pages.length && detailHtml.trim()) {
       pages.push(detailHtml);
     }
-    setDetailPages(pages);
+    const nonEmptyPages = pages.filter((page) => htmlToPlainText(page).trim());
+    while (
+      nonEmptyPages.length > 1 &&
+      htmlToPlainText(nonEmptyPages[0]).trim() ===
+        htmlToPlainText(nonEmptyPages[1]).trim()
+    ) {
+      nonEmptyPages.shift();
+    }
+    if (nonEmptyPages.length > 1) {
+      const firstText = htmlToPlainText(nonEmptyPages[0]).trim();
+      const allSame = nonEmptyPages.every(
+        (page) => htmlToPlainText(page).trim() === firstText
+      );
+      if (allSame) {
+        setDetailPages([nonEmptyPages[0]]);
+        return;
+      }
+    }
+    setDetailPages(nonEmptyPages);
   }, [detailHtml, hasDetailHtml, isExport, detailMeasureTick]);
 
   useLayoutEffect(() => {
@@ -1785,7 +1820,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           data-pdf-page
           style={{
             width: `${a4WidthPx * scale}px`,
-            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+            height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
             minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
           }}
         >
@@ -1849,7 +1884,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             data-pdf-page
             style={{
               width: `${a4WidthPx * scale}px`,
-              height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+              height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
               minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
             }}
           >
@@ -1861,7 +1896,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             }
             style={{
               width: `${a4WidthPx}px`,
-              height: isExport ? "auto" : `${a4HeightPx}px`,
+              height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
               minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
               paddingBottom: isExport ? "48px" : undefined,
               transform: isExport ? "none" : `scale(${scale})`,
@@ -1888,7 +1923,12 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 </div>
                 <span className="text-xs text-sand-500">{offer.reference}</span>
               </div>
-              <div className="mt-4 flex-1 space-y-6" data-pdf-body>
+              <div
+                className="mt-4 flex-1 space-y-6"
+                data-pdf-body
+                ref={pageIndex === pagedPositions.length - 1 ? lastPageBodyRef : null}
+                style={isExport ? { overflow: "hidden" } : undefined}
+              >
                 {pageIndex === 0 ? (
                   <div className="grid gap-4 md:grid-cols-2 text-xs text-sand-600">
                     <div>
@@ -2078,17 +2118,16 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                       ) : null}
                     </div>
                     {showTotals && renderTotalsInline ? (
-                      <>
-                        <div
-                          className="mt-2"
-                          style={{
-                            breakInside: "avoid",
-                            pageBreakInside: "avoid"
-                          }}
-                        >
-                          {totalsContent}
-                        </div>
-                      </>
+                      <div
+                        className="mt-2"
+                        ref={totalsInlineRef}
+                        style={{
+                          breakInside: "avoid",
+                          pageBreakInside: "avoid"
+                        }}
+                      >
+                        {totalsContent}
+                      </div>
                     ) : null}
                   </div>
                 ) : null}
@@ -2111,7 +2150,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             data-pdf-page
             style={{
               width: `${a4WidthPx * scale}px`,
-              height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+              height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
               minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
             }}
           >
@@ -2123,7 +2162,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               }
               style={{
                 width: `${a4WidthPx}px`,
-                height: isExport ? "auto" : `${a4HeightPx}px`,
+                height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 paddingBottom: "48px",
                 transform: isExport ? "none" : `scale(${scale})`,
@@ -2144,7 +2183,13 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 </div>
                 <span className="text-xs text-sand-500">{offer.reference}</span>
               </div>
-              <div className="mt-4 flex-1 space-y-6" data-pdf-body>{totalsContent}</div>
+              <div
+                className="mt-4 flex-1 space-y-6"
+                data-pdf-body
+                style={isExport ? { overflow: "hidden" } : undefined}
+              >
+                {totalsContent}
+              </div>
               <div
                 className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
                 data-pdf-footer
@@ -2195,6 +2240,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             <div
               className={`mt-4 flex-1 ${isExport ? "space-y-3" : "space-y-4"}`}
               data-pdf-body
+              style={isExport ? { overflow: "hidden" } : undefined}
             >
               <div>
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
@@ -2254,7 +2300,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               data-pdf-page
               style={{
                 width: `${a4WidthPx * scale}px`,
-                height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+                height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`,
                 minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
               }}
             >
@@ -2264,15 +2310,15 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                     ? "rounded-2xl bg-white p-8 flex flex-col"
                     : "rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
                 }
-                style={{
-                  width: `${a4WidthPx}px`,
-                  height: isExport ? "auto" : `${a4HeightPx}px`,
-                  minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-                  transform: `scale(${scale})`,
-                  transformOrigin: "top left",
-                  pageBreakAfter:
-                    isExport && pageIndex < pages.length - 1 ? "always" : "auto"
-                }}
+              style={{
+                width: `${a4WidthPx}px`,
+                height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+                minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+                transform: `scale(${scale})`,
+                transformOrigin: "top left",
+                pageBreakAfter:
+                  isExport && pageIndex < pages.length - 1 ? "always" : "auto"
+              }}
               >
                 <div
                   className="flex items-center justify-between border-b border-sand-200 pb-4"
@@ -2291,7 +2337,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   data-pdf-body
                   style={
                     isExport
-                      ? { paddingTop: "6px", paddingBottom: "10px" }
+                      ? { paddingTop: "6px", paddingBottom: "10px", overflow: "hidden" }
                       : { paddingTop: "4px" }
                   }
                 >
