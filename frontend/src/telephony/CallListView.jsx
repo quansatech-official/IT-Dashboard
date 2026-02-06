@@ -32,6 +32,28 @@ const formatDuration = (seconds) => {
 };
 
 const normalizeDigits = (value) => String(value || "").replace(/\D/g, "");
+const PBX_NAME_LIMIT = 40;
+
+const normalizePbxName = (value) =>
+  String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const shortenPbxName = (value, limit = PBX_NAME_LIMIT) => {
+  const cleaned = normalizePbxName(value);
+  if (!cleaned) return "";
+  if (cleaned.length <= limit) return cleaned;
+  const stripped = cleaned
+    .replace(
+      /\b(gmbh\s*&\s*co\.?\s*kg|gmbh\s*&\s*co\.?|gmbh|ag|kg|mbh|inc\.?|ltd\.?|llc|e\.?u\.?|og|e\.?k\.?)\b/gi,
+      ""
+    )
+    .replace(/\s+/g, " ")
+    .replace(/\s+&\s+/g, " und ")
+    .trim();
+  if (stripped && stripped.length <= limit) return stripped;
+  return cleaned.slice(0, limit).trim();
+};
 
 const directionLabel = (direction) => {
   if (!direction) return "-";
@@ -209,8 +231,12 @@ export default function CallListView({
 
   useEffect(() => {
     if (!pbxEditTarget) return;
-    setPbxEditName(pbxEditTarget?.name || "");
-    setPbxEditError("");
+    setPbxEditName(pbxEditTarget?.suggestedName || pbxEditTarget?.name || "");
+    if (pbxEditTarget?.reason === "length") {
+      setPbxEditError(`Name zu lang (max. ${PBX_NAME_LIMIT} Zeichen).`);
+    } else {
+      setPbxEditError("");
+    }
   }, [pbxEditTarget]);
 
   useEffect(() => {
@@ -328,14 +354,35 @@ export default function CallListView({
 
   const handleAddToPbx = async (payload) => {
     if (!onAddToPbx) return;
+    const rawName = normalizePbxName(payload?.name || "");
+    const number = String(payload?.number || "").trim();
+    const nextPayload = {
+      ...payload,
+      name: rawName,
+      number
+    };
+    if (rawName && rawName.length > PBX_NAME_LIMIT) {
+      const suggestion = shortenPbxName(rawName, PBX_NAME_LIMIT);
+      setPbxEditTarget({
+        name: suggestion,
+        suggestedName: suggestion,
+        originalName: rawName,
+        number,
+        reason: "length"
+      });
+      return;
+    }
     try {
-      await Promise.resolve(onAddToPbx(payload));
+      await Promise.resolve(onAddToPbx(nextPayload));
       setToast("Telefonbuch uebernommen.");
     } catch (error) {
       setToast("Telefonbuch-Uebernahme fehlgeschlagen.");
       setPbxEditTarget({
-        name: payload?.name || "",
-        number: payload?.number || ""
+        name: rawName || "",
+        suggestedName: shortenPbxName(rawName || "", PBX_NAME_LIMIT),
+        originalName: rawName || "",
+        number,
+        reason: "error"
       });
     }
   };
@@ -345,6 +392,10 @@ export default function CallListView({
     const trimmed = pbxEditName.trim();
     if (!trimmed) {
       setPbxEditError("Name fehlt.");
+      return;
+    }
+    if (trimmed.length > PBX_NAME_LIMIT) {
+      setPbxEditError(`Name zu lang (max. ${PBX_NAME_LIMIT} Zeichen).`);
       return;
     }
     setPbxEditError("");
@@ -760,11 +811,25 @@ export default function CallListView({
                   className="mt-2 w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm"
                 />
               </label>
+              {pbxEditTarget?.originalName &&
+              pbxEditTarget?.suggestedName &&
+              pbxEditTarget.originalName !== pbxEditTarget.suggestedName ? (
+                <p className="text-xs text-sand-500">
+                  Vorschlag:{" "}
+                  <span className="font-semibold">{pbxEditTarget.suggestedName}</span>
+                </p>
+              ) : null}
+              {pbxEditTarget?.originalName ? (
+                <p className="text-xs text-sand-400">
+                  Original: {pbxEditTarget.originalName} ({pbxEditTarget.originalName.length}{" "}
+                  Zeichen)
+                </p>
+              ) : null}
               {pbxEditError ? (
                 <p className="text-xs text-rose-600">{pbxEditError}</p>
               ) : (
                 <p className="text-xs text-sand-500">
-                  NFON hat ein Namenslimit. Bitte kuerzen und erneut speichern.
+                  Maximal {PBX_NAME_LIMIT} Zeichen im Anlagentelefonbuch.
                 </p>
               )}
               <div className="flex items-center justify-between">

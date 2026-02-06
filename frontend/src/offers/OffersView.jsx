@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   BookmarkPlus,
   Check,
@@ -100,6 +101,7 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
   const marginBottomMm = Number(options.marginBottomMm ?? 8);
   const marginLeftMm = Number(options.marginLeftMm ?? 8);
   const marginRightMm = Number(options.marginRightMm ?? 8);
+  const footerBottomMm = Number(options.footerBottomMm ?? marginBottomMm);
   const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
@@ -223,7 +225,9 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
 
     const headerData = headerCanvas.toDataURL("image/jpeg", 0.98);
     const footerData = footerCanvas.toDataURL("image/jpeg", 0.98);
-    const bodySliceHeightPx = availableBodyMm / ratio;
+    const overlapCanvasPx = Math.max(1, Math.round(canvasScale));
+    const overlapMm = overlapCanvasPx * ratio;
+    const bodySliceHeightPx = Math.max(1, (availableBodyMm - overlapMm) / ratio);
     let offsetY = 0;
     let sliceIndex = 0;
     while (offsetY < bodyHeightCanvasPx - 1) {
@@ -259,13 +263,14 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
         sliceWidthMm,
         sliceHeightMm
       );
+      const footerY = pageHeight - footerBottomMm - footerHeightMm - overlapMm;
       pdf.addImage(
         footerData,
         "JPEG",
         marginLeftMm,
-        pageHeight - marginBottomMm - footerHeightMm,
+        footerY,
         usableWidth,
-        footerHeightMm
+        footerHeightMm + overlapMm
       );
       isFirst = false;
       offsetY += sliceHeightPx;
@@ -554,6 +559,24 @@ const calculatePriceFromInputs = ({
   const percent = Number(markupPercent || 0) + Number(researchPercent || 0);
   const absolute = Number(absoluteMarkup || 0);
   return baseValue + absolute + (baseValue * percent) / 100;
+};
+
+const parseCalcValue = (value) => {
+  if (value === "" || value === null || typeof value === "undefined") return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const getDeviceEkBase = (item) => {
+  const calcBase = parseCalcValue(item?.calcBase);
+  if (calcBase !== null) return calcBase;
+  return 0;
+};
+
+const calculateDeviceEkTotal = (item) => {
+  const ekBase = getDeviceEkBase(item);
+  const qty = Number(item?.quantity || 0);
+  return ekBase * qty;
 };
 
 const normalizeBillingCycle = (value) => {
@@ -925,6 +948,10 @@ const buildDeviceItemFromBlock = (block = {}) => ({
   model: block.model || block.modelFamily || "",
   description: block.description || "",
   price: Number(block.price || 0),
+  calcBase: parseCalcValue(block.calcBase),
+  calcMarkupPercent: parseCalcValue(block.calcMarkupPercent),
+  calcResearchPercent: parseCalcValue(block.calcResearchPercent),
+  calcAbsoluteMarkup: parseCalcValue(block.calcAbsoluteMarkup),
   quantity: normalizeQuantityInput(block.quantity, 1),
   billingCycle: block.billingCycle || "once",
   discountType: normalizeDiscountType(block.discountType),
@@ -1223,6 +1250,14 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       </div>
     );
   }
+  const buildPagedPositions = (positions, size) => {
+    const pages = [];
+    if (!positions.length) return [[]];
+    for (let i = 0; i < positions.length; i += size) {
+      pages.push(positions.slice(i, i + size));
+    }
+    return pages.length ? pages : [[]];
+  };
   const previewPositions = buildPreviewPositions(offer);
   const serviceTotal = (offer.lineItems || []).reduce(
     (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
@@ -1253,38 +1288,52 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const previewRowsPerPage = 10;
   const pageSize = isExport ? rowsPerPage : previewRowsPerPage;
   const [forceTotalsOwnPage, setForceTotalsOwnPage] = useState(false);
+  const [detailPages, setDetailPages] = useState([detailHtml]);
+  const [detailMeasureTick, setDetailMeasureTick] = useState(0);
   const lastPageContentRef = useRef(null);
-  const pagedPositions = [];
-  for (let i = 0; i < previewPositions.length; i += pageSize) {
-    const chunk = previewPositions.slice(i, i + pageSize);
-    pagedPositions.push(chunk);
-  }
-  if (!pagedPositions.length) {
-    pagedPositions.push([]);
-  }
+  const detailMeasureRef = useRef(null);
+  const detailMeasureRafRef = useRef(0);
+  const positionsMeasureFirstRef = useRef(null);
+  const positionsMeasureNextRef = useRef(null);
+  const positionsMeasureTemplateRef = useRef(null);
+  const [measuredPageIndexes, setMeasuredPageIndexes] = useState([]);
+  const measuredPagesSignatureRef = useRef("");
+  const pagedPositions = useMemo(() => {
+    if (!measuredPageIndexes.length) {
+      return buildPagedPositions(previewPositions, pageSize);
+    }
+    const pages = measuredPageIndexes
+      .map((indexes) => indexes.map((index) => previewPositions[index]).filter(Boolean))
+      .filter((page) => page.length);
+    return pages.length ? pages : buildPagedPositions(previewPositions, pageSize);
+  }, [measuredPageIndexes, previewPositions, pageSize]);
+  const renderMeasureBlock = (node) => {
+    if (!isExport || typeof document === "undefined") return node;
+    return createPortal(node, document.body);
+  };
   const getPhotoLayout = (count, exportMode) => {
     const compact = Boolean(exportMode);
     if (count <= 1) {
       return {
         grid: `grid grid-cols-1 ${compact ? "gap-3" : "gap-4"}`,
-        image: compact ? "h-[300px]" : "h-[380px]"
+        image: compact ? "max-h-[300px]" : "max-h-[380px]"
       };
     }
     if (count === 2) {
       return {
         grid: `grid grid-cols-2 ${compact ? "gap-3" : "gap-4"}`,
-        image: compact ? "h-[260px]" : "h-[320px]"
+        image: compact ? "max-h-[260px]" : "max-h-[320px]"
       };
     }
     if (count === 3) {
       return {
         grid: `grid grid-cols-3 ${compact ? "gap-2" : "gap-3"}`,
-        image: compact ? "h-[220px]" : "h-[260px]"
+        image: compact ? "max-h-[220px]" : "max-h-[260px]"
       };
     }
     return {
       grid: `grid grid-cols-3 ${compact ? "gap-2" : "gap-3"}`,
-      image: compact ? "h-[200px]" : "h-[220px]"
+      image: compact ? "max-h-[200px]" : "max-h-[220px]"
     };
   };
   const a4WidthPx = 210 * 3.7795275591;
@@ -1308,6 +1357,67 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const totalsGrossClass = isExport
     ? "flex items-center justify-between text-sm font-semibold text-sand-900"
     : "flex items-center justify-between text-base font-semibold text-sand-900";
+  const previewPositionsWithIndex = previewPositions.map((item, index) => ({
+    ...item,
+    _posIndex: index
+  }));
+  const servicePositionsAll = previewPositionsWithIndex.filter(
+    (item) => item.category === "service"
+  );
+  const devicePositionsAll = previewPositionsWithIndex.filter(
+    (item) => item.category === "device"
+  );
+  let measureRowIndex = 0;
+  const renderMeasureSectionRow = (label, key) => (
+    <div
+      className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400"
+      key={key}
+      data-measure-row
+      data-row-type="section"
+      data-row-index={measureRowIndex++}
+    >
+      {label}
+    </div>
+  );
+  const renderMeasurePositionRow = (item, posIndex, key) => (
+    <div
+      className="border-b border-sand-100"
+      key={key}
+      data-measure-row
+      data-row-type="position"
+      data-pos-index={posIndex}
+      data-row-index={measureRowIndex++}
+    >
+      <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 px-3 py-2 text-xs text-sand-700">
+        <span>{item.optional ? "Optional" : `Pos. ${item.positionIndex || "-"}`}</span>
+        <div>
+          <p className="font-semibold text-sand-800">{item.title}</p>
+          {item.text ? (
+            <p className="mt-1 text-xs text-sand-500 whitespace-pre-line">{item.text}</p>
+          ) : null}
+        </div>
+        <div className="text-right">
+          <div>
+            {item.category === "service"
+              ? formatUnitQuantity(item.quantity, item.unit)
+              : formatPieceQuantity(item.quantity)}
+          </div>
+          <div className="text-[9px] uppercase tracking-[0.18em] text-sand-300">
+            {formatBillingCycleLabel(item.billingCycle)}
+          </div>
+        </div>
+        <span className="text-right">{formatMoney(Number(item.price || 0))}</span>
+        <span className="text-right">
+          {formatLineTotal(item)}
+          {calculateLineDiscount(item) > 0 ? (
+            <span className="mt-0.5 block text-[10px] text-rose-600">
+              Rabatt -{formatMoney(calculateLineDiscount(item))}
+            </span>
+          ) : null}
+        </span>
+      </div>
+    </div>
+  );
   const totalsContent = (
     <>
       {offer.calculationText ? (
@@ -1446,9 +1556,226 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
     }
   }, [isExport, forceTotalsOwnPage, pagedPositions.length, previewPositions.length, scale]);
 
+  useLayoutEffect(() => {
+    if (!hasDetailHtml) {
+      setDetailPages([]);
+      return;
+    }
+    const bodyEl = detailMeasureRef.current;
+    if (!bodyEl) {
+      if (!detailMeasureRafRef.current && typeof window !== "undefined") {
+        detailMeasureRafRef.current = window.requestAnimationFrame(() => {
+          detailMeasureRafRef.current = 0;
+          setDetailMeasureTick((tick) => tick + 1);
+        });
+      }
+      return;
+    }
+    const contentEl = bodyEl.querySelector("[data-detail-content]");
+    if (!contentEl) {
+      if (!detailMeasureRafRef.current && typeof window !== "undefined") {
+        detailMeasureRafRef.current = window.requestAnimationFrame(() => {
+          detailMeasureRafRef.current = 0;
+          setDetailMeasureTick((tick) => tick + 1);
+        });
+      }
+      return;
+    }
+    const source = document.createElement("div");
+    source.innerHTML = detailHtml;
+    const nodes = Array.from(source.childNodes);
+    const pages = [];
+    const getSplitDescriptor = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return {
+          getText: () => node.textContent || "",
+          build: (text) => document.createTextNode(text)
+        };
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) return null;
+      const children = Array.from(node.childNodes || []);
+      const textOnly = children.every((child) => child.nodeType === Node.TEXT_NODE);
+      if (textOnly) {
+        return {
+          getText: () => node.textContent || "",
+          build: (text) => {
+            const clone = node.cloneNode(false);
+            clone.textContent = text;
+            return clone;
+          }
+        };
+      }
+      if (children.length === 1 && children[0].nodeType === Node.ELEMENT_NODE) {
+        const childDescriptor = getSplitDescriptor(children[0]);
+        if (!childDescriptor) return null;
+        return {
+          getText: () => children[0].textContent || "",
+          build: (text) => {
+            const clone = node.cloneNode(false);
+            clone.appendChild(childDescriptor.build(text));
+            return clone;
+          }
+        };
+      }
+      return null;
+    };
+    const pushPage = () => {
+      const html = contentEl.innerHTML.trim();
+      const hasContent = Boolean(htmlToPlainText(html).trim());
+      if (hasContent) {
+        pages.push(html);
+      }
+      contentEl.innerHTML = "";
+    };
+    contentEl.innerHTML = "";
+    for (let index = 0; index < nodes.length; index += 1) {
+      const node = nodes[index];
+      const descriptor = getSplitDescriptor(node);
+      contentEl.appendChild(node.cloneNode(true));
+      const isOverflowing = bodyEl.scrollHeight - bodyEl.clientHeight > 1;
+      if (!isOverflowing) continue;
+      if (contentEl.childNodes.length > 1) {
+        contentEl.removeChild(contentEl.lastChild);
+        pushPage();
+        contentEl.appendChild(node.cloneNode(true));
+        continue;
+      }
+      if (!descriptor) {
+        pushPage();
+        contentEl.appendChild(node.cloneNode(true));
+        continue;
+      }
+      const text = (descriptor.getText() || "").trim();
+      const words = text.split(/\s+/).filter(Boolean);
+      if (words.length < 2) {
+        pushPage();
+        contentEl.appendChild(node.cloneNode(true));
+        continue;
+      }
+      const minWordsNext = 4;
+      let low = 1;
+      let high = words.length - 1;
+      const maxFit = words.length - minWordsNext;
+      if (maxFit >= 1) {
+        high = Math.min(high, maxFit);
+      }
+      let best = 0;
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        const firstText = words.slice(0, mid).join(" ");
+        contentEl.innerHTML = "";
+        contentEl.appendChild(descriptor.build(firstText));
+        const fits = bodyEl.scrollHeight - bodyEl.clientHeight <= 1;
+        if (fits) {
+          best = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      if (best === 0) {
+        pushPage();
+        contentEl.appendChild(node.cloneNode(true));
+        continue;
+      }
+      const firstNode = descriptor.build(words.slice(0, best).join(" "));
+      const restNode = descriptor.build(words.slice(best).join(" "));
+      contentEl.innerHTML = "";
+      contentEl.appendChild(firstNode);
+      pushPage();
+      nodes.splice(index + 1, 0, restNode);
+    }
+    if (contentEl.childNodes.length) {
+      pushPage();
+    }
+    if (!pages.length && detailHtml.trim()) {
+      pages.push(detailHtml);
+    }
+    setDetailPages(pages);
+  }, [detailHtml, hasDetailHtml, isExport, detailMeasureTick]);
+
+  useLayoutEffect(() => {
+    const templateEl = positionsMeasureTemplateRef.current;
+    const firstBody = positionsMeasureFirstRef.current;
+    const nextBody = positionsMeasureNextRef.current;
+    if (!templateEl || !firstBody || !nextBody) return;
+    if (!previewPositions.length) {
+      if (measuredPageIndexes.length) {
+        setMeasuredPageIndexes([]);
+        measuredPagesSignatureRef.current = "";
+      }
+      return;
+    }
+    const headerRow = templateEl.querySelector("[data-measure-header]");
+    const rows = Array.from(templateEl.querySelectorAll("[data-measure-row]")).map((el) => ({
+      el,
+      type: el.getAttribute("data-row-type") || "position",
+      posIndex: Number(el.getAttribute("data-pos-index") || "-1"),
+      rowIndex: Number(el.getAttribute("data-row-index") || "0")
+    }));
+    if (!headerRow || !rows.length) {
+      if (measuredPageIndexes.length) {
+        setMeasuredPageIndexes([]);
+        measuredPagesSignatureRef.current = "";
+      }
+      return;
+    }
+    const pagePositions = [];
+    let cursor = 0;
+    let isFirstPage = true;
+    while (cursor < rows.length) {
+      const bodyEl = isFirstPage ? firstBody : nextBody;
+      const tableEl = bodyEl.querySelector("[data-measure-table]");
+      if (!tableEl) break;
+      tableEl.innerHTML = "";
+      tableEl.appendChild(headerRow.cloneNode(true));
+      const positionsOnPage = [];
+      const addedRows = [];
+      while (cursor < rows.length) {
+        const row = rows[cursor];
+        tableEl.appendChild(row.el.cloneNode(true));
+        const overflow = bodyEl.scrollHeight - bodyEl.clientHeight > 1;
+        if (!overflow) {
+          addedRows.push(row);
+          if (row.type === "position" && row.posIndex >= 0) {
+            positionsOnPage.push(row.posIndex);
+          }
+          cursor += 1;
+          continue;
+        }
+        tableEl.removeChild(tableEl.lastElementChild);
+        if (row.type === "position") {
+          const lastAdded = addedRows[addedRows.length - 1];
+          if (lastAdded && lastAdded.type === "section") {
+            tableEl.removeChild(tableEl.lastElementChild);
+            addedRows.pop();
+            cursor = lastAdded.rowIndex;
+          }
+        }
+        if (!positionsOnPage.length) {
+          tableEl.appendChild(row.el.cloneNode(true));
+          if (row.type === "position" && row.posIndex >= 0) {
+            positionsOnPage.push(row.posIndex);
+          }
+          cursor += 1;
+        }
+        break;
+      }
+      pagePositions.push(positionsOnPage);
+      isFirstPage = false;
+    }
+    const signature = JSON.stringify(pagePositions);
+    if (signature !== measuredPagesSignatureRef.current) {
+      measuredPagesSignatureRef.current = signature;
+      setMeasuredPageIndexes(pagePositions);
+    }
+  }, [previewPositions, pageSize, mode, hasDetailHtml, scale, isExport, measuredPageIndexes.length]);
+
+  const detailPagesReady = !hasDetailHtml || detailPages.length > 0;
   return (
     <div
       ref={containerRef}
+      data-detail-ready={detailPagesReady ? "true" : "false"}
       className={isExport ? "bg-white" : "space-y-6 overflow-auto"}
       style={isExport ? { backgroundColor: "#ffffff" } : undefined}
     >
@@ -1463,10 +1790,14 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           }}
         >
           <div
-            className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-              style={{
-                width: `${a4WidthPx}px`,
-                height: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
+            className={
+              isExport
+                ? "rounded-2xl bg-white p-8 flex flex-col"
+                : "rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+            }
+            style={{
+              width: `${a4WidthPx}px`,
+              height: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
                 minHeight: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
                 transform: `scale(${scale})`,
                 transformOrigin: "top left",
@@ -1523,7 +1854,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             }}
           >
           <div
-            className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+            className={
+              isExport
+                ? "rounded-2xl bg-white p-8 flex flex-col"
+                : "rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+            }
             style={{
               width: `${a4WidthPx}px`,
               height: isExport ? "auto" : `${a4HeightPx}px`,
@@ -1781,7 +2116,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             }}
           >
             <div
-              className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+              className={
+                isExport
+                  ? "rounded-2xl bg-white p-8 flex flex-col"
+                  : "rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+              }
               style={{
                 width: `${a4WidthPx}px`,
                 height: isExport ? "auto" : `${a4HeightPx}px`,
@@ -1829,8 +2168,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           }}
         >
           <div
-            className={`rounded-2xl border border-sand-200 bg-white ${
-              isExport ? "p-6 shadow-none" : "p-8 shadow-soft"
+            className={`rounded-2xl bg-white ${
+              isExport ? "p-6 shadow-none" : "p-8 shadow-soft border border-sand-200"
             } flex flex-col`}
             style={{
               width: `${a4WidthPx}px`,
@@ -1884,7 +2223,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                               <img
                                 src={url}
                                 alt="Produkt"
-                                className={`w-full ${layout.image} rounded-lg object-contain`}
+                                className={`${layout.image} max-w-full rounded-lg object-contain`}
+                                style={{ width: "auto", height: "auto" }}
                               />
                             </div>
                           ))}
@@ -1905,58 +2245,260 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         </div>
       ) : null}
 
-      {hasDetailHtml ? (
-        <div
-          className="mx-auto"
-          data-pdf-page
-          style={{
-            width: `${a4WidthPx * scale}px`,
-            height: isExport ? "auto" : `${a4HeightPx * scale}px`,
-            minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
-          }}
-        >
-          <div
-            className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-            style={{
-              width: `${a4WidthPx}px`,
-              height: isExport ? "auto" : `${a4HeightPx}px`,
-              minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-              transform: `scale(${scale})`,
-              transformOrigin: "top left"
-            }}
-          >
+      {hasDetailHtml
+        ? (detailPages.length ? detailPages : [detailHtml]).map(
+            (pageHtml, pageIndex, pages) => (
             <div
-              className="flex items-center justify-between border-b border-sand-200 pb-4"
-              data-pdf-header
+              key={`detail-page-${pageIndex}`}
+              className="mx-auto"
+              data-pdf-page
+              style={{
+                width: `${a4WidthPx * scale}px`,
+                height: isExport ? "auto" : `${a4HeightPx * scale}px`,
+                minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx * scale}px`
+              }}
             >
-              <div className="flex items-center gap-2">
-                <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
-                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Angebot
-                </span>
-              </div>
-              <span className="text-xs text-sand-500">{offer.reference}</span>
-            </div>
-            <div className="mt-4 flex-1 space-y-4" data-pdf-body>
-              <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                  Angebotsdetails
-                </p>
+              <div
+                className={
+                  isExport
+                    ? "rounded-2xl bg-white p-8 flex flex-col"
+                    : "rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                }
+                style={{
+                  width: `${a4WidthPx}px`,
+                  height: isExport ? "auto" : `${a4HeightPx}px`,
+                  minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
+                  transform: `scale(${scale})`,
+                  transformOrigin: "top left",
+                  pageBreakAfter:
+                    isExport && pageIndex < pages.length - 1 ? "always" : "auto"
+                }}
+              >
                 <div
-                  className="offer-detail-html mt-2 text-sm text-sand-700"
-                  dangerouslySetInnerHTML={{ __html: detailHtml }}
-                />
+                  className="flex items-center justify-between border-b border-sand-200 pb-4"
+                  data-pdf-header
+                >
+                  <div className="flex items-center gap-2">
+                    <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
+                    <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      Angebot
+                    </span>
+                  </div>
+                  <span className="text-xs text-sand-500">{offer.reference}</span>
+                </div>
+                <div
+                  className="mt-4 flex-1 space-y-4"
+                  data-pdf-body
+                  style={
+                    isExport
+                      ? { paddingTop: "6px", paddingBottom: "10px" }
+                      : { paddingTop: "4px" }
+                  }
+                >
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      Angebotsdetails
+                    </p>
+                    <div
+                      className="offer-detail-html mt-2 text-sm text-sand-700"
+                      dangerouslySetInnerHTML={{ __html: pageHtml }}
+                    />
+                  </div>
+                </div>
+                <div
+                  className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
+                  data-pdf-footer
+                >
+                  Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+                </div>
               </div>
             </div>
-            <div
-              className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
-              data-pdf-footer
-            >
-              Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+          )
+        )
+        : null}
+      {renderMeasureBlock(
+        hasDetailHtml ? (
+          <div
+            className="absolute left-[-99999px] top-0 overflow-hidden pointer-events-none"
+            aria-hidden="true"
+          >
+            <div style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}>
+              <div
+                className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}
+              >
+                <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+                  <div className="flex items-center gap-2">
+                    <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
+                    <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      Angebot
+                    </span>
+                  </div>
+                  <span className="text-xs text-sand-500">{offer.reference}</span>
+                </div>
+                <div
+                  className="mt-4 flex-1 min-h-0 overflow-hidden space-y-4"
+                  ref={detailMeasureRef}
+                  style={{ paddingTop: "6px", paddingBottom: "10px" }}
+                >
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      Angebotsdetails
+                    </p>
+                    <div
+                      className="offer-detail-html mt-2 text-sm text-sand-700"
+                      data-detail-content
+                    />
+                  </div>
+                </div>
+                <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+                  Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      ) : null}
+        ) : null
+      )}
+      {renderMeasureBlock(
+        previewPositions.length ? (
+          <div
+            className="absolute left-[-99999px] top-0 overflow-hidden pointer-events-none"
+            aria-hidden="true"
+          >
+            <div style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}>
+              <div
+                className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}
+              >
+                <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+                  <div className="flex items-center gap-2">
+                    <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
+                    <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      Angebot
+                    </span>
+                  </div>
+                  <span className="text-xs text-sand-500">{offer.reference}</span>
+                </div>
+                <div
+                  className="mt-4 flex-1 min-h-0 overflow-hidden space-y-6"
+                  ref={positionsMeasureFirstRef}
+                >
+                  <div className="grid gap-4 md:grid-cols-2 text-xs text-sand-600">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                        Absender
+                      </p>
+                      {splitSenderLines(
+                        offer.senderLine ||
+                          "Quansatech GmbH - Steyrtalstraße 88 - 4523 Neuzeug"
+                      ).map((line) => (
+                        <p
+                          key={`measure-sender-${line}`}
+                          className="mt-1 text-sm font-semibold text-sand-900"
+                        >
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                        Empfänger
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">
+                        {recipientName}
+                      </p>
+                      {recipientCompany && recipientCompany !== recipientName.trim() ? (
+                        <p>{recipientCompany}</p>
+                      ) : null}
+                      {offer.recipientStreet ? <p>{offer.recipientStreet}</p> : null}
+                      {offer.recipientPostalCity ? <p>{offer.recipientPostalCity}</p> : null}
+                      {offer.recipientCountry ? <p>{offer.recipientCountry}</p> : null}
+                      {offer.customerNumber ? <p>Kundennummer {offer.customerNumber}</p> : null}
+                      <p>Angebots-Nr. {offer.orderNumber || offer.reference || "-"}</p>
+                      <p>Datum: {formatDate(offer.createdAt) || "-"}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-2 text-sm text-sand-700">
+                    <p className="text-base font-semibold text-sand-900">
+                      {mode === "confirmation" ? "Auftragsbestätigung" : "Angebot"}{" "}
+                      {offer.reference || "-"}
+                    </p>
+                    <p>{offer.salutation || "Sehr geehrte Damen und Herren,"}</p>
+                    <p>{offer.introText || "Vielen Dank für Ihre Anfrage."}</p>
+                  </div>
+                  {offer.overviewText ? (
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                        Übersicht
+                      </p>
+                      <p className="mt-2 text-sm text-sand-700 whitespace-pre-line">
+                        {offer.overviewText}
+                      </p>
+                    </div>
+                  ) : null}
+                  <div>
+                    <div className="mt-2 rounded-xl border border-sand-200" data-measure-table />
+                  </div>
+                </div>
+                <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+                  Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+                </div>
+              </div>
+            </div>
+            <div style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}>
+              <div
+                className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}
+              >
+                <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+                  <div className="flex items-center gap-2">
+                    <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
+                    <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      Angebot
+                    </span>
+                  </div>
+                  <span className="text-xs text-sand-500">{offer.reference}</span>
+                </div>
+                <div
+                  className="mt-4 flex-1 min-h-0 overflow-hidden space-y-6"
+                  ref={positionsMeasureNextRef}
+                >
+                  <div>
+                    <div className="mt-2 rounded-xl border border-sand-200" data-measure-table />
+                  </div>
+                </div>
+                <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+                  Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
+                </div>
+              </div>
+            </div>
+            <div ref={positionsMeasureTemplateRef} className="hidden">
+              <div
+                className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400"
+                data-measure-header
+              >
+                <span>Pos</span>
+                <span>Leistung</span>
+                <span className="text-right">Menge</span>
+                <span className="text-right">Einzelpreis</span>
+                <span className="text-right">Gesamt (netto)</span>
+              </div>
+              {servicePositionsAll.length
+                ? renderMeasureSectionRow("Leistungen", "measure-section-service")
+                : null}
+              {servicePositionsAll.map((item) =>
+                renderMeasurePositionRow(item, item._posIndex, `measure-service-${item.id}`)
+              )}
+              {devicePositionsAll.length
+                ? renderMeasureSectionRow("Material", "measure-section-device")
+                : null}
+              {devicePositionsAll.map((item) =>
+                renderMeasurePositionRow(item, item._posIndex, `measure-device-${item.id}`)
+              )}
+            </div>
+          </div>
+        ) : null
+      )}
     </div>
   );
 }
@@ -2385,22 +2927,13 @@ function PositionCard({
           placeholder="Leistungstitel"
         />
         <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-1.5 flex-[1.4] min-w-[96px]">
-          <span className="text-sand-500 mr-0.5 text-xs">€</span>
+          <span className="text-sand-500 mr-0.5 text-[10px] uppercase tracking-wide">VK</span>
           <input
             className={inlinePriceInputClass}
             type="number"
             value={item.price ?? ""}
             onChange={(event) => onUpdate({ price: parseNumberInput(event.target.value) })}
           />
-          <button
-            type="button"
-            onClick={() => onOpenPriceCalc?.(item)}
-            className="ml-0.5 rounded-full border border-sand-200 bg-white p-0.5 text-sand-500 hover:bg-sand-100"
-            title="Preisberechnung öffnen"
-            aria-label="Preisberechnung öffnen"
-          >
-            <Info size={12} />
-          </button>
         </div>
         <input
           className={`${quantityInputClass} flex-[1.2] min-w-[70px]`}
@@ -2710,7 +3243,7 @@ function DeviceCard({
           placeholder="Gerät / Material"
         />
         <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-1.5 flex-[1.4] min-w-[96px]">
-          <span className="text-sand-500 mr-0.5 text-xs">€</span>
+          <span className="text-sand-500 mr-0.5 text-[10px] uppercase tracking-wide">VK</span>
           <input
             className={inlinePriceInputClass}
             type="number"
@@ -2759,6 +3292,20 @@ function DeviceCard({
               value={item.description || ""}
               onChange={(event) => onUpdate({ description: event.target.value })}
               placeholder="Beschreibung"
+            />
+          </Field>
+          <Field label="EK netto">
+            <input
+              className={priceInputClass}
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              value={item.calcBase ?? item.ekMin ?? item.ekMax ?? ""}
+              onChange={(event) => {
+                const next = parseNumberInput(event.target.value);
+                onUpdate({ calcBase: next === "" ? null : next });
+              }}
+              placeholder="optional"
             />
           </Field>
           <div className="grid gap-2 md:grid-cols-[minmax(0,1.1fr)_140px_160px_1fr]">
@@ -3650,15 +4197,24 @@ export default function OffersView() {
       exportMode === "confirmation"
         ? `auftragsbestaetigung_${offer.reference || "angebot"}`
         : offer.reference || "angebot";
+    const waitForDetailReady = async () => {
+      if (!element) return;
+      for (let i = 0; i < 30; i += 1) {
+        if (element.getAttribute("data-detail-ready") === "true") return;
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+    };
     const run = async () => {
+      await waitForDetailReady();
       const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
       const blob = pages.length
         ? await buildPdfBlobFromPages(pages, {
-            marginTopMm: 8,
-            marginBottomMm: 8,
-            marginLeftMm: 8,
-            marginRightMm: 8
-          })
+          marginTopMm: 8,
+          marginBottomMm: 8,
+          marginLeftMm: 8,
+          marginRightMm: 8,
+          footerBottomMm: 0
+        })
         : await buildPdfBlobFromElement(element);
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -3688,18 +4244,27 @@ export default function OffersView() {
     }
     const element = emailPdfRef.current;
     const handlers = emailExportPromiseRef.current;
+    const waitForDetailReady = async () => {
+      if (!element) return;
+      for (let i = 0; i < 30; i += 1) {
+        if (element.getAttribute("data-detail-ready") === "true") return;
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+    };
     const run = async () => {
       try {
         await new Promise((resolve) =>
           requestAnimationFrame(() => requestAnimationFrame(resolve))
         );
+        await waitForDetailReady();
         const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
         const blob = pages.length
           ? await buildPdfBlobFromPages(pages, {
               marginTopMm: 8,
               marginBottomMm: 8,
               marginLeftMm: 8,
-              marginRightMm: 8
+              marginRightMm: 8,
+              footerBottomMm: 0
             })
           : await buildPdfBlobFromElement(element);
         handlers?.resolve?.(blob);
@@ -3753,40 +4318,78 @@ export default function OffersView() {
     [customers]
   );
 
-  const serviceTotal = useMemo(
-    () =>
-      activeOffer
-        ? activeOffer.lineItems.reduce(
-    (sum, item) =>
-            sum + (item?.optional ? 0 : calculateLineNet(item)),
-            0
-          )
-        : 0,
-    [activeOffer]
-  );
+  const offerMetrics = useMemo(() => {
+    if (!activeOffer) {
+      return {
+        serviceTotal: 0,
+        deviceTotal: 0,
+        deviceEkTotal: 0,
+        totalNetBeforeDiscount: 0,
+        overallDiscount: 0,
+        totalNet: 0,
+        totalVat: 0,
+        totalGross: 0,
+        deviceMargin: 0,
+        marginTotal: 0
+      };
+    }
+    const serviceTotal = (activeOffer.lineItems || []).reduce(
+      (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
+      0
+    );
+    const deviceTotal = (activeOffer.deviceItems || []).reduce(
+      (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
+      0
+    );
+    const deviceEkTotal = (activeOffer.deviceItems || []).reduce(
+      (sum, item) => sum + (item?.optional ? 0 : calculateDeviceEkTotal(item)),
+      0
+    );
+    const totalNetBeforeDiscount = serviceTotal + deviceTotal;
+    const overallDiscount = calculateOfferDiscount(activeOffer, totalNetBeforeDiscount);
+    const totalNet = totalNetBeforeDiscount - overallDiscount;
+    const totalVat = calcVat(totalNet, activeOffer);
+    const totalGross = totalNet + totalVat;
+    const deviceMargin = deviceTotal - deviceEkTotal;
+    const marginTotal = serviceTotal + deviceTotal - deviceEkTotal - overallDiscount;
+    return {
+      serviceTotal,
+      deviceTotal,
+      deviceEkTotal,
+      totalNetBeforeDiscount,
+      overallDiscount,
+      totalNet,
+      totalVat,
+      totalGross,
+      deviceMargin,
+      marginTotal
+    };
+  }, [
+    activeOffer?.lineItems,
+    activeOffer?.deviceItems,
+    activeOffer?.discountType,
+    activeOffer?.discountValue,
+    activeOffer?.vatMode,
+    activeOffer?.vatRate
+  ]);
 
-  const deviceTotal = useMemo(
-    () =>
-      activeOffer
-        ? activeOffer.deviceItems.reduce(
-    (sum, item) =>
-            sum + (item?.optional ? 0 : calculateLineNet(item)),
-            0
-          )
-        : 0,
-    [activeOffer]
-  );
+  const {
+    serviceTotal,
+    deviceTotal,
+    deviceEkTotal,
+    totalNetBeforeDiscount,
+    overallDiscount,
+    totalNet,
+    totalVat,
+    totalGross,
+    deviceMargin,
+    marginTotal
+  } = offerMetrics;
 
   const costTotals = useMemo(
     () => (activeOffer ? getCostTotalsByCycle(activeOffer) : { once: 0, monthly: 0, yearly: 0 }),
     [activeOffer]
   );
-
-  const totalNetBeforeDiscount = serviceTotal + deviceTotal;
-  const overallDiscount = calculateOfferDiscount(activeOffer, totalNetBeforeDiscount);
-  const totalNet = totalNetBeforeDiscount - overallDiscount;
-  const totalVat = calcVat(totalNet, activeOffer);
-  const totalGross = totalNet + totalVat;
 
   const totals = useMemo(() => {
     if (!activeOffer) return { total: 0, count: 0 };
@@ -4786,16 +5389,25 @@ export default function OffersView() {
         ? item.product || item.title || "Material"
         : item.title || "Leistung";
     const draft = priceCalcDrafts[item.id] || {};
+    const stored = {
+      base: parseCalcValue(item.calcBase),
+      markupPercent: parseCalcValue(item.calcMarkupPercent),
+      researchPercent: parseCalcValue(item.calcResearchPercent),
+      absoluteMarkup: parseCalcValue(item.calcAbsoluteMarkup)
+    };
     setPriceCalcModal({
       open: true,
       itemId: item.id || "",
       itemType,
       itemLabel: label,
       currentPrice: item.price ?? "",
-      base: draft.base ?? item.price ?? "",
-      markupPercent: draft.markupPercent ?? "",
-      researchPercent: draft.researchPercent ?? "",
-      absoluteMarkup: draft.absoluteMarkup ?? ""
+      base:
+        itemType === "device"
+          ? stored.base ?? draft.base ?? item.ekMin ?? item.ekMax ?? ""
+          : stored.base ?? draft.base ?? item.price ?? "",
+      markupPercent: stored.markupPercent ?? draft.markupPercent ?? "",
+      researchPercent: stored.researchPercent ?? draft.researchPercent ?? "",
+      absoluteMarkup: stored.absoluteMarkup ?? draft.absoluteMarkup ?? ""
     });
   };
 
@@ -4816,6 +5428,10 @@ export default function OffersView() {
     }));
     const update = { price: Number(nextPrice || 0) };
     if (priceCalcModal.itemType === "device") {
+      update.calcBase = parseCalcValue(priceCalcModal.base);
+      update.calcMarkupPercent = parseCalcValue(priceCalcModal.markupPercent);
+      update.calcResearchPercent = parseCalcValue(priceCalcModal.researchPercent);
+      update.calcAbsoluteMarkup = parseCalcValue(priceCalcModal.absoluteMarkup);
       updateDeviceItem(activeOffer.id, priceCalcModal.itemId, update);
     } else {
       updateLineItem(activeOffer.id, priceCalcModal.itemId, update);
@@ -5083,6 +5699,10 @@ export default function OffersView() {
         model: item.model || "",
         description: item.description || "",
         price: Number(item.price || 0),
+        calcBase: parseCalcValue(item.calcBase),
+        calcMarkupPercent: parseCalcValue(item.calcMarkupPercent),
+        calcResearchPercent: parseCalcValue(item.calcResearchPercent),
+        calcAbsoluteMarkup: parseCalcValue(item.calcAbsoluteMarkup),
         quantity: normalizeQuantityInput(item.quantity, 1),
         billingCycle: item.billingCycle || "once",
         internalNotes: normalizeInternalNotes(item)
@@ -5245,7 +5865,11 @@ export default function OffersView() {
       product: item.title || item.sku || "Material",
       description: item.shortDescription || item.title || "",
       price,
-      quantity: 1
+      quantity: 1,
+      recommendedVK: item.recommendedVK ?? null,
+      ekMin: item.ekMin ?? null,
+      ekMax: item.ekMax ?? null,
+      currency: item.currency || ""
     });
     setImporterOpen(false);
   };
@@ -5382,6 +6006,30 @@ export default function OffersView() {
                           <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                             Laufend {formatMoney(costTotals.monthly)} / {formatMoney(costTotals.yearly)}
                           </span>
+                          <div className="flex flex-wrap items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-1">
+                            <span className="text-[9px] uppercase tracking-[0.3em] text-sand-400">
+                              Interne Kennzahlen
+                            </span>
+                            <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
+                              Summe EK {formatMoney(deviceEkTotal)}
+                            </span>
+                            <span
+                              className={`rounded-full border px-2 py-1 text-[11px] uppercase tracking-wide ${
+                                marginTotal >= 0
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                  : "border-rose-200 bg-rose-50 text-rose-700"
+                              }`}
+                              title={`Leistungen VK ${formatMoney(serviceTotal)} · Material VK ${formatMoney(
+                                deviceTotal
+                              )} · Material EK ${formatMoney(deviceEkTotal)}${
+                                overallDiscount > 0
+                                  ? ` · Rabatt -${formatMoney(overallDiscount)}`
+                                  : ""
+                              }`}
+                            >
+                              Marge {formatMoney(marginTotal)}
+                            </span>
+                          </div>
                         </div>
                       </div>
 
