@@ -148,6 +148,11 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
       return;
     }
 
+    const isDetailPage = page.hasAttribute("data-detail-page");
+    if (isDetailPage) {
+      await renderFullPage(page);
+      return;
+    }
     const pageRect = page.getBoundingClientRect();
     const headerRect = headerEl.getBoundingClientRect();
     const footerRect = footerEl.getBoundingClientRect();
@@ -156,7 +161,8 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
     const footerStartPx = Math.max(headerEndPx, footerRect.top - pageRect.top);
     const footerEndPx = Math.max(footerStartPx, pageRect.height);
     const bodyTopPx = headerEndPx;
-    const bodyBottomPx = footerStartPx;
+    const detailGapPx = isDetailPage ? 6 : 0;
+    const bodyBottomPx = Math.max(bodyTopPx, footerStartPx - detailGapPx);
     const headerHeightPx = Math.max(0, headerEndPx - headerStartPx);
     const footerHeightPx = Math.max(0, footerEndPx - footerStartPx);
     const bodyChildren = Array.from(bodyEl.children || []);
@@ -243,7 +249,6 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
 
     const headerData = headerCanvas.toDataURL("image/jpeg", 0.98);
     const footerData = footerCanvas.toDataURL("image/jpeg", 0.98);
-    const isDetailPage = page.hasAttribute("data-detail-page");
     const overlapCanvasPx = Math.max(1, Math.round(canvasScale));
     const overlapMm = isDetailPage ? 0 : overlapCanvasPx * ratio;
     const bodySliceHeightPx = Math.max(1, (availableBodyMm - overlapMm) / ratio);
