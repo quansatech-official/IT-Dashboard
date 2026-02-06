@@ -289,6 +289,72 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
   return new Blob([arrayBuffer], { type: "application/pdf" });
 };
 
+const collectPdfStyles = async () => {
+  if (typeof document === "undefined") return "";
+  const sheets = Array.from(document.styleSheets || []);
+  const chunks = await Promise.all(
+    sheets.map(async (sheet) => {
+      try {
+        if (sheet.href) {
+          const response = await fetch(sheet.href);
+          if (response.ok) return await response.text();
+          return "";
+        }
+        const rules = Array.from(sheet.cssRules || []);
+        return rules.map((rule) => rule.cssText).join("\n");
+      } catch (error) {
+        return "";
+      }
+    })
+  );
+  return chunks.filter(Boolean).join("\n");
+};
+
+const buildHtmlPdfDocument = async (rootEl) => {
+  const cssText = await collectPdfStyles();
+  const origin =
+    typeof window !== "undefined" && window.location
+      ? window.location.origin
+      : "";
+  const printCss = `
+    @page { size: A4; margin: 0; }
+    html, body { margin: 0; padding: 0; }
+    [data-pdf-page] { page-break-after: always; }
+    [data-pdf-page]:last-child { page-break-after: auto; }
+  `;
+  const bodyHtml = rootEl?.outerHTML || "";
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        ${origin ? `<base href="${origin}/" />` : ""}
+        <style>${printCss}</style>
+        <style>${cssText}</style>
+      </head>
+      <body>${bodyHtml}</body>
+    </html>
+  `;
+};
+
+const buildPdfBlobFromHtml = async (rootEl, filename = "angebot.pdf") => {
+  const html = await buildHtmlPdfDocument(rootEl);
+  const baseUrl =
+    typeof window !== "undefined" && window.location
+      ? `${window.location.origin}/`
+      : "";
+  const response = await fetch("/api/html/pdf", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ html, filename, base_url: baseUrl })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || "PDF render failed");
+  }
+  return await response.blob();
+};
+
 const initialServiceBlocks = [
   {
     id: "block-secure",
@@ -1691,7 +1757,18 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
     if (!pages.length && detailHtml.trim()) {
       pages.push(detailHtml);
     }
-    setDetailPages(pages);
+    const nonEmptyPages = pages.filter((page) => htmlToPlainText(page).trim());
+    if (nonEmptyPages.length > 1) {
+      const firstText = htmlToPlainText(nonEmptyPages[0]).trim();
+      const allSame = nonEmptyPages.every(
+        (page) => htmlToPlainText(page).trim() === firstText
+      );
+      if (allSame) {
+        setDetailPages([nonEmptyPages[0]]);
+        return;
+      }
+    }
+    setDetailPages(nonEmptyPages);
   }, [detailHtml, hasDetailHtml, isExport, detailMeasureTick]);
 
   useLayoutEffect(() => {
@@ -4206,16 +4283,10 @@ export default function OffersView() {
     };
     const run = async () => {
       await waitForDetailReady();
-      const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
-      const blob = pages.length
-        ? await buildPdfBlobFromPages(pages, {
-          marginTopMm: 8,
-          marginBottomMm: 8,
-          marginLeftMm: 8,
-          marginRightMm: 8,
-          footerBottomMm: 0
-        })
-        : await buildPdfBlobFromElement(element);
+      const blob = await buildPdfBlobFromHtml(
+        element,
+        `${filenameBase}.pdf`
+      );
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -4257,24 +4328,17 @@ export default function OffersView() {
           requestAnimationFrame(() => requestAnimationFrame(resolve))
         );
         await waitForDetailReady();
-        const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
-        const blob = pages.length
-          ? await buildPdfBlobFromPages(pages, {
-              marginTopMm: 8,
-              marginBottomMm: 8,
-              marginLeftMm: 8,
-              marginRightMm: 8,
-              footerBottomMm: 0
-            })
-          : await buildPdfBlobFromElement(element);
+        const filenameBase =
+          emailExportMode === "confirmation"
+            ? `auftragsbestaetigung_${offer.reference || "angebot"}`
+            : offer.reference || "angebot";
+        const blob = await buildPdfBlobFromHtml(
+          element,
+          `${filenameBase}.pdf`
+        );
         handlers?.resolve?.(blob);
       } catch (error) {
-        try {
-          const blob = await buildPdfBlobFromElement(element);
-          handlers?.resolve?.(blob);
-        } catch (fallbackError) {
-          handlers?.reject?.(fallbackError);
-        }
+        handlers?.reject?.(error);
       } finally {
         emailExportPromiseRef.current = null;
         setEmailExportOfferId("");
