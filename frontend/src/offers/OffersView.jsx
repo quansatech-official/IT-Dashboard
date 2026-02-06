@@ -2368,10 +2368,14 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             className="absolute left-[-99999px] top-0 overflow-hidden pointer-events-none"
             aria-hidden="true"
           >
-            <div style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}>
+            <div style={{ width: `${a4WidthPx}px`, height: `${exportPageHeightPx}px` }}>
               <div
                 className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-                style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}
+                style={{
+                  width: `${a4WidthPx}px`,
+                  height: `${exportPageHeightPx}px`,
+                  paddingBottom: "48px"
+                }}
               >
                 <div className="flex items-center justify-between border-b border-sand-200 pb-4">
                   <div className="flex items-center gap-2">
@@ -2411,10 +2415,14 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             className="absolute left-[-99999px] top-0 overflow-hidden pointer-events-none"
             aria-hidden="true"
           >
-            <div style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}>
+            <div style={{ width: `${a4WidthPx}px`, height: `${exportPageHeightPx}px` }}>
               <div
                 className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-                style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}
+                style={{
+                  width: `${a4WidthPx}px`,
+                  height: `${exportPageHeightPx}px`,
+                  paddingBottom: "48px"
+                }}
               >
                 <div className="flex items-center justify-between border-b border-sand-200 pb-4">
                   <div className="flex items-center gap-2">
@@ -2491,10 +2499,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 </div>
               </div>
             </div>
-            <div style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}>
+            <div style={{ width: `${a4WidthPx}px`, height: `${exportPageHeightPx}px` }}>
               <div
                 className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
-                style={{ width: `${a4WidthPx}px`, height: `${a4HeightPx}px` }}
+                style={{ width: `${a4WidthPx}px`, height: `${exportPageHeightPx}px` }}
               >
                 <div className="flex items-center justify-between border-b border-sand-200 pb-4">
                   <div className="flex items-center gap-2">
