@@ -159,7 +159,25 @@ const buildPdfBlobFromPages = async (pages, options = {}) => {
     const bodyBottomPx = footerStartPx;
     const headerHeightPx = Math.max(0, headerEndPx - headerStartPx);
     const footerHeightPx = Math.max(0, footerEndPx - footerStartPx);
-    const bodyHeightPx = Math.max(0, bodyBottomPx - bodyTopPx);
+    const bodyChildren = Array.from(bodyEl.children || []);
+    let contentBottomPx = bodyTopPx;
+    let hasBodyContent = false;
+    bodyChildren.forEach((child) => {
+      const rect = child.getBoundingClientRect();
+      if (rect.height <= 1) return;
+      const text = (child.textContent || "").trim();
+      const hasMedia = child.querySelector(
+        "img,svg,canvas,table,hr,ul,ol,li,div,span,p"
+      );
+      if (!text && !hasMedia) return;
+      hasBodyContent = true;
+      contentBottomPx = Math.max(contentBottomPx, rect.bottom - pageRect.top);
+    });
+    if (!hasBodyContent) {
+      contentBottomPx = bodyTopPx;
+    }
+    const bodyContentBottomPx = Math.min(bodyBottomPx, contentBottomPx);
+    const bodyHeightPx = Math.max(0, bodyContentBottomPx - bodyTopPx);
     if (!bodyHeightPx || bodyBottomPx <= bodyTopPx) {
       await renderFullPage(page);
       return;
