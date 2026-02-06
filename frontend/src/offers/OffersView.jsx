@@ -1340,7 +1340,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   };
   const a4WidthPx = 210 * 3.7795275591;
   const a4HeightPx = 297 * 3.7795275591;
-  const pdfMarginMm = 8;
+  const pdfMarginMm = 0;
   const pdfMarginPx = pdfMarginMm * 3.7795275591;
   const exportPageHeightPx = a4HeightPx - pdfMarginPx * 2;
   const exportPageSafeHeightPx = exportPageHeightPx - 2;
@@ -1926,7 +1926,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 className="mt-4 flex-1 space-y-6"
                 data-pdf-body
                 ref={pageIndex === pagedPositions.length - 1 ? lastPageBodyRef : null}
-                style={isExport ? { overflow: "hidden" } : undefined}
               >
                 {pageIndex === 0 ? (
                   <div className="grid gap-4 md:grid-cols-2 text-xs text-sand-600">
@@ -2181,11 +2180,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 </div>
                 <span className="text-xs text-sand-500">{offer.reference}</span>
               </div>
-              <div
-                className="mt-4 flex-1 space-y-6"
-                data-pdf-body
-                style={isExport ? { overflow: "hidden" } : undefined}
-              >
+              <div className="mt-4 flex-1 space-y-6" data-pdf-body>
                 {totalsContent}
               </div>
               <div
@@ -2238,7 +2233,6 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             <div
               className={`mt-4 flex-1 ${isExport ? "space-y-3" : "space-y-4"}`}
               data-pdf-body
-              style={isExport ? { overflow: "hidden" } : undefined}
             >
               <div>
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
@@ -2335,7 +2329,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   data-pdf-body
                   style={
                     isExport
-                      ? { paddingTop: "6px", paddingBottom: "10px", overflow: "hidden" }
+                      ? { paddingTop: "6px", paddingBottom: "10px" }
                       : { paddingTop: "4px" }
                   }
                 >
@@ -4259,10 +4253,10 @@ export default function OffersView() {
       const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
       const blob = pages.length
         ? await buildPdfBlobFromPages(pages, {
-          marginTopMm: 8,
-          marginBottomMm: 8,
-          marginLeftMm: 8,
-          marginRightMm: 8,
+          marginTopMm: 0,
+          marginBottomMm: 0,
+          marginLeftMm: 0,
+          marginRightMm: 0,
           footerBottomMm: 0
         })
         : await buildPdfBlobFromElement(element);
@@ -4310,10 +4304,10 @@ export default function OffersView() {
         const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
         const blob = pages.length
           ? await buildPdfBlobFromPages(pages, {
-              marginTopMm: 8,
-              marginBottomMm: 8,
-              marginLeftMm: 8,
-              marginRightMm: 8,
+              marginTopMm: 0,
+              marginBottomMm: 0,
+              marginLeftMm: 0,
+              marginRightMm: 0,
               footerBottomMm: 0
             })
           : await buildPdfBlobFromElement(element);
