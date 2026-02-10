@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import {
   BarChart3,
+  Brain,
   ClipboardList,
   FileText,
   Moon,
   Receipt,
   Settings,
+  ShoppingCart,
   StickyNote,
   Sun,
   Users,
@@ -22,6 +24,8 @@ import CustomerDirectoryView from "./customers/CustomerDirectoryView";
 import DayPlanView from "./dayplan/DayPlanView";
 import OffersView from "./offers/OffersView";
 import StatsView from "./stats/StatsView";
+import PurchasingView from "./purchasing/PurchasingView";
+import KnowledgeBaseView from "./knowledge/KnowledgeBaseView";
 
 export default function App() {
   const [activeView, setActiveView] = useState("dayplan");
@@ -137,6 +141,26 @@ export default function App() {
             >
               <Wrench size={18} /> Tools
             </button>
+            <button
+              onClick={() => setActiveView("purchasing")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "purchasing"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <ShoppingCart size={18} /> Einkauf
+            </button>
+            <button
+              onClick={() => setActiveView("knowledge")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "knowledge"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <Brain size={18} className="shrink-0" /> Wissens-DB
+            </button>
           </nav>
 
           <div className="mt-auto space-y-3">
@@ -182,6 +206,10 @@ export default function App() {
             <TelephonyView />
           ) : activeView === "stats" ? (
             <StatsView />
+          ) : activeView === "purchasing" ? (
+            <PurchasingView />
+          ) : activeView === "knowledge" ? (
+            <KnowledgeBaseView />
           ) : activeView === "offers" ? (
             <OffersView />
           ) : (

@@ -368,6 +368,33 @@ class CustomerMetricsSettings(Base):
     min_fee_eur = Column(String, default="15")
     hourly_rate_eur = Column(String, default="0")
 
+
+class PurchasingItem(Base):
+    __tablename__ = "purchasing_items"
+
+    id = Column(Integer, primary_key=True)
+    done = Column(Boolean, default=False)
+    customer = Column(String, default="")
+    title = Column(String, default="")
+    source_url = Column(String, default="")
+    purchase_price = Column(String, default="")
+    sale_price = Column(String, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
+class KnowledgeArticle(Base):
+    __tablename__ = "knowledge_articles"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String, default="")
+    category = Column(String, default="")
+    tags_json = Column(Text, default="[]")
+    content = Column(Text, default="")
+    pinned = Column(Boolean, default=False)
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
 Base.metadata.create_all(bind=engine)
 
 def _ensure_integration_settings_columns() -> None:
@@ -907,6 +934,40 @@ class DayTaskGroupUpdate(BaseModel):
 
 class PinNoteUpdate(BaseModel):
     content: str
+
+
+class PurchasingItemCreate(BaseModel):
+    done: Optional[bool] = False
+    customer: Optional[str] = ""
+    title: str
+    sourceUrl: Optional[str] = ""
+    purchasePrice: Optional[str] = ""
+    salePrice: Optional[str] = ""
+
+
+class PurchasingItemUpdate(BaseModel):
+    done: Optional[bool] = None
+    customer: Optional[str] = None
+    title: Optional[str] = None
+    sourceUrl: Optional[str] = None
+    purchasePrice: Optional[str] = None
+    salePrice: Optional[str] = None
+
+
+class KnowledgeArticleCreate(BaseModel):
+    title: Optional[str] = "Neuer Artikel"
+    category: Optional[str] = ""
+    tags: Optional[List[str]] = None
+    content: Optional[str] = ""
+    pinned: Optional[bool] = False
+
+
+class KnowledgeArticleUpdate(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
+    content: Optional[str] = None
+    pinned: Optional[bool] = None
 
 class ReportCatalogItemBase(BaseModel):
     title: str
@@ -1742,6 +1803,49 @@ def serialize_customer_phone(p: CustomerPhone) -> Dict[str, Any]:
         "id": p.id,
         "label": p.label,
         "number": p.number,
+    }
+
+
+def _normalize_tags(tags: Optional[List[Any]]) -> List[str]:
+    if not isinstance(tags, list):
+        return []
+    return [str(tag).strip() for tag in tags if str(tag).strip()]
+
+
+def _parse_tags_json(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    try:
+        loaded = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return _normalize_tags(loaded)
+
+
+def serialize_purchasing_item(item: PurchasingItem) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "done": bool(item.done),
+        "customer": item.customer or "",
+        "title": item.title or "",
+        "sourceUrl": item.source_url or "",
+        "purchasePrice": item.purchase_price or "",
+        "salePrice": item.sale_price or "",
+        "createdAt": item.created_at,
+        "updatedAt": item.updated_at,
+    }
+
+
+def serialize_knowledge_article(article: KnowledgeArticle) -> Dict[str, Any]:
+    return {
+        "id": article.id,
+        "title": article.title or "",
+        "category": article.category or "",
+        "tags": _parse_tags_json(article.tags_json),
+        "content": article.content or "",
+        "pinned": bool(article.pinned),
+        "createdAt": article.created_at,
+        "updatedAt": article.updated_at,
     }
 
 
@@ -3205,6 +3309,139 @@ def update_pinboard(note_id: int, data: PinNoteUpdate):
         note.content = data.content
         db.commit()
         return {"id": note.id, "content": note.content}
+
+
+# ================= PURCHASING =================
+@app.get("/api/purchasing_items")
+def get_purchasing_items():
+    with SessionLocal() as db:
+        items = (
+            db.query(PurchasingItem)
+            .order_by(PurchasingItem.created_at.desc(), PurchasingItem.id.desc())
+            .all()
+        )
+        return [serialize_purchasing_item(item) for item in items]
+
+
+@app.post("/api/purchasing_items")
+def create_purchasing_item(data: PurchasingItemCreate):
+    now_ms = int(time.time() * 1000)
+    with SessionLocal() as db:
+        item = PurchasingItem(
+            done=bool(data.done),
+            customer=(data.customer or "").strip(),
+            title=(data.title or "").strip(),
+            source_url=(data.sourceUrl or "").strip(),
+            purchase_price=(data.purchasePrice or "").strip(),
+            sale_price=(data.salePrice or "").strip(),
+            created_at=now_ms,
+            updated_at=now_ms,
+        )
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+        return serialize_purchasing_item(item)
+
+
+@app.patch("/api/purchasing_items/{item_id}")
+def update_purchasing_item(item_id: int, data: PurchasingItemUpdate):
+    with SessionLocal() as db:
+        item = db.query(PurchasingItem).get(item_id)
+        if not item:
+            raise HTTPException(404, "Purchasing item not found")
+        payload = data.dict(exclude_unset=True)
+        if "done" in payload:
+            item.done = bool(payload["done"])
+        if "customer" in payload:
+            item.customer = str(payload["customer"] or "").strip()
+        if "title" in payload:
+            item.title = str(payload["title"] or "").strip()
+        if "sourceUrl" in payload:
+            item.source_url = str(payload["sourceUrl"] or "").strip()
+        if "purchasePrice" in payload:
+            item.purchase_price = str(payload["purchasePrice"] or "").strip()
+        if "salePrice" in payload:
+            item.sale_price = str(payload["salePrice"] or "").strip()
+        item.updated_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(item)
+        return serialize_purchasing_item(item)
+
+
+@app.delete("/api/purchasing_items/{item_id}")
+def delete_purchasing_item(item_id: int):
+    with SessionLocal() as db:
+        item = db.query(PurchasingItem).get(item_id)
+        if not item:
+            raise HTTPException(404, "Purchasing item not found")
+        db.delete(item)
+        db.commit()
+        return {"status": "deleted"}
+
+
+# ================= KNOWLEDGE BASE =================
+@app.get("/api/knowledge_articles")
+def get_knowledge_articles():
+    with SessionLocal() as db:
+        articles = (
+            db.query(KnowledgeArticle)
+            .order_by(KnowledgeArticle.pinned.desc(), KnowledgeArticle.updated_at.desc())
+            .all()
+        )
+        return [serialize_knowledge_article(article) for article in articles]
+
+
+@app.post("/api/knowledge_articles")
+def create_knowledge_article(data: KnowledgeArticleCreate):
+    now_ms = int(time.time() * 1000)
+    with SessionLocal() as db:
+        article = KnowledgeArticle(
+            title=(data.title or "Neuer Artikel").strip() or "Neuer Artikel",
+            category=(data.category or "").strip(),
+            tags_json=json.dumps(_normalize_tags(data.tags), ensure_ascii=False),
+            content=data.content or "",
+            pinned=bool(data.pinned),
+            created_at=now_ms,
+            updated_at=now_ms,
+        )
+        db.add(article)
+        db.commit()
+        db.refresh(article)
+        return serialize_knowledge_article(article)
+
+
+@app.patch("/api/knowledge_articles/{article_id}")
+def update_knowledge_article(article_id: int, data: KnowledgeArticleUpdate):
+    with SessionLocal() as db:
+        article = db.query(KnowledgeArticle).get(article_id)
+        if not article:
+            raise HTTPException(404, "Knowledge article not found")
+        payload = data.dict(exclude_unset=True)
+        if "title" in payload:
+            article.title = str(payload["title"] or "").strip()
+        if "category" in payload:
+            article.category = str(payload["category"] or "").strip()
+        if "tags" in payload:
+            article.tags_json = json.dumps(_normalize_tags(payload.get("tags")), ensure_ascii=False)
+        if "content" in payload:
+            article.content = payload.get("content") or ""
+        if "pinned" in payload:
+            article.pinned = bool(payload.get("pinned"))
+        article.updated_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(article)
+        return serialize_knowledge_article(article)
+
+
+@app.delete("/api/knowledge_articles/{article_id}")
+def delete_knowledge_article(article_id: int):
+    with SessionLocal() as db:
+        article = db.query(KnowledgeArticle).get(article_id)
+        if not article:
+            raise HTTPException(404, "Knowledge article not found")
+        db.delete(article)
+        db.commit()
+        return {"status": "deleted"}
 
 # ============ INTEGRATION SETTINGS ============
 @app.get("/api/integrations")
