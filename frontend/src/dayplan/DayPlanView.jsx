@@ -6,6 +6,7 @@ import {
   Clock,
   DollarSign,
   Heart,
+  Loader2,
   Mail,
   Pin,
   Play,
@@ -144,6 +145,7 @@ export default function DayPlanView() {
   const [emailDropBusy, setEmailDropBusy] = useState(false);
   const [emailTaskDraft, setEmailTaskDraft] = useState(null);
   const [emailTaskModalOpen, setEmailTaskModalOpen] = useState(false);
+  const [emailTaskAnalyzing, setEmailTaskAnalyzing] = useState(false);
   const [emailTaskError, setEmailTaskError] = useState("");
   const [emailTaskSaving, setEmailTaskSaving] = useState(false);
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
@@ -1061,6 +1063,7 @@ export default function DayPlanView() {
   const closeEmailTaskModal = () => {
     setEmailTaskModalOpen(false);
     setEmailTaskDraft(null);
+    setEmailTaskAnalyzing(false);
     setEmailTaskError("");
     setEmailTaskSaving(false);
   };
@@ -1107,14 +1110,31 @@ export default function DayPlanView() {
     event.stopPropagation();
     setEmailDropHover(false);
     setEmailDropBusy(true);
+    setEmailTaskModalOpen(true);
+    setEmailTaskAnalyzing(true);
+    setEmailTaskDraft({
+      title: "",
+      details: "",
+      customer: "",
+      customer_number: "",
+      group_id: null,
+      from_email: "",
+      subject: ""
+    });
     setEmailTaskError("");
     setError("");
     try {
       const dropped = await readDroppedEmail(event);
+      setEmailTaskDraft((prev) => ({
+        ...(prev || {}),
+        from_email: String(dropped.fromEmail || "").trim(),
+        subject: String(dropped.subject || "").trim()
+      }));
       if (!dropped.text && !dropped.subject && !dropped.html) {
         setEmailTaskError("Keine auswertbaren E-Mail-Daten erkannt.");
         setError("Keine auswertbaren E-Mail-Daten erkannt.");
         setEmailDropBusy(false);
+        setEmailTaskAnalyzing(false);
         return;
       }
       const result = await api.analyzeEmailDraft(dropped);
@@ -1122,6 +1142,7 @@ export default function DayPlanView() {
         setEmailTaskError(result?.error || "E-Mail konnte nicht analysiert werden.");
         setError(result?.error || "E-Mail konnte nicht analysiert werden.");
         setEmailDropBusy(false);
+        setEmailTaskAnalyzing(false);
         return;
       }
       setEmailTaskDraft({
@@ -1133,11 +1154,11 @@ export default function DayPlanView() {
         from_email: String(result.from_email || dropped.fromEmail || "").trim(),
         subject: String(result.subject || dropped.subject || "").trim()
       });
-      setEmailTaskModalOpen(true);
     } catch (error) {
       setEmailTaskError("E-Mail konnte nicht analysiert werden.");
       setError("E-Mail konnte nicht analysiert werden.");
     } finally {
+      setEmailTaskAnalyzing(false);
       setEmailDropBusy(false);
     }
   };
@@ -1848,7 +1869,11 @@ export default function DayPlanView() {
                         event.stopPropagation();
                         setEmailDropHover(false);
                       }}
-                      onDrop={handleEmailDrop}
+                      onDropCapture={handleEmailDrop}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
                       title="E-Mail hier ablegen, um Aufgabe per KI vorzubereiten"
                     >
                       <Plus size={9} />
@@ -2155,6 +2180,7 @@ export default function DayPlanView() {
       <EmailTaskModal
         open={emailTaskModalOpen}
         draft={emailTaskDraft}
+        analyzing={emailTaskAnalyzing}
         error={emailTaskError}
         saving={emailTaskSaving}
         onClose={closeEmailTaskModal}
@@ -2167,7 +2193,7 @@ export default function DayPlanView() {
   );
 }
 
-function EmailTaskModal({ open, draft, error, saving, onClose, onSubmit, onChange }) {
+function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubmit, onChange }) {
   if (!open || !draft) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
@@ -2186,11 +2212,18 @@ function EmailTaskModal({ open, draft, error, saving, onClose, onSubmit, onChang
           </button>
         </div>
         <div className="space-y-3 px-6 py-4 text-xs text-sand-600">
+          {analyzing ? (
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 inline-flex items-center gap-2">
+              <Loader2 size={14} className="animate-spin" />
+              KI analysiert E-Mail...
+            </div>
+          ) : null}
           <label className="flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Titel</span>
             <input
               value={draft.title || ""}
               onChange={(event) => onChange("title", event.target.value)}
+              disabled={analyzing}
               className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
             />
           </label>
@@ -2200,6 +2233,7 @@ function EmailTaskModal({ open, draft, error, saving, onClose, onSubmit, onChang
               value={draft.customer || ""}
               onChange={(event) => onChange("customer", event.target.value)}
               list="dayplan-customers"
+              disabled={analyzing}
               placeholder="Kundenvorschlag aus E-Mail"
               className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
             />
@@ -2209,6 +2243,7 @@ function EmailTaskModal({ open, draft, error, saving, onClose, onSubmit, onChang
             <textarea
               value={draft.details || ""}
               onChange={(event) => onChange("details", event.target.value)}
+              disabled={analyzing}
               className="min-h-[130px] w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
             />
           </label>
@@ -2235,10 +2270,10 @@ function EmailTaskModal({ open, draft, error, saving, onClose, onSubmit, onChang
           <button
             type="button"
             onClick={onSubmit}
-            disabled={saving}
+            disabled={saving || analyzing || !String(draft.title || "").trim()}
             className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {saving ? "Erstelle..." : "Aufgabe anlegen"}
+            {analyzing ? "Analysiere..." : saving ? "Erstelle..." : "Aufgabe anlegen"}
           </button>
         </div>
       </div>
