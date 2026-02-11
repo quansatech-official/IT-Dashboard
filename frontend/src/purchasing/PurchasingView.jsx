@@ -13,6 +13,7 @@ const EMPTY_DRAFT = {
   customer: "",
   title: "",
   sourceUrl: "",
+  quantity: "",
   purchasePrice: "",
   salePrice: ""
 };
@@ -134,7 +135,7 @@ export default function PurchasingView() {
       }
 
       if (queryNeedle) {
-        const haystack = [item.title, item.customer, item.sourceUrl]
+        const haystack = [item.title, item.customer, item.sourceUrl, item.quantity]
           .map((value) => String(value || "").toLowerCase())
           .join(" ");
         if (!haystack.includes(queryNeedle)) return false;
@@ -174,6 +175,7 @@ export default function PurchasingView() {
       customer: draft.customer.trim(),
       title,
       sourceUrl: normalizeUrl(draft.sourceUrl),
+      quantity: draft.quantity.trim(),
       purchasePrice: draft.purchasePrice.trim(),
       salePrice: draft.salePrice.trim()
     };
@@ -287,13 +289,14 @@ export default function PurchasingView() {
           </div>
 
           <div className="overflow-auto">
-            <table className="w-full min-w-[1080px]">
+            <table className="w-full min-w-[1160px]">
               <thead>
                 <tr className="border-b border-sand-200 text-left text-xs uppercase tracking-[0.2em] text-sand-500">
                   <th className="px-3 py-2 w-12">OK</th>
                   <th className="px-3 py-2">Bezeichnung</th>
                   <th className="px-3 py-2">Bezugsquelle</th>
                   <th className="px-3 py-2">Kunde</th>
+                  <th className="px-2 py-2 w-24">Menge</th>
                   <th className="px-2 py-2 w-24">EK</th>
                   <th className="px-2 py-2 w-24">VK</th>
                   <th className="px-3 py-2 w-24">Marge</th>
@@ -308,11 +311,12 @@ export default function PurchasingView() {
                     </div>
                   </td>
                   <td className="px-3 py-1.5">
-                    <input
+                    <textarea
                       value={draft.title}
                       onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
                       placeholder="Bezeichnung"
-                      className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
+                      rows={2}
+                      className="w-full resize-none rounded-md border-0 bg-transparent px-1 py-1 text-sm leading-tight focus:outline-none"
                     />
                   </td>
                   <td className="px-3 py-1.5">
@@ -334,6 +338,16 @@ export default function PurchasingView() {
                       list={CUSTOMER_DATALIST_ID}
                       placeholder="Kunde (frei oder Suche)"
                       className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
+                    />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input
+                      value={draft.quantity}
+                      onChange={(event) =>
+                        setDraft((prev) => ({ ...prev, quantity: event.target.value }))
+                      }
+                      placeholder="1"
+                      className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
                     />
                   </td>
                   <td className="px-2 py-1.5">
@@ -379,7 +393,7 @@ export default function PurchasingView() {
                 </tr>
                 {visibleItems.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-8 text-center text-sm text-sand-500">
+                    <td colSpan={9} className="px-4 py-8 text-center text-sm text-sand-500">
                       {items.length === 0
                         ? "Noch keine offenen Bestellungen."
                         : "Keine offenen Bestellungen. Aktiviere 'Erledigte einblenden'."}
@@ -401,13 +415,14 @@ export default function PurchasingView() {
                           />
                         </td>
                         <td className="px-3 py-1.5">
-                          <input
+                          <textarea
                             value={item.title || ""}
                             onChange={(event) => updateItem(item.id, "title", event.target.value)}
                             readOnly={!isEditing(item.id, "title")}
                             onDoubleClick={(event) => handleCellDoubleClick(item.id, "title", event)}
                             onBlur={() => handleCellBlur(item.id, "title")}
-                            className={`w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none ${
+                            rows={2}
+                            className={`w-full resize-none rounded-md border-0 bg-transparent px-1 py-1 text-sm leading-tight focus:outline-none ${
                               item.done ? "line-through text-sand-500" : ""
                             }`}
                             title="Doppelklick zum Bearbeiten"
@@ -453,6 +468,20 @@ export default function PurchasingView() {
                             list={CUSTOMER_DATALIST_ID}
                             placeholder="Kunde"
                             className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
+                            title="Doppelklick zum Bearbeiten"
+                          />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input
+                            value={item.quantity || ""}
+                            onChange={(event) => updateItem(item.id, "quantity", event.target.value)}
+                            readOnly={!isEditing(item.id, "quantity")}
+                            onDoubleClick={(event) =>
+                              handleCellDoubleClick(item.id, "quantity", event)
+                            }
+                            onBlur={() => handleCellBlur(item.id, "quantity")}
+                            className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
+                            placeholder="1"
                             title="Doppelklick zum Bearbeiten"
                           />
                         </td>

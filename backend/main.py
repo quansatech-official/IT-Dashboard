@@ -13,6 +13,7 @@ import math
 import time
 import uuid
 import json
+import re
 import hashlib
 import hmac
 import base64
@@ -377,6 +378,7 @@ class PurchasingItem(Base):
     customer = Column(String, default="")
     title = Column(String, default="")
     source_url = Column(String, default="")
+    quantity = Column(String, default="")
     purchase_price = Column(String, default="")
     sale_price = Column(String, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
@@ -396,6 +398,23 @@ class KnowledgeArticle(Base):
     updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 Base.metadata.create_all(bind=engine)
+
+def _ensure_purchasing_items_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("purchasing_items"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("purchasing_items")}
+    statements = []
+    if "quantity" not in columns:
+        statements.append("ALTER TABLE purchasing_items ADD COLUMN quantity VARCHAR DEFAULT ''")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_purchasing_items_columns()
 
 def _ensure_integration_settings_columns() -> None:
     inspector = inspect(engine)
@@ -941,6 +960,7 @@ class PurchasingItemCreate(BaseModel):
     customer: Optional[str] = ""
     title: str
     sourceUrl: Optional[str] = ""
+    quantity: Optional[str] = ""
     purchasePrice: Optional[str] = ""
     salePrice: Optional[str] = ""
 
@@ -950,6 +970,7 @@ class PurchasingItemUpdate(BaseModel):
     customer: Optional[str] = None
     title: Optional[str] = None
     sourceUrl: Optional[str] = None
+    quantity: Optional[str] = None
     purchasePrice: Optional[str] = None
     salePrice: Optional[str] = None
 
@@ -1223,6 +1244,14 @@ class PbxPhonebookUpdate(BaseModel):
 
 class ActionAiRequest(BaseModel):
     text: str
+
+
+class DayTaskEmailDraftRequest(BaseModel):
+    subject: Optional[str] = ""
+    fromEmail: Optional[str] = ""
+    fromName: Optional[str] = ""
+    text: Optional[str] = ""
+    html: Optional[str] = ""
 
 class OfferAiRequest(BaseModel):
     mode: str
@@ -1829,6 +1858,7 @@ def serialize_purchasing_item(item: PurchasingItem) -> Dict[str, Any]:
         "customer": item.customer or "",
         "title": item.title or "",
         "sourceUrl": item.source_url or "",
+        "quantity": item.quantity or "",
         "purchasePrice": item.purchase_price or "",
         "salePrice": item.sale_price or "",
         "createdAt": item.created_at,
@@ -2735,6 +2765,166 @@ def parse_action_json(raw: Any) -> Optional[Dict[str, str]]:
         except json.JSONDecodeError:
             return None
 
+
+def _normalize_space(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _strip_html(value: str) -> str:
+    text_value = str(value or "")
+    if not text_value:
+        return ""
+    text_value = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text_value)
+    text_value = re.sub(r"(?i)<br\s*/?>", "\n", text_value)
+    text_value = re.sub(r"(?i)</p>", "\n", text_value)
+    text_value = re.sub(r"<[^>]+>", " ", text_value)
+    text_value = text_value.replace("&nbsp;", " ").replace("&amp;", "&")
+    return _normalize_space(text_value.replace("\r", " ").replace("\n", " "))
+
+
+def _extract_emails(value: str) -> List[str]:
+    text_value = str(value or "")
+    if not text_value:
+        return []
+    matches = re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text_value, flags=re.I)
+    deduped: List[str] = []
+    seen = set()
+    for email in matches:
+        lowered = email.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        deduped.append(email)
+    return deduped
+
+
+def _extract_email_name(raw_from: str, from_email: str) -> str:
+    value = str(raw_from or "")
+    if not value:
+        return ""
+    if from_email:
+        value = value.replace(from_email, " ")
+    value = re.sub(r"<[^>]*>", " ", value)
+    value = value.replace("\"", " ").replace("'", " ")
+    return _normalize_space(value)
+
+
+def _fit_task_title(value: str, max_len: int = 78) -> str:
+    title = _normalize_space(value)
+    if not title:
+        return ""
+    if len(title) <= max_len:
+        return title
+    return f"{title[: max_len - 1].rstrip()}…"
+
+
+def _best_customer_match(
+    customers: List[Customer],
+    sender_email: str,
+    sender_name: str,
+    subject: str,
+    content_text: str,
+    customer_hint: str = "",
+) -> Tuple[Optional[Customer], List[str]]:
+    sender_email_lower = str(sender_email or "").strip().lower()
+    sender_domain = sender_email_lower.split("@", 1)[1] if "@" in sender_email_lower else ""
+    sender_name_lower = str(sender_name or "").strip().lower()
+    context = f"{subject} {content_text}".lower()
+    hint = str(customer_hint or "").strip().lower()
+    scored: List[Tuple[int, Customer]] = []
+    for customer in customers:
+        name = _normalize_space(customer.name)
+        if not name:
+            continue
+        score = 0
+        customer_name_lower = name.lower()
+        customer_email = str(customer.email or "").strip().lower()
+        customer_short = str(customer.short_code or "").strip().lower()
+        if sender_email_lower and customer_email and sender_email_lower == customer_email:
+            score += 260
+        if sender_domain and customer_email and customer_email.endswith(f"@{sender_domain}"):
+            score += 180
+        if customer_email and customer_email in context:
+            score += 140
+        if customer_name_lower and customer_name_lower in context:
+            score += 110
+        if sender_name_lower and customer_name_lower and sender_name_lower in customer_name_lower:
+            score += 70
+        if customer_short and customer_short in context:
+            score += 65
+        if hint:
+            if hint == customer_name_lower:
+                score += 90
+            elif hint in customer_name_lower or customer_name_lower in hint:
+                score += 45
+        if score > 0:
+            scored.append((score, customer))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    best = scored[0][1] if scored else None
+    candidates = [_normalize_space(item[1].name) for item in scored[:3]]
+    return best, candidates
+
+
+def _generate_task_draft_from_email(
+    subject: str, sender_name: str, sender_email: str, content_text: str
+) -> Dict[str, str]:
+    subject_text = _normalize_space(subject)
+    sender_name_text = _normalize_space(sender_name)
+    sender_email_text = _normalize_space(sender_email)
+    content = _normalize_space(content_text)[:4000]
+    if not content and not subject_text:
+        return {"title": "", "details": "", "customer_hint": ""}
+    prompt = (
+        "Analysiere diese E-Mail und antworte nur als JSON mit den Feldern "
+        "title, details, customer_hint. "
+        "title: kurz, klar, maximal 78 Zeichen, keine Floskeln. "
+        "details: 1-3 saubere Sätze für eine Aufgaben-Notiz. "
+        "customer_hint: vermuteter Kundenname oder leer.\n\n"
+        f"Absender Name: {sender_name_text or 'n/a'}\n"
+        f"Absender E-Mail: {sender_email_text or 'n/a'}\n"
+        f"Betreff: {subject_text or 'n/a'}\n"
+        f"Inhalt: {content or 'n/a'}"
+    )
+    try:
+        res = requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0.15},
+            },
+            timeout=60,
+        )
+        res.raise_for_status()
+        payload = res.json()
+        raw = payload.get("response")
+        loaded: Dict[str, Any] = {}
+        if isinstance(raw, dict):
+            loaded = raw
+        elif isinstance(raw, str):
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError:
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    try:
+                        loaded = json.loads(raw[start : end + 1])
+                    except json.JSONDecodeError:
+                        loaded = {}
+        return {
+            "title": _fit_task_title(str(loaded.get("title") or "")),
+            "details": _normalize_space(loaded.get("details") or ""),
+            "customer_hint": _normalize_space(loaded.get("customer_hint") or ""),
+        }
+    except Exception as exc:
+        logger.warning("Email draft AI failed: %s", exc)
+    fallback_title = _fit_task_title(subject_text or content[:78] or "Neue Aufgabe aus E-Mail")
+    fallback_details = _normalize_space(content[:1000])
+    return {"title": fallback_title, "details": fallback_details, "customer_hint": ""}
+
 # ================= CUSTOMERS =================
 @app.get("/api/customers")
 def get_customers():
@@ -3029,6 +3219,76 @@ def get_day_tasks():
     with SessionLocal() as db:
         tasks = db.query(DayTask).order_by(DayTask.created_at.desc()).all()
         return [serialize_day_task(t) for t in tasks]
+
+
+@app.post("/api/day_tasks/email_draft")
+def analyze_day_task_email_draft(data: DayTaskEmailDraftRequest):
+    subject = _normalize_space(data.subject)
+    sender_email = _normalize_space(data.fromEmail).lower()
+    sender_name = _normalize_space(data.fromName)
+    raw_text = str(data.text or "")
+    plain_text = _normalize_space(raw_text)
+    html_text = _strip_html(data.html or "")
+    merged_text = _normalize_space(f"{plain_text} {html_text}")
+
+    if not subject and not merged_text:
+        raise HTTPException(400, "No email content provided")
+
+    if (not sender_email or not sender_name) and raw_text:
+        from_match = re.search(r"^From:\s*(.+)$", raw_text, flags=re.I | re.M)
+        if from_match:
+            from_raw = _normalize_space(from_match.group(1))
+            extracted = _extract_emails(from_raw)
+            if extracted and not sender_email:
+                sender_email = extracted[0].lower()
+            if not sender_name:
+                sender_name = _extract_email_name(from_raw, sender_email)
+        if not subject:
+            subject_match = re.search(r"^Subject:\s*(.+)$", raw_text, flags=re.I | re.M)
+            if subject_match:
+                subject = _normalize_space(subject_match.group(1))
+
+    with SessionLocal() as db:
+        customers = db.query(Customer).all()
+
+    ai_draft = _generate_task_draft_from_email(subject, sender_name, sender_email, merged_text)
+    ai_title = _fit_task_title(ai_draft.get("title") or subject or "Neue Aufgabe aus E-Mail")
+    ai_details = _normalize_space(ai_draft.get("details") or merged_text[:1000])
+    customer_hint = _normalize_space(ai_draft.get("customer_hint"))
+
+    matched_customer, customer_candidates = _best_customer_match(
+        customers=customers,
+        sender_email=sender_email,
+        sender_name=sender_name,
+        subject=subject,
+        content_text=merged_text,
+        customer_hint=customer_hint,
+    )
+    if not matched_customer and customer_hint:
+        hint_lower = customer_hint.lower()
+        matched_customer = next(
+            (
+                customer
+                for customer in customers
+                if _normalize_space(customer.name).lower() == hint_lower
+                or hint_lower in _normalize_space(customer.name).lower()
+            ),
+            None,
+        )
+        if matched_customer and _normalize_space(matched_customer.name) not in customer_candidates:
+            customer_candidates.insert(0, _normalize_space(matched_customer.name))
+
+    return {
+        "title": ai_title,
+        "details": ai_details,
+        "customer": _normalize_space(matched_customer.name) if matched_customer else "",
+        "customer_number": _normalize_space(matched_customer.creditor_number) if matched_customer else "",
+        "customer_candidates": customer_candidates,
+        "customer_hint": customer_hint,
+        "subject": subject,
+        "from_email": sender_email,
+        "from_name": sender_name,
+    }
 
 
 @app.get("/api/delivery_notes")
@@ -3332,6 +3592,7 @@ def create_purchasing_item(data: PurchasingItemCreate):
             customer=(data.customer or "").strip(),
             title=(data.title or "").strip(),
             source_url=(data.sourceUrl or "").strip(),
+            quantity=(data.quantity or "").strip(),
             purchase_price=(data.purchasePrice or "").strip(),
             sale_price=(data.salePrice or "").strip(),
             created_at=now_ms,
@@ -3358,6 +3619,8 @@ def update_purchasing_item(item_id: int, data: PurchasingItemUpdate):
             item.title = str(payload["title"] or "").strip()
         if "sourceUrl" in payload:
             item.source_url = str(payload["sourceUrl"] or "").strip()
+        if "quantity" in payload:
+            item.quantity = str(payload["quantity"] or "").strip()
         if "purchasePrice" in payload:
             item.purchase_price = str(payload["purchasePrice"] or "").strip()
         if "salePrice" in payload:

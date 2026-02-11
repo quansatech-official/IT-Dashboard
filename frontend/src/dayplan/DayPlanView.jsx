@@ -6,6 +6,7 @@ import {
   Clock,
   DollarSign,
   Heart,
+  Mail,
   Pin,
   Play,
   Plus,
@@ -38,6 +39,12 @@ const api = {
   toggleTimeTask: (id) =>
     fetch(`${API}/day_tasks/${id}/toggle_timer`, { method: "PATCH" }).then((r) => r.json()),
   remove: (id) => fetch(`${API}/day_tasks/${id}`, { method: "DELETE" }),
+  analyzeEmailDraft: (payload) =>
+    fetch(`${API}/day_tasks/email_draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then((r) => r.json()),
   createGroup: (payload) =>
     fetch(`${API}/day_task_groups`, {
       method: "POST",
@@ -133,6 +140,12 @@ export default function DayPlanView() {
   });
   const [timeEdits, setTimeEdits] = useState({});
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [emailDropHover, setEmailDropHover] = useState(false);
+  const [emailDropBusy, setEmailDropBusy] = useState(false);
+  const [emailTaskDraft, setEmailTaskDraft] = useState(null);
+  const [emailTaskModalOpen, setEmailTaskModalOpen] = useState(false);
+  const [emailTaskError, setEmailTaskError] = useState("");
+  const [emailTaskSaving, setEmailTaskSaving] = useState(false);
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
 
   useEffect(() => {
@@ -980,6 +993,155 @@ export default function DayPlanView() {
     setError("");
   };
 
+  const shortenTaskTitle = (value, maxLength = 78) => {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text) return "";
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+  };
+
+  const htmlToText = (value) => {
+    const html = String(value || "").trim();
+    if (!html) return "";
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, "text/html");
+      return String(doc.body?.textContent || "").replace(/\s+/g, " ").trim();
+    } catch (error) {
+      return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    }
+  };
+
+  const parseEmailMeta = (plainText = "") => {
+    const text = String(plainText || "");
+    const subjectMatch = text.match(/^Subject:\s*(.+)$/im);
+    const fromMatch = text.match(/^From:\s*(.+)$/im);
+    const fromRaw = fromMatch?.[1] ? String(fromMatch[1]).trim() : "";
+    const fromEmailMatch = fromRaw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    const fromEmail = fromEmailMatch ? fromEmailMatch[0] : "";
+    const fromName = fromRaw
+      ? fromRaw.replace(/[<\[].*[>\]]/, "").replace(fromEmail, "").replace(/["<>]/g, "").trim()
+      : "";
+    return {
+      subject: subjectMatch?.[1] ? String(subjectMatch[1]).trim() : "",
+      fromEmail,
+      fromName
+    };
+  };
+
+  const readDroppedEmail = async (event) => {
+    const transfer = event.dataTransfer;
+    const text = transfer?.getData("text/plain") || "";
+    const html = transfer?.getData("text/html") || "";
+    let fileText = "";
+    if (transfer?.files?.length) {
+      const files = Array.from(transfer.files);
+      const preferred = files.find((file) =>
+        file.type.startsWith("text/") || /\.(eml|txt|md)$/i.test(file.name || "")
+      );
+      if (preferred && typeof preferred.text === "function") {
+        try {
+          fileText = await preferred.text();
+        } catch (error) {
+          fileText = "";
+        }
+      }
+    }
+    const rawText = String(text || fileText || htmlToText(html) || "").trim();
+    const parsed = parseEmailMeta(rawText);
+    return {
+      text: rawText,
+      html: String(html || "").trim(),
+      subject: parsed.subject,
+      fromEmail: parsed.fromEmail,
+      fromName: parsed.fromName
+    };
+  };
+
+  const closeEmailTaskModal = () => {
+    setEmailTaskModalOpen(false);
+    setEmailTaskDraft(null);
+    setEmailTaskError("");
+    setEmailTaskSaving(false);
+  };
+
+  const submitEmailTaskDraft = async () => {
+    if (!emailTaskDraft) return;
+    const title = shortenTaskTitle(emailTaskDraft.title);
+    if (!title) {
+      setEmailTaskError("Bitte einen Titel angeben.");
+      return;
+    }
+    setEmailTaskSaving(true);
+    setEmailTaskError("");
+    try {
+      const selectedCustomer = customers.find(
+        (item) =>
+          String(item?.name || "").trim().toLowerCase() ===
+          String(emailTaskDraft.customer || "").trim().toLowerCase()
+      );
+      const customerName = String(emailTaskDraft.customer || "").trim();
+      const payload = {
+        title,
+        details: String(emailTaskDraft.details || "").trim(),
+        customer: customerName,
+        customer_number: String(
+          selectedCustomer?.creditor_number || emailTaskDraft.customer_number || ""
+        ).trim(),
+        status: "todo",
+        group_id: emailTaskDraft.group_id ?? null
+      };
+      const created = await api.create(payload);
+      if (created?.id) {
+        setTasks((prev) => [created, ...prev]);
+      }
+      closeEmailTaskModal();
+    } catch (error) {
+      setEmailTaskError("Aufgabe konnte aus der E-Mail nicht erstellt werden.");
+      setEmailTaskSaving(false);
+    }
+  };
+
+  const handleEmailDrop = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setEmailDropHover(false);
+    setEmailDropBusy(true);
+    setEmailTaskError("");
+    setError("");
+    try {
+      const dropped = await readDroppedEmail(event);
+      if (!dropped.text && !dropped.subject && !dropped.html) {
+        setEmailTaskError("Keine auswertbaren E-Mail-Daten erkannt.");
+        setError("Keine auswertbaren E-Mail-Daten erkannt.");
+        setEmailDropBusy(false);
+        return;
+      }
+      const result = await api.analyzeEmailDraft(dropped);
+      if (!result || result.error) {
+        setEmailTaskError(result?.error || "E-Mail konnte nicht analysiert werden.");
+        setError(result?.error || "E-Mail konnte nicht analysiert werden.");
+        setEmailDropBusy(false);
+        return;
+      }
+      setEmailTaskDraft({
+        title: shortenTaskTitle(result.title || dropped.subject || "Neue Aufgabe aus E-Mail"),
+        details: String(result.details || "").trim(),
+        customer: String(result.customer || "").trim(),
+        customer_number: String(result.customer_number || "").trim(),
+        group_id: null,
+        from_email: String(result.from_email || dropped.fromEmail || "").trim(),
+        subject: String(result.subject || dropped.subject || "").trim()
+      });
+      setEmailTaskModalOpen(true);
+    } catch (error) {
+      setEmailTaskError("E-Mail konnte nicht analysiert werden.");
+      setError("E-Mail konnte nicht analysiert werden.");
+    } finally {
+      setEmailDropBusy(false);
+    }
+  };
+
   const isKnownCustomer = (value) => {
     const name = String(value || "").trim().toLowerCase();
     return name ? knownCustomerNames.includes(name) : false;
@@ -1175,7 +1337,7 @@ export default function DayPlanView() {
                     disabled={!canPromote && !task.time_enabled}
                     className={`rounded-full border p-1 ${
                       canPromote || task.time_enabled
-                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                        ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
                         : "border-sand-100 text-sand-300 cursor-not-allowed"
                     }`}
                     title="Zeit in Aufgabe aktivieren"
@@ -1196,7 +1358,7 @@ export default function DayPlanView() {
                       className={`rounded-full border p-1 ${
                         timeTask?.running
                           ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
-                          : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                          : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
                       }`}
                       title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
                       disabled={!timeTask}
@@ -1666,6 +1828,35 @@ export default function DayPlanView() {
                   <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">
                     {column.label}
                   </h2>
+                  {column.id === "todo" ? (
+                    <div
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] ${
+                        emailDropHover
+                          ? "border-blue-300 bg-blue-50 text-blue-700"
+                          : "border-sand-200 bg-sand-50 text-sand-500"
+                      }`}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setEmailDropHover(true);
+                        if (event.dataTransfer) {
+                          event.dataTransfer.dropEffect = "copy";
+                        }
+                      }}
+                      onDragLeave={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setEmailDropHover(false);
+                      }}
+                      onDrop={handleEmailDrop}
+                      title="E-Mail hier ablegen, um Aufgabe per KI vorzubereiten"
+                    >
+                      <Plus size={9} />
+                      <Mail size={9} />
+                      <span>email drag&drop</span>
+                      {emailDropBusy ? <span className="text-[8px]">…</span> : null}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-sand-500">{grouped[column.id].length}</span>
@@ -1961,6 +2152,96 @@ export default function DayPlanView() {
         onToggleAdvanced={() => setSevdeskDraftAdvancedOpen((current) => !current)}
         onChange={updateSevdeskDraftForm}
       />
+      <EmailTaskModal
+        open={emailTaskModalOpen}
+        draft={emailTaskDraft}
+        error={emailTaskError}
+        saving={emailTaskSaving}
+        onClose={closeEmailTaskModal}
+        onSubmit={submitEmailTaskDraft}
+        onChange={(field, value) =>
+          setEmailTaskDraft((prev) => (prev ? { ...prev, [field]: value } : prev))
+        }
+      />
+    </div>
+  );
+}
+
+function EmailTaskModal({ open, draft, error, saving, onClose, onSubmit, onChange }) {
+  if (!open || !draft) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
+      <div className="w-full max-w-xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+        <div className="flex items-center justify-between border-b border-sand-100 px-6 py-4">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">E-Mail zu Aufgabe</p>
+            <h3 className="text-lg font-display text-sand-900">Neue Aufgabe aus E-Mail</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 bg-white p-2 text-sand-500 hover:bg-sand-50"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="space-y-3 px-6 py-4 text-xs text-sand-600">
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Titel</span>
+            <input
+              value={draft.title || ""}
+              onChange={(event) => onChange("title", event.target.value)}
+              className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Kunde</span>
+            <input
+              value={draft.customer || ""}
+              onChange={(event) => onChange("customer", event.target.value)}
+              list="dayplan-customers"
+              placeholder="Kundenvorschlag aus E-Mail"
+              className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Notiz</span>
+            <textarea
+              value={draft.details || ""}
+              onChange={(event) => onChange("details", event.target.value)}
+              className="min-h-[130px] w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+            />
+          </label>
+          {draft.subject || draft.from_email ? (
+            <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-[11px] text-sand-500">
+              {draft.subject ? <div>Betreff: {draft.subject}</div> : null}
+              {draft.from_email ? <div>Absender: {draft.from_email}</div> : null}
+            </div>
+          ) : null}
+          {error ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              {error}
+            </div>
+          ) : null}
+        </div>
+        <div className="flex items-center justify-end gap-3 border-t border-sand-100 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 px-4 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+          >
+            Abbrechen
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={saving}
+            className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? "Erstelle..." : "Aufgabe anlegen"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
