@@ -1031,9 +1031,10 @@ export default function DayPlanView() {
     };
   };
 
-  const readDroppedEmail = async (event) => {
-    const transfer = event.dataTransfer;
+  const readDroppedEmailFromTransfer = async (transfer) => {
     const text = transfer?.getData("text/plain") || "";
+    const uriList = transfer?.getData("text/uri-list") || "";
+    const rtf = transfer?.getData("text/rtf") || "";
     const html = transfer?.getData("text/html") || "";
     let fileText = "";
     if (transfer?.files?.length) {
@@ -1049,7 +1050,7 @@ export default function DayPlanView() {
         }
       }
     }
-    const rawText = String(text || fileText || htmlToText(html) || "").trim();
+    const rawText = String(text || fileText || htmlToText(html) || uriList || rtf || "").trim();
     const parsed = parseEmailMeta(rawText);
     return {
       text: rawText,
@@ -1105,9 +1106,7 @@ export default function DayPlanView() {
     }
   };
 
-  const handleEmailDrop = async (event) => {
-    event.preventDefault();
-    event.stopPropagation();
+  const handleEmailDropTransfer = async (transfer) => {
     setEmailDropHover(false);
     setEmailDropBusy(true);
     setEmailTaskModalOpen(true);
@@ -1124,7 +1123,7 @@ export default function DayPlanView() {
     setEmailTaskError("");
     setError("");
     try {
-      const dropped = await readDroppedEmail(event);
+      const dropped = await readDroppedEmailFromTransfer(transfer);
       setEmailTaskDraft((prev) => ({
         ...(prev || {}),
         from_email: String(dropped.fromEmail || "").trim(),
@@ -1869,10 +1868,10 @@ export default function DayPlanView() {
                         event.stopPropagation();
                         setEmailDropHover(false);
                       }}
-                      onDropCapture={handleEmailDrop}
                       onDrop={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
+                        handleEmailDropTransfer(event.dataTransfer);
                       }}
                       title="E-Mail hier ablegen, um Aufgabe per KI vorzubereiten"
                     >
