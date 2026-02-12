@@ -130,6 +130,9 @@ services:
       context: ./docker/ollama
     container_name: it-dashboard-ollama
     restart: unless-stopped
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1}
+      OLLAMA_PRELOAD_MODELS: ${OLLAMA_PRELOAD_MODELS:-llama3.1 qwen2.5:14b qwen2.5:32b}
     volumes:
       - ollama-data:/root/.ollama
     ports:
