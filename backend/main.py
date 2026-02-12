@@ -14,9 +14,12 @@ import time
 import uuid
 import json
 import re
+import difflib
 import hashlib
 import hmac
 import base64
+from email import policy
+from email.parser import Parser
 import requests
 from urllib.parse import quote, urlparse
 from datetime import datetime, timedelta, timezone
@@ -42,6 +45,49 @@ if not logging.getLogger().handlers:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 logger = logging.getLogger("it_dashboard")
+MODEL_PREF_CUSTOMER_RANKING = "qwen2.5:32b qwen2.5:14b"
+MODEL_PREF_TASK_DRAFT = "llama3.1 qwen2.5:14b"
+MODEL_PREF_ACTION = "qwen2.5:14b llama3.1"
+MODEL_PREF_OFFER_TEXT = "llama3.1 qwen2.5:14b"
+MODEL_PREF_INVOICE_SUMMARY = "llama3.1 qwen2.5:14b"
+FREE_EMAIL_DOMAINS = {
+    "gmail.com",
+    "googlemail.com",
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "msn.com",
+    "icloud.com",
+    "me.com",
+    "mac.com",
+    "yahoo.com",
+    "gmx.at",
+    "gmx.de",
+    "web.de",
+    "aol.com",
+    "proton.me",
+    "protonmail.com",
+}
+NAME_STOPWORDS = {
+    "gmbh",
+    "mbh",
+    "ag",
+    "kg",
+    "co",
+    "company",
+    "inc",
+    "ltd",
+    "the",
+    "und",
+    "u",
+    "ue",
+    "eu",
+    "og",
+    "gesmbh",
+}
+COMPANY_SUFFIX_PATTERN = (
+    r"(gmbh(?:\s*&\s*co\.\s*kg)?|ag|kg|og|eg|gbr|e\.?k\.?|inc\.?|ltd\.?|llc|s\.?r\.?o\.?|s\.?a\.?)"
+)
 
 # ================= MODELS ===================
 class Customer(Base):
@@ -1396,19 +1442,67 @@ def _require_sevdesk_invoice_fields(config: SevdeskConfig) -> None:
     return None
 
 
+def _split_model_list(raw_value: Any) -> List[str]:
+    text_value = str(raw_value or "").strip()
+    if not text_value:
+        return []
+    parts = [part.strip() for part in re.split(r"[,\s]+", text_value) if part.strip()]
+    return parts
+
+
+def _resolve_ollama_models(*specific_values: Any) -> List[str]:
+    ordered: List[str] = []
+    seen = set()
+    model_lists = [*specific_values, OLLAMA_MODEL]
+    for raw in model_lists:
+        for model in _split_model_list(raw):
+            lowered = model.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            ordered.append(model)
+    if not ordered:
+        ordered.append("llama3.1")
+    return ordered
+
+
+def _ollama_generate(
+    prompt: str,
+    *,
+    model_candidates: List[str],
+    timeout: int = 45,
+    response_format: str = "",
+    temperature: Optional[float] = None,
+) -> Tuple[Dict[str, Any], str]:
+    for model in model_candidates:
+        payload: Dict[str, Any] = {"model": model, "prompt": prompt, "stream": False}
+        if response_format:
+            payload["format"] = response_format
+        if temperature is not None:
+            payload["options"] = {"temperature": temperature}
+        try:
+            response = requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json=payload,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+        except requests.RequestException as exc:
+            logger.warning("Ollama request failed with model %s: %s", model, exc)
+            continue
+        except ValueError as exc:
+            logger.warning("Ollama invalid JSON with model %s: %s", model, exc)
+            continue
+        if isinstance(data, dict):
+            return data, model
+        logger.warning("Ollama response malformed with model %s", model)
+    return {}, ""
+
+
 def _ollama_generate_text(prompt: str) -> str:
-    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
-    try:
-        response = requests.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json=payload,
-            timeout=45,
-        )
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        logger.warning("Ollama request failed: %s", exc)
-        return ""
-    data = response.json()
+    model_candidates = _resolve_ollama_models(MODEL_PREF_INVOICE_SUMMARY)
+    data, _ = _ollama_generate(prompt, model_candidates=model_candidates, timeout=45)
     return (data.get("response") or "").strip()
 
 
@@ -2782,6 +2876,79 @@ def _strip_html(value: str) -> str:
     return _normalize_space(text_value.replace("\r", " ").replace("\n", " "))
 
 
+def _strip_attachment_markers(value: str) -> str:
+    text_value = str(value or "")
+    if not text_value:
+        return ""
+    cleaned_lines: List[str] = []
+    for raw_line in text_value.splitlines():
+        line = raw_line.strip()
+        if not line:
+            cleaned_lines.append("")
+            continue
+        if re.match(r"^(anh[aä]nge?|attachments?)\s*:", line, flags=re.I):
+            continue
+        if re.match(r"^(anlage|attachment)\s*:", line, flags=re.I):
+            continue
+        if re.match(r"^\[cid:.*\]$", line, flags=re.I):
+            continue
+        cleaned_lines.append(raw_line)
+    return "\n".join(cleaned_lines)
+
+
+def _extract_visible_text_from_raw_email(raw_value: str) -> str:
+    raw_text = str(raw_value or "")
+    if not raw_text:
+        return ""
+    lower_raw = raw_text.lower()
+    looks_like_mime = "content-type:" in lower_raw or "mime-version:" in lower_raw
+    looks_like_mail_headers = re.search(r"^(from|subject|to|date):", raw_text, flags=re.I | re.M)
+    if not looks_like_mime and not looks_like_mail_headers:
+        return ""
+    try:
+        msg = Parser(policy=policy.default).parsestr(raw_text)
+    except Exception:
+        return ""
+
+    def _decode_part_text(part) -> str:
+        payload_bytes = part.get_payload(decode=True)
+        if payload_bytes is None:
+            payload_raw = part.get_payload()
+            return str(payload_raw or "")
+        charset = part.get_content_charset() or "utf-8"
+        try:
+            return payload_bytes.decode(charset, errors="replace")
+        except Exception:
+            try:
+                return payload_bytes.decode("utf-8", errors="replace")
+            except Exception:
+                return payload_bytes.decode("latin-1", errors="replace")
+
+    plain_parts: List[str] = []
+    html_parts: List[str] = []
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        disposition = str(part.get_content_disposition() or "").lower()
+        if disposition == "attachment":
+            continue
+        content_type = str(part.get_content_type() or "").lower()
+        if content_type not in {"text/plain", "text/html"}:
+            continue
+        decoded = _decode_part_text(part)
+        if not decoded:
+            continue
+        if content_type == "text/html":
+            html_parts.append(decoded)
+        else:
+            plain_parts.append(decoded)
+
+    normalized_plain = [_normalize_space(_strip_attachment_markers(part)) for part in plain_parts]
+    normalized_html = [_strip_html(part) for part in html_parts]
+    merged = " ".join([*normalized_plain, *normalized_html]).strip()
+    return _normalize_space(_strip_attachment_markers(merged))
+
+
 def _extract_emails(value: str) -> List[str]:
     text_value = str(value or "")
     if not text_value:
@@ -2818,6 +2985,160 @@ def _fit_task_title(value: str, max_len: int = 78) -> str:
     return f"{title[: max_len - 1].rstrip()}…"
 
 
+def _normalize_match_text(value: Any) -> str:
+    text_value = str(value or "").lower()
+    if not text_value:
+        return ""
+    text_value = (
+        text_value.replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+    )
+    text_value = re.sub(r"[^a-z0-9@._+\- ]+", " ", text_value)
+    return _normalize_space(text_value)
+
+
+def _tokenize_match(value: Any) -> List[str]:
+    text_value = _normalize_match_text(value)
+    if not text_value:
+        return []
+    tokens = []
+    for token in text_value.split():
+        cleaned = token.strip("._-+")
+        if len(cleaned) < 2:
+            continue
+        if cleaned in NAME_STOPWORDS:
+            continue
+        tokens.append(cleaned)
+    return tokens
+
+
+def _extract_company_mentions(value: Any) -> List[str]:
+    text_value = str(value or "")
+    if not text_value:
+        return []
+    mentions: List[str] = []
+    seen = set()
+
+    patterns = [
+        rf"\b([A-ZÄÖÜ][\w&./\-]+(?:\s+[A-ZÄÖÜ][\w&./\-]+){{0,6}}\s+{COMPANY_SUFFIX_PATTERN})\b",
+        rf"\b(?:firma|company|kunde)\s*:?\s*([A-ZÄÖÜ][\w&./\-]+(?:\s+[A-ZÄÖÜ][\w&./\-]+){{0,6}})\b",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text_value, flags=re.I):
+            candidate = _normalize_space(match.group(1))
+            if not candidate:
+                continue
+            key = _normalize_match_text(candidate)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            mentions.append(candidate)
+    return mentions[:12]
+
+
+def _customer_name_aliases(name: str) -> List[str]:
+    base = _normalize_space(name)
+    if not base:
+        return []
+    aliases = [base]
+    compact = _normalize_space(
+        re.sub(rf"\b{COMPANY_SUFFIX_PATTERN}\b", " ", base, flags=re.I)
+    )
+    if compact and compact.lower() != base.lower():
+        aliases.append(compact)
+    deduped: List[str] = []
+    seen = set()
+    for alias in aliases:
+        key = _normalize_match_text(alias)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(alias)
+    return deduped
+
+
+def _ai_rank_customer_candidates(
+    subject: str,
+    sender_name: str,
+    sender_email: str,
+    content_text: str,
+    candidates: List[str],
+) -> List[str]:
+    cleaned_candidates = [_normalize_space(name) for name in candidates if _normalize_space(name)]
+    if not cleaned_candidates:
+        return []
+    content = _normalize_space(content_text)[:2600]
+    subject_text = _normalize_space(subject)
+    sender_name_text = _normalize_space(sender_name)
+    sender_email_text = _normalize_space(sender_email)
+    choices_block = "\n".join(f"- {name}" for name in cleaned_candidates[:12])
+    prompt = (
+        "Du bekommst eine E-Mail und eine Liste bekannter Kunden.\n"
+        "Waehle den wahrscheinlichsten Kunden aus der Liste anhand von Signatur, Namen, "
+        "Betreff und Inhalt.\n"
+        "Antworte nur als JSON mit den Feldern primary und alternatives.\n"
+        "primary: exakt ein Name aus der Liste oder leer.\n"
+        "alternatives: maximal 2 weitere Namen aus der Liste.\n\n"
+        f"Absender Name: {sender_name_text or 'n/a'}\n"
+        f"Absender E-Mail: {sender_email_text or 'n/a'}\n"
+        f"Betreff: {subject_text or 'n/a'}\n"
+        f"Inhalt: {content or 'n/a'}\n\n"
+        "Kundenliste:\n"
+        f"{choices_block}"
+    )
+    try:
+        model_candidates = _resolve_ollama_models(
+            MODEL_PREF_CUSTOMER_RANKING,
+            MODEL_PREF_TASK_DRAFT,
+        )
+        payload, used_model = _ollama_generate(
+            prompt,
+            model_candidates=model_candidates,
+            timeout=45,
+            response_format="json",
+            temperature=0.05,
+        )
+        if not payload:
+            return []
+        raw = payload.get("response")
+        loaded: Dict[str, Any] = {}
+        if isinstance(raw, dict):
+            loaded = raw
+        elif isinstance(raw, str):
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError:
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    try:
+                        loaded = json.loads(raw[start : end + 1])
+                    except json.JSONDecodeError:
+                        loaded = {}
+        selected = []
+        primary = _normalize_space(loaded.get("primary") or "")
+        if primary:
+            selected.append(primary)
+        alternatives_raw = loaded.get("alternatives")
+        if isinstance(alternatives_raw, list):
+            selected.extend(_normalize_space(item) for item in alternatives_raw)
+        allowed = {_normalize_space(name).lower(): _normalize_space(name) for name in cleaned_candidates}
+        deduped: List[str] = []
+        seen = set()
+        for item in selected:
+            key = str(item or "").strip().lower()
+            if not key or key not in allowed or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(allowed[key])
+        return deduped
+    except Exception as exc:
+        logger.warning("Email customer ranking AI failed (%s): %s", used_model if 'used_model' in locals() else "n/a", exc)
+    return []
+
+
 def _best_customer_match(
     customers: List[Customer],
     sender_email: str,
@@ -2828,9 +3149,16 @@ def _best_customer_match(
 ) -> Tuple[Optional[Customer], List[str]]:
     sender_email_lower = str(sender_email or "").strip().lower()
     sender_domain = sender_email_lower.split("@", 1)[1] if "@" in sender_email_lower else ""
-    sender_name_lower = str(sender_name or "").strip().lower()
-    context = f"{subject} {content_text}".lower()
-    hint = str(customer_hint or "").strip().lower()
+    sender_local = sender_email_lower.split("@", 1)[0] if "@" in sender_email_lower else ""
+    sender_name_norm = _normalize_match_text(sender_name)
+    context = f"{subject} {content_text} {sender_name} {sender_email}"
+    context_lower = context.lower()
+    context_norm = _normalize_match_text(context)
+    context_tokens = set(_tokenize_match(context))
+    company_mentions = _extract_company_mentions(content_text)
+    company_mentions_norm = [_normalize_match_text(item) for item in company_mentions]
+    company_mention_tokens = [set(_tokenize_match(item)) for item in company_mentions]
+    hint = _normalize_match_text(customer_hint)
     scored: List[Tuple[int, Customer]] = []
     for customer in customers:
         name = _normalize_space(customer.name)
@@ -2838,27 +3166,100 @@ def _best_customer_match(
             continue
         score = 0
         customer_name_lower = name.lower()
+        customer_name_norm = _normalize_match_text(name)
+        name_tokens = set(_tokenize_match(name))
+        name_aliases = _customer_name_aliases(name)
+        alias_norms = [_normalize_match_text(alias) for alias in name_aliases]
         customer_email = str(customer.email or "").strip().lower()
+        customer_domain = customer_email.split("@", 1)[1] if "@" in customer_email else ""
+        customer_local = customer_email.split("@", 1)[0] if "@" in customer_email else ""
         customer_short = str(customer.short_code or "").strip().lower()
+
         if sender_email_lower and customer_email and sender_email_lower == customer_email:
-            score += 260
-        if sender_domain and customer_email and customer_email.endswith(f"@{sender_domain}"):
-            score += 180
-        if customer_email and customer_email in context:
-            score += 140
-        if customer_name_lower and customer_name_lower in context:
-            score += 110
-        if sender_name_lower and customer_name_lower and sender_name_lower in customer_name_lower:
-            score += 70
-        if customer_short and customer_short in context:
-            score += 65
+            score += 360
+        if sender_domain and customer_domain and sender_domain == customer_domain:
+            score += 260 if sender_domain not in FREE_EMAIL_DOMAINS else 90
+        if sender_local and customer_local and sender_local == customer_local:
+            score += 170
+        if customer_email and customer_email in context_lower:
+            score += 220
+        if customer_name_lower and customer_name_lower in context_lower:
+            score += 210
+        if customer_name_norm and f" {customer_name_norm} " in f" {context_norm} ":
+            score += 190
+        for alias_norm in alias_norms:
+            if alias_norm and f" {alias_norm} " in f" {context_norm} ":
+                score += 150
+                break
+        if customer_short and customer_short in context_lower:
+            score += 95
+
+        if name_tokens:
+            overlap = len(name_tokens & context_tokens)
+            if overlap > 0:
+                ratio = overlap / max(1, len(name_tokens))
+                score += int(160 * ratio)
+        for mention_norm, mention_tokens in zip(company_mentions_norm, company_mention_tokens):
+            if not mention_norm:
+                continue
+            if customer_name_norm and mention_norm == customer_name_norm:
+                score += 260
+                continue
+            if mention_norm in alias_norms:
+                score += 230
+                continue
+            if mention_tokens and name_tokens:
+                overlap = len(mention_tokens & name_tokens)
+                if overlap:
+                    score += int(180 * (overlap / max(1, len(name_tokens))))
+            if customer_name_norm:
+                mention_similarity = difflib.SequenceMatcher(
+                    None, mention_norm, customer_name_norm
+                ).ratio()
+                if mention_similarity >= 0.90:
+                    score += 180
+                elif mention_similarity >= 0.82:
+                    score += 120
+
+        if sender_name_norm and customer_name_norm:
+            similarity = difflib.SequenceMatcher(None, sender_name_norm, customer_name_norm).ratio()
+            if similarity >= 0.90:
+                score += 180
+            elif similarity >= 0.80:
+                score += 125
+            elif similarity >= 0.68:
+                score += 70
+
         if hint:
-            if hint == customer_name_lower:
-                score += 90
-            elif hint in customer_name_lower or customer_name_lower in hint:
-                score += 45
+            if hint == customer_name_norm:
+                score += 220
+            elif hint in customer_name_norm or customer_name_norm in hint:
+                score += 110
+            elif customer_name_norm:
+                hint_similarity = difflib.SequenceMatcher(None, hint, customer_name_norm).ratio()
+                if hint_similarity >= 0.84:
+                    score += 90
+
         if score > 0:
             scored.append((score, customer))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    ai_input_names = [_normalize_space(item[1].name) for item in scored[:12]]
+    ai_ranked = _ai_rank_customer_candidates(
+        subject=subject,
+        sender_name=sender_name,
+        sender_email=sender_email,
+        content_text=content_text,
+        candidates=ai_input_names,
+    )
+    if ai_ranked:
+        ai_bonus_map = {name.lower(): bonus for name, bonus in zip(ai_ranked, [260, 170, 110])}
+        rescored = []
+        for score, customer in scored:
+            bonus = ai_bonus_map.get(_normalize_space(customer.name).lower(), 0)
+            rescored.append((score + bonus, customer))
+        scored = rescored
+
     scored.sort(key=lambda item: item[0], reverse=True)
     best = scored[0][1] if scored else None
     candidates = [_normalize_space(item[1].name) for item in scored[:3]]
@@ -2886,19 +3287,16 @@ def _generate_task_draft_from_email(
         f"Inhalt: {content or 'n/a'}"
     )
     try:
-        res = requests.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "format": "json",
-                "stream": False,
-                "options": {"temperature": 0.15},
-            },
+        model_candidates = _resolve_ollama_models(MODEL_PREF_TASK_DRAFT)
+        payload, used_model = _ollama_generate(
+            prompt,
+            model_candidates=model_candidates,
             timeout=60,
+            response_format="json",
+            temperature=0.15,
         )
-        res.raise_for_status()
-        payload = res.json()
+        if not payload:
+            raise RuntimeError("No Ollama response")
         raw = payload.get("response")
         loaded: Dict[str, Any] = {}
         if isinstance(raw, dict):
@@ -2920,7 +3318,11 @@ def _generate_task_draft_from_email(
             "customer_hint": _normalize_space(loaded.get("customer_hint") or ""),
         }
     except Exception as exc:
-        logger.warning("Email draft AI failed: %s", exc)
+        logger.warning(
+            "Email draft AI failed (%s): %s",
+            used_model if 'used_model' in locals() else "n/a",
+            exc,
+        )
     fallback_title = _fit_task_title(subject_text or content[:78] or "Neue Aufgabe aus E-Mail")
     fallback_details = _normalize_space(content[:1000])
     return {"title": fallback_title, "details": fallback_details, "customer_hint": ""}
@@ -3227,8 +3629,13 @@ def analyze_day_task_email_draft(data: DayTaskEmailDraftRequest):
     sender_email = _normalize_space(data.fromEmail).lower()
     sender_name = _normalize_space(data.fromName)
     raw_text = str(data.text or "")
-    plain_text = _normalize_space(raw_text)
-    html_text = _strip_html(data.html or "")
+    extracted_text = _extract_visible_text_from_raw_email(raw_text)
+    plain_text = _normalize_space(extracted_text or raw_text)
+    plain_text = _normalize_space(_strip_attachment_markers(plain_text))
+    html_text = _strip_html(_strip_attachment_markers(data.html or ""))
+    if extracted_text:
+        # MIME parsing already extracted visible non-attachment text.
+        html_text = ""
     merged_text = _normalize_space(f"{plain_text} {html_text}")
 
     if not subject and not merged_text:
@@ -4453,22 +4860,16 @@ def generate_action(data: ActionAiRequest):
     if "{text}" not in prompts["action_prompt"] and "Text:" not in prompt:
         prompt = f"{prompt}\n\nText: {text}"
 
-    try:
-        res = requests.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "format": "json",
-                "stream": False,
-                "options": {"temperature": 0.2},
-            },
-            timeout=60,
-        )
-        res.raise_for_status()
-        payload = res.json()
-    except requests.RequestException as exc:
-        raise HTTPException(502, "Ollama request failed") from exc
+    model_candidates = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+    payload, _ = _ollama_generate(
+        prompt,
+        model_candidates=model_candidates,
+        timeout=60,
+        response_format="json",
+        temperature=0.2,
+    )
+    if not payload:
+        raise HTTPException(502, "Ollama request failed")
 
     action = parse_action_json(payload.get("response"))
     if not action:
@@ -4497,27 +4898,20 @@ def generate_offer_text(data: OfferAiRequest):
         },
     )
 
-    try:
-        res = requests.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.2},
-            },
-            timeout=60,
-        )
-        res.raise_for_status()
-        payload = res.json()
-    except requests.RequestException as exc:
-        raise HTTPException(502, "Ollama request failed") from exc
+    model_candidates = _resolve_ollama_models(MODEL_PREF_OFFER_TEXT, MODEL_PREF_TASK_DRAFT)
+    payload, _ = _ollama_generate(
+        prompt,
+        model_candidates=model_candidates,
+        timeout=60,
+        temperature=0.2,
+    )
+    if not payload:
+        raise HTTPException(502, "Ollama request failed")
 
     text = (payload.get("response") or "").strip()
     if not text:
         raise HTTPException(502, "Invalid AI response")
     return {"text": text}
-    return {"action": action}
 
 # ============== REPORT CATALOG =============
 @app.get("/api/report_catalog")

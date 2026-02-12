@@ -1031,31 +1031,141 @@ export default function DayPlanView() {
     };
   };
 
+  const stripAttachmentLines = (value = "") =>
+    String(value || "")
+      .split(/\r?\n/)
+      .filter((line) => {
+        const text = String(line || "").trim();
+        if (!text) return true;
+        if (/^(attachments?|anh[aä]nge?)\s*:/i.test(text)) return false;
+        if (/^(attachment|anlage)\s*:/i.test(text)) return false;
+        if (/^\[cid:.*\]$/i.test(text)) return false;
+        return true;
+      })
+      .join("\n");
+
   const readDroppedEmailFromTransfer = async (transfer) => {
-    const text = transfer?.getData("text/plain") || "";
-    const uriList = transfer?.getData("text/uri-list") || "";
-    const rtf = transfer?.getData("text/rtf") || "";
-    const html = transfer?.getData("text/html") || "";
-    let fileText = "";
-    if (transfer?.files?.length) {
-      const files = Array.from(transfer.files);
-      const preferred = files.find((file) =>
-        file.type.startsWith("text/") || /\.(eml|txt|md)$/i.test(file.name || "")
-      );
-      if (preferred && typeof preferred.text === "function") {
+    const readStringItem = (item, timeoutMs = 400) =>
+      new Promise((resolve) => {
+        let settled = false;
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          resolve(String(value || ""));
+        };
+        const timer = setTimeout(() => finish(""), timeoutMs);
         try {
-          fileText = await preferred.text();
+          item.getAsString((value) => {
+            clearTimeout(timer);
+            finish(value);
+          });
         } catch (error) {
-          fileText = "";
+          clearTimeout(timer);
+          finish("");
+        }
+      });
+    const readFileText = async (file) => {
+      if (!file) return "";
+      if (typeof file.text === "function") {
+        try {
+          return await file.text();
+        } catch (error) {
+          return "";
         }
       }
+      return await new Promise((resolve) => {
+        try {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => resolve("");
+          reader.readAsText(file);
+        } catch (error) {
+          resolve("");
+        }
+      });
+    };
+
+    const getTransferValue = (types = []) => {
+      if (!transfer || typeof transfer.getData !== "function") return "";
+      for (const type of types) {
+        const value = transfer.getData(type);
+        if (typeof value === "string" && value.trim()) return value;
+      }
+      return "";
+    };
+
+    const text = getTransferValue([
+      "text/plain",
+      "public.utf8-plain-text",
+      "public.plain-text",
+      "NSStringPboardType"
+    ]);
+    const uriList = getTransferValue(["text/uri-list"]);
+    const uriName = getTransferValue(["public.url-name", "text/x-moz-url-desc"]);
+    const rtf = getTransferValue(["text/rtf", "public.rtf"]);
+    const html = getTransferValue(["text/html", "public.html", "Apple Web Archive pasteboard type"]);
+
+    let itemText = "";
+    let itemHtml = "";
+    const items = transfer?.items ? Array.from(transfer.items) : [];
+    if (items.length) {
+      const stringItems = items.filter((item) => item.kind === "string");
+      const stringValues = await Promise.all(
+        stringItems.map(async (item) => ({
+          type: String(item.type || "").toLowerCase(),
+          value: await readStringItem(item)
+        }))
+      );
+      itemText =
+        stringValues.find((entry) =>
+          /(text\/plain|plain-text|public\.utf8-plain-text)/.test(entry.type)
+        )?.value || "";
+      itemHtml =
+        stringValues.find((entry) => /(text\/html|public\.html)/.test(entry.type))?.value || "";
     }
-    const rawText = String(text || fileText || htmlToText(html) || uriList || rtf || "").trim();
-    const parsed = parseEmailMeta(rawText);
+
+    let fileText = "";
+    const transferFiles = transfer?.files ? Array.from(transfer.files) : [];
+    const itemFiles = items
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile?.())
+      .filter(Boolean);
+    const allFiles = [...transferFiles, ...itemFiles];
+    let fileName = "";
+    if (allFiles.length) {
+      const preferred =
+        allFiles.find((file) => {
+          const type = String(file?.type || "").toLowerCase();
+          const name = String(file?.name || "");
+          return (
+            type.startsWith("text/") ||
+            type.includes("message/rfc822") ||
+            type.includes("application/emlx") ||
+            /\.(eml|emlx|txt|md)$/i.test(name)
+          );
+        }) || allFiles[0];
+      fileName = String(preferred?.name || "").trim();
+      fileText = await readFileText(preferred);
+    }
+
+    const cleanedUriList = String(uriList || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("#") && !/^message:\/\//i.test(line));
+    const rawText = String(
+      text || itemText || fileText || htmlToText(html || itemHtml) || cleanedUriList || rtf || ""
+    ).trim();
+    const plainTextOnly = stripAttachmentLines(rawText).trim();
+    const parsed = parseEmailMeta(plainTextOnly);
+    const subjectFromName = fileName
+      ? fileName.replace(/\.(eml|emlx|txt|md)$/i, "").replace(/\s+/g, " ").trim()
+      : "";
+    const normalizedSubject = String(parsed.subject || uriName || subjectFromName || "").trim();
+    const safeHtml = stripAttachmentLines(String(html || itemHtml || "")).trim();
     return {
-      text: rawText,
-      html: String(html || "").trim(),
-      subject: parsed.subject,
+      text: plainTextOnly,
+      html: safeHtml,
+      subject: normalizedSubject,
       fromEmail: parsed.fromEmail,
       fromName: parsed.fromName
     };
