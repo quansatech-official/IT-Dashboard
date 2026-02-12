@@ -149,6 +149,7 @@ export default function DayPlanView() {
   const [emailTaskError, setEmailTaskError] = useState("");
   const [emailTaskSaving, setEmailTaskSaving] = useState(false);
   const emailDropGuardRef = useRef(0);
+  const emailDropBadgeRef = useRef(null);
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
 
   useEffect(() => {
@@ -336,7 +337,19 @@ export default function DayPlanView() {
   const handleDrop = (event, status) => {
     event.preventDefault();
     setDragOver("");
-    const payload = event.dataTransfer.getData("text/plain");
+    const transfer = event.dataTransfer || event.nativeEvent?.dataTransfer;
+    const payload = transfer?.getData("text/plain") || "";
+    const isInternalTaskDrag = payload.startsWith("task:") || payload.startsWith("group:");
+    if (status === "todo" && !isInternalTaskDrag && emailDropBadgeRef.current) {
+      const rect = emailDropBadgeRef.current.getBoundingClientRect();
+      const x = Number(event.clientX || 0);
+      const y = Number(event.clientY || 0);
+      const droppedOnBadge = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      if (droppedOnBadge && transfer) {
+        triggerEmailDropTransfer(transfer);
+        return;
+      }
+    }
     if (!payload) return;
     if (payload.startsWith("group:")) {
       const id = Number(payload.replace("group:", ""));
@@ -1968,6 +1981,7 @@ export default function DayPlanView() {
                   </h2>
                   {column.id === "todo" ? (
                     <div
+                      ref={emailDropBadgeRef}
                       className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] ${
                         emailDropHover
                           ? "border-blue-300 bg-blue-50 text-blue-700"
