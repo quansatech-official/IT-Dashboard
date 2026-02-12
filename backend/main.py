@@ -368,7 +368,6 @@ class SmtpSettings(Base):
     sender_email = Column(String, default="")
     use_tls = Column(Boolean, default=True)
     use_ssl = Column(Boolean, default=False)
-    beacon_base_url = Column(String, default="")
     signature_html = Column(String, default="")
 
 
@@ -706,8 +705,6 @@ def _ensure_smtp_settings_columns() -> None:
         return
     columns = {column["name"] for column in inspector.get_columns("smtp_settings")}
     statements = []
-    if "beacon_base_url" not in columns:
-        statements.append("ALTER TABLE smtp_settings ADD COLUMN beacon_base_url VARCHAR")
     if "signature_html" not in columns:
         statements.append("ALTER TABLE smtp_settings ADD COLUMN signature_html VARCHAR")
     if not statements:
@@ -1172,7 +1169,6 @@ class SmtpSettingsUpdate(BaseModel):
     sender_email: Optional[str] = None
     use_tls: Optional[bool] = None
     use_ssl: Optional[bool] = None
-    beacon_base_url: Optional[str] = None
     signature_html: Optional[str] = None
 
 
@@ -1213,7 +1209,6 @@ class OfferSendRequest(BaseModel):
     html: str
     text: Optional[str] = None
     attachments: Optional[List[EmailAttachment]] = None
-    reset_tracking: Optional[bool] = False
 
 
 ReportSendRequest.update_forward_refs()
@@ -2254,7 +2249,6 @@ def serialize_smtp_settings(settings: SmtpSettings) -> Dict[str, Any]:
         "sender_email": settings.sender_email,
         "use_tls": settings.use_tls,
         "use_ssl": settings.use_ssl,
-        "beacon_base_url": settings.beacon_base_url,
         "signature_html": settings.signature_html,
         "has_password": bool(settings.password),
     }
@@ -2389,64 +2383,6 @@ def serialize_offer_blocks(store: OfferBlockStore) -> Dict[str, Any]:
         "deviceBlocks": data.get("deviceBlocks", []),
         "calcBlocks": data.get("calcBlocks", []),
         "updatedAt": _offer_iso_timestamp(store.updated_at),
-    }
-
-
-def _build_offer_beacon_url(base_url: str, guid: str) -> str:
-    base = (base_url or "").strip().rstrip("/")
-    if not base:
-        return ""
-    if "{guid}" in base:
-        return base.replace("{guid}", guid)
-    if base.endswith("/open"):
-        separator = "&" if "?" in base else "?"
-        return f"{base}{separator}guid={guid}"
-    return f"{base}/open?guid={guid}"
-
-
-def _build_report_beacon_url(base_url: str, guid: str) -> str:
-    base = (base_url or "").strip().rstrip("/")
-    if not base:
-        return ""
-    if "{guid}" in base:
-        return base.replace("{guid}", guid)
-    if base.endswith("/open"):
-        separator = "&" if "?" in base else "?"
-        return f"{base}{separator}guid={guid}"
-    return f"{base}/open?guid={guid}"
-
-
-def _probe_beacon(url: str) -> Dict[str, Any]:
-    if not url:
-        return {"ok": False, "status_code": None, "error": "Beacon URL not configured", "url": ""}
-    started = time.perf_counter()
-    try:
-        response = requests.get(url, timeout=8, headers={"User-Agent": "qtbeacon"})
-    except requests.RequestException as exc:
-        return {
-            "ok": False,
-            "status_code": None,
-            "error": str(exc),
-            "url": url,
-            "debug": {"duration_ms": int((time.perf_counter() - started) * 1000)},
-        }
-    duration_ms = int((time.perf_counter() - started) * 1000)
-    content_type = (response.headers.get("content-type") or "").lower()
-    preview = ""
-    if content_type.startswith("text/") or "json" in content_type or "html" in content_type:
-        preview = (response.text or "")[:300]
-    return {
-        "ok": response.ok,
-        "status_code": response.status_code,
-        "error": "" if response.ok else preview,
-        "url": url,
-        "debug": {
-            "duration_ms": duration_ms,
-            "content_type": content_type,
-            "reason": response.reason,
-            "url": response.url,
-            "preview": preview,
-        },
     }
 
 
@@ -5044,22 +4980,6 @@ def get_reports(customer: Optional[str] = None, customer_id: Optional[int] = Non
         return [serialize_report(r) for r in reports]
 
 
-@app.get("/api/reports/open")
-def report_open(guid: str):
-    with SessionLocal() as db:
-        report = db.query(Report).filter(Report.guid == guid).first()
-        if report:
-            report.opened_at = int(time.time() * 1000)
-            report.opened_count = (report.opened_count or 0) + 1
-            db.commit()
-    pixel = (
-        b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
-        b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
-        b"\x00\x02\x02D\x01\x00;"
-    )
-    return Response(content=pixel, media_type="image/gif")
-
-
 @app.get("/api/reports/{report_id}")
 def get_report(report_id: int):
     with SessionLocal() as db:
@@ -5131,27 +5051,6 @@ def delete_report(report_id: int):
         db.delete(report)
         db.commit()
         return {"status": "deleted"}
-
-
-@app.get("/api/offers/open")
-def offer_open(guid: str):
-    with SessionLocal() as db:
-        offer = (
-            db.query(Offer)
-            .filter(or_(Offer.tracking_guid == guid, Offer.guid == guid))
-            .first()
-        )
-        if offer:
-            offer.opened_at = int(time.time() * 1000)
-            offer.opened_count = (offer.opened_count or 0) + 1
-            offer.updated_at = offer.opened_at
-            db.commit()
-    pixel = (
-        b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
-        b"\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00"
-        b"\x00\x02\x02D\x01\x00;"
-    )
-    return Response(content=pixel, media_type="image/gif")
 
 
 @app.get("/api/smtp_settings")
@@ -5236,20 +5135,6 @@ def update_ai_prompts(data: AiPromptsUpdate):
         db.commit()
         db.refresh(store)
         return serialize_ai_prompts(store)
-
-
-@app.get("/api/beacon/health")
-def beacon_health():
-    with SessionLocal() as db:
-        settings = _get_smtp_settings(db)
-    guid = str(uuid.uuid4())
-    offer_url = _build_offer_beacon_url(settings.beacon_base_url, guid)
-    report_url = _build_report_beacon_url(settings.beacon_base_url, guid)
-    return {
-        "checked_at": _offer_iso_timestamp(int(time.time() * 1000)),
-        "offers": _probe_beacon(offer_url),
-        "reports": _probe_beacon(report_url),
-    }
 
 
 @app.get("/api/offers")
@@ -5564,7 +5449,6 @@ def send_report(report_id: int, data: ReportSendRequest):
         if not report.guid:
             report.guid = str(uuid.uuid4())
         subject = data.subject or f"IT-Kundenbericht – {report.customer} ({report.period or 'ohne Zeitraum'})"
-        report_url = _build_report_beacon_url(settings.beacon_base_url, report.guid)
 
         from_addr = settings.sender_email
         if settings.sender_name:
@@ -5578,11 +5462,7 @@ def send_report(report_id: int, data: ReportSendRequest):
         msg["Subject"] = subject
         msg["From"] = from_addr
         msg["To"] = data.to
-        fallback_text = (
-            f"Wenn Ihr E-Mail-Programm kein HTML anzeigen kann, öffnen Sie den Bericht hier: {report_url}"
-            if report_url
-            else "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung."
-        )
+        fallback_text = "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung."
         msg.set_content(data.text or fallback_text)
         msg.add_alternative(data.html, subtype="html")
         for attachment in data.attachments or []:
@@ -5657,22 +5537,7 @@ def send_offer(data: OfferSendRequest):
         if settings.sender_name:
             from_addr = f"{settings.sender_name} <{settings.sender_email}>"
 
-        tracking_guid = ""
         html = data.html or ""
-        existing_tracking = ""
-        if data.offer_id:
-            existing = db.query(Offer).get(data.offer_id)
-            if existing:
-                existing_tracking = existing.tracking_guid or ""
-        if settings.beacon_base_url:
-            should_reset = bool(data.reset_tracking)
-            if should_reset or not existing_tracking:
-                tracking_guid = str(uuid.uuid4())
-            else:
-                tracking_guid = existing_tracking
-            pixel_url = _build_offer_beacon_url(settings.beacon_base_url, tracking_guid)
-            if pixel_url:
-                html += f'<img src="{pixel_url}" alt="" width="1" height="1" style="display:none;" />'
 
         import smtplib
         import base64
@@ -5721,13 +5586,11 @@ def send_offer(data: OfferSendRequest):
                 offer.sent_at = sent_at
                 offer.sent_via = "smtp"
                 offer.sent_to = data.to
-                if tracking_guid:
-                    offer.tracking_guid = tracking_guid
                 offer.updated_at = sent_at
                 db.commit()
 
-        logger.info("offer_send done offer_id=%s tracking_guid=%s", data.offer_id, tracking_guid)
-        return {"status": "sent", "tracking_guid": tracking_guid, "sent_at": sent_at}
+        logger.info("offer_send done offer_id=%s", data.offer_id)
+        return {"status": "sent", "sent_at": sent_at}
 
 
 @app.get("/offers/confirm/{guid}", response_class=HTMLResponse)

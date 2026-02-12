@@ -2586,7 +2586,7 @@ function HandoverModal({
   if (!open || !offer || !summary) return null;
   const trackingText = offer.trackingGuid
     ? `Tracking aktiv (ID ${offer.trackingGuid}).`
-    : "Tracking wird beim Versand aktiviert, sofern Beacon konfiguriert ist.";
+    : "Tracking ist deaktiviert.";
   const statusLabel = summary.accepted ? "Angebot angenommen" : "Angebot nicht angenommen";
   const lineItems = offer.lineItems || [];
   const deviceItems = offer.deviceItems || [];
@@ -3660,7 +3660,6 @@ export default function OffersView() {
   const [emailOfferId, setEmailOfferId] = useState("");
   const [emailMode, setEmailMode] = useState("offer");
   const [toast, setToast] = useState("");
-  const [resetTracking, setResetTracking] = useState(false);
   const [emailHelperText, setEmailHelperText] = useState("");
   const [smtpSignatureHtml, setSmtpSignatureHtml] = useState(loadCachedSignature);
   const [recipientTouched, setRecipientTouched] = useState(false);
@@ -3730,10 +3729,10 @@ export default function OffersView() {
   const activeSevdeskState = activeSevdeskKey ? sevdeskStatus[activeSevdeskKey] : null;
   const offerTrackingText = activeOffer?.trackingGuid
     ? `Tracking aktiv (ID ${activeOffer.trackingGuid}).`
-    : "Tracking wird beim Versand aktiviert, sofern Beacon konfiguriert ist.";
+    : "Tracking ist deaktiviert.";
   const emailTrackingText = emailOffer?.trackingGuid
     ? `Tracking aktiv (ID ${emailOffer.trackingGuid}).`
-    : "Tracking wird beim Versand aktiviert, sofern Beacon konfiguriert ist.";
+    : "Tracking ist deaktiviert.";
   const offerDefaultSubject = `Angebot ${activeOffer?.reference || ""}`.trim();
   const emailDefaultSubject = `Angebot ${emailOffer?.reference || ""}`.trim();
   const handoverOffer = offers.find((item) => item.id === handoverModal.offerId) || null;
@@ -5066,7 +5065,6 @@ export default function OffersView() {
     const defaultText = `Angebot ${offer.reference || ""}`.trim();
     setSendSubject(defaultText);
     setOfferEmailBody(DEFAULT_OFFER_EMAIL_BODY);
-    setResetTracking(false);
     const customer = customersByName.get(String(offer.customer || "").toLowerCase());
     if (!sendTo && customer?.email) {
       setSendTo(customer.email);
@@ -5092,7 +5090,6 @@ export default function OffersView() {
     setRecipientTouched(false);
     setSendSubject(`Auftragsbestätigung ${offer.reference || ""}`.trim());
     setOfferEmailBody("");
-    setResetTracking(false);
     const customer = customersByName.get(String(offer.customer || "").toLowerCase());
     if (!sendTo && customer?.email) {
       setSendTo(customer.email);
@@ -5109,7 +5106,6 @@ export default function OffersView() {
     setOfferEmailBody("");
     setSendSubject("");
     setSendTo("");
-    setResetTracking(false);
     setRecipientTouched(false);
   };
 
@@ -5173,8 +5169,7 @@ export default function OffersView() {
           subject: sendSubject || `Angebot ${offer.reference || ""}`.trim(),
           html,
           text,
-          attachments,
-          reset_tracking: resetTracking
+          attachments
         })
       });
       console.log("[offer-email] send-response", { status: res.status });
@@ -8542,8 +8537,6 @@ export default function OffersView() {
     trackingText={emailTrackingText}
     isSending={sendStatus === "sending" || sendStatus === "preparing"}
     busyText={sendStatus === "preparing" ? "PDF wird erstellt..." : "E-Mail wird versendet..."}
-    trackingResetChecked={resetTracking}
-    onTrackingResetChange={emailMode === "confirmation" ? undefined : setResetTracking}
     previewSignatureHtml={smtpSignatureHtml}
     onClose={closeOfferEmailComposer}
     onSend={() => {

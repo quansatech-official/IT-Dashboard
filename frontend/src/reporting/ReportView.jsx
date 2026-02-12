@@ -53,38 +53,6 @@ const wrapEmailHtml = (baseHtml, introHtml = "", signatureHtml = "") => {
 
 const plainTextToHtml = (text = "") =>
   escapeHTML(String(text)).replace(/\n/g, "<br/>");
-const ENABLE_OPEN_BEACON = true;
-const DEFAULT_BEACON_BASE_URL = "https://work.quansatech.at/beacon";
-
-const loadBeaconBaseUrl = () => {
-  if (typeof window === "undefined") return "";
-  try {
-    const raw = window.localStorage.getItem(SMTP_STORAGE_KEY);
-    if (!raw) return "";
-    const cached = JSON.parse(raw);
-    return cached?.beacon_base_url || "";
-  } catch (error) {
-    return "";
-  }
-};
-
-const normalizeBaseUrl = (value) => String(value || "").trim().replace(/\/+$/, "");
-
-const buildBeaconUrl = (guid, baseOverride = "") => {
-  if (!ENABLE_OPEN_BEACON || !guid) return "";
-  const baseUrl = normalizeBaseUrl(baseOverride || loadBeaconBaseUrl() || DEFAULT_BEACON_BASE_URL);
-  if (baseUrl.includes("{guid}")) {
-    return baseUrl.replace("{guid}", encodeURIComponent(guid));
-  }
-  if (baseUrl) {
-    const separator = baseUrl.includes("?") ? "&" : "?";
-    if (baseUrl.endsWith("/open")) {
-      return `${baseUrl}${separator}guid=${encodeURIComponent(guid)}`;
-    }
-    return `${baseUrl}/open?guid=${encodeURIComponent(guid)}`;
-  }
-  return `${window.location.origin}/open?guid=${encodeURIComponent(guid)}`;
-};
 
 function CustomerCombobox({ groups, value, onChange }) {
   const [query, setQuery] = useState(value || "");
@@ -321,7 +289,6 @@ export default function ReportView() {
     title: "",
     html: ""
   });
-  const [beaconBaseUrl, setBeaconBaseUrl] = useState(loadBeaconBaseUrl);
   const [smtpSignatureHtml, setSmtpSignatureHtml] = useState(loadCachedSignature);
   const [freeText, setFreeText] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -433,22 +400,20 @@ export default function ReportView() {
 
   useEffect(() => {
     let active = true;
-    const loadBeaconSettings = async () => {
+    const loadSmtpSettings = async () => {
       try {
         const res = await fetch("/api/smtp_settings");
         if (!res.ok) return;
         const data = await res.json();
-        const next = String(data?.beacon_base_url || "").trim();
         const signature = String(data?.signature_html || "");
         if (!active) return;
-        setBeaconBaseUrl(next);
         setSmtpSignatureHtml(signature);
         try {
           const raw = window.localStorage.getItem(SMTP_STORAGE_KEY);
           const cached = raw ? JSON.parse(raw) : {};
           window.localStorage.setItem(
             SMTP_STORAGE_KEY,
-            JSON.stringify({ ...cached, beacon_base_url: next, signature_html: signature })
+            JSON.stringify({ ...cached, signature_html: signature })
           );
         } catch (error) {
           // ignore cache errors
@@ -457,7 +422,7 @@ export default function ReportView() {
         // ignore fetch errors
       }
     };
-    loadBeaconSettings();
+    loadSmtpSettings();
     return () => {
       active = false;
     };
@@ -1333,8 +1298,7 @@ export default function ReportView() {
     }
     try {
       const subject = `IT-Kundenbericht – ${data.customer} (${data.period || "ohne Zeitraum"})`;
-      const beaconUrl = buildBeaconUrl(data.guid, beaconBaseUrl);
-      const htmlBody = renderReportHTML(data, { mode: "email", beaconUrl }).replace(
+      const htmlBody = renderReportHTML(data, { mode: "email" }).replace(
         /src="\/QTLogo\.jpg"/g,
         'src="cid:qtlogo"'
       );
@@ -1489,11 +1453,7 @@ export default function ReportView() {
     if (!data) return;
     const normalized = normalizeReport(data);
     const subject = `IT-Kundenbericht – ${normalized.customer} (${normalized.period || "ohne Zeitraum"})`;
-    const beaconUrl = buildBeaconUrl(normalized.guid, beaconBaseUrl);
-    const baseHtml = renderReportHTML(normalized, { mode: "email", beaconUrl }).replace(
-      /src="\/QTLogo\.jpg"/g,
-      `src="${window.location.origin}/QTLogo.jpg"`
-    );
+    const baseHtml = await inlineReportLogo(renderReportHTML(normalized, { mode: "email" }));
     const pdfHtml = renderReportHTML(normalized, { mode: "pdf" }).replace(
       /src="\/QTLogo\.jpg"/g,
       `src="${window.location.origin}/QTLogo.jpg"`
@@ -1505,9 +1465,6 @@ export default function ReportView() {
       .replaceAll("/", "-");
     const text = buildPlainText(normalized);
     const introHtml = plainTextToHtml(text);
-    const trackingText = beaconUrl
-      ? `Tracking Beacon: ${beaconUrl}`
-      : "Tracking nicht aktiviert (Beacon URL fehlt).";
     setReportEmailComposer({
       open: true,
       to: "",
@@ -1518,7 +1475,7 @@ export default function ReportView() {
       fallbackText: text,
       pdfHtml,
       pdfFilenameBase: filenameBase,
-      trackingText,
+      trackingText: "",
       isSending: false
     });
   };
@@ -1561,10 +1518,11 @@ export default function ReportView() {
             }
           ]
         : [];
+      const htmlWithInlineLogo = await inlineReportLogo(html);
       const res = await fetch(`/api/reports/${reportId}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, subject, html, attachments })
+        body: JSON.stringify({ to, subject, html: htmlWithInlineLogo, attachments })
       });
       if (!res.ok) {
         const text = await res.text();

@@ -28,20 +28,6 @@ export default function ArchivePanel({
       document.removeEventListener("mousedown", handleClick);
     };
   }, [openInfoId]);
-  const beaconStatus = useMemo(() => {
-    if (typeof window === "undefined") return { ok: false, label: "Beacon: unbekannt" };
-    try {
-      const raw = window.localStorage.getItem("qt_smtp_settings_cache");
-      if (!raw) return { ok: false, label: "Beacon: nicht gesetzt" };
-      const cached = JSON.parse(raw);
-      const base = String(cached?.beacon_base_url || "").trim();
-      return base
-        ? { ok: true, label: "Beacon: konfiguriert" }
-        : { ok: false, label: "Beacon: nicht gesetzt" };
-    } catch (error) {
-      return { ok: false, label: "Beacon: ungültig" };
-    }
-  }, []);
   const filteredArchive = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const periodNeedle = periodFilter.trim().toLowerCase();
@@ -228,20 +214,6 @@ export default function ArchivePanel({
                           ) : (
                             <div className="text-sand-400">Nicht gesendet</div>
                           )}
-                        </div>
-                        <div className="border-t border-sand-100 pt-2">
-                          <div className="text-[10px] uppercase tracking-[0.3em] text-sand-400 mb-2">
-                            Tracking
-                          </div>
-                          <div
-                            className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
-                              beaconStatus.ok
-                                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                : "border-sand-200 bg-sand-50 text-sand-500"
-                            }`}
-                          >
-                            {beaconStatus.label}
-                          </div>
                         </div>
                       </div>
                     </div>

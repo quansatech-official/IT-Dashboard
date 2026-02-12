@@ -10,7 +10,6 @@ export const escapeHTML = (value = "") =>
 export const renderReportHTML = (report, options = {}) => {
   const isEmail = options.mode === "email";
   const isPdf = options.mode === "pdf";
-  const beaconUrl = options.beaconUrl || "";
   const period = report.period?.trim() || "ohne Zeitraum";
   const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
@@ -314,17 +313,11 @@ export const renderReportHTML = (report, options = {}) => {
       ${innerTable}
     </table>`;
 
-  const beaconTag =
-    isEmail && beaconUrl
-      ? `<img src="${beaconUrl}" alt="" width="1" height="1" style="display:block; width:1px; height:1px; border:0; margin:0; padding:0;" />`
-      : "";
-
   return `
     <table style="width: 100%; border-collapse: collapse; background: ${outerBackground}; padding: ${outerPadding};">
       <tr>
         <td align="center" style="padding: ${outerCellPadding};">
           ${emailContainer}
-          ${beaconTag}
         </td>
       </tr>
     </table>

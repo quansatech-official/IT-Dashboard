@@ -18,7 +18,6 @@ const defaultSmtp = {
   password: "",
   sender_name: "",
   sender_email: "",
-  beacon_base_url: "https://work.quansatech.at/beacon",
   use_tls: true,
   use_ssl: false,
   signature_html: "",
@@ -211,9 +210,6 @@ export default function SettingsView() {
   const [debugStatus, setDebugStatus] = useState("idle");
   const [debugTablesOpen, setDebugTablesOpen] = useState(false);
   const [smtpOpen, setSmtpOpen] = useState(false);
-  const [beaconOpen, setBeaconOpen] = useState(false);
-  const [beaconDebugOpen, setBeaconDebugOpen] = useState(false);
-  const [beaconSaveStatus, setBeaconSaveStatus] = useState("idle");
   const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
   const [apiTestOpen, setApiTestOpen] = useState(false);
   const [apiTestPath, setApiTestPath] = useState("/api/telephony/calls");
@@ -227,12 +223,6 @@ export default function SettingsView() {
   });
   const [pbxOpen, setPbxOpen] = useState(false);
   const [ctiOpen, setCtiOpen] = useState(false);
-  const [beaconCheckStatus, setBeaconCheckStatus] = useState("idle");
-  const [beaconHealth, setBeaconHealth] = useState({
-    checkedAt: "",
-    offers: { ok: null, status_code: null, error: "", url: "" },
-    reports: { ok: null, status_code: null, error: "", url: "" }
-  });
   const [aiPrompts, setAiPrompts] = useState({
     action_prompt: "",
     offer_base_prompt: "",
@@ -247,10 +237,6 @@ export default function SettingsView() {
   const [aiPromptsStatus, setAiPromptsStatus] = useState("idle");
   const [aiPromptsLoadStatus, setAiPromptsLoadStatus] = useState("loading");
   const [clearingTable, setClearingTable] = useState("");
-  const beaconDisplay =
-    smtp.beacon_base_url && smtp.beacon_base_url.trim()
-      ? smtp.beacon_base_url.trim()
-      : "Nicht gesetzt";
   const hasCtiPasswordAuth = cti.hasPassword && cti.username?.trim();
   const hasCtiRefreshAuth = cti.hasRefreshToken;
   const hasCtiCredentials = Boolean(hasCtiPasswordAuth || hasCtiRefreshAuth);
@@ -512,7 +498,6 @@ export default function SettingsView() {
           password: smtp.password,
           sender_name: smtp.sender_name,
           sender_email: smtp.sender_email,
-          beacon_base_url: smtp.beacon_base_url,
           use_tls: smtp.use_tls,
           use_ssl: smtp.use_ssl,
           signature_html: smtp.signature_html
@@ -539,56 +524,6 @@ export default function SettingsView() {
     setTimeout(() => setStatus("idle"), 2000);
   };
 
-  const saveBeacon = async () => {
-    setBeaconSaveStatus("saving");
-    try {
-      const res = await fetch(`${API}/smtp_settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          beacon_base_url: smtp.beacon_base_url,
-          signature_html: smtp.signature_html
-        })
-      });
-      if (!res.ok) throw new Error("save_failed");
-      const data = await res.json();
-      const next = {
-        ...smtp,
-        beacon_base_url: data?.beacon_base_url || smtp.beacon_base_url
-      };
-      setSmtp(next);
-      try {
-        const raw = window.localStorage.getItem(STORAGE_KEY);
-        const cached = raw ? JSON.parse(raw) : {};
-        const { password, ...cacheable } = { ...cached, beacon_base_url: next.beacon_base_url };
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheable));
-      } catch (error) {
-        // Ignore cache write errors.
-      }
-      setBeaconSaveStatus("saved");
-    } catch (error) {
-      setBeaconSaveStatus("error");
-    }
-    setTimeout(() => setBeaconSaveStatus("idle"), 2000);
-  };
-
-  const refreshBeaconHealth = async () => {
-    setBeaconCheckStatus("loading");
-    try {
-      const res = await fetch(`${API}/beacon/health`);
-      if (!res.ok) throw new Error("health_failed");
-      const data = await res.json();
-      setBeaconHealth({
-        checkedAt: data?.checked_at || "",
-        offers: data?.offers || { ok: false, status_code: null, error: "", url: "" },
-        reports: data?.reports || { ok: false, status_code: null, error: "", url: "" }
-      });
-      setBeaconCheckStatus("ready");
-    } catch (error) {
-      setBeaconCheckStatus("error");
-    }
-    setTimeout(() => setBeaconCheckStatus("idle"), 2000);
-  };
 
   const addEmployee = async () => {
     const name = (employeeDraft.name || "").trim();
@@ -1245,11 +1180,6 @@ export default function SettingsView() {
     }
   };
 
-  const formatBeaconDebugValue = (value) => {
-    if (value === null || value === undefined || value === "") return "n/a";
-    return value;
-  };
-
   const buildApiTestUrl = (value) => {
     const trimmed = String(value || "").trim();
     if (!trimmed) return "";
@@ -1561,228 +1491,6 @@ export default function SettingsView() {
                     Noch keine Mitarbeiter angelegt.
                   </div>
                 )}
-              </div>
-            </>
-          ) : null}
-        </div>
-
-        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <button
-            type="button"
-            onClick={() => setBeaconOpen((current) => !current)}
-            className="flex w-full items-center justify-between gap-2 text-sand-700"
-          >
-            <div className="flex items-center gap-2">
-              <Settings size={18} />
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Beacon</p>
-            </div>
-            <span className="text-sm text-sand-500">{beaconOpen ? "–" : "+"}</span>
-          </button>
-          {beaconOpen ? (
-            <>
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <label className="text-xs text-sand-500">Beacon Base URL</label>
-                  <input
-                    value={smtp.beacon_base_url}
-                    onChange={(event) =>
-                      setSmtp((prev) => ({ ...prev, beacon_base_url: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="https://beacon.example.com"
-                  />
-                  <div className="mt-2 text-xs text-sand-500">
-                    Aktuell: <span className="text-sand-700">{beaconDisplay}</span>
-                  </div>
-                  <p className="mt-2 text-xs text-sand-400">
-                    Optional: externe Basis-URL oder Template mit {"{guid}"}.
-                  </p>
-                  <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
-                    <button
-                      type="button"
-                      onClick={saveBeacon}
-                      className="rounded-full border border-sand-200 bg-white px-3 py-2 uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                    >
-                      Beacon speichern
-                    </button>
-                    {beaconSaveStatus === "saved" && (
-                      <span className="text-emerald-600">Gespeichert</span>
-                    )}
-                    {beaconSaveStatus === "error" && (
-                      <span className="text-rose-600">Speichern fehlgeschlagen</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-sand-600">
-                <div className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-                  <span>Angebote</span>
-                  <span
-                    className={`inline-flex items-center gap-2 ${
-                      beaconHealth.offers.ok === null
-                        ? "text-sand-500"
-                        : beaconHealth.offers.ok
-                        ? "text-emerald-700"
-                        : "text-rose-600"
-                    }`}
-                  >
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        beaconHealth.offers.ok === null
-                          ? "bg-sand-400"
-                          : beaconHealth.offers.ok
-                          ? "bg-emerald-500"
-                          : "bg-rose-500"
-                      }`}
-                    />
-                    {beaconHealth.offers.ok === null
-                      ? "unbekannt"
-                      : beaconHealth.offers.ok
-                      ? "erreichbar"
-                      : "nicht erreichbar"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-                  <span>Kundenberichte</span>
-                  <span
-                    className={`inline-flex items-center gap-2 ${
-                      beaconHealth.reports.ok === null
-                        ? "text-sand-500"
-                        : beaconHealth.reports.ok
-                        ? "text-emerald-700"
-                        : "text-rose-600"
-                    }`}
-                  >
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        beaconHealth.reports.ok === null
-                          ? "bg-sand-400"
-                          : beaconHealth.reports.ok
-                          ? "bg-emerald-500"
-                          : "bg-rose-500"
-                      }`}
-                    />
-                    {beaconHealth.reports.ok === null
-                      ? "unbekannt"
-                      : beaconHealth.reports.ok
-                      ? "erreichbar"
-                      : "nicht erreichbar"}
-                  </span>
-                </div>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
-                <button
-                  onClick={refreshBeaconHealth}
-                  className="rounded-full border border-sand-200 bg-white px-3 py-2 uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                >
-                  Beacon testen
-                </button>
-                {beaconCheckStatus === "error" && (
-                  <span className="text-rose-600">Test fehlgeschlagen</span>
-                )}
-                {beaconHealth.checkedAt ? (
-                  <span className="text-sand-500">Letzter Check: {beaconHealth.checkedAt}</span>
-                ) : null}
-              </div>
-              <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50 p-4 text-xs text-sand-700">
-                <button
-                  type="button"
-                  onClick={() => setBeaconDebugOpen((current) => !current)}
-                  className="w-full flex items-center justify-between uppercase tracking-[0.3em] text-[10px] text-sand-500"
-                >
-                  <span>Beacon Debug</span>
-                  <span>{beaconDebugOpen ? "–" : "+"}</span>
-                </button>
-                {beaconDebugOpen ? (
-                  <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                        Angebote
-                      </p>
-                      <div className="mt-2 grid grid-cols-1 gap-2">
-                        <div>
-                          <span className="text-sand-500">Status:</span>{" "}
-                          {beaconHealth.offers.ok === null
-                            ? "unbekannt"
-                            : beaconHealth.offers.ok
-                            ? "ok"
-                            : "fehlgeschlagen"}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Status Code:</span>{" "}
-                          {beaconHealth.offers.status_code ?? "n/a"}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">URL:</span>{" "}
-                          {beaconHealth.offers.url || "n/a"}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Fehler:</span>{" "}
-                          {beaconHealth.offers.error || "n/a"}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Dauer (ms):</span>{" "}
-                          {formatBeaconDebugValue(beaconHealth.offers?.debug?.duration_ms)}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Content-Type:</span>{" "}
-                          {formatBeaconDebugValue(beaconHealth.offers?.debug?.content_type)}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Reason:</span>{" "}
-                          {formatBeaconDebugValue(beaconHealth.offers?.debug?.reason)}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Preview:</span>{" "}
-                          {formatBeaconDebugValue(beaconHealth.offers?.debug?.preview)}
-                        </div>
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                        Kundenberichte
-                      </p>
-                      <div className="mt-2 grid grid-cols-1 gap-2">
-                        <div>
-                          <span className="text-sand-500">Status:</span>{" "}
-                          {beaconHealth.reports.ok === null
-                            ? "unbekannt"
-                            : beaconHealth.reports.ok
-                            ? "ok"
-                            : "fehlgeschlagen"}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Status Code:</span>{" "}
-                          {beaconHealth.reports.status_code ?? "n/a"}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">URL:</span>{" "}
-                          {beaconHealth.reports.url || "n/a"}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Fehler:</span>{" "}
-                          {beaconHealth.reports.error || "n/a"}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Dauer (ms):</span>{" "}
-                          {formatBeaconDebugValue(beaconHealth.reports?.debug?.duration_ms)}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Content-Type:</span>{" "}
-                          {formatBeaconDebugValue(beaconHealth.reports?.debug?.content_type)}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Reason:</span>{" "}
-                          {formatBeaconDebugValue(beaconHealth.reports?.debug?.reason)}
-                        </div>
-                        <div>
-                          <span className="text-sand-500">Preview:</span>{" "}
-                          {formatBeaconDebugValue(beaconHealth.reports?.debug?.preview)}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
               </div>
             </>
           ) : null}

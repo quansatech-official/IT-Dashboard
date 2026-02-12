@@ -90,20 +90,6 @@ services:
     ports:
       - "${MOBILE_FRONTEND_PORT:-7001}:80"
 
-  beacon:
-    build:
-      context: ./beacon
-    container_name: it-dashboard-beacon
-    restart: unless-stopped
-    depends_on:
-      - db
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-it_user}:${POSTGRES_PASSWORD:-it_secret_password}@db:5432/${POSTGRES_DB:-it_dashboard}}
-      BEACON_REPORT_OPEN_URL: ${BEACON_REPORT_OPEN_URL:-http://backend:8000/api/reports/open?guid={guid}}
-      BEACON_OFFER_OPEN_URL: ${BEACON_OFFER_OPEN_URL:-http://backend:8000/api/offers/open?guid={guid}}
-    ports:
-      - "${BEACON_PORT:-9875}:8000"
-
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
     container_name: it-dashboard-oauth2-proxy
