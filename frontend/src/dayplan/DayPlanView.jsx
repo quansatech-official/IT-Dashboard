@@ -148,6 +148,7 @@ export default function DayPlanView() {
   const [emailTaskAnalyzing, setEmailTaskAnalyzing] = useState(false);
   const [emailTaskError, setEmailTaskError] = useState("");
   const [emailTaskSaving, setEmailTaskSaving] = useState(false);
+  const emailDropGuardRef = useRef(0);
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
 
   useEffect(() => {
@@ -1272,6 +1273,13 @@ export default function DayPlanView() {
     }
   };
 
+  const triggerEmailDropTransfer = (transfer) => {
+    const now = Date.now();
+    if (now - emailDropGuardRef.current < 250) return;
+    emailDropGuardRef.current = now;
+    handleEmailDropTransfer(transfer);
+  };
+
   const isKnownCustomer = (value) => {
     const name = String(value || "").trim().toLowerCase();
     return name ? knownCustomerNames.includes(name) : false;
@@ -1965,6 +1973,11 @@ export default function DayPlanView() {
                           ? "border-blue-300 bg-blue-50 text-blue-700"
                           : "border-sand-200 bg-sand-50 text-sand-500"
                       }`}
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setEmailDropHover(true);
+                      }}
                       onDragOver={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
@@ -1981,7 +1994,9 @@ export default function DayPlanView() {
                       onDrop={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-                        handleEmailDropTransfer(event.dataTransfer);
+                        const transfer = event.dataTransfer || event.nativeEvent?.dataTransfer;
+                        if (!transfer) return;
+                        triggerEmailDropTransfer(transfer);
                       }}
                       title="E-Mail hier ablegen, um Aufgabe per KI vorzubereiten"
                     >
