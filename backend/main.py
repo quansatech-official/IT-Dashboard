@@ -304,7 +304,6 @@ class Offer(Base):
     confirmed_at = Column(BigInteger, default=0)
     opened_at = Column(BigInteger, default=0)
     opened_count = Column(Integer, default=0)
-    tracking_guid = Column(String, default="")
     sent_at = Column(BigInteger, default=0)
     sent_via = Column(String, default="")
     sent_to = Column(String, default="")
@@ -643,8 +642,6 @@ def _ensure_offer_opened_columns() -> None:
         statements.append("ALTER TABLE offers ADD COLUMN opened_at BIGINT DEFAULT 0")
     if "opened_count" not in columns:
         statements.append("ALTER TABLE offers ADD COLUMN opened_count INTEGER DEFAULT 0")
-    if "tracking_guid" not in columns:
-        statements.append("ALTER TABLE offers ADD COLUMN tracking_guid VARCHAR DEFAULT ''")
     if "sent_at" not in columns:
         statements.append("ALTER TABLE offers ADD COLUMN sent_at BIGINT DEFAULT 0")
     if "sent_via" not in columns:
@@ -2405,8 +2402,6 @@ def serialize_offer(offer: Offer) -> Dict[str, Any]:
         data["id"] = str(offer.id)
     data["serverId"] = offer.id
     data["confirmGuid"] = offer.guid or data.get("confirmGuid") or ""
-    if offer.tracking_guid and not data.get("trackingGuid"):
-        data["trackingGuid"] = offer.tracking_guid
     data["reference"] = offer.reference or data.get("reference") or ""
     data["customer"] = offer.customer or data.get("customer") or ""
     data["status"] = offer.status or data.get("status") or ""
@@ -5149,7 +5144,6 @@ def create_offer(data: OfferSaveRequest, request: Request):
     with SessionLocal() as db:
         now_ms = int(time.time() * 1000)
         payload = data.data or {}
-        tracking_guid = str(payload.get("trackingGuid") or "")
         offer = Offer(
             guid=str(uuid.uuid4()),
             reference=data.reference or "",
@@ -5158,7 +5152,6 @@ def create_offer(data: OfferSaveRequest, request: Request):
             data_json=json.dumps(payload),
             created_at=now_ms,
             updated_at=now_ms,
-            tracking_guid=tracking_guid,
         )
         db.add(offer)
         db.commit()
@@ -5177,15 +5170,12 @@ def update_offer(offer_id: int, data: OfferSaveRequest, request: Request):
         if not offer:
             raise HTTPException(404, "Offer not found")
         payload = data.data or {}
-        tracking_guid = str(payload.get("trackingGuid") or "").strip()
         offer.reference = data.reference or offer.reference
         offer.customer = data.customer or offer.customer
         if data.status is not None:
             offer.status = data.status or offer.status
         offer.data_json = json.dumps(payload)
         offer.updated_at = int(time.time() * 1000)
-        if tracking_guid:
-            offer.tracking_guid = tracking_guid
         db.commit()
         db.refresh(offer)
         return OfferSaveResponse(

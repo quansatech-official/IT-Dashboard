@@ -497,8 +497,7 @@ const getOfferOpenedCount = (offer) =>
 
 const renderOfferReadBadge = (offer) => {
   const openedCount = getOfferOpenedCount(offer);
-  const hasTracking = Boolean(offer?.trackingGuid);
-  if (!hasTracking && openedCount <= 0 && !getOfferOpenedAt(offer)) return null;
+  if (openedCount <= 0 && !getOfferOpenedAt(offer)) return null;
   if (openedCount > 0) {
     return (
       <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] uppercase tracking-wide text-sky-700">
@@ -1057,7 +1056,6 @@ const createEmptyOffer = (index, format) => ({
   deviceItems: [],
   serverId: null,
   confirmGuid: "",
-  trackingGuid: "",
   handoverLocked: false
 });
 
@@ -2584,9 +2582,6 @@ function HandoverModal({
   onToggleDeviceItem
 }) {
   if (!open || !offer || !summary) return null;
-  const trackingText = offer.trackingGuid
-    ? `Tracking aktiv (ID ${offer.trackingGuid}).`
-    : "Tracking ist deaktiviert.";
   const statusLabel = summary.accepted ? "Angebot angenommen" : "Angebot nicht angenommen";
   const lineItems = offer.lineItems || [];
   const deviceItems = offer.deviceItems || [];
@@ -2745,9 +2740,6 @@ function HandoverModal({
               </div>
             ) : null}
           </div>
-        </div>
-        <div className="border-t border-sand-100 px-6 py-4 text-[11px] text-sand-500">
-          <p>{trackingText}</p>
         </div>
         <div className="flex items-center justify-end gap-3 border-t border-sand-100 px-6 py-4">
           <button
@@ -3727,12 +3719,6 @@ export default function OffersView() {
   const emailOffer = offers.find((offer) => offer.id === emailOfferId) || null;
   const activeSevdeskKey = activeOffer ? activeOffer.serverId || activeOffer.id : null;
   const activeSevdeskState = activeSevdeskKey ? sevdeskStatus[activeSevdeskKey] : null;
-  const offerTrackingText = activeOffer?.trackingGuid
-    ? `Tracking aktiv (ID ${activeOffer.trackingGuid}).`
-    : "Tracking ist deaktiviert.";
-  const emailTrackingText = emailOffer?.trackingGuid
-    ? `Tracking aktiv (ID ${emailOffer.trackingGuid}).`
-    : "Tracking ist deaktiviert.";
   const offerDefaultSubject = `Angebot ${activeOffer?.reference || ""}`.trim();
   const emailDefaultSubject = `Angebot ${emailOffer?.reference || ""}`.trim();
   const handoverOffer = offers.find((item) => item.id === handoverModal.offerId) || null;
@@ -4894,8 +4880,7 @@ export default function OffersView() {
         status: "Entwurf",
         createdAt: new Date().toISOString(),
         serverId: null,
-        confirmGuid: "",
-        trackingGuid: ""
+        confirmGuid: ""
       };
       setLastOfferIndex((current) => {
         const nextValue = Math.max(current || 0, nextIndex);
@@ -5175,19 +5160,7 @@ export default function OffersView() {
       console.log("[offer-email] send-response", { status: res.status });
       if (!res.ok) throw new Error("send_failed");
       const responsePayload = await res.json();
-      if (responsePayload?.tracking_guid) {
-        const nextOffer = {
-          ...offer,
-          trackingGuid: responsePayload.tracking_guid,
-          sentAt: responsePayload.sent_at ? new Date(responsePayload.sent_at).toISOString() : offer.sentAt
-        };
-        updateOffer(offer.id, () => nextOffer);
-        try {
-          await persistOfferForCustomer(nextOffer);
-        } catch (error) {
-          // Ignore tracking persist errors.
-        }
-      } else if (responsePayload?.sent_at) {
+      if (responsePayload?.sent_at) {
         updateOffer(offer.id, (current) => ({
           ...current,
           sentAt: new Date(responsePayload.sent_at).toISOString()
@@ -5257,19 +5230,7 @@ export default function OffersView() {
       console.log("[offer-email] send-response", { status: res.status });
       if (!res.ok) throw new Error("send_failed");
       const responsePayload = await res.json();
-      if (responsePayload?.tracking_guid) {
-        const nextOffer = {
-          ...offer,
-          trackingGuid: responsePayload.tracking_guid,
-          sentAt: responsePayload.sent_at ? new Date(responsePayload.sent_at).toISOString() : offer.sentAt
-        };
-        updateOffer(offer.id, () => nextOffer);
-        try {
-          await persistOfferForCustomer(nextOffer);
-        } catch (error) {
-          // Ignore tracking persist errors.
-        }
-      } else if (responsePayload?.sent_at) {
+      if (responsePayload?.sent_at) {
         updateOffer(offer.id, (current) => ({
           ...current,
           sentAt: new Date(responsePayload.sent_at).toISOString()
@@ -5571,7 +5532,6 @@ export default function OffersView() {
       status: activeOffer.status || base.status,
       serverId: activeOffer.serverId || null,
       confirmGuid: activeOffer.confirmGuid || "",
-      trackingGuid: activeOffer.trackingGuid || "",
       handoverLocked: Boolean(activeOffer.handoverLocked)
     };
     updateOffer(activeOffer.id, () => cleared);
@@ -7065,9 +7025,6 @@ export default function OffersView() {
                             <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
                             <span>Summe brutto: {formatMoney(grossTotal)}</span>
                             <span>Datum: {formatDate(offer.createdAt)}</span>
-                            <span>
-                              Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
-                            </span>
                             {getOfferSentAt(offer) ? (
                               <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
                             ) : null}
@@ -7309,9 +7266,6 @@ export default function OffersView() {
                             <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
                             <span>Summe brutto: {formatMoney(grossTotal)}</span>
                             <span>Datum: {formatDate(offer.createdAt)}</span>
-                            <span>
-                              Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
-                            </span>
                             {getOfferSentAt(offer) ? (
                               <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
                             ) : null}
@@ -7515,9 +7469,6 @@ export default function OffersView() {
                             <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
                             <span>Summe brutto: {formatMoney(grossTotal)}</span>
                             <span>Datum: {formatDate(offer.createdAt)}</span>
-                            <span>
-                              Tracking: {offer.trackingGuid ? "aktiv" : "nicht gesetzt"}
-                            </span>
                             {getOfferSentAt(offer) ? (
                               <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
                             ) : null}
@@ -8534,7 +8485,7 @@ export default function OffersView() {
     subject={sendSubject}
     body={offerEmailBody}
     helperText={emailHelperText || "HTML wird gesendet, Plaintext wird automatisch erstellt."}
-    trackingText={emailTrackingText}
+    trackingText=""
     isSending={sendStatus === "sending" || sendStatus === "preparing"}
     busyText={sendStatus === "preparing" ? "PDF wird erstellt..." : "E-Mail wird versendet..."}
     previewSignatureHtml={smtpSignatureHtml}
