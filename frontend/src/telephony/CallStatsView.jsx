@@ -30,14 +30,27 @@ const normalizeDuration = (value) => {
   return Math.floor(numeric);
 };
 
+const shouldUseLiveDuration = (call) => {
+  const start = Number(call?.startTime || 0);
+  const end = Number(call?.endTime || 0);
+  if (!call?.answered || !start) return false;
+  if (end && end >= start) return false;
+  if (normalizeDuration(call?.duration) > 0) return false;
+  const ageMs = Date.now() - start;
+  // Treat as active only for fresh calls; stale records should not keep growing forever.
+  return ageMs >= 0 && ageMs <= 4 * 60 * 60 * 1000;
+};
+
 const durationSeconds = (call) => {
   const duration = normalizeDuration(call.duration);
   if (duration) return duration;
-  if (call.startTime && call.endTime && call.endTime >= call.startTime) {
-    return Math.floor((call.endTime - call.startTime) / 1000);
+  const start = Number(call?.startTime || 0);
+  const end = Number(call?.endTime || 0);
+  if (start && end && end >= start) {
+    return Math.floor((end - start) / 1000);
   }
-  if (call.answered && call.startTime) {
-    return Math.floor((Date.now() - call.startTime) / 1000);
+  if (shouldUseLiveDuration(call)) {
+    return Math.floor((Date.now() - start) / 1000);
   }
   return 0;
 };
