@@ -419,6 +419,7 @@ class PurchasingItem(Base):
 
     id = Column(Integer, primary_key=True)
     done = Column(Boolean, default=False)
+    status = Column(String, default="open")
     customer = Column(String, default="")
     title = Column(String, default="")
     source_url = Column(String, default="")
@@ -451,6 +452,8 @@ def _ensure_purchasing_items_columns() -> None:
     statements = []
     if "quantity" not in columns:
         statements.append("ALTER TABLE purchasing_items ADD COLUMN quantity VARCHAR DEFAULT ''")
+    if "status" not in columns:
+        statements.append("ALTER TABLE purchasing_items ADD COLUMN status VARCHAR DEFAULT 'open'")
     if not statements:
         return
     with engine.begin() as connection:
@@ -997,6 +1000,7 @@ class PinNoteUpdate(BaseModel):
 
 class PurchasingItemCreate(BaseModel):
     done: Optional[bool] = False
+    status: Optional[str] = "open"
     customer: Optional[str] = ""
     title: str
     sourceUrl: Optional[str] = ""
@@ -1007,6 +1011,7 @@ class PurchasingItemCreate(BaseModel):
 
 class PurchasingItemUpdate(BaseModel):
     done: Optional[bool] = None
+    status: Optional[str] = None
     customer: Optional[str] = None
     title: Optional[str] = None
     sourceUrl: Optional[str] = None
@@ -1938,9 +1943,13 @@ def _parse_tags_json(value: Optional[str]) -> List[str]:
 
 
 def serialize_purchasing_item(item: PurchasingItem) -> Dict[str, Any]:
+    status = str(item.status or "").strip().lower()
+    if status not in {"open", "ordered", "received"}:
+        status = "received" if bool(item.done) else "open"
     return {
         "id": item.id,
-        "done": bool(item.done),
+        "done": bool(item.done) or status == "received",
+        "status": status,
         "customer": item.customer or "",
         "title": item.title or "",
         "sourceUrl": item.source_url or "",
@@ -3925,8 +3934,13 @@ def get_purchasing_items():
 def create_purchasing_item(data: PurchasingItemCreate):
     now_ms = int(time.time() * 1000)
     with SessionLocal() as db:
+        status = str(data.status or "").strip().lower()
+        if status not in {"open", "ordered", "received"}:
+            status = "received" if bool(data.done) else "open"
+        done = bool(data.done) or status == "received"
         item = PurchasingItem(
-            done=bool(data.done),
+            done=done,
+            status=status,
             customer=(data.customer or "").strip(),
             title=(data.title or "").strip(),
             source_url=(data.sourceUrl or "").strip(),
@@ -3949,8 +3963,17 @@ def update_purchasing_item(item_id: int, data: PurchasingItemUpdate):
         if not item:
             raise HTTPException(404, "Purchasing item not found")
         payload = data.dict(exclude_unset=True)
+        next_status = str(item.status or "").strip().lower()
+        if next_status not in {"open", "ordered", "received"}:
+            next_status = "received" if bool(item.done) else "open"
         if "done" in payload:
-            item.done = bool(payload["done"])
+            done_value = bool(payload["done"])
+            next_status = "received" if done_value else ("open" if next_status == "received" else next_status)
+            item.done = done_value
+        if "status" in payload:
+            candidate = str(payload["status"] or "").strip().lower()
+            if candidate in {"open", "ordered", "received"}:
+                next_status = candidate
         if "customer" in payload:
             item.customer = str(payload["customer"] or "").strip()
         if "title" in payload:
@@ -3963,6 +3986,8 @@ def update_purchasing_item(item_id: int, data: PurchasingItemUpdate):
             item.purchase_price = str(payload["purchasePrice"] or "").strip()
         if "salePrice" in payload:
             item.sale_price = str(payload["salePrice"] or "").strip()
+        item.status = next_status
+        item.done = next_status == "received"
         item.updated_at = int(time.time() * 1000)
         db.commit()
         db.refresh(item)

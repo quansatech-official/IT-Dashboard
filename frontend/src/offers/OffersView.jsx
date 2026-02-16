@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronUp,
   Eye,
+  ExternalLink,
   FileDown,
   FilePlus,
   Image,
@@ -19,6 +20,7 @@ import {
   Receipt,
   Save,
   Send,
+  ShoppingCart,
   Sparkles,
   Trash2,
   X
@@ -2949,7 +2951,8 @@ function PositionCard({
   onRemove,
   onSaveAsBlock,
   onOpenPriceCalc,
-  onNotesChange
+  onNotesChange,
+  onOpenNoteLink
 }) {
   if (!item) return null;
   const [open, setOpen] = useState(false);
@@ -3160,6 +3163,17 @@ function PositionCard({
                             note.type === "bezugslink" ? "https://..." : "Interner Vermerk"
                           }
                         />
+                        {note.type === "bezugslink" && String(note.text || "").trim() ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenNoteLink?.(note.text)}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                            title="Bezugslink öffnen"
+                            aria-label="Bezugslink öffnen"
+                          >
+                            <ExternalLink size={12} />
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => {
@@ -3231,7 +3245,9 @@ function DeviceCard({
   onRemoveImage = () => {},
   onSaveAsBlock,
   onOpenPriceCalc,
-  onNotesChange
+  onNotesChange,
+  onOpenNoteLink,
+  onAddToPurchasing
 }) {
   if (!item) return null;
   const [open, setOpen] = useState(false);
@@ -3343,6 +3359,15 @@ function DeviceCard({
           title="Als Baustein speichern"
         >
           <BookmarkPlus size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onAddToPurchasing?.(item)}
+          className="rounded-full border border-sand-200 bg-white p-0.5 text-sand-500 hover:bg-sand-100"
+          title="In Einkaufsliste übernehmen"
+          aria-label="In Einkaufsliste übernehmen"
+        >
+          <ShoppingCart size={12} />
         </button>
       </div>
       {open ? (
@@ -3568,6 +3593,17 @@ function DeviceCard({
                           note.type === "bezugslink" ? "https://..." : "Interner Vermerk"
                         }
                       />
+                      {note.type === "bezugslink" && String(note.text || "").trim() ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenNoteLink?.(note.text)}
+                          className="rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-100"
+                          title="Bezugslink öffnen"
+                          aria-label="Bezugslink öffnen"
+                        >
+                          <ExternalLink size={12} />
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => {
@@ -4751,6 +4787,61 @@ export default function OffersView() {
         return { ...item, images: images.filter((entry) => entry !== url) };
       })
     }));
+  };
+
+  const openNoteLink = (rawUrl) => {
+    const trimmed = String(rawUrl || "").trim();
+    if (!trimmed) return;
+    const href = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    window.open(href, "_blank", "noopener,noreferrer");
+  };
+
+  const getReferenceLinkFromNotes = (item) => {
+    const notes = normalizeInternalNotes(item);
+    const linkNote = notes.find(
+      (note) => note?.type === "bezugslink" && String(note?.text || "").trim()
+    );
+    if (!linkNote) return "";
+    const trimmed = String(linkNote.text || "").trim();
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  };
+
+  const addDeviceToPurchasing = async (item) => {
+    if (!activeOffer || !item) return;
+    const payload = {
+      status: "open",
+      done: false,
+      customer: String(activeOffer.customer || "").trim(),
+      title: String(getDeviceProduct(item) || item.product || item.title || "Material").trim(),
+      sourceUrl: getReferenceLinkFromNotes(item),
+      quantity:
+        item.quantity === null || typeof item.quantity === "undefined"
+          ? ""
+          : String(item.quantity),
+      purchasePrice:
+        item.calcBase === null || typeof item.calcBase === "undefined" || item.calcBase === ""
+          ? ""
+          : String(item.calcBase),
+      salePrice:
+        item.price === null || typeof item.price === "undefined" || item.price === ""
+          ? ""
+          : String(item.price)
+    };
+    if (!payload.title) {
+      setToast("Material ohne Titel kann nicht übernommen werden.");
+      return;
+    }
+    try {
+      const res = await fetch("/api/purchasing_items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error("purchase_create_failed");
+      setToast("Material in Einkaufsliste übernommen.");
+    } catch (error) {
+      setToast("Übernahme in Einkaufsliste fehlgeschlagen.");
+    }
   };
 
   const importFromReferenceLink = async (item, note) => {
@@ -6456,6 +6547,7 @@ export default function OffersView() {
                               onNotesChange={(notes) =>
                                 updateLineItemNotes(activeOffer.id, item.id, () => notes)
                               }
+                              onOpenNoteLink={openNoteLink}
                             />
                           ))}
                           {!activeOffer.lineItems.length ? (
@@ -6489,6 +6581,8 @@ export default function OffersView() {
                               onNotesChange={(notes) =>
                                 updateDeviceItemNotes(activeOffer.id, item.id, () => notes)
                               }
+                              onOpenNoteLink={openNoteLink}
+                              onAddToPurchasing={addDeviceToPurchasing}
                             />
                           ))}
                           {!activeOffer.deviceItems.length ? (

@@ -26,6 +26,7 @@ import OffersView from "./offers/OffersView";
 import StatsView from "./stats/StatsView";
 import PurchasingView from "./purchasing/PurchasingView";
 import KnowledgeBaseView from "./knowledge/KnowledgeBaseView";
+import IncomingCallQuickTaskPopup from "./telephony/IncomingCallQuickTaskPopup";
 
 export default function App() {
   const [activeView, setActiveView] = useState("dayplan");
@@ -45,6 +46,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
+      <IncomingCallQuickTaskPopup />
       <div className="flex min-h-screen">
         <aside
           className="bg-white border-r border-sand-200 p-4 flex flex-col gap-6"

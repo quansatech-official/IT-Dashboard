@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
   ExternalLink,
   PackageCheck,
   Plus,
   ShoppingCart,
-  Trash2
+  Trash2,
+  Truck
 } from "lucide-react";
+
 const API = "/api";
 const CUSTOMER_DATALIST_ID = "purchasing-customer-options";
 
@@ -32,10 +35,16 @@ const parsePrice = (value) => {
 };
 
 const normalizeUrl = (value) => {
-  const trimmed = value.trim();
+  const trimmed = String(value || "").trim();
   if (!trimmed) return "";
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   return `https://${trimmed}`;
+};
+
+const normalizeStatus = (item) => {
+  const status = String(item?.status || "").trim().toLowerCase();
+  if (status === "open" || status === "ordered" || status === "received") return status;
+  return item?.done ? "received" : "open";
 };
 
 const fetchJson = async (url, options) => {
@@ -77,7 +86,7 @@ export default function PurchasingView() {
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [customerOptions, setCustomerOptions] = useState([]);
   const [editingCell, setEditingCell] = useState(null);
-  const [showCompleted, setShowCompleted] = useState(false);
+  const [showReceived, setShowReceived] = useState(false);
   const [customerFilter, setCustomerFilter] = useState("");
   const [queryFilter, setQueryFilter] = useState("");
   const saveTimersRef = useRef({});
@@ -113,6 +122,8 @@ export default function PurchasingView() {
   const totals = useMemo(() => {
     return items.reduce(
       (sum, item) => {
+        const status = normalizeStatus(item);
+        if (status === "received") return sum;
         return {
           purchase: sum.purchase + parsePrice(item.purchasePrice),
           sale: sum.sale + parsePrice(item.salePrice)
@@ -122,12 +133,13 @@ export default function PurchasingView() {
     );
   }, [items]);
 
-  const visibleItems = useMemo(() => {
+  const filteredItems = useMemo(() => {
     const customerNeedle = customerFilter.trim().toLowerCase();
     const queryNeedle = queryFilter.trim().toLowerCase();
 
     return items.filter((item) => {
-      if (!showCompleted && item.done) return false;
+      const status = normalizeStatus(item);
+      if (!showReceived && status === "received") return false;
 
       if (customerNeedle) {
         const customer = String(item.customer || "").toLowerCase();
@@ -143,7 +155,34 @@ export default function PurchasingView() {
 
       return true;
     });
-  }, [items, showCompleted, customerFilter, queryFilter]);
+  }, [items, showReceived, customerFilter, queryFilter]);
+
+  const openGrouped = useMemo(() => {
+    const groups = new Map();
+    filteredItems.forEach((item) => {
+      if (normalizeStatus(item) !== "open") return;
+      const customer = String(item.customer || "").trim();
+      const key = customer ? customer.toLowerCase() : "__general__";
+      const label = customer || "Allgemein / Unzugeordnet";
+      if (!groups.has(key)) groups.set(key, { key, label, items: [] });
+      groups.get(key).items.push(item);
+    });
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.key === "__general__") return 1;
+      if (b.key === "__general__") return -1;
+      return a.label.localeCompare(b.label, "de");
+    });
+  }, [filteredItems]);
+
+  const orderedItems = useMemo(
+    () => filteredItems.filter((item) => normalizeStatus(item) === "ordered"),
+    [filteredItems]
+  );
+
+  const receivedItems = useMemo(
+    () => filteredItems.filter((item) => normalizeStatus(item) === "received"),
+    [filteredItems]
+  );
 
   const scheduleUpdate = (id, patch) => {
     pendingPatchesRef.current[id] = {
@@ -163,7 +202,7 @@ export default function PurchasingView() {
       } catch (error) {
         console.error("Purchasing update failed", error);
       }
-    }, 350);
+    }, 300);
   };
 
   const addItem = async () => {
@@ -172,6 +211,7 @@ export default function PurchasingView() {
 
     const payload = {
       done: false,
+      status: "open",
       customer: draft.customer.trim(),
       title,
       sourceUrl: normalizeUrl(draft.sourceUrl),
@@ -189,10 +229,19 @@ export default function PurchasingView() {
   };
 
   const updateItem = (id, key, value) => {
+    const patch = key === "status" ? { [key]: value, done: value === "received" } : { [key]: value };
     setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, [key]: value, updatedAt: Date.now() } : item))
+      prev.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              ...patch,
+              updatedAt: Date.now()
+            }
+          : item
+      )
     );
-    scheduleUpdate(id, { [key]: value });
+    scheduleUpdate(id, patch);
   };
 
   const removeItem = async (id) => {
@@ -225,6 +274,221 @@ export default function PurchasingView() {
     setEditingCell(null);
   };
 
+  const renderRows = (rows, status) =>
+    rows.map((item) => {
+      const purchase = parsePrice(item.purchasePrice);
+      const sale = parsePrice(item.salePrice);
+      const margin = sale - purchase;
+      return (
+        <tr key={item.id} className="border-b border-sand-200 align-top">
+          <td className="px-3 py-1.5">
+            <div className="flex items-center gap-1.5">
+              {status === "open" ? (
+                <button
+                  type="button"
+                  onClick={() => updateItem(item.id, "status", "ordered")}
+                  className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
+                  title="Als bestellt markieren"
+                >
+                  <Truck size={11} /> Bestellt
+                </button>
+              ) : null}
+              {status === "ordered" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => updateItem(item.id, "status", "received")}
+                    className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
+                    title="Lieferung erhalten"
+                  >
+                    <Check size={11} /> Erhalten
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateItem(item.id, "status", "open")}
+                    className="inline-flex items-center rounded-md border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                    title="Zurück auf offen"
+                  >
+                    Zurück
+                  </button>
+                </>
+              ) : null}
+              {status === "received" ? (
+                <button
+                  type="button"
+                  onClick={() => updateItem(item.id, "status", "open")}
+                  className="inline-flex items-center rounded-md border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                  title="Wieder öffnen"
+                >
+                  Wieder offen
+                </button>
+              ) : null}
+            </div>
+          </td>
+          <td className="px-3 py-1.5">
+            <textarea
+              value={item.title || ""}
+              onChange={(event) => updateItem(item.id, "title", event.target.value)}
+              readOnly={!isEditing(item.id, "title")}
+              onDoubleClick={(event) => handleCellDoubleClick(item.id, "title", event)}
+              onBlur={() => handleCellBlur(item.id, "title")}
+              rows={2}
+              className={`w-full resize-none rounded-md border-0 bg-transparent px-1 py-1 text-sm leading-tight focus:outline-none ${
+                status === "received" ? "line-through text-sand-500" : ""
+              }`}
+              title="Doppelklick zum Bearbeiten"
+            />
+          </td>
+          <td className="px-3 py-1.5">
+            <div className="flex items-center gap-2">
+              <input
+                value={item.sourceUrl || ""}
+                onChange={(event) => updateItem(item.id, "sourceUrl", event.target.value)}
+                readOnly={!isEditing(item.id, "sourceUrl")}
+                onDoubleClick={(event) => handleCellDoubleClick(item.id, "sourceUrl", event)}
+                onBlur={() => handleCellBlur(item.id, "sourceUrl")}
+                className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
+                placeholder="https://..."
+                title="Doppelklick zum Bearbeiten"
+              />
+              {item.sourceUrl ? (
+                <a
+                  href={normalizeUrl(item.sourceUrl)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center rounded-full border border-sand-300 p-1.5 text-xs hover:bg-sand-100"
+                  title="Link öffnen"
+                  aria-label="Link öffnen"
+                >
+                  <ExternalLink size={12} />
+                </a>
+              ) : null}
+            </div>
+          </td>
+          <td className="px-3 py-1.5">
+            <input
+              value={item.customer || ""}
+              onChange={(event) => updateItem(item.id, "customer", event.target.value)}
+              readOnly={!isEditing(item.id, "customer")}
+              onDoubleClick={(event) => handleCellDoubleClick(item.id, "customer", event)}
+              onBlur={() => handleCellBlur(item.id, "customer")}
+              list={CUSTOMER_DATALIST_ID}
+              placeholder="Kunde"
+              className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
+              title="Doppelklick zum Bearbeiten"
+            />
+          </td>
+          <td className="px-2 py-1.5">
+            <input
+              value={item.quantity || ""}
+              onChange={(event) => updateItem(item.id, "quantity", event.target.value)}
+              readOnly={!isEditing(item.id, "quantity")}
+              onDoubleClick={(event) => handleCellDoubleClick(item.id, "quantity", event)}
+              onBlur={() => handleCellBlur(item.id, "quantity")}
+              className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
+              placeholder="1"
+              title="Doppelklick zum Bearbeiten"
+            />
+          </td>
+          <td className="px-2 py-1.5">
+            <div className="relative">
+              <input
+                value={item.purchasePrice || ""}
+                onChange={(event) => updateItem(item.id, "purchasePrice", event.target.value)}
+                readOnly={!isEditing(item.id, "purchasePrice")}
+                onDoubleClick={(event) => handleCellDoubleClick(item.id, "purchasePrice", event)}
+                onBlur={() => handleCellBlur(item.id, "purchasePrice")}
+                className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 pr-5 text-sm focus:outline-none"
+                placeholder="0,00"
+                title="Doppelklick zum Bearbeiten"
+              />
+              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-sand-500">
+                €
+              </span>
+            </div>
+          </td>
+          <td className="px-2 py-1.5">
+            <div className="relative">
+              <input
+                value={item.salePrice || ""}
+                onChange={(event) => updateItem(item.id, "salePrice", event.target.value)}
+                readOnly={!isEditing(item.id, "salePrice")}
+                onDoubleClick={(event) => handleCellDoubleClick(item.id, "salePrice", event)}
+                onBlur={() => handleCellBlur(item.id, "salePrice")}
+                className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 pr-5 text-sm focus:outline-none"
+                placeholder="0,00"
+                title="Doppelklick zum Bearbeiten"
+              />
+              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-sand-500">
+                €
+              </span>
+            </div>
+          </td>
+          <td
+            className={`px-3 py-1.5 text-sm font-medium ${
+              margin >= 0 ? "text-emerald-600" : "text-rose-600"
+            }`}
+          >
+            {toCurrency(margin)}
+          </td>
+          <td className="px-3 py-1.5">
+            <button
+              type="button"
+              onClick={() => removeItem(item.id)}
+              className="inline-flex items-center justify-center rounded-lg border border-sand-200 p-2 text-sand-500 hover:bg-sand-100"
+              title="Eintrag löschen"
+              aria-label="Eintrag löschen"
+            >
+              <Trash2 size={14} />
+            </button>
+          </td>
+        </tr>
+      );
+    });
+
+  const renderSectionTable = (title, subtitle, rows, status, icon) => (
+    <section className="rounded-2xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+      <div className="flex items-center justify-between border-b border-sand-200 px-4 py-3">
+        <div className="flex items-center gap-2 text-sand-700">
+          {icon}
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">{title}</p>
+            <p className="text-xs text-sand-500">{subtitle}</p>
+          </div>
+        </div>
+        <p className="text-xs text-sand-500">{rows.length} Einträge</p>
+      </div>
+      <div className="overflow-auto">
+        <table className="w-full min-w-[1200px]">
+          <thead>
+            <tr className="border-b border-sand-200 text-left text-xs uppercase tracking-[0.2em] text-sand-500">
+              <th className="px-3 py-2 w-44">Status</th>
+              <th className="px-3 py-2">Bezeichnung</th>
+              <th className="px-3 py-2">Bezugsquelle</th>
+              <th className="px-3 py-2">Kunde</th>
+              <th className="px-2 py-2 w-24">Menge</th>
+              <th className="px-2 py-2 w-24">EK</th>
+              <th className="px-2 py-2 w-24">VK</th>
+              <th className="px-3 py-2 w-24">Marge</th>
+              <th className="px-3 py-2 w-16" />
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? (
+              renderRows(rows, status)
+            ) : (
+              <tr>
+                <td colSpan={9} className="px-4 py-8 text-center text-sm text-sand-500">
+                  Keine Einträge vorhanden.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
@@ -244,24 +508,19 @@ export default function PurchasingView() {
           <div className="flex items-center justify-between border-b border-sand-200 px-4 py-3">
             <div className="flex items-center gap-2 text-sand-700">
               <PackageCheck size={16} />
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Bestellliste</p>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Neuer Einkauf</p>
             </div>
-            <div className="flex items-center gap-4">
-              <label className="inline-flex items-center gap-2 text-xs text-sand-600 select-none">
-                <input
-                  type="checkbox"
-                  checked={showCompleted}
-                  onChange={(event) => setShowCompleted(event.target.checked)}
-                  className="h-4 w-4"
-                />
-                Erledigte einblenden
-              </label>
-              <p className="text-xs text-sand-500">
-                {visibleItems.length}
-                {showCompleted ? "" : ` / ${items.length}`} Einträge
-              </p>
-            </div>
+            <label className="inline-flex items-center gap-2 text-xs text-sand-600 select-none">
+              <input
+                type="checkbox"
+                checked={showReceived}
+                onChange={(event) => setShowReceived(event.target.checked)}
+                className="h-4 w-4"
+              />
+              Erhaltene einblenden
+            </label>
           </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 border-b border-sand-200 px-4 py-2.5">
             <input
               value={customerFilter}
@@ -289,10 +548,10 @@ export default function PurchasingView() {
           </div>
 
           <div className="overflow-auto">
-            <table className="w-full min-w-[1160px]">
+            <table className="w-full min-w-[1200px]">
               <thead>
                 <tr className="border-b border-sand-200 text-left text-xs uppercase tracking-[0.2em] text-sand-500">
-                  <th className="px-3 py-2 w-12">OK</th>
+                  <th className="px-3 py-2 w-44">Status</th>
                   <th className="px-3 py-2">Bezeichnung</th>
                   <th className="px-3 py-2">Bezugsquelle</th>
                   <th className="px-3 py-2">Kunde</th>
@@ -305,11 +564,7 @@ export default function PurchasingView() {
               </thead>
               <tbody>
                 <tr className="border-b border-sand-200 bg-sand-50 align-top">
-                  <td className="px-3 py-1.5">
-                    <div className="inline-flex h-4 w-4 items-center justify-center rounded border border-sand-300 text-[10px] text-sand-500">
-                      +
-                    </div>
-                  </td>
+                  <td className="px-3 py-1.5 text-xs text-sand-500">Offen</td>
                   <td className="px-3 py-1.5">
                     <textarea
                       value={draft.title}
@@ -322,9 +577,7 @@ export default function PurchasingView() {
                   <td className="px-3 py-1.5">
                     <input
                       value={draft.sourceUrl}
-                      onChange={(event) =>
-                        setDraft((prev) => ({ ...prev, sourceUrl: event.target.value }))
-                      }
+                      onChange={(event) => setDraft((prev) => ({ ...prev, sourceUrl: event.target.value }))}
                       placeholder="https://..."
                       className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
                     />
@@ -332,9 +585,7 @@ export default function PurchasingView() {
                   <td className="px-3 py-1.5">
                     <input
                       value={draft.customer}
-                      onChange={(event) =>
-                        setDraft((prev) => ({ ...prev, customer: event.target.value }))
-                      }
+                      onChange={(event) => setDraft((prev) => ({ ...prev, customer: event.target.value }))}
                       list={CUSTOMER_DATALIST_ID}
                       placeholder="Kunde (frei oder Suche)"
                       className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
@@ -343,9 +594,7 @@ export default function PurchasingView() {
                   <td className="px-2 py-1.5">
                     <input
                       value={draft.quantity}
-                      onChange={(event) =>
-                        setDraft((prev) => ({ ...prev, quantity: event.target.value }))
-                      }
+                      onChange={(event) => setDraft((prev) => ({ ...prev, quantity: event.target.value }))}
                       placeholder="1"
                       className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
                     />
@@ -354,15 +603,11 @@ export default function PurchasingView() {
                     <div className="relative">
                       <input
                         value={draft.purchasePrice}
-                        onChange={(event) =>
-                          setDraft((prev) => ({ ...prev, purchasePrice: event.target.value }))
-                        }
+                        onChange={(event) => setDraft((prev) => ({ ...prev, purchasePrice: event.target.value }))}
                         placeholder="0,00"
                         className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 pr-5 text-sm focus:outline-none"
                       />
-                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-sand-500">
-                        €
-                      </span>
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-sand-500">€</span>
                     </div>
                   </td>
                   <td className="px-2 py-1.5">
@@ -373,9 +618,7 @@ export default function PurchasingView() {
                         placeholder="0,00"
                         className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 pr-5 text-sm focus:outline-none"
                       />
-                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-sand-500">
-                        €
-                      </span>
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-sand-500">€</span>
                     </div>
                   </td>
                   <td className="px-3 py-1.5 text-sm text-sand-500">Neu</td>
@@ -391,162 +634,6 @@ export default function PurchasingView() {
                     </button>
                   </td>
                 </tr>
-                {visibleItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-sm text-sand-500">
-                      {items.length === 0
-                        ? "Noch keine offenen Bestellungen."
-                        : "Keine offenen Bestellungen. Aktiviere 'Erledigte einblenden'."}
-                    </td>
-                  </tr>
-                ) : (
-                  visibleItems.map((item) => {
-                    const purchase = parsePrice(item.purchasePrice);
-                    const sale = parsePrice(item.salePrice);
-                    const margin = sale - purchase;
-                    return (
-                      <tr key={item.id} className="border-b border-sand-200 align-top">
-                        <td className="px-3 py-1.5">
-                          <input
-                            type="checkbox"
-                            checked={Boolean(item.done)}
-                            onChange={(event) => updateItem(item.id, "done", event.target.checked)}
-                            className="h-4 w-4"
-                          />
-                        </td>
-                        <td className="px-3 py-1.5">
-                          <textarea
-                            value={item.title || ""}
-                            onChange={(event) => updateItem(item.id, "title", event.target.value)}
-                            readOnly={!isEditing(item.id, "title")}
-                            onDoubleClick={(event) => handleCellDoubleClick(item.id, "title", event)}
-                            onBlur={() => handleCellBlur(item.id, "title")}
-                            rows={2}
-                            className={`w-full resize-none rounded-md border-0 bg-transparent px-1 py-1 text-sm leading-tight focus:outline-none ${
-                              item.done ? "line-through text-sand-500" : ""
-                            }`}
-                            title="Doppelklick zum Bearbeiten"
-                          />
-                        </td>
-                        <td className="px-3 py-1.5">
-                          <div className="flex items-center gap-2">
-                            <div className="flex items-center gap-2">
-                              <input
-                                value={item.sourceUrl || ""}
-                                onChange={(event) => updateItem(item.id, "sourceUrl", event.target.value)}
-                                readOnly={!isEditing(item.id, "sourceUrl")}
-                                onDoubleClick={(event) =>
-                                  handleCellDoubleClick(item.id, "sourceUrl", event)
-                                }
-                                onBlur={() => handleCellBlur(item.id, "sourceUrl")}
-                                className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
-                                placeholder="https://..."
-                                title="Doppelklick zum Bearbeiten"
-                              />
-                              {item.sourceUrl ? (
-                                <a
-                                  href={normalizeUrl(item.sourceUrl)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="inline-flex items-center justify-center whitespace-nowrap rounded-full border border-sand-300 p-1.5 text-xs hover:bg-sand-100"
-                                  title="Link öffnen"
-                                  aria-label="Link öffnen"
-                                >
-                                  <ExternalLink size={12} />
-                                </a>
-                              ) : null}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-3 py-1.5">
-                          <input
-                            value={item.customer || ""}
-                            onChange={(event) => updateItem(item.id, "customer", event.target.value)}
-                            readOnly={!isEditing(item.id, "customer")}
-                            onDoubleClick={(event) => handleCellDoubleClick(item.id, "customer", event)}
-                            onBlur={() => handleCellBlur(item.id, "customer")}
-                            list={CUSTOMER_DATALIST_ID}
-                            placeholder="Kunde"
-                            className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
-                            title="Doppelklick zum Bearbeiten"
-                          />
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <input
-                            value={item.quantity || ""}
-                            onChange={(event) => updateItem(item.id, "quantity", event.target.value)}
-                            readOnly={!isEditing(item.id, "quantity")}
-                            onDoubleClick={(event) =>
-                              handleCellDoubleClick(item.id, "quantity", event)
-                            }
-                            onBlur={() => handleCellBlur(item.id, "quantity")}
-                            className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
-                            placeholder="1"
-                            title="Doppelklick zum Bearbeiten"
-                          />
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <div className="relative">
-                            <input
-                              value={item.purchasePrice || ""}
-                              onChange={(event) =>
-                                updateItem(item.id, "purchasePrice", event.target.value)
-                              }
-                              readOnly={!isEditing(item.id, "purchasePrice")}
-                              onDoubleClick={(event) =>
-                                handleCellDoubleClick(item.id, "purchasePrice", event)
-                              }
-                              onBlur={() => handleCellBlur(item.id, "purchasePrice")}
-                              className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 pr-5 text-sm focus:outline-none"
-                              placeholder="0,00"
-                              title="Doppelklick zum Bearbeiten"
-                            />
-                            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-sand-500">
-                              €
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <div className="relative">
-                            <input
-                              value={item.salePrice || ""}
-                              onChange={(event) => updateItem(item.id, "salePrice", event.target.value)}
-                              readOnly={!isEditing(item.id, "salePrice")}
-                              onDoubleClick={(event) =>
-                                handleCellDoubleClick(item.id, "salePrice", event)
-                              }
-                              onBlur={() => handleCellBlur(item.id, "salePrice")}
-                              className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 pr-5 text-sm focus:outline-none"
-                              placeholder="0,00"
-                              title="Doppelklick zum Bearbeiten"
-                            />
-                            <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-sand-500">
-                              €
-                            </span>
-                          </div>
-                        </td>
-                        <td
-                          className={`px-3 py-1.5 text-sm font-medium ${
-                            margin >= 0 ? "text-emerald-600" : "text-rose-600"
-                          }`}
-                        >
-                          {toCurrency(margin)}
-                        </td>
-                        <td className="px-3 py-1.5">
-                          <button
-                            type="button"
-                            onClick={() => removeItem(item.id)}
-                            className="inline-flex items-center justify-center rounded-lg border border-sand-200 p-2 text-sand-500 hover:bg-sand-100"
-                            title="Eintrag löschen"
-                            aria-label="Eintrag löschen"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
               </tbody>
             </table>
             <datalist id={CUSTOMER_DATALIST_ID}>
@@ -558,21 +645,55 @@ export default function PurchasingView() {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-sand-200 px-4 py-3 text-sm">
             <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
-              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Summe EK</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Offen EK</p>
               <p className="font-semibold text-sand-900">{toCurrency(totals.purchase)}</p>
             </div>
             <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
-              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Summe VK</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Offen VK</p>
               <p className="font-semibold text-sand-900">{toCurrency(totals.sale)}</p>
             </div>
             <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
-              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Gesamtmarge</p>
+              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Offene Marge</p>
               <p className={`font-semibold ${totals.sale - totals.purchase >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
                 {toCurrency(totals.sale - totals.purchase)}
               </p>
             </div>
           </div>
         </section>
+
+        {openGrouped.length ? (
+          openGrouped.map((group) =>
+            renderSectionTable(
+              "Offene Einkäufe",
+              group.label,
+              group.items,
+              "open",
+              <ShoppingCart size={16} />
+            )
+          )
+        ) : (
+          <section className="rounded-2xl border border-sand-200 bg-white px-4 py-8 text-center text-sm text-sand-500">
+            Keine offenen Einkäufe.
+          </section>
+        )}
+
+        {renderSectionTable(
+          "Container",
+          "Bestellt",
+          orderedItems,
+          "ordered",
+          <Truck size={16} />
+        )}
+
+        {showReceived
+          ? renderSectionTable(
+              "Container",
+              "Erhalten",
+              receivedItems,
+              "received",
+              <Check size={16} />
+            )
+          : null}
       </main>
     </div>
   );
