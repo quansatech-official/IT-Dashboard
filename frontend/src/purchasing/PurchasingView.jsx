@@ -447,7 +447,7 @@ export default function PurchasingView() {
         <p className="text-xs text-sand-500">{rows.length} Einträge</p>
       </div>
       <div className="overflow-auto">
-        <table className="w-full min-w-[1200px]">
+        <table className="w-full min-w-[1360px]">
           <thead>
             <tr className="border-b border-sand-200 text-left text-xs uppercase tracking-[0.2em] text-sand-500">
               <th className="px-3 py-2 w-44">Status</th>
@@ -480,7 +480,7 @@ export default function PurchasingView() {
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-3">
+        <div className="mx-auto w-full max-w-[1880px] px-4 py-4 md:px-6 flex items-center gap-3">
           <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
             <ShoppingCart size={18} />
           </div>
@@ -491,7 +491,7 @@ export default function PurchasingView() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8 space-y-5">
+      <main className="mx-auto w-full max-w-[1880px] px-4 py-8 md:px-6 space-y-5">
         <section className="rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
           <div className="flex items-center justify-between border-b border-sand-200 px-4 py-3">
             <div className="flex items-center gap-2 text-sand-700">
@@ -536,7 +536,7 @@ export default function PurchasingView() {
           </div>
 
           <div className="overflow-auto">
-            <table className="w-full min-w-[1200px]">
+            <table className="w-full min-w-[1360px]">
               <thead>
                 <tr className="border-b border-sand-200 text-left text-xs uppercase tracking-[0.2em] text-sand-500">
                   <th className="px-3 py-2 w-44">Status</th>
