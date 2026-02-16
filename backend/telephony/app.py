@@ -1,10 +1,14 @@
 import json
 import os
 import time
+import asyncio
+from queue import Empty, Queue
+from threading import Lock
 from typing import Dict, List, Optional
 from urllib.parse import quote
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
@@ -117,6 +121,8 @@ _reverse_cache: Dict[str, Dict[str, Optional[str]]] = {}
 _reverse_cache_ttl = 60 * 60 * 24
 _customer_mapping_cache: Dict[str, Dict[str, str] | float] = {"ts": 0.0, "mapping": {}}
 _customer_mapping_ttl = 60 * 5
+_call_event_subscribers: set[Queue] = set()
+_call_event_lock = Lock()
 
 
 def _load_customer_mapping() -> Dict[str, str]:
@@ -253,6 +259,22 @@ def _serialize_settings(settings: TelephonySettings) -> Dict:
     }
 
 
+def _broadcast_call_event(call: TelephonyCall) -> None:
+    payload = _serialize_call(call, include_raw=False)
+    with _call_event_lock:
+        subscribers = list(_call_event_subscribers)
+    for subscriber in subscribers:
+        try:
+            if subscriber.full():
+                try:
+                    subscriber.get_nowait()
+                except Empty:
+                    pass
+            subscriber.put_nowait(payload)
+        except Exception:
+            continue
+
+
 def _build_client(session) -> NfonCtiClient:
     settings = _get_settings(session)
     return NfonCtiClient(
@@ -286,7 +308,7 @@ class CallbackResolvedRequest(BaseModel):
 
 @app.on_event("startup")
 def _startup() -> None:
-    start_stream_listener(SessionLocal)
+    start_stream_listener(SessionLocal, on_call=_broadcast_call_event)
 
 
 @app.get("/telephony/calls")
@@ -337,7 +359,47 @@ def resolve_callback(call_uuid: str, payload: CallbackResolvedRequest) -> Dict:
         call.callback_resolved = bool(payload.resolved)
         session.commit()
         session.refresh(call)
+        _broadcast_call_event(call)
         return _serialize_call(call)
+
+
+@app.get("/telephony/events")
+@app.get("/api/telephony/events")
+async def stream_call_events(request: Request):
+    subscriber: Queue = Queue(maxsize=250)
+    with _call_event_lock:
+        _call_event_subscribers.add(subscriber)
+
+    async def event_stream():
+        last_ping = time.time()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                drained = False
+                try:
+                    while True:
+                        payload = subscriber.get_nowait()
+                        data = json.dumps(payload, ensure_ascii=False)
+                        yield f"event: call\ndata: {data}\n\n"
+                        drained = True
+                except Empty:
+                    pass
+                now = time.time()
+                if not drained and now - last_ping >= 15:
+                    last_ping = now
+                    yield "event: ping\ndata: {}\n\n"
+                await asyncio.sleep(0.2)
+        finally:
+            with _call_event_lock:
+                _call_event_subscribers.discard(subscriber)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
 @app.get("/telephony/stats")

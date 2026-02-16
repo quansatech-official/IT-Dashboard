@@ -28,6 +28,7 @@ export default function IncomingCallQuickTaskPopup() {
   });
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
+  const [liveMode, setLiveMode] = useState("connecting");
   const [dismissedCallUuid, setDismissedCallUuid] = useState("");
   const [position, setPosition] = useState(getDefaultPosition);
 
@@ -132,12 +133,39 @@ export default function IncomingCallQuickTaskPopup() {
 
     loadCalls();
     loadDirectoryData();
-
-    const callsInterval = setInterval(loadCalls, 1500);
+    let source = null;
+    if (typeof window !== "undefined" && typeof window.EventSource !== "undefined") {
+      source = new EventSource("/api/telephony/events");
+      source.addEventListener("open", () => {
+        if (!active) return;
+        setLiveMode("live");
+      });
+      source.addEventListener("call", (event) => {
+        if (!active) return;
+        try {
+          const payload = JSON.parse(event.data || "{}");
+          if (!payload?.uuid) return;
+          setCalls((prev) => {
+            const without = prev.filter((item) => item.uuid !== payload.uuid);
+            return [payload, ...without].slice(0, 120);
+          });
+        } catch (error) {
+          // ignore malformed stream events
+        }
+      });
+      source.addEventListener("error", () => {
+        if (!active) return;
+        setLiveMode("reconnecting");
+      });
+    } else {
+      setLiveMode("polling");
+    }
+    const callsInterval = setInterval(loadCalls, 20000);
     const directoryInterval = setInterval(loadDirectoryData, 60000);
 
     return () => {
       active = false;
+      source?.close();
       clearInterval(callsInterval);
       clearInterval(directoryInterval);
     };
@@ -323,7 +351,12 @@ export default function IncomingCallQuickTaskPopup() {
 
       <div className="mt-2 flex items-center justify-between gap-2">
         <p className="text-xs text-sand-700">
-          {status || "Bleibt nach Gespräch offen, sobald Text eingetragen ist."}
+          {status ||
+            (liveMode === "live"
+              ? "Live-Erkennung aktiv."
+              : liveMode === "polling"
+                ? "Polling-Fallback aktiv."
+                : "Verbindung wird aufgebaut...")}
         </p>
         <button
           type="button"

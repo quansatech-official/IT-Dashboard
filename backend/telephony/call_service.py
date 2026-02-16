@@ -3,7 +3,7 @@ import os
 import threading
 import time
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy.orm import Session
 
@@ -251,7 +251,11 @@ def process_event(
     return call
 
 
-def start_stream_listener(session_factory, api_client: Optional[NfonCtiClient] = None) -> None:
+def start_stream_listener(
+    session_factory,
+    api_client: Optional[NfonCtiClient] = None,
+    on_call: Optional[Callable[[TelephonyCall], None]] = None,
+) -> None:
     env_enabled = os.environ.get("TELEPHONY_STREAM_ENABLED", "").lower() in {"1", "true", "yes"}
     settings_enabled = False
     if not env_enabled:
@@ -284,7 +288,9 @@ def start_stream_listener(session_factory, api_client: Optional[NfonCtiClient] =
                     stream_client = client
                 for event in stream_client.stream_calls():
                     with session_factory() as session:
-                        process_event(session, event, crm_mapping)
+                        call = process_event(session, event, crm_mapping)
+                        if on_call:
+                            on_call(call)
             except Exception:
                 time.sleep(5)
 
