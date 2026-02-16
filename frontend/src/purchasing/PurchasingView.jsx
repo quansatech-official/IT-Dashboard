@@ -157,22 +157,10 @@ export default function PurchasingView() {
     });
   }, [items, showReceived, customerFilter, queryFilter]);
 
-  const openGrouped = useMemo(() => {
-    const groups = new Map();
-    filteredItems.forEach((item) => {
-      if (normalizeStatus(item) !== "open") return;
-      const customer = String(item.customer || "").trim();
-      const key = customer ? customer.toLowerCase() : "__general__";
-      const label = customer || "Allgemein / Unzugeordnet";
-      if (!groups.has(key)) groups.set(key, { key, label, items: [] });
-      groups.get(key).items.push(item);
-    });
-    return Array.from(groups.values()).sort((a, b) => {
-      if (a.key === "__general__") return 1;
-      if (b.key === "__general__") return -1;
-      return a.label.localeCompare(b.label, "de");
-    });
-  }, [filteredItems]);
+  const openItems = useMemo(
+    () => filteredItems.filter((item) => normalizeStatus(item) === "open"),
+    [filteredItems]
+  );
 
   const orderedItems = useMemo(
     () => filteredItems.filter((item) => normalizeStatus(item) === "ordered"),
@@ -661,20 +649,12 @@ export default function PurchasingView() {
           </div>
         </section>
 
-        {openGrouped.length ? (
-          openGrouped.map((group) =>
-            renderSectionTable(
-              "Offene Einkäufe",
-              group.label,
-              group.items,
-              "open",
-              <ShoppingCart size={16} />
-            )
-          )
-        ) : (
-          <section className="rounded-2xl border border-sand-200 bg-white px-4 py-8 text-center text-sm text-sand-500">
-            Keine offenen Einkäufe.
-          </section>
+        {renderSectionTable(
+          "Gesamtliste",
+          "Offene Einkäufe",
+          openItems,
+          "open",
+          <ShoppingCart size={16} />
         )}
 
         {renderSectionTable(
