@@ -133,7 +133,7 @@ export default function IncomingCallQuickTaskPopup() {
     loadCalls();
     loadDirectoryData();
 
-    const callsInterval = setInterval(loadCalls, 10000);
+    const callsInterval = setInterval(loadCalls, 1500);
     const directoryInterval = setInterval(loadDirectoryData, 60000);
 
     return () => {
@@ -221,6 +221,12 @@ export default function IncomingCallQuickTaskPopup() {
         })
       });
       if (!response.ok) throw new Error("create_failed");
+      const createdTask = await response.json().catch(() => null);
+      window.dispatchEvent(
+        new CustomEvent("qt:daytask-created", {
+          detail: { task: createdTask || null, source: "incoming-call-popup" }
+        })
+      );
 
       setStatus("Aufgabe erstellt.");
       setTitle("");

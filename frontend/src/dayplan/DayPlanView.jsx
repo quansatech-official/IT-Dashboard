@@ -158,6 +158,16 @@ export default function DayPlanView() {
     });
   }, []);
 
+  useEffect(() => {
+    const refreshTasks = () => {
+      api.list().then((data) => {
+        setTasks(Array.isArray(data) ? data : []);
+      });
+    };
+    window.addEventListener("qt:daytask-created", refreshTasks);
+    return () => window.removeEventListener("qt:daytask-created", refreshTasks);
+  }, []);
+
   const refreshCustomers = () =>
     api.customers().then((data) => {
       setCustomers(Array.isArray(data) ? data : []);
