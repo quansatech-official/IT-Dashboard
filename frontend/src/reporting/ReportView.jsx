@@ -876,7 +876,7 @@ export default function ReportView() {
         title: THIRD_PARTY_BLOCK_TITLE,
         priority: "Hinweis",
         custom_text:
-          "Unsere monatliche Systemauswertung hat unter anderem folgende Schwachstellen gefunden. Wir empfehlen, diese so bald wie möglich zu beheben.",
+          "Die Schwachstellen der angezeigten Programme werden bereits aktiv ausgenutzt.",
         custom_html: "",
         custom_data: { includeMicrosoft: false, rawItems: [], items: [] }
       });

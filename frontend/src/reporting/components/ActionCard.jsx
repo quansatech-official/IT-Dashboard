@@ -509,7 +509,7 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
             onChange={(event) => onChange({ custom_text: event.target.value })}
             rows={3}
             className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-            placeholder="Unsere monatliche Systemauswertung hat unter anderem folgende Schwachstellen gefunden. Wir empfehlen, diese so bald wie möglich zu beheben."
+            placeholder="Die Schwachstellen der angezeigten Programme werden bereits aktiv ausgenutzt."
           />
         </label>
 

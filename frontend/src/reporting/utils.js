@@ -17,8 +17,7 @@ export const renderReportHTML = (report, options = {}) => {
   const thirdPartyTop = Array.isArray(thirdPartyPayload.top) ? thirdPartyPayload.top : [];
   const thirdPartyTitle = thirdPartyPayload.title || "Sicherheitsreport";
   const thirdPartySource = thirdPartyPayload.sourceName || "";
-  const thirdPartyText =
-    "Unsere monatliche Systemauswertung hat folgende Schwachstellen gefunden. Wir empfehlen, diese so bald wie möglich zu beheben.";
+  const thirdPartyText = "Die Schwachstellen der angezeigten Programme werden bereits aktiv ausgenutzt.";
   const actionSummary = (report.actions || [])
     .map((action) => escapeHTML(action.title || ""))
     .filter(Boolean);
@@ -347,9 +346,7 @@ export const buildPlainText = (report) => {
 
   if (thirdPartyPayload && (thirdPartyTop.length || thirdPartyPayload.sourceName)) {
     lines.push(thirdPartyPayload.title || "Sicherheitsreport");
-    lines.push(
-      "Unsere monatliche Systemauswertung hat folgende Schwachstellen gefunden. Wir empfehlen, diese so bald wie möglich zu beheben."
-    );
+    lines.push("Die Schwachstellen der angezeigten Programme werden bereits aktiv ausgenutzt.");
     if (thirdPartyTop.length) {
       thirdPartyTop.forEach((entry) => {
         const name = entry.name || "Programm";
