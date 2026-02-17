@@ -61,9 +61,6 @@ export const renderReportHTML = (report, options = {}) => {
     if (action.action_type === "security_report") {
       const customText = String(action.custom_text || "").trim();
       const items = Array.isArray(action.custom_data?.items) ? action.custom_data.items : [];
-      const microsoftItems = Array.isArray(action.custom_data?.microsoftItems)
-        ? action.custom_data.microsoftItems
-        : [];
       const renderChipList = (list, title) => {
         if (!list.length) return "";
         return `<div style="margin-top: 10px;">
@@ -75,10 +72,17 @@ export const renderReportHTML = (report, options = {}) => {
               .map((entry, index) => {
                 const name = escapeHTML(entry.name || "Programm");
                 const prio = entry.priority ? escapeHTML(entry.priority) : "Priorität n/a";
+                const versionFrom = entry.versionFrom ? escapeHTML(entry.versionFrom) : "";
+                const versionTo = entry.versionTo ? escapeHTML(entry.versionTo) : "";
+                const versionLine = versionFrom || versionTo
+                  ? `<div style="font-size:11px; color:#64748b; margin-top:2px;">${
+                      versionFrom ? `von ${versionFrom}` : "von n/a"
+                    }${versionTo ? ` &rarr; ${versionTo}` : ""}</div>`
+                  : "";
                 return `<div style="display:flex; align-items:center; justify-content:space-between; border:1px solid #e2e8f0; background:#ffffff; border-radius:12px; padding:8px 12px; margin-bottom:8px; font-size:12px; color:#334155;">
                   <div style="display:flex; align-items:center; gap:10px;">
                     <span style="font-size:11px; font-weight:600; color:#94a3b8;">${index + 1}.</span>
-                    <strong>${name}</strong>
+                    <div><strong>${name}</strong>${versionLine}</div>
                   </div>
                   <span style="font-size:11px; color:#64748b;">${prio}</span>
                 </div>`;
@@ -107,12 +111,8 @@ export const renderReportHTML = (report, options = {}) => {
                   : ""
               }
               ${
-                items.length || (action.custom_data?.includeMicrosoft && microsoftItems.length)
-                  ? `${renderChipList(items, "Top 3 Updatebedarf")}${
-                      action.custom_data?.includeMicrosoft && microsoftItems.length
-                        ? renderChipList(microsoftItems, "Top 3 Microsoft")
-                        : ""
-                    }`
+                items.length
+                  ? `${renderChipList(items, "Programme mit Updatebedarf")}`
                   : `<div style="margin-top: 10px; font-size: 12px; color:#6b665f;">Keine Einträge erkannt.</div>`
               }
             </td>
@@ -376,9 +376,6 @@ export const buildPlainText = (report) => {
   report.actions.forEach((action, idx) => {
     if (action.action_type === "security_report") {
       const items = Array.isArray(action.custom_data?.items) ? action.custom_data.items : [];
-      const microsoftItems = Array.isArray(action.custom_data?.microsoftItems)
-        ? action.custom_data.microsoftItems
-        : [];
       lines.push(
         "",
         `${idx + 1}. ${action.title || "Sicherheitsreport"}`
@@ -387,16 +384,13 @@ export const buildPlainText = (report) => {
         lines.push(action.custom_text);
       }
       if (items.length) {
+        lines.push("Programme mit Updatebedarf:");
         items.forEach((item) => {
           const name = item.name || "Programm";
-          lines.push(`- ${name}`);
-        });
-      }
-      if (action.custom_data?.includeMicrosoft && microsoftItems.length) {
-        lines.push("Top 3 Microsoft:");
-        microsoftItems.forEach((item) => {
-          const name = item.name || "Programm";
-          lines.push(`- ${name}`);
+          const from = item.versionFrom ? ` (von ${item.versionFrom}` : "";
+          const to = item.versionTo ? `${from ? " -> " : " (von n/a -> "}${item.versionTo}` : "";
+          const suffix = from || to ? `${from}${to})` : "";
+          lines.push(`- ${name}${suffix}`);
         });
       }
       return;

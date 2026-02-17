@@ -1,8 +1,12 @@
+import { useState } from "react";
 import { BookmarkPlus, Trash2 } from "lucide-react";
 import { priorityStyles } from "../constants";
 
 export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog }) {
   const isSecurityReport = action?.action_type === "security_report";
+  const [uploadError, setUploadError] = useState("");
+  const [isDragOverUpload, setIsDragOverUpload] = useState(false);
+  const [programPickerState, setProgramPickerState] = useState(null);
 
   const normalizeText = (value) => String(value ?? "").trim();
   const extractVersion = (value) => {
@@ -14,10 +18,96 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
   const isMicrosoftEntry = (name) => {
     const text = String(name || "").trim().toLowerCase();
     if (!text) return false;
-    if (!text.startsWith("microsoft ")) return false;
     if (text.includes(" for microsoft ")) return false;
-    return true;
+    if (text.startsWith("microsoft ")) return true;
+
+    const knownThirdPartyVendors = [
+      "adobe",
+      "notepad++",
+      "7-zip",
+      "7zip",
+      "google",
+      "mozilla",
+      "oracle",
+      "zoom",
+      "teamviewer",
+      "vmware",
+      "citrix"
+    ];
+    if (knownThirdPartyVendors.some((vendor) => text.includes(vendor))) return false;
+
+    const microsoftProductPatterns = [
+      /\bsql\s*server\b/,
+      /\bssms\b/,
+      /\bmanagement\s*studio\b/,
+      /\bshared\s*management\s*objects\b/,
+      /\bsystem\s*clr\s*types\b/,
+      /\bdata-?tier\b/,
+      /\bt-?sql\b/,
+      /\bxevent\b/,
+      /\bdatabase\s*engine\b/,
+      /\bintegration\s*services\b/,
+      /\breporting\s*services\b/,
+      /\banalysis\s*services\b/,
+      /\bvisual\s*studio\b/,
+      /\bvisual\s*c\+\+\b/,
+      /\bvisual\s*c\+\+\s*library\b/,
+      /\bvs\s+script\s+debugging\b/,
+      /\bentity\s*framework\b/,
+      /\bclickonce\b/,
+      /\broslyn\b/,
+      /\bmsvc\b/,
+      /\basp\.?\s*net\b/,
+      /\btypescript\s*sdk\b/,
+      /\bnetstandard\b/,
+      /\buniversal\s*crt\b/,
+      /\bwinrt\b/,
+      /\bapp\s*certification\s*kit\b/,
+      /\bdesktop\s*extension\s*sdk\b/,
+      /\bmobile\s*extension\s*sdk\b/,
+      /\bteam\s*extension\s*sdk\b/,
+      /\bsoftware\s*development\s*kit\b/,
+      /\bwindows\s*sdk\b/,
+      /\bwindows\s+desktop\s+runtime\b/,
+      /\bwindows\s+desktop\s+targeting\s+pack\b/,
+      /\bwindows\s+phone\s*sdk\b/,
+      /\bwindows\s+store\s+apps\b/,
+      /\bwindows\s+iot\b/,
+      /\bwindows\s+app\b/,
+      /\bwindows\b/,
+      /\bskype\s*for\s*business\b/,
+      /\bexchange\b/,
+      /\bsharepoint\b/,
+      /\bteams\b/,
+      /\bone\s*drive\b/,
+      /\bonenote\b/,
+      /\boutlook\b/,
+      /\boffice\b/,
+      /\bword\b/,
+      /\bexcel\b/,
+      /\bpowerpoint\b/,
+      /\bvisio\b/,
+      /\bpublisher\b/,
+      /\baccess\b/,
+      /\bazure\b/,
+      /\bdefender\b/,
+      /\bintune\b/,
+      /\bactive\s*directory\b/,
+      /\bentra\b/,
+      /\bhyper-?v\b/,
+      /\bdotnet\b/,
+      /\b\.net\b/,
+      /\bedge\b/,
+      /\bremote\s*desktop\b/,
+      /\brdp\b/,
+      /\biis\b/,
+      /\bole\s*db\b.*\b(sql|analysis)\b/,
+      /\bvss\s*writer\b/
+    ];
+
+    return microsoftProductPatterns.some((pattern) => pattern.test(text));
   };
+
   const normalizePriority = (value) => {
     const raw = normalizeText(value).toLowerCase();
     if (raw.includes("critical") || raw.includes("krit")) return "critical";
@@ -133,7 +223,7 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
     });
   };
 
-  const buildSecurityPayload = (rawItems, includeMicrosoft) => {
+  const buildSecurityPayload = (rawItems, includeMicrosoft, selectedPrograms = []) => {
     const filtered = rawItems.filter((item) => item.name);
     const unique = [];
     const seen = new Set();
@@ -188,6 +278,7 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
     const thirdPartyItems = unique.filter((item) => !isMicrosoftEntry(item.name));
     const thirdPartyGrouped = grouped(thirdPartyItems);
     const microsoftGrouped = grouped(microsoftItems);
+    const combinedGrouped = new Map([...thirdPartyGrouped, ...microsoftGrouped]);
 
     const rank = (entries) =>
       [...entries.values()].sort((a, b) => {
@@ -197,14 +288,63 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
         return a.name.localeCompare(b.name);
       });
 
-    const rankedThirdParty = rank(thirdPartyGrouped);
-    const rankedMicrosoft = rank(microsoftGrouped);
+    const rankedThirdParty = rank(thirdPartyGrouped).map((item) => ({
+      ...item,
+      versionFrom: item.version || "",
+      versionTo: ""
+    }));
+    const rankedCombined = rank(combinedGrouped).map((item) => ({
+      ...item,
+      versionFrom: item.version || "",
+      versionTo: ""
+    }));
+    const rankedBase = includeMicrosoft ? rankedCombined : rankedThirdParty;
+
+    const normalizedSelectedPrograms = selectedPrograms
+      .map((entry) => {
+        if (typeof entry === "string") {
+          const name = normalizeText(entry);
+          if (!name) return null;
+          return { name, versionFrom: "", versionTo: "" };
+        }
+        const name = normalizeText(entry?.name);
+        if (!name) return null;
+        return {
+          name,
+          versionFrom: normalizeText(entry?.versionFrom),
+          versionTo: normalizeText(entry?.versionTo)
+        };
+      })
+      .filter(Boolean);
+
+    const selectedMap = new Map(
+      normalizedSelectedPrograms.map((entry) => [normalizeText(entry.name).toLowerCase(), entry])
+    );
+    const selectedSet = new Set(selectedMap.keys());
+    const selectedRanked = rankedBase
+      .filter((item) => selectedSet.has(normalizeText(item.name).toLowerCase()))
+      .map((item) => {
+        const selected = selectedMap.get(normalizeText(item.name).toLowerCase());
+        return {
+          ...item,
+          versionFrom: selected?.versionFrom || item.versionFrom || "",
+          versionTo: selected?.versionTo || ""
+        };
+      });
+    const finalRanked = selectedSet.size ? selectedRanked : rankedBase.slice(0, 3);
+    const candidates = rankedBase.slice(0, 20).map((item) => ({
+      name: item.name,
+      versionFrom: item.versionFrom || "",
+      versionTo: ""
+    }));
 
     return {
       includeMicrosoft,
       rawItems,
-      items: rankedThirdParty.slice(0, 3),
-      microsoftItems: rankedMicrosoft.slice(0, 3)
+      selectedPrograms: normalizedSelectedPrograms,
+      selectedProgramNames: normalizedSelectedPrograms.map((entry) => entry.name),
+      candidates,
+      items: finalRanked
     };
   };
 
@@ -223,7 +363,15 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
             >
               <div className="flex items-center gap-3">
                 <span className="text-[11px] font-semibold text-sand-500">{index + 1}.</span>
-                <span className="font-semibold text-sand-900">{item.name}</span>
+                <span>
+                  <span className="font-semibold text-sand-900">{item.name}</span>
+                  {(item.versionFrom || item.versionTo) ? (
+                    <span className="block text-[11px] text-sand-500">
+                      {item.versionFrom ? `von ${item.versionFrom}` : "von n/a"}
+                      {item.versionTo ? ` -> ${item.versionTo}` : ""}
+                    </span>
+                  ) : null}
+                </span>
               </div>
               <span className="text-[11px] text-sand-500">
                 {item.priority ? item.priority : "Priorität n/a"}
@@ -238,14 +386,95 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
   const handleHtmlUpload = async (file) => {
     if (!file) return;
     try {
+      setUploadError("");
       const text = await file.text();
       const rawItems = parseHtmlReport(text);
+      if (!rawItems.length) {
+        setUploadError("Keine Programme im HTML gefunden.");
+        return;
+      }
       const includeMicrosoft = Boolean(action.custom_data?.includeMicrosoft);
-      const customData = buildSecurityPayload(rawItems, includeMicrosoft);
-      onChange({ custom_html: text, custom_data: customData });
+      const initialPayload = buildSecurityPayload(rawItems, includeMicrosoft);
+      const candidates = initialPayload.candidates || [];
+      const defaultSelection = initialPayload.items.map((item) => ({
+        name: item.name,
+        versionFrom: item.versionFrom || item.version || "",
+        versionTo: item.versionTo || ""
+      }));
+      setProgramPickerState({
+        text,
+        rawItems,
+        includeMicrosoft,
+        candidates,
+        selectedPrograms: defaultSelection
+      });
     } catch (error) {
-      // ignore read errors
+      setUploadError("Upload fehlgeschlagen. Bitte HTML-Datei prüfen.");
     }
+  };
+
+  const closeProgramPicker = () => setProgramPickerState(null);
+
+  const toggleProgramSelection = (name) => {
+    setProgramPickerState((prev) => {
+      if (!prev) return prev;
+      const selected = Array.isArray(prev.selectedPrograms) ? [...prev.selectedPrograms] : [];
+      const idx = selected.findIndex(
+        (entry) => normalizeText(entry?.name).toLowerCase() === normalizeText(name).toLowerCase()
+      );
+      if (idx >= 0) {
+        selected.splice(idx, 1);
+        return { ...prev, selectedPrograms: selected };
+      }
+      const candidate = (prev.candidates || []).find(
+        (entry) => normalizeText(entry?.name).toLowerCase() === normalizeText(name).toLowerCase()
+      );
+      selected.push({
+        name,
+        versionFrom: normalizeText(candidate?.versionFrom),
+        versionTo: ""
+      });
+      return { ...prev, selectedPrograms: selected };
+    });
+  };
+
+  const updateProgramVersion = (name, field, value) => {
+    setProgramPickerState((prev) => {
+      if (!prev) return prev;
+      const selected = Array.isArray(prev.selectedPrograms) ? [...prev.selectedPrograms] : [];
+      const idx = selected.findIndex(
+        (entry) => normalizeText(entry?.name).toLowerCase() === normalizeText(name).toLowerCase()
+      );
+      if (idx < 0) return prev;
+      selected[idx] = { ...selected[idx], [field]: normalizeText(value) };
+      return { ...prev, selectedPrograms: selected };
+    });
+  };
+
+  const confirmProgramPicker = () => {
+    if (!programPickerState) return;
+    const selectedPrograms = programPickerState.selectedPrograms || [];
+    const customData = buildSecurityPayload(
+      programPickerState.rawItems,
+      programPickerState.includeMicrosoft,
+      selectedPrograms
+    );
+    onChange({ custom_html: programPickerState.text, custom_data: customData });
+    closeProgramPicker();
+  };
+
+  const handleHtmlDrop = (event) => {
+    event.preventDefault();
+    setIsDragOverUpload(false);
+    setUploadError("");
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+    const lowerName = String(file.name || "").toLowerCase();
+    if (!(lowerName.endsWith(".html") || lowerName.endsWith(".htm"))) {
+      setUploadError("Bitte eine HTML-Datei (.html/.htm) ablegen.");
+      return;
+    }
+    handleHtmlUpload(file);
   };
 
   if (isSecurityReport) {
@@ -282,7 +511,21 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
           />
         </label>
 
-        <div className="rounded-xl border border-dashed border-sand-200 bg-sand-50 px-3 py-3 text-sm text-sand-600 flex flex-wrap items-center justify-between gap-2">
+        <div
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+            if (!isDragOverUpload) setIsDragOverUpload(true);
+          }}
+          onDragLeave={(event) => {
+            event.preventDefault();
+            setIsDragOverUpload(false);
+          }}
+          onDrop={handleHtmlDrop}
+          className={`rounded-xl border border-dashed bg-sand-50 px-3 py-3 text-sm text-sand-600 flex flex-wrap items-center justify-between gap-2 ${
+            isDragOverUpload ? "border-sand-400 bg-sand-100" : "border-sand-200"
+          }`}
+        >
           <span>{action.custom_html ? "HTML-Report geladen." : "HTML-Report hochladen."}</span>
           <div className="flex items-center gap-3">
             <label className="inline-flex items-center gap-2 text-xs text-sand-600">
@@ -295,7 +538,17 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
                   if (!rawItems.length && action.custom_html) {
                     rawItems = parseHtmlReport(action.custom_html);
                   }
-                  const customData = buildSecurityPayload(rawItems, includeMicrosoft);
+                  const selectedProgramNames = Array.isArray(action.custom_data?.selectedProgramNames)
+                    ? action.custom_data.selectedProgramNames
+                    : [];
+                  const selectedPrograms = Array.isArray(action.custom_data?.selectedPrograms)
+                    ? action.custom_data.selectedPrograms
+                    : selectedProgramNames;
+                  const customData = buildSecurityPayload(
+                    rawItems,
+                    includeMicrosoft,
+                    selectedPrograms
+                  );
                   onChange({ custom_data: customData });
                 }}
                 className="h-4 w-4"
@@ -317,14 +570,84 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
             </label>
           </div>
         </div>
+        {uploadError ? <p className="text-xs text-rose-600">{uploadError}</p> : null}
+
+        {programPickerState ? (
+          <div className="rounded-xl border border-sand-200 bg-white p-3 space-y-3">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-sand-500">Programme auswählen</p>
+              <p className="text-sm text-sand-700">
+                Top 3 sind vorausgewählt. Du kannst manuell weitere Programme auswählen.
+              </p>
+            </div>
+            <div className="max-h-56 overflow-auto rounded-lg border border-sand-100">
+              {(programPickerState.candidates || []).map((candidate) => {
+                const candidateName = candidate?.name || "";
+                const selectedEntry = (programPickerState.selectedPrograms || []).find(
+                  (entry) =>
+                    normalizeText(entry?.name).toLowerCase() === normalizeText(candidateName).toLowerCase()
+                );
+                const checked = Boolean(selectedEntry);
+                return (
+                  <label
+                    key={candidateName}
+                    className="block px-3 py-2 text-sm border-b border-sand-100 last:border-b-0 text-sand-700"
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleProgramSelection(candidateName)}
+                        className="h-4 w-4"
+                      />
+                      <span>{candidateName}</span>
+                    </div>
+                    {checked ? (
+                      <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <input
+                          value={selectedEntry?.versionFrom || ""}
+                          onChange={(event) =>
+                            updateProgramVersion(candidateName, "versionFrom", event.target.value)
+                          }
+                          placeholder="Version von"
+                          className="rounded-md border border-sand-200 px-2 py-1 text-xs"
+                        />
+                        <input
+                          value={selectedEntry?.versionTo || ""}
+                          onChange={(event) =>
+                            updateProgramVersion(candidateName, "versionTo", event.target.value)
+                          }
+                          placeholder="Version zu"
+                          className="rounded-md border border-sand-200 px-2 py-1 text-xs"
+                        />
+                      </div>
+                    ) : null}
+                  </label>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeProgramPicker}
+                className="rounded-md border border-sand-200 px-3 py-1.5 text-xs text-sand-700 hover:bg-sand-50"
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                onClick={confirmProgramPicker}
+                className="rounded-md border border-sand-300 bg-sand-800 px-3 py-1.5 text-xs text-white hover:bg-sand-700"
+              >
+                Übernehmen
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <div className="rounded-xl border border-sand-200 bg-white px-3 py-3 text-sm text-sand-700">
-          {renderTopList(action.custom_data?.items, "Top 3 Updatebedarf")}
-          {action.custom_data?.includeMicrosoft
-            ? renderTopList(action.custom_data?.microsoftItems, "Top 3 Microsoft")
-            : null}
-          {!action.custom_data?.items?.length &&
-          (!action.custom_data?.includeMicrosoft || !action.custom_data?.microsoftItems?.length) ? (
+          {renderTopList(action.custom_data?.items, "Programme mit Updatebedarf")}
+          {!action.custom_data?.items?.length ? (
             <p className="mt-2 text-xs text-sand-500">Noch keine Einträge.</p>
           ) : null}
         </div>
