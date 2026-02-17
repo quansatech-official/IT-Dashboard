@@ -4,6 +4,7 @@ import { telephonyService } from "./telephonyService";
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const DISMISSED_CALL_STORAGE_KEY = "qt_incoming_call_popup_dismissed_uuid";
+const MAX_ACTIVE_INCOMING_AGE_MS = 5 * 60 * 1000;
 
 const getDefaultPosition = () => {
   if (typeof window === "undefined") return { x: 24, y: 24 };
@@ -86,9 +87,11 @@ export default function IncomingCallQuickTaskPopup() {
       const end = Number(call?.endTime || 0);
       const duration = Number(call?.duration || 0);
       if (duration > 0) return false;
+      const age = now - start;
+      if (age < 0 || age > MAX_ACTIVE_INCOMING_AGE_MS) return false;
       const activeCall = !end || end < start;
       if (!activeCall) return false;
-      return now - start < 4 * 60 * 60 * 1000;
+      return true;
     });
     if (!incoming.length) return null;
     return incoming.sort((a, b) => Number(b?.startTime || 0) - Number(a?.startTime || 0))[0];
