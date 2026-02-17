@@ -3,6 +3,7 @@ import { FilePlus, Save, X } from "lucide-react";
 import { telephonyService } from "./telephonyService";
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+const DISMISSED_CALL_STORAGE_KEY = "qt_incoming_call_popup_dismissed_uuid";
 
 const getDefaultPosition = () => {
   if (typeof window === "undefined") return { x: 24, y: 24 };
@@ -83,6 +84,8 @@ export default function IncomingCallQuickTaskPopup() {
       const start = Number(call?.startTime || 0);
       if (!start) return false;
       const end = Number(call?.endTime || 0);
+      const duration = Number(call?.duration || 0);
+      if (duration > 0) return false;
       const activeCall = !end || end < start;
       if (!activeCall) return false;
       return now - start < 4 * 60 * 60 * 1000;
@@ -111,6 +114,12 @@ export default function IncomingCallQuickTaskPopup() {
       startedAt: Number(call?.startTime || 0)
     };
   }, [activeIncomingCall, customerByPhone, pbxNameByPhone]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.sessionStorage.getItem(DISMISSED_CALL_STORAGE_KEY) || "";
+    if (stored) setDismissedCallUuid(stored);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -175,6 +184,9 @@ export default function IncomingCallQuickTaskPopup() {
     const call = activeIncomingCall;
     if (!call) {
       setDismissedCallUuid("");
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem(DISMISSED_CALL_STORAGE_KEY);
+      }
       if (open && !title.trim()) {
         setOpen(false);
         setCallUuid("");
@@ -197,6 +209,22 @@ export default function IncomingCallQuickTaskPopup() {
   }, [activeIncomingCall, callUuid, dismissedCallUuid, incomingMeta, open, title]);
 
   useEffect(() => {
+    if (!open || !callUuid) return;
+    if (title.trim()) return;
+    const currentCall = (Array.isArray(calls) ? calls : []).find((item) => item?.uuid === callUuid);
+    if (!currentCall) return;
+    const start = Number(currentCall?.startTime || 0);
+    const end = Number(currentCall?.endTime || 0);
+    const duration = Number(currentCall?.duration || 0);
+    const ended = duration > 0 || (!!end && (!start || end >= start));
+    if (!ended) return;
+    setOpen(false);
+    setCallUuid("");
+    setStatus("");
+    setContext({ customerName: "", customerNumber: "", phone: "", startedAt: 0 });
+  }, [callUuid, calls, open, title]);
+
+  useEffect(() => {
     if (!status) return;
     const timer = setTimeout(() => setStatus(""), 1800);
     return () => clearTimeout(timer);
@@ -217,7 +245,11 @@ export default function IncomingCallQuickTaskPopup() {
 
   const closePopup = () => {
     if (activeIncomingCall?.uuid) {
-      setDismissedCallUuid(activeIncomingCall.uuid);
+      const dismissedUuid = activeIncomingCall.uuid;
+      setDismissedCallUuid(dismissedUuid);
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(DISMISSED_CALL_STORAGE_KEY, dismissedUuid);
+      }
     }
     setOpen(false);
     setTitle("");

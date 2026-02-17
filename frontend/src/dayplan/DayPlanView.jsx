@@ -62,6 +62,7 @@ const api = {
 };
 
 const columns = [{ id: "todo", label: "Aufgaben" }];
+const NEW_TASK_HIGHLIGHT_MS = 60 * 1000;
 const formatDoneDate = (value) => {
   const date = new Date(Number(value || 0));
   if (!value || Number.isNaN(date.getTime())) return "";
@@ -151,6 +152,35 @@ export default function DayPlanView() {
   const emailDropGuardRef = useRef(0);
   const emailDropBadgeRef = useRef(null);
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
+  const taskHighlightTimeoutsRef = useRef({});
+  const [highlightedTaskIds, setHighlightedTaskIds] = useState({});
+
+  const markTaskAsNew = (taskId) => {
+    const id = Number(taskId || 0);
+    if (!id) return;
+    setHighlightedTaskIds((prev) => ({ ...prev, [id]: true }));
+    if (taskHighlightTimeoutsRef.current[id]) {
+      clearTimeout(taskHighlightTimeoutsRef.current[id]);
+    }
+    taskHighlightTimeoutsRef.current[id] = setTimeout(() => {
+      setHighlightedTaskIds((prev) => {
+        if (!prev[id]) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      delete taskHighlightTimeoutsRef.current[id];
+    }, NEW_TASK_HIGHLIGHT_MS);
+  };
+
+  useEffect(() => {
+    return () => {
+      Object.values(taskHighlightTimeoutsRef.current).forEach((timeoutId) => {
+        clearTimeout(timeoutId);
+      });
+      taskHighlightTimeoutsRef.current = {};
+    };
+  }, []);
 
   useEffect(() => {
     api.list().then((data) => {
@@ -164,8 +194,15 @@ export default function DayPlanView() {
         setTasks(Array.isArray(data) ? data : []);
       });
     };
-    window.addEventListener("qt:daytask-created", refreshTasks);
-    return () => window.removeEventListener("qt:daytask-created", refreshTasks);
+    const handleTaskCreated = (event) => {
+      const createdTaskId = Number(event?.detail?.task?.id || 0);
+      if (createdTaskId) {
+        markTaskAsNew(createdTaskId);
+      }
+      refreshTasks();
+    };
+    window.addEventListener("qt:daytask-created", handleTaskCreated);
+    return () => window.removeEventListener("qt:daytask-created", handleTaskCreated);
   }, []);
 
   const refreshCustomers = () =>
@@ -286,6 +323,7 @@ export default function DayPlanView() {
     });
     if (created?.id) {
       setTasks((prev) => [created, ...prev]);
+      markTaskAsNew(created.id);
     }
   };
 
@@ -1232,6 +1270,7 @@ export default function DayPlanView() {
       const created = await api.create(payload);
       if (created?.id) {
         setTasks((prev) => [created, ...prev]);
+        markTaskAsNew(created.id);
       }
       closeEmailTaskModal();
     } catch (error) {
@@ -1407,10 +1446,15 @@ export default function DayPlanView() {
       ? `Deadline in ${Math.max(1, Math.ceil(deadlineDiffMs / 86400000))} Tagen`
       : `Deadline in ${Math.ceil(deadlineDiffMs / 86400000)} Tagen`;
     const isDetailsCollapsed = detailOpenId !== task.id;
+    const isNewlyCreated = Boolean(highlightedTaskIds[task.id]);
     return (
       <div
         key={task.id}
-        className="relative rounded-lg border border-sand-200 bg-white px-3 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] md:px-2 md:py-1.5"
+        className={`relative rounded-lg border px-3 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] transition-colors duration-500 md:px-2 md:py-1.5 ${
+          isNewlyCreated
+            ? "border-amber-300 bg-amber-50/60 ring-1 ring-amber-200/70"
+            : "border-sand-200 bg-white"
+        }`}
         draggable={editingId !== task.id}
         onDragStart={(event) => {
           event.dataTransfer.setData("text/plain", `task:${task.id}`);
