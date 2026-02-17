@@ -73,11 +73,8 @@ export const renderReportHTML = (report, options = {}) => {
                 const name = escapeHTML(entry.name || "Programm");
                 const prio = entry.priority ? escapeHTML(entry.priority) : "Priorität n/a";
                 const versionFrom = entry.versionFrom ? escapeHTML(entry.versionFrom) : "";
-                const versionTo = entry.versionTo ? escapeHTML(entry.versionTo) : "";
-                const versionLine = versionFrom || versionTo
-                  ? `<div style="font-size:11px; color:#64748b; margin-top:2px;">${
-                      versionFrom ? `von ${versionFrom}` : "von n/a"
-                    }${versionTo ? ` &rarr; ${versionTo}` : ""}</div>`
+                const versionLine = versionFrom
+                  ? `<div style="font-size:11px; color:#64748b; margin-top:2px;">von ${versionFrom}</div>`
                   : "";
                 return `<div style="display:flex; align-items:center; justify-content:space-between; border:1px solid #e2e8f0; background:#ffffff; border-radius:12px; padding:8px 12px; margin-bottom:8px; font-size:12px; color:#334155;">
                   <div style="display:flex; align-items:center; gap:10px;">
@@ -387,9 +384,7 @@ export const buildPlainText = (report) => {
         lines.push("Programme mit Updatebedarf:");
         items.forEach((item) => {
           const name = item.name || "Programm";
-          const from = item.versionFrom ? ` (von ${item.versionFrom}` : "";
-          const to = item.versionTo ? `${from ? " -> " : " (von n/a -> "}${item.versionTo}` : "";
-          const suffix = from || to ? `${from}${to})` : "";
+          const suffix = item.versionFrom ? ` (von ${item.versionFrom})` : "";
           lines.push(`- ${name}${suffix}`);
         });
       }

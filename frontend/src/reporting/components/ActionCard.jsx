@@ -290,13 +290,11 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
 
     const rankedThirdParty = rank(thirdPartyGrouped).map((item) => ({
       ...item,
-      versionFrom: item.version || "",
-      versionTo: ""
+      versionFrom: item.version || ""
     }));
     const rankedCombined = rank(combinedGrouped).map((item) => ({
       ...item,
-      versionFrom: item.version || "",
-      versionTo: ""
+      versionFrom: item.version || ""
     }));
     const rankedBase = includeMicrosoft ? rankedCombined : rankedThirdParty;
 
@@ -305,14 +303,12 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
         if (typeof entry === "string") {
           const name = normalizeText(entry);
           if (!name) return null;
-          return { name, versionFrom: "", versionTo: "" };
+          return { name, versionFrom: "" };
         }
         const name = normalizeText(entry?.name);
         if (!name) return null;
         return {
-          name,
-          versionFrom: normalizeText(entry?.versionFrom),
-          versionTo: normalizeText(entry?.versionTo)
+          name, versionFrom: normalizeText(entry?.versionFrom)
         };
       })
       .filter(Boolean);
@@ -327,15 +323,13 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
         const selected = selectedMap.get(normalizeText(item.name).toLowerCase());
         return {
           ...item,
-          versionFrom: selected?.versionFrom || item.versionFrom || "",
-          versionTo: selected?.versionTo || ""
+          versionFrom: selected?.versionFrom || item.versionFrom || ""
         };
       });
     const finalRanked = selectedSet.size ? selectedRanked : rankedBase.slice(0, 3);
     const candidates = rankedBase.slice(0, 20).map((item) => ({
       name: item.name,
-      versionFrom: item.versionFrom || "",
-      versionTo: ""
+      versionFrom: item.versionFrom || ""
     }));
 
     return {
@@ -365,10 +359,9 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
                 <span className="text-[11px] font-semibold text-sand-500">{index + 1}.</span>
                 <span>
                   <span className="font-semibold text-sand-900">{item.name}</span>
-                  {(item.versionFrom || item.versionTo) ? (
+                  {item.versionFrom ? (
                     <span className="block text-[11px] text-sand-500">
-                      {item.versionFrom ? `von ${item.versionFrom}` : "von n/a"}
-                      {item.versionTo ? ` -> ${item.versionTo}` : ""}
+                      von {item.versionFrom}
                     </span>
                   ) : null}
                 </span>
@@ -398,8 +391,7 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
       const candidates = initialPayload.candidates || [];
       const defaultSelection = initialPayload.items.map((item) => ({
         name: item.name,
-        versionFrom: item.versionFrom || item.version || "",
-        versionTo: item.versionTo || ""
+        versionFrom: item.versionFrom || item.version || ""
       }));
       setProgramPickerState({
         text,
@@ -414,6 +406,30 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
   };
 
   const closeProgramPicker = () => setProgramPickerState(null);
+
+  const openProgramPicker = () => {
+    setUploadError("");
+    const includeMicrosoft = Boolean(action.custom_data?.includeMicrosoft);
+    let rawItems = Array.isArray(action.custom_data?.rawItems) ? action.custom_data.rawItems : [];
+    if (!rawItems.length && action.custom_html) {
+      rawItems = parseHtmlReport(action.custom_html);
+    }
+    if (!rawItems.length) {
+      setUploadError("Kein geladener HTML-Report zum Bearbeiten vorhanden.");
+      return;
+    }
+    const basePayload = buildSecurityPayload(rawItems, includeMicrosoft);
+    const selectedPrograms = Array.isArray(action.custom_data?.selectedPrograms)
+      ? action.custom_data.selectedPrograms
+      : (action.custom_data?.selectedProgramNames || []).map((name) => ({ name, versionFrom: "" }));
+    setProgramPickerState({
+      text: action.custom_html || "",
+      rawItems,
+      includeMicrosoft,
+      candidates: basePayload.candidates || [],
+      selectedPrograms
+    });
+  };
 
   const toggleProgramSelection = (name) => {
     setProgramPickerState((prev) => {
@@ -431,22 +447,8 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
       );
       selected.push({
         name,
-        versionFrom: normalizeText(candidate?.versionFrom),
-        versionTo: ""
+        versionFrom: normalizeText(candidate?.versionFrom)
       });
-      return { ...prev, selectedPrograms: selected };
-    });
-  };
-
-  const updateProgramVersion = (name, field, value) => {
-    setProgramPickerState((prev) => {
-      if (!prev) return prev;
-      const selected = Array.isArray(prev.selectedPrograms) ? [...prev.selectedPrograms] : [];
-      const idx = selected.findIndex(
-        (entry) => normalizeText(entry?.name).toLowerCase() === normalizeText(name).toLowerCase()
-      );
-      if (idx < 0) return prev;
-      selected[idx] = { ...selected[idx], [field]: normalizeText(value) };
       return { ...prev, selectedPrograms: selected };
     });
   };
@@ -568,6 +570,13 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
                 }}
               />
             </label>
+            <button
+              type="button"
+              onClick={openProgramPicker}
+              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+            >
+              Programme bearbeiten
+            </button>
           </div>
         </div>
         {uploadError ? <p className="text-xs text-rose-600">{uploadError}</p> : null}
@@ -602,25 +611,8 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
                       />
                       <span>{candidateName}</span>
                     </div>
-                    {checked ? (
-                      <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
-                        <input
-                          value={selectedEntry?.versionFrom || ""}
-                          onChange={(event) =>
-                            updateProgramVersion(candidateName, "versionFrom", event.target.value)
-                          }
-                          placeholder="Version von"
-                          className="rounded-md border border-sand-200 px-2 py-1 text-xs"
-                        />
-                        <input
-                          value={selectedEntry?.versionTo || ""}
-                          onChange={(event) =>
-                            updateProgramVersion(candidateName, "versionTo", event.target.value)
-                          }
-                          placeholder="Version zu"
-                          className="rounded-md border border-sand-200 px-2 py-1 text-xs"
-                        />
-                      </div>
+                    {checked && selectedEntry?.versionFrom ? (
+                      <div className="mt-1 text-xs text-sand-500">Version: {selectedEntry.versionFrom}</div>
                     ) : null}
                   </label>
                 );
@@ -637,7 +629,8 @@ export default function ActionCard({ action, onChange, onRemove, onSaveToCatalog
               <button
                 type="button"
                 onClick={confirmProgramPicker}
-                className="rounded-md border border-sand-300 bg-sand-800 px-3 py-1.5 text-xs text-white hover:bg-sand-700"
+                title="Auswahl übernehmen"
+                className="rounded-md border border-sand-300 bg-sand-100 px-3 py-1.5 text-xs font-semibold text-sand-900 hover:bg-sand-200"
               >
                 Übernehmen
               </button>
