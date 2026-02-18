@@ -31,7 +31,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or (
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
 )
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL") or "http://ollama:11434"
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "llama3.1"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "qwen2.5:7b"
+OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS") or "180")
 _geo_cache: Dict[str, Optional[tuple[float, float]]] = {}
 GEO_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 ROUTE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -45,11 +46,11 @@ if not logging.getLogger().handlers:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 logger = logging.getLogger("it_dashboard")
-MODEL_PREF_CUSTOMER_RANKING = "qwen2.5:32b qwen2.5:14b"
-MODEL_PREF_TASK_DRAFT = "llama3.1 qwen2.5:14b"
-MODEL_PREF_ACTION = "qwen2.5:14b llama3.1"
-MODEL_PREF_OFFER_TEXT = "llama3.1 qwen2.5:14b"
-MODEL_PREF_INVOICE_SUMMARY = "llama3.1 qwen2.5:14b"
+MODEL_PREF_CUSTOMER_RANKING = "qwen2.5:7b qwen2.5:3b"
+MODEL_PREF_TASK_DRAFT = "qwen2.5:7b qwen2.5:3b"
+MODEL_PREF_ACTION = "qwen2.5:7b qwen2.5:3b"
+MODEL_PREF_OFFER_TEXT = "qwen2.5:7b qwen2.5:3b"
+MODEL_PREF_INVOICE_SUMMARY = "qwen2.5:7b qwen2.5:3b"
 FREE_EMAIL_DOMAINS = {
     "gmail.com",
     "googlemail.com",
@@ -1459,7 +1460,7 @@ def _resolve_ollama_models(*specific_values: Any) -> List[str]:
             seen.add(lowered)
             ordered.append(model)
     if not ordered:
-        ordered.append("llama3.1")
+        ordered.append("qwen2.5:7b")
     return ordered
 
 
@@ -1467,29 +1468,48 @@ def _ollama_generate(
     prompt: str,
     *,
     model_candidates: List[str],
-    timeout: int = 45,
+    timeout: Optional[int] = None,
     response_format: str = "",
     temperature: Optional[float] = None,
 ) -> Tuple[Dict[str, Any], str]:
+    request_timeout = max(1, int(timeout or OLLAMA_TIMEOUT_SECONDS))
     for model in model_candidates:
-        payload: Dict[str, Any] = {"model": model, "prompt": prompt, "stream": False}
+        payload: Dict[str, Any] = {"model": model, "prompt": prompt, "stream": True}
         if response_format:
             payload["format"] = response_format
         if temperature is not None:
             payload["options"] = {"temperature": temperature}
         try:
-            response = requests.post(
+            with requests.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json=payload,
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
+                timeout=request_timeout,
+                stream=True,
+            ) as response:
+                response.raise_for_status()
+                data: Dict[str, Any] = {}
+                chunks: List[str] = []
+                for raw_line in response.iter_lines(decode_unicode=True):
+                    if not raw_line:
+                        continue
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                    except ValueError as exc:
+                        logger.warning("Ollama invalid chunk JSON with model %s: %s", model, exc)
+                        continue
+                    if not isinstance(chunk, dict):
+                        continue
+                    chunk_text = chunk.get("response")
+                    if isinstance(chunk_text, str) and chunk_text:
+                        chunks.append(chunk_text)
+                    data.update({k: v for k, v in chunk.items() if k != "response"})
+                if chunks:
+                    data["response"] = "".join(chunks)
         except requests.RequestException as exc:
             logger.warning("Ollama request failed with model %s: %s", model, exc)
-            continue
-        except ValueError as exc:
-            logger.warning("Ollama invalid JSON with model %s: %s", model, exc)
             continue
         if isinstance(data, dict):
             return data, model
@@ -1499,7 +1519,7 @@ def _ollama_generate(
 
 def _ollama_generate_text(prompt: str) -> str:
     model_candidates = _resolve_ollama_models(MODEL_PREF_INVOICE_SUMMARY)
-    data, _ = _ollama_generate(prompt, model_candidates=model_candidates, timeout=45)
+    data, _ = _ollama_generate(prompt, model_candidates=model_candidates)
     return (data.get("response") or "").strip()
 
 
@@ -3036,7 +3056,6 @@ def _ai_rank_customer_candidates(
         payload, used_model = _ollama_generate(
             prompt,
             model_candidates=model_candidates,
-            timeout=45,
             response_format="json",
             temperature=0.05,
         )
@@ -3231,7 +3250,6 @@ def _generate_task_draft_from_email(
         payload, used_model = _ollama_generate(
             prompt,
             model_candidates=model_candidates,
-            timeout=60,
             response_format="json",
             temperature=0.15,
         )
@@ -4820,7 +4838,6 @@ def generate_action(data: ActionAiRequest):
     payload, _ = _ollama_generate(
         prompt,
         model_candidates=model_candidates,
-        timeout=60,
         response_format="json",
         temperature=0.2,
     )
@@ -4858,7 +4875,6 @@ def generate_offer_text(data: OfferAiRequest):
     payload, _ = _ollama_generate(
         prompt,
         model_candidates=model_candidates,
-        timeout=60,
         temperature=0.2,
     )
     if not payload:
