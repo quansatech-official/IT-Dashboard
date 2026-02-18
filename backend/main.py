@@ -31,7 +31,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or (
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
 )
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL") or "http://ollama:11434"
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "qwen2.5:7b"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "llama3.2:3b"
 OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS") or "180")
 _geo_cache: Dict[str, Optional[tuple[float, float]]] = {}
 GEO_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -46,11 +46,11 @@ if not logging.getLogger().handlers:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 logger = logging.getLogger("it_dashboard")
-MODEL_PREF_CUSTOMER_RANKING = "qwen2.5:7b qwen2.5:3b"
-MODEL_PREF_TASK_DRAFT = "qwen2.5:7b qwen2.5:3b"
-MODEL_PREF_ACTION = "qwen2.5:7b qwen2.5:3b"
-MODEL_PREF_OFFER_TEXT = "qwen2.5:7b qwen2.5:3b"
-MODEL_PREF_INVOICE_SUMMARY = "qwen2.5:7b qwen2.5:3b"
+MODEL_PREF_CUSTOMER_RANKING = "llama3.2:3b llama3.2:1b"
+MODEL_PREF_TASK_DRAFT = "llama3.2:3b llama3.2:1b"
+MODEL_PREF_ACTION = "llama3.2:3b llama3.2:1b"
+MODEL_PREF_OFFER_TEXT = "llama3.2:3b llama3.2:1b"
+MODEL_PREF_INVOICE_SUMMARY = "llama3.2:3b llama3.2:1b"
 FREE_EMAIL_DOMAINS = {
     "gmail.com",
     "googlemail.com",
@@ -1460,7 +1460,7 @@ def _resolve_ollama_models(*specific_values: Any) -> List[str]:
             seen.add(lowered)
             ordered.append(model)
     if not ordered:
-        ordered.append("qwen2.5:7b")
+        ordered.append("llama3.2:3b")
     return ordered
 
 
@@ -1508,6 +1508,18 @@ def _ollama_generate(
                     data.update({k: v for k, v in chunk.items() if k != "response"})
                 if chunks:
                     data["response"] = "".join(chunks)
+        except requests.HTTPError as exc:
+            response = exc.response
+            if response is not None and response.status_code == 404:
+                detail = (response.text or "").strip()
+                logger.warning(
+                    "Ollama model missing for %s (404). Pull it first. Response: %s",
+                    model,
+                    detail[:240],
+                )
+            else:
+                logger.warning("Ollama request failed with model %s: %s", model, exc)
+            continue
         except requests.RequestException as exc:
             logger.warning("Ollama request failed with model %s: %s", model, exc)
             continue

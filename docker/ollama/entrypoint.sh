@@ -7,7 +7,7 @@ until ollama list >/dev/null 2>&1; do
   sleep 1
 done
 
-DEFAULT_MODELS="${OLLAMA_MODEL:-qwen2.5:7b} qwen2.5:3b"
+DEFAULT_MODELS="${OLLAMA_MODEL:-llama3.2:3b} llama3.2:1b"
 MODELS="${OLLAMA_PRELOAD_MODELS:-$DEFAULT_MODELS}"
 
 for model in $MODELS; do
