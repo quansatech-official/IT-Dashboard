@@ -90,10 +90,11 @@ export default function StatsView() {
   const [stats, setStats] = useState({});
   const [activeTab, setActiveTab] = useState("general");
   const [tabStatus, setTabStatus] = useState({});
+  const [reloadTick, setReloadTick] = useState(0);
   const days = 30;
-  const activeTabState = tabStatus[activeTab];
 
   useEffect(() => {
+    const activeTabState = tabStatus[activeTab];
     if (activeTabState === "loading" || activeTabState === "ready") return;
     let active = true;
     const controller = new AbortController();
@@ -126,7 +127,7 @@ export default function StatsView() {
       clearTimeout(timeout);
       controller.abort();
     };
-  }, [activeTab, days, activeTabState]);
+  }, [activeTab, days, reloadTick]);
 
   const percent = (part, total) => {
     if (!total) return "0%";
@@ -207,7 +208,10 @@ export default function StatsView() {
             <span>Kennzahlen konnten nicht geladen werden.</span>
             <button
               type="button"
-              onClick={() => setTabStatus((prev) => ({ ...prev, [activeTab]: "idle" }))}
+              onClick={() => {
+                setTabStatus((prev) => ({ ...prev, [activeTab]: "idle" }));
+                setReloadTick((value) => value + 1);
+              }}
               className="rounded-full border border-rose-300 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
             >
               Erneut laden
