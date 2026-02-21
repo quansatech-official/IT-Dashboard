@@ -926,7 +926,8 @@ const internalNoteOptions = [
 ];
 
 const initialOffers = [];
-const AUTOSAVE_KEY = "qt_offer_autosave";
+const CRASH_RECOVERY_KEY = "qt_offer_crash_recovery";
+const CRASH_CLEAN_EXIT_KEY = "qt_offer_crash_clean_exit";
 const LAST_OFFER_INDEX_KEY = "qt_offer_last_index";
 const PRICE_CALC_DRAFTS_KEY = "qt_offer_price_calc_drafts";
 
@@ -3650,7 +3651,6 @@ function DeviceCard({
 export default function OffersView() {
   const [offers, setOffers] = useState(initialOffers);
   const [activeId, setActiveId] = useState("");
-  const [starterCreated, setStarterCreated] = useState(false);
   const [detailOpen, setDetailOpen] = useState({});
   const [positionType, setPositionType] = useState(
     positionTypes[0]?.value || "Dienstleistung"
@@ -3669,7 +3669,6 @@ export default function OffersView() {
   const [blockOpen, setBlockOpen] = useState({});
   const [customers, setCustomers] = useState([]);
   const [offerNumberFormat, setOfferNumberFormat] = useState(defaultOfferFormat);
-  const [offerSettingsLoaded, setOfferSettingsLoaded] = useState(false);
   const [blocksLoaded, setBlocksLoaded] = useState(false);
   const [offersLoaded, setOffersLoaded] = useState(false);
   const [lastOfferIndex, setLastOfferIndex] = useState(0);
@@ -3726,8 +3725,9 @@ export default function OffersView() {
   const lastOfferIndexRef = useRef(0);
   const [previewScale, setPreviewScale] = useState(0.7);
   const [previewMaxHeight, setPreviewMaxHeight] = useState("70vh");
-  const autosaveTimer = useRef(null);
+  const crashRecoveryTimer = useRef(null);
   const serverSaveInFlightRef = useRef({});
+  const crashRecoveryCheckedRef = useRef(false);
   const [detailDraft, setDetailDraft] = useState("");
   const [importerOpen, setImporterOpen] = useState(false);
   const [importSources, setImportSources] = useState([]);
@@ -3773,28 +3773,36 @@ export default function OffersView() {
     return map;
   }, [customers]);
 
-  const persistToStorage = (withStatus) => {
+  const persistCrashRecoveryDraft = () => {
     if (typeof window === "undefined") return;
-    const payload = {
-      offers: sanitizeOffersForSave(offers),
-      activeId,
-      serviceBlocks,
-      deviceBlocks,
-      calcBlocks,
-      lastOfferIndex
-    };
+    const offer = offers.find((entry) => entry.id === activeId);
+    if (!offer) {
+      window.localStorage.removeItem(CRASH_RECOVERY_KEY);
+      return;
+    }
+    const savedSnapshot = lastSavedOffersRef.current[offer.id];
+    const currentSanitized = sanitizeOfferForSave(offer);
+    const savedSanitized = savedSnapshot ? sanitizeOfferForSave(savedSnapshot) : null;
+    const hasUnsavedChanges = offer.serverId
+      ? !!savedSanitized &&
+        JSON.stringify(currentSanitized) !== JSON.stringify(savedSanitized)
+      : !isOfferEmpty(offer);
+    if (!hasUnsavedChanges) {
+      window.localStorage.removeItem(CRASH_RECOVERY_KEY);
+      return;
+    }
     try {
-      window.localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload));
-      window.localStorage.setItem(LAST_OFFER_INDEX_KEY, String(lastOfferIndex || 0));
-      if (withStatus) {
-        setSaveStatus("saved");
-        setTimeout(() => setSaveStatus("idle"), 2000);
-      }
+      window.localStorage.setItem(
+        CRASH_RECOVERY_KEY,
+        JSON.stringify({
+          savedAt: Date.now(),
+          activeId: offer.id,
+          offer: currentSanitized,
+          lastOfferIndex: lastOfferIndexRef.current || 0
+        })
+      );
     } catch (error) {
-      if (withStatus) {
-        setSaveStatus("error");
-        setTimeout(() => setSaveStatus("idle"), 2000);
-      }
+      // ignore crash recovery cache errors
     }
   };
 
@@ -3996,16 +4004,18 @@ export default function OffersView() {
             return next;
           });
         }
-        setOffers((prev) => {
-          const drafts = prev.filter((offer) => !offer.serverId);
-          const merged = dedupeOffers([...drafts, ...fetched]);
-          setActiveId((current) =>
-            merged.some((offer) => offer.id === current || offer.serverId === current)
-              ? current
-              : merged[0]?.id || ""
-          );
-          return merged;
+        const merged = dedupeOffers(fetched);
+        const snapshots = {};
+        merged.forEach((offer) => {
+          snapshots[offer.id] = cloneOffer(offer);
         });
+        lastSavedOffersRef.current = snapshots;
+        setOffers(merged);
+        setActiveId((current) =>
+          merged.some((offer) => offer.id === current || offer.serverId === current)
+            ? current
+            : merged[0]?.id || ""
+        );
       })
       .catch(() => {})
       .finally(() => {
@@ -4016,35 +4026,7 @@ export default function OffersView() {
     if (typeof window === "undefined") return;
     try {
       const storedIndex = window.localStorage.getItem(LAST_OFFER_INDEX_KEY);
-      const raw = window.localStorage.getItem(AUTOSAVE_KEY);
-      const stored = raw ? JSON.parse(raw) : null;
-      if (stored) {
-        if (Array.isArray(stored?.offers) && stored.offers.length) {
-          setOffers(stored.offers);
-          const storedActive = stored.activeId;
-          if (
-            storedActive &&
-            stored.offers.some(
-              (offer) => offer.id === storedActive || offer.serverId === storedActive
-            )
-          ) {
-            setActiveId(storedActive);
-          } else {
-            setActiveId(stored.offers[0]?.id || "");
-          }
-          setStarterCreated(true);
-        }
-        if (Array.isArray(stored?.serviceBlocks) && stored.serviceBlocks.length) {
-          setServiceBlocks(normalizeBlockListWithNotes(stored.serviceBlocks));
-        }
-        if (Array.isArray(stored?.deviceBlocks) && stored.deviceBlocks.length) {
-          setDeviceBlocks(normalizeBlockListWithNotes(stored.deviceBlocks));
-        }
-        if (Array.isArray(stored?.calcBlocks) && stored.calcBlocks.length) {
-          setCalcBlocks(stored.calcBlocks);
-        }
-      }
-      const lastIndex = Number(stored?.lastOfferIndex) || Number(storedIndex) || 0;
+      const lastIndex = Number(storedIndex) || 0;
       if (lastIndex) {
         setLastOfferIndex(lastIndex);
         lastOfferIndexRef.current = lastIndex;
@@ -4111,12 +4093,8 @@ export default function OffersView() {
   useEffect(() => {
     if (offersFetchedRef.current) return;
     offersFetchedRef.current = true;
-    let active = true;
     loadOffersFromServer();
-    return () => {
-      active = false;
-    };
-  }, [offerNumberFormat, offerSettingsLoaded, starterCreated, offersLoaded, offers]);
+  }, []);
 
   useEffect(() => {
     if (!offers.length) return;
@@ -4129,22 +4107,6 @@ export default function OffersView() {
       });
     }
   }, [offers, offerNumberFormat]);
-
-  useEffect(() => {
-    if (starterCreated || !offerSettingsLoaded || !offersLoaded) return;
-    if (offers.length) return;
-    const nextIndex = getNextOfferIndex(offers, offerNumberFormat, lastOfferIndexRef.current);
-    const starter = createEmptyOffer(nextIndex, offerNumberFormat);
-    setLastOfferIndex((prev) => {
-      const next = Math.max(prev || 0, nextIndex);
-      lastOfferIndexRef.current = next;
-      return next;
-    });
-    setOffers((prev) => [starter, ...prev]);
-    setActiveId(starter.id);
-    setStarterCreated(true);
-    setMainTab("new");
-  }, [offerNumberFormat, offerSettingsLoaded, starterCreated]);
 
   useEffect(() => {
     let active = true;
@@ -4264,19 +4226,86 @@ export default function OffersView() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!offers.length) return;
-    if (autosaveTimer.current) {
-      clearTimeout(autosaveTimer.current);
+    if (crashRecoveryTimer.current) {
+      clearTimeout(crashRecoveryTimer.current);
     }
-    autosaveTimer.current = setTimeout(() => {
-      persistToStorage(false);
+    crashRecoveryTimer.current = setTimeout(() => {
+      persistCrashRecoveryDraft();
     }, 700);
     return () => {
-      if (autosaveTimer.current) {
-        clearTimeout(autosaveTimer.current);
+      if (crashRecoveryTimer.current) {
+        clearTimeout(crashRecoveryTimer.current);
       }
     };
   }, [offers, activeId, serviceBlocks, deviceBlocks, calcBlocks]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const markCleanExit = () => {
+      try {
+        window.localStorage.setItem(CRASH_CLEAN_EXIT_KEY, String(Date.now()));
+      } catch (error) {
+        // ignore clean-exit marker errors
+      }
+    };
+    window.addEventListener("beforeunload", markCleanExit);
+    return () => window.removeEventListener("beforeunload", markCleanExit);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!offersLoaded || crashRecoveryCheckedRef.current) return;
+    crashRecoveryCheckedRef.current = true;
+    let recovery = null;
+    try {
+      const raw = window.localStorage.getItem(CRASH_RECOVERY_KEY);
+      const cleanExit = Number(window.localStorage.getItem(CRASH_CLEAN_EXIT_KEY) || 0);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed?.offer && Number(parsed.savedAt || 0) > cleanExit) {
+        recovery = parsed;
+      }
+    } catch (error) {
+      recovery = null;
+    }
+    if (!recovery?.offer) return;
+    const restore = window.confirm(
+      "Ungesichertes Angebot gefunden. Möchten Sie es wiederherstellen?"
+    );
+    try {
+      window.localStorage.removeItem(CRASH_RECOVERY_KEY);
+    } catch (error) {
+      // ignore storage errors
+    }
+    if (!restore) return;
+    const recovered = normalizeServerOffer(recovery.offer) || recovery.offer;
+    setOffers((prev) => {
+      if (recovered.serverId) {
+        let found = false;
+        const merged = prev.map((entry) => {
+          if (String(entry.serverId || "") !== String(recovered.serverId || "")) {
+            return entry;
+          }
+          found = true;
+          return {
+            ...entry,
+            ...recovered,
+            id: entry.id
+          };
+        });
+        return found ? merged : [recovered, ...merged];
+      }
+      const filtered = prev.filter((entry) => entry.id !== recovered.id);
+      return [recovered, ...filtered];
+    });
+    setActiveId(recovered.id);
+    setMainTab("new");
+    setToast("Ungesichertes Angebot wiederhergestellt.");
+    setLastOfferIndex((prev) => {
+      const next = Math.max(prev || 0, Number(recovery?.lastOfferIndex || 0));
+      lastOfferIndexRef.current = next;
+      return next;
+    });
+  }, [offersLoaded]);
 
   useEffect(() => {
     if (!exportOfferId) return;
@@ -4381,11 +4410,9 @@ export default function OffersView() {
       .then((data) => {
         if (!active) return;
         setOfferNumberFormat(data?.offer_number_format || defaultOfferFormat);
-        setOfferSettingsLoaded(true);
       })
       .catch(() => {
         if (!active) return;
-        setOfferSettingsLoaded(true);
       });
     return () => {
       active = false;
@@ -4652,17 +4679,6 @@ export default function OffersView() {
   const removeOffer = (offerId) => {
     setOffers((prev) => {
       const next = prev.filter((offer) => offer.id !== offerId);
-      if (!next.length) {
-        const nextIndex = getNextOfferIndex(prev, offerNumberFormat, lastOfferIndexRef.current);
-        const starter = createEmptyOffer(nextIndex, offerNumberFormat);
-        setLastOfferIndex((current) => {
-          const nextValue = Math.max(current || 0, nextIndex);
-          lastOfferIndexRef.current = nextValue;
-          return nextValue;
-        });
-        setActiveId(starter.id);
-        return [starter];
-      }
       if (offerId === activeId) {
         setActiveId(next[0]?.id || "");
       }
@@ -4913,33 +4929,7 @@ export default function OffersView() {
       [key]: !prev[key]
     }));
 
-  const isOfferDraftEmpty = (offer) => {
-    if (!offer || offer.serverId) return false;
-    const hasMeta =
-      String(offer.customer || "").trim() ||
-      String(offer.recipientName || "").trim() ||
-      String(offer.recipientCompany || "").trim() ||
-      String(offer.recipientStreet || "").trim() ||
-      String(offer.recipientPostalCity || "").trim() ||
-      String(offer.customerNumber || "").trim() ||
-      String(offer.orderNumber || "").trim() ||
-      String(offer.overviewText || "").trim() ||
-      String(offer.calculationText || "").trim() ||
-      String(offer.detailHtml || "").trim() ||
-      String(offer.coverHeadline || "").trim() ||
-      String(offer.coverSubheadline || "").trim() ||
-      String(offer.coverIntro || "").trim();
-    const hasItems =
-      (offer.lineItems || []).length > 0 ||
-      (offer.deviceItems || []).length > 0 ||
-      (offer.attachments || []).length > 0;
-    return !hasMeta && !hasItems;
-  };
-
   const addOffer = () => {
-    if (isOfferDraftEmpty(activeOffer)) {
-      return;
-    }
     setOffers((prev) => {
       const nextIndex = getNextOfferIndex(prev, offerNumberFormat, lastOfferIndexRef.current);
       const next = createEmptyOffer(nextIndex, offerNumberFormat);
@@ -5598,10 +5588,16 @@ export default function OffersView() {
     if (!activeOffer) return;
     const snapshot = cloneOffer(activeOffer);
     lastSavedOffersRef.current[activeOffer.id] = snapshot;
-    persistToStorage(false);
     const saved = await persistOfferToServer(activeOffer, true);
     if (saved?.id) {
       lastSavedOffersRef.current[activeOffer.id] = cloneOffer(normalizeServerOffer(saved) || saved);
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.removeItem(CRASH_RECOVERY_KEY);
+        } catch (error) {
+          // ignore storage errors
+        }
+      }
     }
   };
 

@@ -1796,6 +1796,118 @@ def _top_customers_for_period(
     ]
 
 
+def _build_customer_payment_stats(
+    invoices: List[Dict[str, Any]],
+    now_dt: datetime,
+) -> List[Dict[str, Any]]:
+    stats: Dict[str, Dict[str, Any]] = {}
+    for invoice in invoices:
+        status = _parse_int(invoice.get("status"))
+        if status in (100, 400):
+            continue
+        amount = _parse_sevdesk_amount(invoice)
+        if amount <= 0:
+            continue
+        invoice_date = _parse_sevdesk_date(invoice.get("invoiceDate"))
+        if not invoice_date:
+            continue
+        contact_id, contact_name = _extract_sevdesk_contact(invoice)
+        entry = stats.get(contact_id)
+        if not entry:
+            entry = {
+                "name": contact_name,
+                "contactId": contact_id,
+                "totalInvoices": 0,
+                "paidInvoices": 0,
+                "openInvoices": 0,
+                "overdueInvoices": 0,
+                "totalAmount": 0.0,
+                "openAmount": 0.0,
+                "paidAmount": 0.0,
+                "paymentDaysTotal": 0,
+                "paymentDaysCount": 0,
+                "openAgeDaysTotal": 0,
+                "openAgeDaysCount": 0,
+                "maxPaymentDays": 0,
+            }
+        entry["totalInvoices"] += 1
+        entry["totalAmount"] += amount
+        paid_date = _invoice_date_for_paid(invoice)
+        if _invoice_is_paid(invoice) and paid_date:
+            paid_days = max(0, (paid_date.date() - invoice_date.date()).days)
+            entry["paidInvoices"] += 1
+            entry["paidAmount"] += _invoice_paid_amount(invoice)
+            entry["paymentDaysTotal"] += paid_days
+            entry["paymentDaysCount"] += 1
+            entry["maxPaymentDays"] = max(entry["maxPaymentDays"], paid_days)
+        else:
+            entry["openInvoices"] += 1
+            entry["openAmount"] += amount
+            age_days = max(0, (now_dt.date() - invoice_date.date()).days)
+            entry["openAgeDaysTotal"] += age_days
+            entry["openAgeDaysCount"] += 1
+            due_date = _parse_sevdesk_date(
+                invoice.get("dueDate")
+                or invoice.get("paymentDeadline")
+                or invoice.get("paymentDeadlineDate")
+            )
+            is_overdue = False
+            if due_date:
+                is_overdue = due_date.date() < now_dt.date()
+            else:
+                is_overdue = status == 300 or age_days > 30
+            if is_overdue:
+                entry["overdueInvoices"] += 1
+        stats[contact_id] = entry
+
+    rows: List[Dict[str, Any]] = []
+    for item in stats.values():
+        avg_payment_days = (
+            round(item["paymentDaysTotal"] / item["paymentDaysCount"], 1)
+            if item["paymentDaysCount"]
+            else None
+        )
+        avg_open_age_days = (
+            round(item["openAgeDaysTotal"] / item["openAgeDaysCount"], 1)
+            if item["openAgeDaysCount"]
+            else None
+        )
+        if item["overdueInvoices"] > 0:
+            grade = "C"
+        elif (avg_payment_days or 0) > 30 or (avg_open_age_days or 0) > 45:
+            grade = "C"
+        elif (avg_payment_days or 0) > 10 or item["openInvoices"] > 0:
+            grade = "B"
+        else:
+            grade = "A"
+        rows.append(
+            {
+                "name": item["name"],
+                "contactId": item.get("contactId", ""),
+                "grade": grade,
+                "totalInvoices": item["totalInvoices"],
+                "paidInvoices": item["paidInvoices"],
+                "openInvoices": item["openInvoices"],
+                "overdueInvoices": item["overdueInvoices"],
+                "totalAmountEur": round(item["totalAmount"], 2),
+                "paidAmountEur": round(item["paidAmount"], 2),
+                "openAmountEur": round(item["openAmount"], 2),
+                "avgPaymentDays": avg_payment_days,
+                "avgOpenAgeDays": avg_open_age_days,
+                "maxPaymentDays": item["maxPaymentDays"],
+            }
+        )
+    grade_order = {"A": 0, "B": 1, "C": 2}
+    rows.sort(
+        key=lambda row: (
+            grade_order.get(str(row.get("grade") or ""), 9),
+            -(row.get("totalAmountEur") or 0),
+            str(row.get("name") or "").lower(),
+        )
+    )
+    return rows
+
+
 def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, Any]:
     drafts = client.list_invoices(params={"status": 100}, max_pages=10)
     draft_sum = round(sum(_parse_sevdesk_amount(item) for item in drafts), 2)
@@ -1865,6 +1977,7 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
         "currentYear": _top_customers_for_period(all_invoices, start_current_year, now_dt),
         "lastYear": _top_customers_for_period(all_invoices, start_last_year, end_last_year),
     }
+    customer_payment_stats = _build_customer_payment_stats(all_invoices, now_dt)
 
     contact_ids: set[str] = set()
     for bucket in top_customers.values():
@@ -1872,6 +1985,10 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
             contact_id = str(item.get("contactId") or "").strip()
             if contact_id and (item.get("name") or "").startswith("Kontakt #"):
                 contact_ids.add(contact_id)
+    for item in customer_payment_stats:
+        contact_id = str(item.get("contactId") or "").strip()
+        if contact_id and (item.get("name") or "").startswith("Kontakt #"):
+            contact_ids.add(contact_id)
     if contact_ids:
         for contact_id in contact_ids:
             try:
@@ -1887,6 +2004,9 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
                 for item in bucket:
                     if str(item.get("contactId") or "") == contact_id:
                         item["name"] = contact_name
+            for item in customer_payment_stats:
+                if str(item.get("contactId") or "") == contact_id:
+                    item["name"] = contact_name
 
     return {
         "connected": True,
@@ -1898,6 +2018,7 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
         "paidAverage": {"sumEur": paid_avg},
         "overdue": {"count": len(overdue_invoices), "sumEur": overdue_sum},
         "topCustomers": top_customers,
+        "customerPaymentStats": customer_payment_stats,
     }
 
 
