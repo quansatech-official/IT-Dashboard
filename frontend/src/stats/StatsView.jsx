@@ -92,12 +92,6 @@ export default function StatsView() {
   const [tabStatus, setTabStatus] = useState({});
   const [reloadTick, setReloadTick] = useState(0);
   const [customerSort, setCustomerSort] = useState({ key: "businessWeight", direction: "desc" });
-  const [customerFilters, setCustomerFilters] = useState({
-    withLastYearRevenue: false,
-    withCurrentYearRevenue: false,
-    withOpenItems: false,
-    withReminders: false
-  });
   const days = 30;
 
   useEffect(() => {
@@ -159,25 +153,8 @@ export default function StatsView() {
     });
     return base;
   }, [customerPaymentStats]);
-  const filteredCustomerPaymentStats = useMemo(() => {
-    return customerPaymentStats.filter((item) => {
-      if (customerFilters.withLastYearRevenue && Number(item?.revenueLastYearEur || 0) <= 0) {
-        return false;
-      }
-      if (customerFilters.withCurrentYearRevenue && Number(item?.revenueCurrentYearEur || 0) <= 0) {
-        return false;
-      }
-      if (customerFilters.withOpenItems && Number(item?.openOverdueInvoices || item?.openInvoices || 0) <= 0) {
-        return false;
-      }
-      if (customerFilters.withReminders && Number(item?.remindersTotal || 0) <= 0) {
-        return false;
-      }
-      return true;
-    });
-  }, [customerPaymentStats, customerFilters]);
   const sortedCustomerPaymentStats = useMemo(() => {
-    const list = [...filteredCustomerPaymentStats];
+    const list = [...customerPaymentStats];
     const direction = customerSort.direction === "asc" ? 1 : -1;
     const key = customerSort.key;
     const valueFor = (item) => {
@@ -213,7 +190,7 @@ export default function StatsView() {
       return (Number(av) - Number(bv)) * direction;
     });
     return list;
-  }, [filteredCustomerPaymentStats, customerSort]);
+  }, [customerPaymentStats, customerSort]);
 
   const currentStatus = tabStatus[activeTab] || "idle";
   const sortIndicator = (key) =>
@@ -224,17 +201,6 @@ export default function StatsView() {
         ? { key, direction: prev.direction === "asc" ? "desc" : "asc" }
         : { key, direction: "desc" }
     );
-  };
-  const toggleCustomerFilter = (key) => {
-    setCustomerFilters((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-  const clearCustomerFilters = () => {
-    setCustomerFilters({
-      withLastYearRevenue: false,
-      withCurrentYearRevenue: false,
-      withOpenItems: false,
-      withReminders: false
-    });
   };
 
   return (
@@ -567,47 +533,6 @@ export default function StatsView() {
                       />
                     </div>
                     <div className="mt-4 overflow-x-auto rounded-2xl border border-sand-200">
-                      <div className="flex flex-wrap items-center gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[11px]">
-                        <span className="uppercase tracking-wide text-sand-500">Filter</span>
-                        <button
-                          type="button"
-                          onClick={() => toggleCustomerFilter("withLastYearRevenue")}
-                          className={`rounded-full border px-2 py-0.5 ${customerFilters.withLastYearRevenue ? "border-sand-800 bg-sand-900 text-white" : "border-sand-300 bg-white text-sand-700"}`}
-                        >
-                          Umsatz Vorjahr {'>'} 0
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => toggleCustomerFilter("withCurrentYearRevenue")}
-                          className={`rounded-full border px-2 py-0.5 ${customerFilters.withCurrentYearRevenue ? "border-sand-800 bg-sand-900 text-white" : "border-sand-300 bg-white text-sand-700"}`}
-                        >
-                          Umsatz lfd. Jahr {'>'} 0
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => toggleCustomerFilter("withOpenItems")}
-                          className={`rounded-full border px-2 py-0.5 ${customerFilters.withOpenItems ? "border-sand-800 bg-sand-900 text-white" : "border-sand-300 bg-white text-sand-700"}`}
-                        >
-                          Nur offene / überfällige
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => toggleCustomerFilter("withReminders")}
-                          className={`rounded-full border px-2 py-0.5 ${customerFilters.withReminders ? "border-sand-800 bg-sand-900 text-white" : "border-sand-300 bg-white text-sand-700"}`}
-                        >
-                          Nur mit Mahnungen
-                        </button>
-                        <button
-                          type="button"
-                          onClick={clearCustomerFilters}
-                          className="rounded-full border border-sand-300 bg-white px-2 py-0.5 text-sand-700"
-                        >
-                          Zurücksetzen
-                        </button>
-                        <span className="ml-auto text-sand-500">
-                          Treffer: {formatNumber(sortedCustomerPaymentStats.length)}
-                        </span>
-                      </div>
                       <table className="min-w-full text-left text-xs">
                         <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
                           <tr>
