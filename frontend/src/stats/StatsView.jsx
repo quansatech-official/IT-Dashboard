@@ -91,13 +91,17 @@ export default function StatsView() {
   const [activeTab, setActiveTab] = useState("general");
   const [tabStatus, setTabStatus] = useState({});
   const days = 30;
+  const activeTabState = tabStatus[activeTab];
 
   useEffect(() => {
-    const state = tabStatus[activeTab];
-    if (state === "loading" || state === "ready" || state === "error") return;
+    if (activeTabState === "loading" || activeTabState === "ready") return;
     let active = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
     setTabStatus((prev) => ({ ...prev, [activeTab]: "loading" }));
-    fetch(`${API}/company_stats?days=${days}&section=${encodeURIComponent(activeTab)}`)
+    fetch(`${API}/company_stats?days=${days}&section=${encodeURIComponent(activeTab)}`, {
+      signal: controller.signal
+    })
       .then((res) => {
         if (!res.ok) throw new Error("stats_failed");
         return res.json();
@@ -119,8 +123,10 @@ export default function StatsView() {
       });
     return () => {
       active = false;
+      clearTimeout(timeout);
+      controller.abort();
     };
-  }, [activeTab, days, tabStatus]);
+  }, [activeTab, days, activeTabState]);
 
   const percent = (part, total) => {
     if (!total) return "0%";
@@ -197,8 +203,15 @@ export default function StatsView() {
             Kennzahlen laden...
           </div>
         ) : currentStatus === "error" ? (
-          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600">
-            Kennzahlen konnten nicht geladen werden.
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600 flex items-center justify-between gap-3">
+            <span>Kennzahlen konnten nicht geladen werden.</span>
+            <button
+              type="button"
+              onClick={() => setTabStatus((prev) => ({ ...prev, [activeTab]: "idle" }))}
+              className="rounded-full border border-rose-300 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+            >
+              Erneut laden
+            </button>
           </div>
         ) : (
           <>

@@ -2054,7 +2054,7 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
             due_invoices.append(item)
     due_sum = round(sum(_parse_sevdesk_amount(item) for item in due_invoices), 2)
 
-    all_invoices = client.list_invoices(max_pages=60)
+    all_invoices = client.list_invoices(max_pages=30)
     start_month = datetime(now_dt.year, now_dt.month, 1)
     start_half_year = now_dt - timedelta(days=182)
     start_current_year = datetime(now_dt.year, 1, 1)
@@ -2115,7 +2115,7 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
             contact_id = str(item.get("contactId") or "").strip()
             if contact_id and (item.get("name") or "").startswith("Kontakt #"):
                 contact_ids.add(contact_id)
-    for item in customer_payment_stats:
+    for item in customer_payment_stats[:15]:
         contact_id = str(item.get("contactId") or "").strip()
         if contact_id and (item.get("name") or "").startswith("Kontakt #"):
             contact_ids.add(contact_id)
@@ -2680,6 +2680,48 @@ def _offer_iso_timestamp(ms: int) -> str:
     if not ms:
         return ""
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _offer_make_reference(number_format: str, index: int) -> str:
+    template = (number_format or "AN-XXXX").strip() or "AN-XXXX"
+    match = re.search(r"X+", template)
+    if not match:
+        return template
+    width = len(match.group(0))
+    number = str(max(1, int(index or 1))).zfill(width)
+    start, end = match.span()
+    return f"{template[:start]}{number}{template[end:]}"
+
+
+def _normalize_offer_references(db) -> int:
+    settings = _get_offer_settings(db)
+    number_format = (settings.offer_number_format or "AN-XXXX").strip() or "AN-XXXX"
+    offers = db.query(Offer).order_by(Offer.created_at.asc(), Offer.id.asc()).all()
+    if not offers:
+        return 0
+    changed = 0
+    now_ms = int(time.time() * 1000)
+    for idx, offer in enumerate(offers, start=1):
+        expected = _offer_make_reference(number_format, idx)
+        payload: Dict[str, Any] = {}
+        if offer.data_json:
+            try:
+                parsed = json.loads(offer.data_json)
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except Exception:
+                payload = {}
+        data_reference = str(payload.get("reference") or "").strip()
+        if offer.reference == expected and data_reference == expected:
+            continue
+        offer.reference = expected
+        payload["reference"] = expected
+        offer.data_json = json.dumps(payload)
+        offer.updated_at = now_ms
+        changed += 1
+    if changed:
+        db.commit()
+    return changed
 
 
 def serialize_offer(offer: Offer) -> Dict[str, Any]:
@@ -5440,6 +5482,7 @@ def update_ai_prompts(data: AiPromptsUpdate):
 @app.get("/api/offers")
 def list_offers():
     with SessionLocal() as db:
+        _normalize_offer_references(db)
         offers = db.query(Offer).order_by(Offer.created_at.desc()).all()
         return [serialize_offer(offer) for offer in offers]
 
