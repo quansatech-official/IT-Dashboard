@@ -2071,68 +2071,82 @@ def _build_customer_payment_stats(
     return {"rows": rows, "summary": summary}
 
 
-def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, Any]:
-    drafts = client.list_invoices(params={"status": 100}, max_pages=10)
-    draft_sum = round(sum(_parse_sevdesk_amount(item) for item in drafts), 2)
-
-    due_candidates: List[Dict[str, Any]] = []
-    for status in (200, 300):
-        due_candidates.extend(client.list_invoices(params={"status": status}, max_pages=10))
-    seen_due: set[str] = set()
+def _build_sevdesk_stats(
+    client: SevdeskClient,
+    now_dt: datetime,
+    *,
+    include_financial_overview: bool = True,
+    invoices_max_pages: int = 30,
+    resolve_contacts_limit: int = 40,
+) -> Dict[str, Any]:
+    drafts: List[Dict[str, Any]] = []
+    draft_sum = 0.0
     due_invoices: List[Dict[str, Any]] = []
-    for item in due_candidates:
-        invoice_id = str(item.get("id") or "")
-        if invoice_id in seen_due:
-            continue
-        seen_due.add(invoice_id)
-        if _invoice_is_due(item, now_dt):
-            due_invoices.append(item)
-    due_sum = round(sum(_parse_sevdesk_amount(item) for item in due_invoices), 2)
+    due_sum = 0.0
+    paid_invoices: List[Dict[str, Any]] = []
+    paid_sum_total = 0.0
+    paid_current_year: List[Dict[str, Any]] = []
+    paid_current_month: List[Dict[str, Any]] = []
+    paid_year_sum = 0.0
+    paid_month_sum = 0.0
+    overdue_invoices: List[Dict[str, Any]] = []
+    overdue_sum = 0.0
+    paid_avg = 0.0
 
-    all_invoices = client.list_invoices(max_pages=30)
+    if include_financial_overview:
+        drafts = client.list_invoices(params={"status": 100}, max_pages=10)
+        draft_sum = round(sum(_parse_sevdesk_amount(item) for item in drafts), 2)
+
+        due_candidates: List[Dict[str, Any]] = []
+        for status in (200, 300):
+            due_candidates.extend(client.list_invoices(params={"status": status}, max_pages=10))
+        seen_due: set[str] = set()
+        for item in due_candidates:
+            invoice_id = str(item.get("id") or "")
+            if invoice_id in seen_due:
+                continue
+            seen_due.add(invoice_id)
+            if _invoice_is_due(item, now_dt):
+                due_invoices.append(item)
+        due_sum = round(sum(_parse_sevdesk_amount(item) for item in due_invoices), 2)
+
+    all_invoices = client.list_invoices(max_pages=max(1, invoices_max_pages))
     start_month = datetime(now_dt.year, now_dt.month, 1)
     start_half_year = now_dt - timedelta(days=182)
     start_current_year = datetime(now_dt.year, 1, 1)
     start_last_year = datetime(now_dt.year - 1, 1, 1)
     end_last_year = datetime(now_dt.year - 1, 12, 31, 23, 59, 59)
-
-    paid_invoices = [item for item in all_invoices if _invoice_is_paid(item)]
-    paid_sum_total = round(sum(_invoice_paid_amount(item) for item in paid_invoices), 2)
-
-    paid_current_year = []
-    paid_current_month = []
-    for item in paid_invoices:
-        paid_date = _invoice_date_for_paid(item)
-        if not paid_date:
-            continue
-        if paid_date >= start_current_year and paid_date <= now_dt:
-            paid_current_year.append(item)
-        if paid_date >= start_month and paid_date <= now_dt:
-            paid_current_month.append(item)
-
-    paid_year_sum = round(sum(_invoice_paid_amount(item) for item in paid_current_year), 2)
-    paid_month_sum = round(sum(_invoice_paid_amount(item) for item in paid_current_month), 2)
-
-    overdue_invoices: List[Dict[str, Any]] = []
-    for item in all_invoices:
-        if _invoice_is_paid(item):
-            continue
-        status = _parse_int(item.get("status"))
-        if status == 100 or status == 400:
-            continue
-        due_date = _parse_sevdesk_date(
-            item.get("dueDate")
-            or item.get("paymentDeadline")
-            or item.get("paymentDeadlineDate")
-        )
-        if status == 300 and due_date is None:
-            overdue_invoices.append(item)
-            continue
-        if due_date and due_date.date() < now_dt.date():
-            overdue_invoices.append(item)
-
-    overdue_sum = round(sum(_parse_sevdesk_amount(item) for item in overdue_invoices), 2)
-    paid_avg = round(paid_sum_total / len(paid_invoices), 2) if paid_invoices else 0.0
+    if include_financial_overview:
+        paid_invoices = [item for item in all_invoices if _invoice_is_paid(item)]
+        paid_sum_total = round(sum(_invoice_paid_amount(item) for item in paid_invoices), 2)
+        for item in paid_invoices:
+            paid_date = _invoice_date_for_paid(item)
+            if not paid_date:
+                continue
+            if paid_date >= start_current_year and paid_date <= now_dt:
+                paid_current_year.append(item)
+            if paid_date >= start_month and paid_date <= now_dt:
+                paid_current_month.append(item)
+        paid_year_sum = round(sum(_invoice_paid_amount(item) for item in paid_current_year), 2)
+        paid_month_sum = round(sum(_invoice_paid_amount(item) for item in paid_current_month), 2)
+        for item in all_invoices:
+            if _invoice_is_paid(item):
+                continue
+            status = _parse_int(item.get("status"))
+            if status == 100 or status == 400:
+                continue
+            due_date = _parse_sevdesk_date(
+                item.get("dueDate")
+                or item.get("paymentDeadline")
+                or item.get("paymentDeadlineDate")
+            )
+            if status == 300 and due_date is None:
+                overdue_invoices.append(item)
+                continue
+            if due_date and due_date.date() < now_dt.date():
+                overdue_invoices.append(item)
+        overdue_sum = round(sum(_parse_sevdesk_amount(item) for item in overdue_invoices), 2)
+        paid_avg = round(paid_sum_total / len(paid_invoices), 2) if paid_invoices else 0.0
 
     top_customers = {
         "thisMonth": _top_customers_for_period(all_invoices, start_month, now_dt),
@@ -2150,7 +2164,7 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
             contact_id = str(item.get("contactId") or "").strip()
             if contact_id and (item.get("name") or "").startswith("Kontakt #"):
                 contact_ids.add(contact_id)
-    for item in customer_payment_stats[:40]:
+    for item in customer_payment_stats[: max(0, resolve_contacts_limit)]:
         contact_id = str(item.get("contactId") or "").strip()
         if contact_id and (item.get("name") or "").startswith("Kontakt #"):
             contact_ids.add(contact_id)
@@ -5794,7 +5808,19 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
     sevdesk_stats: Dict[str, Any] = {"connected": False}
     if load_sevdesk and sevdesk_config and sevdesk_config.api_token:
         try:
-            sevdesk_stats = _build_sevdesk_stats(SevdeskClient(sevdesk_config), now_dt)
+            if load_customers and not load_billing:
+                sevdesk_stats = _build_sevdesk_stats(
+                    SevdeskClient(sevdesk_config, timeout=12),
+                    now_dt,
+                    include_financial_overview=False,
+                    invoices_max_pages=20,
+                    resolve_contacts_limit=20,
+                )
+            else:
+                sevdesk_stats = _build_sevdesk_stats(
+                    SevdeskClient(sevdesk_config),
+                    now_dt,
+                )
         except SevdeskError as exc:
             sevdesk_stats = {"connected": False, "error": str(exc)}
 
