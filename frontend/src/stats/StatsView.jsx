@@ -91,6 +91,13 @@ export default function StatsView() {
   const [activeTab, setActiveTab] = useState("general");
   const [tabStatus, setTabStatus] = useState({});
   const [reloadTick, setReloadTick] = useState(0);
+  const [customerSort, setCustomerSort] = useState({ key: "businessWeight", direction: "desc" });
+  const [customerFilters, setCustomerFilters] = useState({
+    withLastYearRevenue: false,
+    withCurrentYearRevenue: false,
+    withOpenItems: false,
+    withReminders: false
+  });
   const days = 30;
 
   useEffect(() => {
@@ -152,8 +159,83 @@ export default function StatsView() {
     });
     return base;
   }, [customerPaymentStats]);
+  const filteredCustomerPaymentStats = useMemo(() => {
+    return customerPaymentStats.filter((item) => {
+      if (customerFilters.withLastYearRevenue && Number(item?.revenueLastYearEur || 0) <= 0) {
+        return false;
+      }
+      if (customerFilters.withCurrentYearRevenue && Number(item?.revenueCurrentYearEur || 0) <= 0) {
+        return false;
+      }
+      if (customerFilters.withOpenItems && Number(item?.openOverdueInvoices || item?.openInvoices || 0) <= 0) {
+        return false;
+      }
+      if (customerFilters.withReminders && Number(item?.remindersTotal || 0) <= 0) {
+        return false;
+      }
+      return true;
+    });
+  }, [customerPaymentStats, customerFilters]);
+  const sortedCustomerPaymentStats = useMemo(() => {
+    const list = [...filteredCustomerPaymentStats];
+    const direction = customerSort.direction === "asc" ? 1 : -1;
+    const key = customerSort.key;
+    const valueFor = (item) => {
+      switch (key) {
+        case "name":
+          return String(item?.name || "").toLowerCase();
+        case "grade":
+          return String(item?.grade || "Z");
+        case "avgPaymentDays":
+          return Number(item?.avgPaymentDays ?? Number.MAX_SAFE_INTEGER);
+        case "latePaidRatePct":
+          return Number(item?.latePaidRatePct ?? Number.MAX_SAFE_INTEGER);
+        case "remindersTotal":
+          return Number(item?.remindersTotal ?? 0);
+        case "openOverdueInvoices":
+          return Number(item?.openOverdueInvoices ?? item?.openInvoices ?? 0);
+        case "revenueCurrentYearEur":
+          return Number(item?.revenueCurrentYearEur ?? 0);
+        case "revenueLastYearEur":
+          return Number(item?.revenueLastYearEur ?? 0);
+        case "totalAmountEur":
+          return Number(item?.totalAmountEur ?? 0);
+        default:
+          return Number(item?.businessWeight ?? 0);
+      }
+    };
+    list.sort((a, b) => {
+      const av = valueFor(a);
+      const bv = valueFor(b);
+      if (typeof av === "string" || typeof bv === "string") {
+        return String(av).localeCompare(String(bv), "de", { sensitivity: "base" }) * direction;
+      }
+      return (Number(av) - Number(bv)) * direction;
+    });
+    return list;
+  }, [filteredCustomerPaymentStats, customerSort]);
 
   const currentStatus = tabStatus[activeTab] || "idle";
+  const sortIndicator = (key) =>
+    customerSort.key === key ? (customerSort.direction === "asc" ? "▲" : "▼") : "";
+  const toggleCustomerSort = (key) => {
+    setCustomerSort((prev) =>
+      prev.key === key
+        ? { key, direction: prev.direction === "asc" ? "desc" : "asc" }
+        : { key, direction: "desc" }
+    );
+  };
+  const toggleCustomerFilter = (key) => {
+    setCustomerFilters((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+  const clearCustomerFilters = () => {
+    setCustomerFilters({
+      withLastYearRevenue: false,
+      withCurrentYearRevenue: false,
+      withOpenItems: false,
+      withReminders: false
+    });
+  };
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
@@ -485,22 +567,95 @@ export default function StatsView() {
                       />
                     </div>
                     <div className="mt-4 overflow-x-auto rounded-2xl border border-sand-200">
+                      <div className="flex flex-wrap items-center gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[11px]">
+                        <span className="uppercase tracking-wide text-sand-500">Filter</span>
+                        <button
+                          type="button"
+                          onClick={() => toggleCustomerFilter("withLastYearRevenue")}
+                          className={`rounded-full border px-2 py-0.5 ${customerFilters.withLastYearRevenue ? "border-sand-800 bg-sand-900 text-white" : "border-sand-300 bg-white text-sand-700"}`}
+                        >
+                          Umsatz Vorjahr {'>'} 0
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleCustomerFilter("withCurrentYearRevenue")}
+                          className={`rounded-full border px-2 py-0.5 ${customerFilters.withCurrentYearRevenue ? "border-sand-800 bg-sand-900 text-white" : "border-sand-300 bg-white text-sand-700"}`}
+                        >
+                          Umsatz lfd. Jahr {'>'} 0
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleCustomerFilter("withOpenItems")}
+                          className={`rounded-full border px-2 py-0.5 ${customerFilters.withOpenItems ? "border-sand-800 bg-sand-900 text-white" : "border-sand-300 bg-white text-sand-700"}`}
+                        >
+                          Nur offene / überfällige
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleCustomerFilter("withReminders")}
+                          className={`rounded-full border px-2 py-0.5 ${customerFilters.withReminders ? "border-sand-800 bg-sand-900 text-white" : "border-sand-300 bg-white text-sand-700"}`}
+                        >
+                          Nur mit Mahnungen
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearCustomerFilters}
+                          className="rounded-full border border-sand-300 bg-white px-2 py-0.5 text-sand-700"
+                        >
+                          Zurücksetzen
+                        </button>
+                        <span className="ml-auto text-sand-500">
+                          Treffer: {formatNumber(sortedCustomerPaymentStats.length)}
+                        </span>
+                      </div>
                       <table className="min-w-full text-left text-xs">
                         <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
                           <tr>
-                            <th className="px-3 py-2">Kunde</th>
-                            <th className="px-3 py-2">Klasse</th>
-                            <th className="px-3 py-2">Umsatz gesamt</th>
-                            <th className="px-3 py-2">Umsatz lfd.</th>
-                            <th className="px-3 py-2">Umsatz Vorjahr</th>
-                            <th className="px-3 py-2">Zahlungsmoral Historie</th>
-                            <th className="px-3 py-2">Mahnungen</th>
-                            <th className="px-3 py-2">Offen / überfällig</th>
+                            <th className="px-3 py-2">
+                              <button type="button" onClick={() => toggleCustomerSort("name")} className="inline-flex items-center gap-1">
+                                Kunde <span>{sortIndicator("name")}</span>
+                              </button>
+                            </th>
+                            <th className="px-3 py-2">
+                              <button type="button" onClick={() => toggleCustomerSort("grade")} className="inline-flex items-center gap-1">
+                                Klasse <span>{sortIndicator("grade")}</span>
+                              </button>
+                            </th>
+                            <th className="px-3 py-2">
+                              <button type="button" onClick={() => toggleCustomerSort("totalAmountEur")} className="inline-flex items-center gap-1">
+                                Umsatz gesamt <span>{sortIndicator("totalAmountEur")}</span>
+                              </button>
+                            </th>
+                            <th className="px-3 py-2">
+                              <button type="button" onClick={() => toggleCustomerSort("revenueCurrentYearEur")} className="inline-flex items-center gap-1">
+                                Umsatz lfd. <span>{sortIndicator("revenueCurrentYearEur")}</span>
+                              </button>
+                            </th>
+                            <th className="px-3 py-2">
+                              <button type="button" onClick={() => toggleCustomerSort("revenueLastYearEur")} className="inline-flex items-center gap-1">
+                                Umsatz Vorjahr <span>{sortIndicator("revenueLastYearEur")}</span>
+                              </button>
+                            </th>
+                            <th className="px-3 py-2">
+                              <button type="button" onClick={() => toggleCustomerSort("avgPaymentDays")} className="inline-flex items-center gap-1">
+                                Zahlungsmoral Historie <span>{sortIndicator("avgPaymentDays")}</span>
+                              </button>
+                            </th>
+                            <th className="px-3 py-2">
+                              <button type="button" onClick={() => toggleCustomerSort("remindersTotal")} className="inline-flex items-center gap-1">
+                                Mahnungen <span>{sortIndicator("remindersTotal")}</span>
+                              </button>
+                            </th>
+                            <th className="px-3 py-2">
+                              <button type="button" onClick={() => toggleCustomerSort("openOverdueInvoices")} className="inline-flex items-center gap-1">
+                                Offen / überfällig <span>{sortIndicator("openOverdueInvoices")}</span>
+                              </button>
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
-                          {customerPaymentStats.length ? (
-                            customerPaymentStats.map((item, index) => (
+                          {sortedCustomerPaymentStats.length ? (
+                            sortedCustomerPaymentStats.map((item, index) => (
                               <tr key={`${item.contactId || item.name || "customer"}-${index}`} className="border-t border-sand-100">
                                 <td className="px-3 py-2 text-sand-800">{item.name || "Unbekannt"}</td>
                                 <td className="px-3 py-2">

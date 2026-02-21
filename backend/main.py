@@ -36,6 +36,8 @@ OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS") or "180")
 _geo_cache: Dict[str, Optional[tuple[float, float]]] = {}
 GEO_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 ROUTE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
+SEVDESK_CONTACT_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+_sevdesk_contact_cache: Dict[str, Tuple[int, str]] = {}
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -1664,19 +1666,52 @@ def _extract_sevdesk_contact(invoice: Dict[str, Any]) -> Tuple[str, str]:
     contact_name = ""
     if isinstance(contact, dict):
         contact_id = str(contact.get("id") or "").strip()
-        contact_name = str(
+        primary_name = str(
             contact.get("name")
             or contact.get("customerName")
+            or contact.get("name2")
             or contact.get("firstName")
             or ""
         ).strip()
+        if primary_name:
+            contact_name = primary_name
+        else:
+            first = str(contact.get("firstName") or "").strip()
+            family = str(contact.get("familyName") or contact.get("lastName") or "").strip()
+            combined = " ".join(part for part in (first, family) if part).strip()
+            contact_name = combined
     if not contact_name:
-        contact_name = str(invoice.get("contactName") or invoice.get("customerName") or "").strip()
+        contact_name = str(
+            invoice.get("contactName")
+            or invoice.get("customerName")
+            or invoice.get("name")
+            or ""
+        ).strip()
     if not contact_name and contact_id:
         contact_name = f"Kontakt #{contact_id}"
     if not contact_name:
         contact_name = "Unbekannt"
     return contact_id or contact_name, contact_name
+
+
+def _resolve_sevdesk_contact_name(client: SevdeskClient, contact_id: str) -> str:
+    key = str(contact_id or "").strip()
+    if not key:
+        return ""
+    now_ms = int(time.time() * 1000)
+    cached = _sevdesk_contact_cache.get(key)
+    if cached and (now_ms - int(cached[0])) < SEVDESK_CONTACT_CACHE_TTL_MS:
+        return str(cached[1] or "")
+    try:
+        contact = client.get_contact(int(key))
+    except (SevdeskError, ValueError):
+        return ""
+    if not contact:
+        return ""
+    contact_name = _format_contact_name(contact)
+    if contact_name:
+        _sevdesk_contact_cache[key] = (now_ms, contact_name)
+    return contact_name
 
 
 def _format_contact_name(contact: Dict[str, Any]) -> str:
@@ -2115,19 +2150,13 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
             contact_id = str(item.get("contactId") or "").strip()
             if contact_id and (item.get("name") or "").startswith("Kontakt #"):
                 contact_ids.add(contact_id)
-    for item in customer_payment_stats[:15]:
+    for item in customer_payment_stats[:40]:
         contact_id = str(item.get("contactId") or "").strip()
         if contact_id and (item.get("name") or "").startswith("Kontakt #"):
             contact_ids.add(contact_id)
     if contact_ids:
         for contact_id in contact_ids:
-            try:
-                contact = client.get_contact(int(contact_id))
-            except (SevdeskError, ValueError):
-                continue
-            if not contact:
-                continue
-            contact_name = _format_contact_name(contact)
+            contact_name = _resolve_sevdesk_contact_name(client, contact_id)
             if not contact_name:
                 continue
             for bucket in top_customers.values():
