@@ -176,6 +176,33 @@ class SevdeskClient:
                 break
         return results
 
+    def list_contacts(
+        self,
+        params: Optional[Dict[str, Any]] = None,
+        *,
+        limit: int = 200,
+        max_pages: int = 10,
+    ) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        base_params = dict(params or {})
+        safe_limit = max(1, min(int(base_params.get("limit") or limit), 500))
+        for page in range(max_pages):
+            request_params = {**base_params, "limit": safe_limit, "offset": page * safe_limit}
+            payload = self.request("GET", "/Contact", params=request_params)
+            objects = payload.get("objects")
+            if isinstance(objects, list):
+                items = objects
+            elif isinstance(objects, dict):
+                items = [objects]
+            else:
+                items = []
+            if not items:
+                break
+            results.extend(items)
+            if len(items) < safe_limit:
+                break
+        return results
+
     def get_default_contact_person_id(self) -> Optional[int]:
         if self._contact_person_id_cache:
             return self._contact_person_id_cache

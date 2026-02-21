@@ -1714,6 +1714,50 @@ def _resolve_sevdesk_contact_name(client: SevdeskClient, contact_id: str) -> str
     return contact_name
 
 
+def _resolve_sevdesk_contact_names_batch(
+    client: SevdeskClient,
+    contact_ids: set[str],
+    *,
+    max_contacts_pages: int = 12,
+) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+    unresolved = {str(item).strip() for item in contact_ids if str(item).strip()}
+    if not unresolved:
+        return result
+
+    now_ms = int(time.time() * 1000)
+    for contact_id in list(unresolved):
+        cached = _sevdesk_contact_cache.get(contact_id)
+        if cached and (now_ms - int(cached[0])) < SEVDESK_CONTACT_CACHE_TTL_MS and cached[1]:
+            result[contact_id] = str(cached[1])
+            unresolved.discard(contact_id)
+
+    if unresolved:
+        try:
+            contacts = client.list_contacts(max_pages=max_contacts_pages, limit=200)
+        except SevdeskError:
+            contacts = []
+        for contact in contacts:
+            contact_id = str(contact.get("id") or "").strip()
+            if not contact_id or contact_id not in unresolved:
+                continue
+            contact_name = _format_contact_name(contact)
+            if not contact_name:
+                continue
+            _sevdesk_contact_cache[contact_id] = (now_ms, contact_name)
+            result[contact_id] = contact_name
+            unresolved.discard(contact_id)
+            if not unresolved:
+                break
+
+    # Fallback for remaining ids
+    for contact_id in unresolved:
+        contact_name = _resolve_sevdesk_contact_name(client, contact_id)
+        if contact_name:
+            result[contact_id] = contact_name
+    return result
+
+
 def _format_contact_name(contact: Dict[str, Any]) -> str:
     if not isinstance(contact, dict):
         return ""
@@ -2169,10 +2213,8 @@ def _build_sevdesk_stats(
         if contact_id and (item.get("name") or "").startswith("Kontakt #"):
             contact_ids.add(contact_id)
     if contact_ids:
-        for contact_id in contact_ids:
-            contact_name = _resolve_sevdesk_contact_name(client, contact_id)
-            if not contact_name:
-                continue
+        names_map = _resolve_sevdesk_contact_names_batch(client, contact_ids)
+        for contact_id, contact_name in names_map.items():
             for bucket in top_customers.values():
                 for item in bucket:
                     if str(item.get("contactId") or "") == contact_id:
