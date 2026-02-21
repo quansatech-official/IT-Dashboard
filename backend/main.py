@@ -1718,7 +1718,7 @@ def _resolve_sevdesk_contact_names_batch(
     client: SevdeskClient,
     contact_ids: set[str],
     *,
-    max_contacts_pages: int = 12,
+    max_contacts_pages: int = 100,
 ) -> Dict[str, str]:
     result: Dict[str, str] = {}
     unresolved = {str(item).strip() for item in contact_ids if str(item).strip()}
@@ -2121,7 +2121,7 @@ def _build_sevdesk_stats(
     *,
     include_financial_overview: bool = True,
     invoices_max_pages: int = 30,
-    resolve_contacts_limit: int = 40,
+    resolve_contacts_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     drafts: List[Dict[str, Any]] = []
     draft_sum = 0.0
@@ -2208,7 +2208,12 @@ def _build_sevdesk_stats(
             contact_id = str(item.get("contactId") or "").strip()
             if contact_id and (item.get("name") or "").startswith("Kontakt #"):
                 contact_ids.add(contact_id)
-    for item in customer_payment_stats[: max(0, resolve_contacts_limit)]:
+    customer_rows_for_resolution = (
+        customer_payment_stats
+        if resolve_contacts_limit is None
+        else customer_payment_stats[: max(0, int(resolve_contacts_limit))]
+    )
+    for item in customer_rows_for_resolution:
         contact_id = str(item.get("contactId") or "").strip()
         if contact_id and (item.get("name") or "").startswith("Kontakt #"):
             contact_ids.add(contact_id)
@@ -5852,11 +5857,11 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
         try:
             if load_customers and not load_billing:
                 sevdesk_stats = _build_sevdesk_stats(
-                    SevdeskClient(sevdesk_config, timeout=12),
+                    SevdeskClient(sevdesk_config, timeout=25),
                     now_dt,
                     include_financial_overview=False,
-                    invoices_max_pages=20,
-                    resolve_contacts_limit=20,
+                    invoices_max_pages=60,
+                    resolve_contacts_limit=None,
                 )
             else:
                 sevdesk_stats = _build_sevdesk_stats(
