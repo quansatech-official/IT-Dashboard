@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { renderReportHTML, uid } from "../reporting/utils";
 import { telephonyService } from "../telephony/telephonyService";
+import CustomerDevelopmentCustomerTab from "../customer-development/CustomerDevelopmentCustomerTab";
 
 const API = "/api";
 
@@ -41,7 +42,17 @@ const api = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }).then((r) => r.json())
+    }).then((r) => r.json()),
+  syncSevdesk: () =>
+    fetch(`${API}/customers/sync_sevdesk`, {
+      method: "POST"
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(data?.detail || "sevdesk_sync_failed");
+      }
+      return data;
+    })
 };
 
 const blankPhone = () => ({
@@ -70,7 +81,17 @@ const normalizeCustomer = (customer) => ({
     customer.newsletter ??
     customer.newsletter_enabled ??
     customer.newsletterEnabled ??
-    true
+    true,
+  status: String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active",
+  maintenanceContract:
+    customer.maintenance_contract ??
+    customer.maintenanceContract ??
+    false,
+  contractFlags: Array.isArray(customer.contract_flags)
+    ? customer.contract_flags
+    : Array.isArray(customer.contractFlags)
+    ? customer.contractFlags
+    : []
 });
 
 const customerPayload = (customer) => ({
@@ -84,6 +105,9 @@ const customerPayload = (customer) => ({
   country: customer.country || "",
   customer_report: Boolean(customer.customerReport),
   newsletter: Boolean(customer.newsletter),
+  status: String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active",
+  maintenance_contract: Boolean(customer.maintenanceContract),
+  contract_flags: Array.isArray(customer.contractFlags) ? customer.contractFlags : [],
   phones: (customer.phones || [])
     .filter((phone) => (phone.label || "").trim() || (phone.number || "").trim())
     .map((phone) => ({
@@ -109,6 +133,7 @@ export default function CustomerDirectoryView() {
   const [activeId, setActiveId] = useState(null);
   const [query, setQuery] = useState("");
   const [importStatus, setImportStatus] = useState("");
+  const [syncBusy, setSyncBusy] = useState(false);
   const [metrics, setMetrics] = useState(null);
   const [metricsStatus, setMetricsStatus] = useState("idle");
   const [importPreview, setImportPreview] = useState(null);
@@ -583,6 +608,24 @@ export default function CustomerDirectoryView() {
         setCustomers((prev) => [normalized, ...prev]);
         setActiveId(normalized.id);
       });
+  };
+
+  const handleSevdeskSync = async () => {
+    setSyncBusy(true);
+    try {
+      const result = await api.syncSevdesk();
+      const refreshed = await api.list();
+      setCustomers((refreshed || []).map(normalizeCustomer));
+      setImportStatus(
+        `sevDesk Sync: ${result.created || 0} neu, ${result.updated || 0} aktualisiert, ${result.inactivated || 0} inaktiv.`
+      );
+      setTimeout(() => setImportStatus(""), 5000);
+    } catch {
+      setImportStatus("sevDesk Sync fehlgeschlagen.");
+      setTimeout(() => setImportStatus(""), 4000);
+    } finally {
+      setSyncBusy(false);
+    }
   };
 
   const handleRemove = (id) => {
@@ -1198,6 +1241,18 @@ export default function CustomerDirectoryView() {
             </button>
             <button
               type="button"
+              onClick={handleSevdeskSync}
+              disabled={syncBusy}
+              className={`inline-flex items-center justify-center gap-2 rounded-full border px-4 py-1.5 text-xs uppercase tracking-wide ${
+                syncBusy
+                  ? "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
+                  : "border-sand-200 bg-white text-sand-700 hover:bg-sand-100"
+              }`}
+            >
+              sevDesk Sync
+            </button>
+            <button
+              type="button"
               onClick={downloadCsv}
               className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-1.5 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
             >
@@ -1308,6 +1363,17 @@ export default function CustomerDirectoryView() {
               >
                 Kennzahlenbasis
               </button>
+              <button
+                type="button"
+                onClick={() => setSettingsTab("development")}
+                className={`rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
+                  settingsTab === "development"
+                    ? "border-sand-900 bg-sand-900 text-white"
+                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                }`}
+              >
+                Kundenentwicklung
+              </button>
             </div>
             {settingsTab === "settings" ? (
               <div className="space-y-4">
@@ -1416,6 +1482,12 @@ export default function CustomerDirectoryView() {
                   <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
                 ) : null}
               </div>
+            ) : settingsTab === "development" ? (
+              <CustomerDevelopmentCustomerTab
+                customerId={activeCustomer?.id}
+                customerName={activeCustomer?.name || ""}
+                customerNumber={activeCustomer?.creditorNumber || ""}
+              />
             ) : activeCustomer ? (
               <div className="space-y-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
@@ -1525,6 +1597,56 @@ export default function CustomerDirectoryView() {
                       />
                       <span>Newsletter</span>
                     </label>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge & Status</p>
+                  </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <span className="text-xs uppercase tracking-wide text-sand-500">Kundenstatus</span>
+                      <select
+                        value={activeCustomer.status || "active"}
+                        onChange={(event) =>
+                          updateCustomer(activeCustomer.id, { status: event.target.value })
+                        }
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      >
+                        <option value="active">Aktiv</option>
+                        <option value="inactive">Inaktiv</option>
+                      </select>
+                    </label>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {[
+                        { id: "monitoring", label: "Monitoring" },
+                        { id: "wartung", label: "Wartung" },
+                        { id: "sla", label: "SLA" }
+                      ].map((contract) => (
+                        <label
+                          key={contract.id}
+                          className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean((activeCustomer.contractFlags || []).includes(contract.id))}
+                            onChange={(event) => {
+                              const current = new Set(activeCustomer.contractFlags || []);
+                              if (event.target.checked) current.add(contract.id);
+                              else current.delete(contract.id);
+                              const nextFlags = Array.from(current);
+                              updateCustomer(activeCustomer.id, {
+                                contractFlags: nextFlags,
+                                maintenanceContract: nextFlags.includes("wartung")
+                              });
+                            }}
+                            className="h-4 w-4"
+                          />
+                          <span>{contract.label}</span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
@@ -1660,7 +1782,7 @@ export default function CustomerDirectoryView() {
                 <div className="rounded-2xl border border-sand-200 bg-white p-4">
                   <div className="flex items-center gap-2 text-sand-700 mb-3">
                     <Building2 size={16} />
-                    <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Kennzahlen</p>
+                    <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Operative Kennzahlen</p>
                   </div>
                   {metricsStatus === "loading" ? (
                     <p className="text-sm text-sand-500">Lädt Kennzahlen…</p>

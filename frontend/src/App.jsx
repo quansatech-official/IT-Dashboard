@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  TrendingDown,
   BarChart3,
   Brain,
   ClipboardList,
@@ -27,6 +28,7 @@ import StatsView from "./stats/StatsView";
 import PurchasingView from "./purchasing/PurchasingView";
 import KnowledgeBaseView from "./knowledge/KnowledgeBaseView";
 import IncomingCallQuickTaskPopup from "./telephony/IncomingCallQuickTaskPopup";
+import CustomerDevelopmentView from "./customer-development/CustomerDevelopmentView";
 
 export default function App() {
   const [activeView, setActiveView] = useState("dayplan");
@@ -94,6 +96,16 @@ export default function App() {
               } flex items-center gap-3`}
             >
               <Users size={18} /> Kundenstamm
+            </button>
+            <button
+              onClick={() => setActiveView("customer-development")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "customer-development"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <TrendingDown size={18} /> Kundenentwicklung
             </button>
             <button
               onClick={() => setActiveView("offers")}
@@ -212,6 +224,8 @@ export default function App() {
             <PurchasingView />
           ) : activeView === "knowledge" ? (
             <KnowledgeBaseView />
+          ) : activeView === "customer-development" ? (
+            <CustomerDevelopmentView />
           ) : activeView === "offers" ? (
             <OffersView />
           ) : (

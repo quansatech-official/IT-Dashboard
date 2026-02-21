@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Response, Request, Form
+from fastapi import FastAPI, HTTPException, Response, Request, Form, Header
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -104,6 +104,9 @@ class Customer(Base):
     time_tracking_enabled = Column(Boolean, default=False)
     customer_report = Column(Boolean, default=True)
     newsletter = Column(Boolean, default=True)
+    status = Column(String, default="active")
+    maintenance_contract = Column(Boolean, default=False)
+    contract_flags = Column(Text, default="[]")
     street = Column(String, default="")
     postal_code = Column(String, default="")
     city = Column(String, default="")
@@ -356,6 +359,23 @@ class IntegrationSettings(Base):
     sevdesk_hourly_rate_eur = Column(String, default="")
     icecat_api_token = Column(String, default="")
     icecat_enabled = Column(Boolean, default=False)
+
+
+class InfraDiscoveryDevice(Base):
+    __tablename__ = "infra_discovery_devices"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
+    customer_number = Column(String, default="")
+    customer_name = Column(String, default="")
+    source = Column(String, default="agent")
+    hostname = Column(String, default="")
+    ip = Column(String, default="")
+    mac = Column(String, default="")
+    protocol = Column(String, default="")
+    managed = Column(Boolean, default=False)
+    last_seen_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
 class SmtpSettings(Base):
@@ -738,6 +758,12 @@ def _ensure_customer_columns() -> None:
         statements.append("ALTER TABLE customers ADD COLUMN customer_report BOOLEAN DEFAULT TRUE")
     if "newsletter" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN newsletter BOOLEAN DEFAULT TRUE")
+    if "status" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN status VARCHAR DEFAULT 'active'")
+    if "maintenance_contract" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN maintenance_contract BOOLEAN DEFAULT FALSE")
+    if "contract_flags" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN contract_flags TEXT DEFAULT '[]'")
     if "street" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN street VARCHAR DEFAULT ''")
     if "postal_code" not in columns:
@@ -760,6 +786,10 @@ def _ensure_customer_columns() -> None:
         if "customer_report" in columns:
             connection.execute(
                 text("UPDATE customers SET customer_report = TRUE WHERE customer_report IS NULL")
+            )
+        if "status" in columns:
+            connection.execute(
+                text("UPDATE customers SET status = 'active' WHERE status IS NULL OR TRIM(status) = ''")
             )
         if "newsletter" in columns:
             connection.execute(
@@ -892,6 +922,9 @@ class CustomerCreate(BaseModel):
     time_tracking_enabled: Optional[bool] = None
     customer_report: Optional[bool] = None
     newsletter: Optional[bool] = None
+    status: Optional[str] = "active"
+    maintenance_contract: Optional[bool] = False
+    contract_flags: Optional[List[str]] = None
     street: Optional[str] = ""
     postal_code: Optional[str] = ""
     city: Optional[str] = ""
@@ -907,6 +940,9 @@ class CustomerUpdate(BaseModel):
     time_tracking_enabled: Optional[bool] = None
     customer_report: Optional[bool] = None
     newsletter: Optional[bool] = None
+    status: Optional[str] = None
+    maintenance_contract: Optional[bool] = None
+    contract_flags: Optional[List[str]] = None
     street: Optional[str] = None
     postal_code: Optional[str] = None
     city: Optional[str] = None
@@ -1183,6 +1219,23 @@ class CustomerMetricsSettingsUpdate(BaseModel):
     min_distance_km: Optional[str] = None
     min_fee_eur: Optional[str] = None
     hourly_rate_eur: Optional[str] = None
+
+
+class InfraDiscoveryItem(BaseModel):
+    customer_id: Optional[int] = None
+    customer_number: Optional[str] = ""
+    customer_name: Optional[str] = ""
+    source: Optional[str] = "agent"
+    hostname: Optional[str] = ""
+    ip: Optional[str] = ""
+    mac: Optional[str] = ""
+    protocol: Optional[str] = ""
+    managed: Optional[bool] = False
+    seen_at: Optional[int] = None
+
+
+class InfraDiscoveryIngestRequest(BaseModel):
+    items: List[InfraDiscoveryItem]
 
 
 class OfferSettingsUpdate(BaseModel):
@@ -2274,7 +2327,39 @@ def serialize_day_task_group(g: DayTaskGroup) -> Dict[str, Any]:
     }
 
 
+def _normalize_contract_flags(flags: Optional[List[Any]]) -> List[str]:
+    if not isinstance(flags, list):
+        return []
+    allowed = {"monitoring", "wartung", "sla"}
+    normalized: List[str] = []
+    seen = set()
+    for value in flags:
+        key = re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+        if key in {"maintenance", "wartungsvertrag"}:
+            key = "wartung"
+        if key in {"monitoringvertrag", "rmm"}:
+            key = "monitoring"
+        if key in {"servicelevelagreement"}:
+            key = "sla"
+        if key not in allowed or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    return normalized
+
+
+def _parse_contract_flags(raw: Optional[str]) -> List[str]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return _normalize_contract_flags(parsed if isinstance(parsed, list) else [])
+
+
 def serialize_customer(c: Customer) -> Dict[str, Any]:
+    contract_flags = _parse_contract_flags(c.contract_flags)
     return {
         "id": c.id,
         "name": c.name,
@@ -2284,6 +2369,9 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
         "time_tracking_enabled": c.time_tracking_enabled,
         "customer_report": c.customer_report,
         "newsletter": c.newsletter,
+        "status": (c.status or "active").strip().lower() or "active",
+        "maintenance_contract": bool(c.maintenance_contract) or ("wartung" in contract_flags),
+        "contract_flags": contract_flags,
         "street": c.street,
         "postal_code": c.postal_code,
         "city": c.city,
@@ -3681,12 +3769,623 @@ def _generate_task_draft_from_email(
     fallback_details = _normalize_space(content[:1000])
     return {"title": fallback_title, "details": fallback_details, "customer_hint": ""}
 
+
+def _dev_normalize_text(value: Any) -> str:
+    text_value = str(value or "").strip().lower()
+    text_value = re.sub(r"[^a-z0-9]+", " ", text_value)
+    return re.sub(r"\s+", " ", text_value).strip()
+
+
+def _dev_customer_match_terms(customer: Customer) -> List[str]:
+    terms = []
+    for value in [customer.name, customer.creditor_number, customer.short_code]:
+        normalized = _dev_normalize_text(value)
+        if normalized:
+            terms.append(normalized)
+    return terms
+
+
+def _dev_score_to_state(score: float) -> str:
+    if score >= 75:
+        return "RISK"
+    if score >= 50:
+        return "ATTENTION"
+    if score >= 25:
+        return "POTENTIAL"
+    return "STABLE"
+
+
+def _fetch_tactical_rmm_agents(settings: Optional[IntegrationSettings]) -> Tuple[List[Dict[str, Any]], bool]:
+    if not settings:
+        return [], False
+    host = str(settings.rmm_host or "").strip().rstrip("/")
+    user = str(settings.rmm_user or "").strip()
+    password = str(settings.rmm_password or "").strip()
+    if not host:
+        return [], False
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": "QT-Workbench"})
+    auth_candidates = [
+        "/api-token-auth/",
+        "/api/v3/token/",
+        "/api/v3/auth/token/",
+    ]
+    token = ""
+    if user and password:
+        for path in auth_candidates:
+            try:
+                auth_res = session.post(
+                    f"{host}{path}",
+                    json={"username": user, "password": password},
+                    timeout=6,
+                )
+            except requests.RequestException:
+                continue
+            if not auth_res.ok:
+                continue
+            try:
+                payload = auth_res.json()
+            except ValueError:
+                payload = {}
+            token = (
+                str(payload.get("token") or payload.get("access") or payload.get("access_token") or "")
+                .strip()
+            )
+            if token:
+                break
+    if token:
+        session.headers.update({"Authorization": f"Bearer {token}"})
+
+    list_candidates = [
+        "/api/v3/agents/",
+        "/api/v3/agents",
+    ]
+    for path in list_candidates:
+        try:
+            res = session.get(f"{host}{path}", timeout=8)
+        except requests.RequestException:
+            continue
+        if not res.ok:
+            continue
+        try:
+            payload = res.json()
+        except ValueError:
+            continue
+        if isinstance(payload, list):
+            return payload, True
+        if isinstance(payload, dict):
+            for key in ("results", "agents", "data"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return value, True
+    return [], False
+
+
+def _extract_customer_number_from_contact(contact: Dict[str, Any]) -> str:
+    for key in ("customerNumber", "customernumber", "number"):
+        value = str(contact.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _build_sevdesk_customer_rows(
+    integration: Optional[IntegrationSettings],
+    metrics_settings: Optional[CustomerMetricsSettings],
+    now_dt: datetime,
+) -> List[Dict[str, Any]]:
+    if not integration:
+        return []
+    config = _build_sevdesk_config(integration, metrics_settings)
+    if not config.api_token:
+        return []
+    try:
+        client = SevdeskClient(config, timeout=20)
+        sevdesk_stats = _build_sevdesk_stats(
+            client,
+            now_dt,
+            include_financial_overview=False,
+            invoices_max_pages=60,
+            resolve_contacts_limit=None,
+        )
+        rows = sevdesk_stats.get("customerPaymentStats")
+        return rows if isinstance(rows, list) else []
+    except SevdeskError:
+        return []
+
+
+def _match_sevdesk_row(customer: Customer, rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not rows:
+        return None
+    customer_number = str(customer.creditor_number or "").strip()
+    customer_name = _dev_normalize_text(customer.name)
+    best = None
+    best_score = -1
+    for row in rows:
+        score = 0
+        row_name = _dev_normalize_text(row.get("name"))
+        if customer_number:
+            row_number = _dev_normalize_text(row.get("customerNumber") or row.get("customer_number"))
+            if row_number and row_number == _dev_normalize_text(customer_number):
+                score += 100
+        if customer_name and row_name:
+            if customer_name == row_name:
+                score += 80
+            elif customer_name in row_name or row_name in customer_name:
+                score += 45
+        if score > best_score:
+            best_score = score
+            best = row
+    return best if best_score > 0 else None
+
+
+def _customer_task_filter(customer: Customer) -> List[Any]:
+    filters = []
+    customer_name = (customer.name or "").strip().lower()
+    customer_number = (customer.creditor_number or "").strip()
+    if customer_name:
+        filters.append(func.lower(func.trim(DayTask.customer)) == customer_name)
+    if customer_number:
+        filters.append(func.trim(DayTask.customer_number) == customer_number)
+    return filters
+
+
+def _customer_telephony_metrics(phone_numbers: List[str], start_ms: int) -> Dict[str, Any]:
+    phone_digits = []
+    for number in phone_numbers:
+        normalized = _normalize_phone(number)
+        if normalized and normalized not in phone_digits:
+            phone_digits.append(normalized)
+    if not phone_digits:
+        return {"minutes": 0, "missed": 0, "calls": 0}
+    conditions = []
+    params: Dict[str, Any] = {"since": start_ms}
+    for idx, digits in enumerate(phone_digits):
+        params[f"p{idx}"] = f"%{digits}"
+        conditions.append(
+            f"(regexp_replace(from_number, '\\\\D', '', 'g') LIKE :p{idx} "
+            f"OR regexp_replace(to_number, '\\\\D', '', 'g') LIKE :p{idx})"
+        )
+    where_clause = " OR ".join(conditions)
+    sql = (
+        "SELECT COALESCE(SUM(duration), 0) AS total_seconds, "
+        "COALESCE(SUM(CASE WHEN answered = false THEN 1 ELSE 0 END), 0) AS missed_calls, "
+        "COALESCE(COUNT(*), 0) AS total_calls "
+        "FROM telephony_calls "
+        "WHERE start_time >= :since AND (" + where_clause + ")"
+    )
+    try:
+        with engine.begin() as connection:
+            row = connection.execute(text(sql), params).mappings().first()
+            if not row:
+                return {"minutes": 0, "missed": 0, "calls": 0}
+            seconds = int(row.get("total_seconds") or 0)
+            return {
+                "minutes": round(seconds / 60, 1) if seconds else 0,
+                "missed": int(row.get("missed_calls") or 0),
+                "calls": int(row.get("total_calls") or 0),
+            }
+    except Exception:
+        return {"minutes": 0, "missed": 0, "calls": 0}
+
+
+def _agent_is_online(agent: Dict[str, Any]) -> bool:
+    value = str(
+        agent.get("status")
+        or agent.get("agent_status")
+        or agent.get("online")
+        or agent.get("is_online")
+        or ""
+    ).strip().lower()
+    return value in {"online", "up", "true", "1", "healthy"}
+
+
+def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
+    terms = _dev_customer_match_terms(customer)
+    if not terms:
+        return False
+    searchable = " ".join(
+        [
+            str(agent.get("site") or ""),
+            str(agent.get("site_name") or ""),
+            str(agent.get("client") or ""),
+            str(agent.get("client_name") or ""),
+            str(agent.get("customer") or ""),
+            str(agent.get("hostname") or ""),
+        ]
+    )
+    haystack = _dev_normalize_text(searchable)
+    return any(term and term in haystack for term in terms)
+
+
+def _build_customer_development_context(
+    db,
+    customer: Customer,
+    now_ms: int,
+    sevdesk_rows: List[Dict[str, Any]],
+    tactical_agents: List[Dict[str, Any]],
+    full: bool,
+) -> Dict[str, Any]:
+    contract_flags = _parse_contract_flags(customer.contract_flags)
+    has_contract = bool(customer.maintenance_contract) or bool(
+        set(contract_flags) & {"wartung", "monitoring", "sla"}
+    )
+    task_filters = _customer_task_filter(customer)
+    open_day_tasks = 0
+    open_time_tasks = 0
+    open_time_ms = 0
+    if task_filters:
+        open_day_tasks = (
+            db.query(DayTask)
+            .filter(DayTask.status != "done")
+            .filter(DayTask.time_enabled == False)
+            .filter(or_(*task_filters))
+            .count()
+        )
+        timed_tasks = (
+            db.query(DayTask)
+            .filter(DayTask.status != "done")
+            .filter(DayTask.time_enabled == True)
+            .filter(or_(*task_filters))
+            .all()
+        )
+        open_time_tasks = len(timed_tasks)
+        for task in timed_tasks:
+            elapsed = task.elapsed or 0
+            if task.running and task.startTime:
+                elapsed += max(0, now_ms - task.startTime)
+            open_time_ms += elapsed
+    open_time_minutes = round(open_time_ms / 60000, 1) if open_time_ms else 0
+
+    phone_numbers = [phone.number for phone in customer.phones]
+    telephony = _customer_telephony_metrics(phone_numbers, now_ms - 30 * 24 * 60 * 60 * 1000)
+    comm_load = round(float(telephony["minutes"]) + float(telephony["missed"]) * 5.0, 1)
+
+    matched_sevdesk = _match_sevdesk_row(customer, sevdesk_rows)
+    revenue_current_year = float(matched_sevdesk.get("revenueCurrentYearEur") or 0) if matched_sevdesk else 0.0
+    revenue_last_year = float(matched_sevdesk.get("revenueLastYearEur") or 0) if matched_sevdesk else 0.0
+    revenue_trend_pct = 0.0
+    if revenue_last_year > 0:
+        revenue_trend_pct = round(((revenue_current_year - revenue_last_year) / revenue_last_year) * 100.0, 1)
+    elif revenue_current_year > 0:
+        revenue_trend_pct = 100.0
+
+    discovery_conditions = [InfraDiscoveryDevice.customer_id == customer.id]
+    if str(customer.creditor_number or "").strip():
+        discovery_conditions.append(
+            func.lower(func.trim(InfraDiscoveryDevice.customer_number))
+            == func.lower(func.trim(customer.creditor_number))
+        )
+    if str(customer.name or "").strip():
+        discovery_conditions.append(
+            func.lower(func.trim(InfraDiscoveryDevice.customer_name))
+            == func.lower(func.trim(customer.name))
+        )
+    customer_discovery_rows = (
+        db.query(InfraDiscoveryDevice)
+        .filter(or_(*discovery_conditions))
+        .all()
+    )
+    discovered_total = len(customer_discovery_rows)
+    discovered_unmanaged = sum(1 for row in customer_discovery_rows if not bool(row.managed))
+
+    managed_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
+    managed_count = len(managed_agents)
+    offline_count = sum(1 for agent in managed_agents if not _agent_is_online(agent))
+    offline_rate = round((offline_count / managed_count), 2) if managed_count else 0.0
+    discovered_base = discovered_total if discovered_total > 0 else managed_count
+    coverage_ratio = round((managed_count / discovered_base), 2) if discovered_base > 0 else 0.0
+    unmanaged_count = max(discovered_base - managed_count, 0) + discovered_unmanaged
+
+    business_risk = 0
+    infra_risk = 0
+    signals: List[str] = []
+    recommendations: List[Dict[str, str]] = []
+
+    if not has_contract:
+        business_risk += 20
+        signals.append("Kein Wartungsvertrag hinterlegt")
+        recommendations.append(
+            {"type": "betreuung", "title": "Wartungsvertrag prüfen", "why": "Kein Vertrag im Kundenstamm."}
+        )
+    if revenue_trend_pct <= -15:
+        business_risk += 25
+        signals.append(f"Umsatztrend fallend ({revenue_trend_pct}%)")
+        recommendations.append(
+            {"type": "betreuung", "title": "Umsatzrückgang besprechen", "why": "Deutlicher Rückgang gegenüber Vorjahr."}
+        )
+    if comm_load >= 120 or telephony["missed"] >= 5:
+        business_risk += 15
+        signals.append("Hohe Kommunikationslast")
+        recommendations.append(
+            {"type": "betreuung", "title": "Betreuungsrhythmus erhöhen", "why": "Viele Minuten/Anrufe in den letzten 30 Tagen."}
+        )
+    if (open_day_tasks + open_time_tasks) >= 8:
+        business_risk += 10
+        signals.append("Viele offene Aufgaben")
+        recommendations.append(
+            {"type": "betreuung", "title": "Offene Aufgaben bündeln", "why": "Mehrere offene Punkte beim Kunden."}
+        )
+
+    if unmanaged_count > 0:
+        infra_risk += 35
+        signals.append(f"Unmanaged Geräte erkannt ({unmanaged_count})")
+        recommendations.append(
+            {"type": "security", "title": "Unmanaged Geräte inventarisieren", "why": "Erkannte Geräte sind nicht vollständig im RMM."}
+        )
+    if discovered_base > 0 and coverage_ratio < 0.7:
+        infra_risk += 25
+        signals.append(f"Niedrige RMM-Abdeckung ({int(coverage_ratio * 100)}%)")
+        recommendations.append(
+            {"type": "lifecycle", "title": "RMM-Abdeckung erhöhen", "why": "Managed/Discovered Verhältnis ist niedrig."}
+        )
+    if managed_count > 0 and offline_rate >= 0.3:
+        infra_risk += 25
+        signals.append(f"Viele Offline-Agents ({int(offline_rate * 100)}%)")
+        recommendations.append(
+            {"type": "security", "title": "Offline-Agents prüfen", "why": "Ein signifikanter Teil meldet sich nicht."}
+        )
+
+    total_risk = min(100, business_risk + infra_risk)
+    development_state = "INACTIVE" if (customer.status or "active").lower() == "inactive" else _dev_score_to_state(total_risk)
+    priority_score = round(total_risk + min(20.0, revenue_current_year / 10000.0), 1)
+    top_recommendations = recommendations[:3]
+
+    light = {
+        "customerId": customer.id,
+        "customerName": customer.name or "",
+        "customerNumber": customer.creditor_number or "",
+        "status": (customer.status or "active").lower(),
+        "hasMaintenanceContract": has_contract,
+        "contractFlags": contract_flags,
+        "revenueCurrentYearEur": round(revenue_current_year, 2),
+        "revenueLastYearEur": round(revenue_last_year, 2),
+        "revenueTrendPct": revenue_trend_pct,
+        "ticketLoad": open_day_tasks + open_time_tasks,
+        "openTimeMinutes": open_time_minutes,
+        "communicationFrequency": telephony["calls"],
+        "communicationLoad": comm_load,
+        "missedCalls": telephony["missed"],
+        "infra": {
+            "managedAssets": managed_count,
+            "discoveredAssets": discovered_base,
+            "coverageRatio": coverage_ratio,
+            "offlineRate": offline_rate,
+            "unmanagedCount": unmanaged_count,
+        },
+        "businessRisk": business_risk,
+        "infrastructureRisk": infra_risk,
+        "riskScore": total_risk,
+        "developmentState": development_state,
+        "priority": priority_score,
+        "signals": signals[:4],
+        "topRecommendations": top_recommendations,
+    }
+    if not full:
+        return light
+    light["recommendations"] = recommendations
+    light["telephony"] = telephony
+    light["reasons"] = signals
+    light["source"] = {
+        "sevdesk": bool(sevdesk_rows),
+        "tacticalRmm": bool(tactical_agents),
+        "discovery": discovered_total,
+    }
+    return light
+
+
+def _build_customer_development_payload(
+    include_inactive: bool = False,
+    customer_id: Optional[int] = None,
+    full: bool = False,
+) -> Dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    now_dt = datetime.now()
+    with SessionLocal() as db:
+        customers_query = db.query(Customer)
+        if customer_id is not None:
+            customers_query = customers_query.filter(Customer.id == customer_id)
+        elif not include_inactive:
+            customers_query = customers_query.filter(
+                or_(Customer.status.is_(None), func.lower(func.trim(Customer.status)) != "inactive")
+            )
+        customers = customers_query.all()
+        integration = db.query(IntegrationSettings).first()
+        metrics_settings = _get_customer_metrics_settings(db)
+        sevdesk_rows = _build_sevdesk_customer_rows(integration, metrics_settings, now_dt)
+        tactical_agents, tactical_connected = _fetch_tactical_rmm_agents(integration)
+        contexts = [
+            _build_customer_development_context(db, customer, now_ms, sevdesk_rows, tactical_agents, full)
+            for customer in customers
+        ]
+        contexts.sort(key=lambda item: (-(item.get("priority") or 0), -(item.get("riskScore") or 0)))
+        return {
+            "generatedAt": now_ms,
+            "count": len(contexts),
+            "contexts": contexts,
+            "sources": {
+                "sevdesk": bool(sevdesk_rows),
+                "tacticalRmm": bool(tactical_connected),
+            },
+        }
+
+
 # ================= CUSTOMERS =================
 @app.get("/api/customers")
 def get_customers():
     with SessionLocal() as db:
         customers = db.query(Customer).all()
         return [serialize_customer(c) for c in customers]
+
+
+@app.get("/api/customer_development")
+def get_customer_development(include_inactive: bool = False, full: bool = False):
+    return _build_customer_development_payload(include_inactive=include_inactive, full=full)
+
+
+@app.get("/api/customers/{customer_id}/development")
+def get_customer_development_for_customer(customer_id: int):
+    payload = _build_customer_development_payload(
+        include_inactive=True,
+        customer_id=customer_id,
+        full=True,
+    )
+    contexts = payload.get("contexts") or []
+    if not contexts:
+        raise HTTPException(404, "Customer not found")
+    return contexts[0]
+
+
+def _sevdesk_contact_display_name(contact: Dict[str, Any]) -> str:
+    for key in ("name", "name2", "contactName"):
+        value = str(contact.get(key) or "").strip()
+        if value:
+            return value
+    first_name = str(contact.get("firstName") or "").strip()
+    last_name = str(contact.get("surename") or contact.get("lastName") or "").strip()
+    joined = " ".join([part for part in [first_name, last_name] if part]).strip()
+    return joined
+
+
+@app.post("/api/customers/sync_sevdesk")
+def sync_customers_from_sevdesk():
+    with SessionLocal() as db:
+        integration = db.query(IntegrationSettings).first()
+        if not integration:
+            raise HTTPException(400, "Integration settings missing")
+        metrics = _get_customer_metrics_settings(db)
+        config = _build_sevdesk_config(integration, metrics)
+        if not config.api_token:
+            raise HTTPException(400, "Sevdesk settings missing: sevdesk_api_token")
+        try:
+            contacts = SevdeskClient(config, timeout=25).list_contacts(limit=200, max_pages=25)
+        except SevdeskError as exc:
+            raise HTTPException(502, f"Sevdesk sync failed: {exc}") from exc
+
+        existing = db.query(Customer).all()
+        by_number = {
+            str(customer.creditor_number or "").strip(): customer
+            for customer in existing
+            if str(customer.creditor_number or "").strip()
+        }
+        by_name = {
+            _dev_normalize_text(customer.name): customer
+            for customer in existing
+            if _dev_normalize_text(customer.name)
+        }
+
+        created = 0
+        updated = 0
+        activated = 0
+        seen_numbers: set[str] = set()
+        for contact in contacts:
+            number = _extract_customer_number_from_contact(contact)
+            name = _sevdesk_contact_display_name(contact)
+            if number:
+                seen_numbers.add(number)
+            if not name and not number:
+                continue
+            customer = by_number.get(number) if number else None
+            if not customer and name:
+                customer = by_name.get(_dev_normalize_text(name))
+            if customer:
+                changed = False
+                if number and not str(customer.creditor_number or "").strip():
+                    customer.creditor_number = number
+                    changed = True
+                if name and _dev_normalize_text(name) != _dev_normalize_text(customer.name):
+                    customer.name = name
+                    changed = True
+                if (customer.status or "active").lower() == "inactive":
+                    customer.status = "active"
+                    activated += 1
+                    changed = True
+                if changed:
+                    updated += 1
+                continue
+            created_customer = Customer(
+                name=name or f"Kunde {number}",
+                creditor_number=number or "",
+                status="active",
+                contract_flags="[]",
+            )
+            db.add(created_customer)
+            created += 1
+
+        inactivated = 0
+        if seen_numbers:
+            for customer in existing:
+                number = str(customer.creditor_number or "").strip()
+                if not number:
+                    continue
+                if number not in seen_numbers and (customer.status or "active").lower() != "inactive":
+                    customer.status = "inactive"
+                    inactivated += 1
+        db.commit()
+        return {
+            "status": "ok",
+            "created": created,
+            "updated": updated,
+            "reactivated": activated,
+            "inactivated": inactivated,
+            "contacts": len(contacts),
+        }
+
+
+@app.post("/api/infrastructure/discovery")
+def ingest_infrastructure_discovery(
+    payload: InfraDiscoveryIngestRequest,
+    x_discovery_token: Optional[str] = Header(default=None, alias="X-Discovery-Token"),
+):
+    expected_token = str(os.environ.get("INFRA_DISCOVERY_TOKEN") or "").strip()
+    if expected_token and str(x_discovery_token or "").strip() != expected_token:
+        raise HTTPException(401, "Invalid discovery token")
+    now_ms = int(time.time() * 1000)
+    created = 0
+    updated = 0
+    with SessionLocal() as db:
+        for item in payload.items:
+            seen_at = int(item.seen_at or now_ms)
+            existing = (
+                db.query(InfraDiscoveryDevice)
+                .filter(
+                    func.lower(func.trim(InfraDiscoveryDevice.source))
+                    == func.lower(func.trim(item.source or "agent")),
+                    func.lower(func.trim(InfraDiscoveryDevice.ip))
+                    == func.lower(func.trim(item.ip or "")),
+                    func.lower(func.trim(InfraDiscoveryDevice.mac))
+                    == func.lower(func.trim(item.mac or "")),
+                    InfraDiscoveryDevice.customer_id == item.customer_id,
+                )
+                .first()
+            )
+            if existing:
+                existing.customer_number = item.customer_number or existing.customer_number
+                existing.customer_name = item.customer_name or existing.customer_name
+                existing.hostname = item.hostname or existing.hostname
+                existing.protocol = item.protocol or existing.protocol
+                existing.managed = bool(item.managed)
+                existing.last_seen_at = seen_at
+                updated += 1
+                continue
+            db.add(
+                InfraDiscoveryDevice(
+                    customer_id=item.customer_id,
+                    customer_number=item.customer_number or "",
+                    customer_name=item.customer_name or "",
+                    source=item.source or "agent",
+                    hostname=item.hostname or "",
+                    ip=item.ip or "",
+                    mac=item.mac or "",
+                    protocol=item.protocol or "",
+                    managed=bool(item.managed),
+                    last_seen_at=seen_at,
+                )
+            )
+            created += 1
+        db.commit()
+    return {"status": "ok", "created": created, "updated": updated}
 
 
 # ============ REPORT CUSTOMERS (DUMMY) ============
@@ -3698,6 +4397,10 @@ def get_report_customers():
 @app.post("/api/customers")
 def create_customer(data: CustomerCreate):
     with SessionLocal() as db:
+        status_value = str(data.status or "active").strip().lower()
+        if status_value not in {"active", "inactive"}:
+            status_value = "active"
+        contract_flags = _normalize_contract_flags(data.contract_flags)
         customer = Customer(
             name=data.name,
             creditor_number=data.creditor_number or "",
@@ -3706,6 +4409,9 @@ def create_customer(data: CustomerCreate):
             time_tracking_enabled=bool(data.time_tracking_enabled),
             customer_report=True if data.customer_report is None else bool(data.customer_report),
             newsletter=True if data.newsletter is None else bool(data.newsletter),
+            status=status_value,
+            maintenance_contract=bool(data.maintenance_contract) or ("wartung" in contract_flags),
+            contract_flags=json.dumps(contract_flags),
             street=data.street or "",
             postal_code=data.postal_code or "",
             city=data.city or "",
@@ -3734,7 +4440,15 @@ def update_customer(customer_id: int, data: CustomerUpdate):
             raise HTTPException(404, "Customer not found")
 
         previous_name = customer.name
-        for field, value in data.dict(exclude_unset=True, exclude={"phones"}).items():
+        update_fields = data.dict(exclude_unset=True, exclude={"phones"})
+        if "status" in update_fields:
+            normalized_status = str(update_fields.get("status") or "").strip().lower()
+            update_fields["status"] = normalized_status if normalized_status in {"active", "inactive"} else "active"
+        if "contract_flags" in update_fields:
+            flags = _normalize_contract_flags(update_fields.get("contract_flags"))
+            update_fields["contract_flags"] = json.dumps(flags)
+            update_fields["maintenance_contract"] = bool(update_fields.get("maintenance_contract")) or ("wartung" in flags)
+        for field, value in update_fields.items():
             setattr(customer, field, value)
 
         if data.phones is not None:
