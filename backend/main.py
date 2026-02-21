@@ -1757,6 +1757,19 @@ def _invoice_date_for_paid(invoice: Dict[str, Any]) -> Optional[datetime]:
     )
 
 
+def _invoice_reminder_count(invoice: Dict[str, Any]) -> int:
+    for key in ("reminderCount", "dunningLevel", "dunning_level", "reminderLevel", "dunningLevelNumber"):
+        value = _parse_int(invoice.get(key))
+        if value and value > 0:
+            return value
+    reminders = invoice.get("reminders")
+    if isinstance(reminders, list) and reminders:
+        return len(reminders)
+    if bool(invoice.get("isReminder") or invoice.get("isDunned") or invoice.get("dunned")):
+        return 1
+    return 0
+
+
 def _top_customers_for_period(
     invoices: List[Dict[str, Any]],
     start_dt: datetime,
@@ -1799,7 +1812,10 @@ def _top_customers_for_period(
 def _build_customer_payment_stats(
     invoices: List[Dict[str, Any]],
     now_dt: datetime,
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
+    start_current_year = datetime(now_dt.year, 1, 1)
+    start_last_year = datetime(now_dt.year - 1, 1, 1)
+    end_last_year = datetime(now_dt.year - 1, 12, 31, 23, 59, 59)
     stats: Dict[str, Dict[str, Any]] = {}
     for invoice in invoices:
         status = _parse_int(invoice.get("status"))
@@ -1822,16 +1838,33 @@ def _build_customer_payment_stats(
                 "openInvoices": 0,
                 "overdueInvoices": 0,
                 "totalAmount": 0.0,
+                "revenueCurrentYear": 0.0,
+                "revenueLastYear": 0.0,
                 "openAmount": 0.0,
                 "paidAmount": 0.0,
                 "paymentDaysTotal": 0,
                 "paymentDaysCount": 0,
+                "latePaidInvoices": 0,
+                "veryLatePaidInvoices": 0,
                 "openAgeDaysTotal": 0,
                 "openAgeDaysCount": 0,
                 "maxPaymentDays": 0,
+                "remindersTotal": 0,
+                "earliestInvoiceDate": None,
+                "latestInvoiceDate": None,
             }
         entry["totalInvoices"] += 1
         entry["totalAmount"] += amount
+        reminder_count = _invoice_reminder_count(invoice)
+        entry["remindersTotal"] += reminder_count
+        if entry["earliestInvoiceDate"] is None or invoice_date < entry["earliestInvoiceDate"]:
+            entry["earliestInvoiceDate"] = invoice_date
+        if entry["latestInvoiceDate"] is None or invoice_date > entry["latestInvoiceDate"]:
+            entry["latestInvoiceDate"] = invoice_date
+        if invoice_date >= start_current_year and invoice_date <= now_dt:
+            entry["revenueCurrentYear"] += amount
+        elif invoice_date >= start_last_year and invoice_date <= end_last_year:
+            entry["revenueLastYear"] += amount
         paid_date = _invoice_date_for_paid(invoice)
         if _invoice_is_paid(invoice) and paid_date:
             paid_days = max(0, (paid_date.date() - invoice_date.date()).days)
@@ -1840,6 +1873,10 @@ def _build_customer_payment_stats(
             entry["paymentDaysTotal"] += paid_days
             entry["paymentDaysCount"] += 1
             entry["maxPaymentDays"] = max(entry["maxPaymentDays"], paid_days)
+            if paid_days > 14:
+                entry["latePaidInvoices"] += 1
+            if paid_days > 30:
+                entry["veryLatePaidInvoices"] += 1
         else:
             entry["openInvoices"] += 1
             entry["openAmount"] += amount
@@ -1860,10 +1897,31 @@ def _build_customer_payment_stats(
                 entry["overdueInvoices"] += 1
         stats[contact_id] = entry
 
+    overall_open_age_total = 0
+    overall_open_age_count = 0
+    overall_outstanding_amount = 0.0
+    overall_outstanding_invoices = 0
+    overall_revenue_total = 0.0
+    overall_revenue_current_year = 0.0
+    overall_revenue_last_year = 0.0
+    overall_payment_days_total = 0
+    overall_payment_days_count = 0
+    overall_late_paid_invoices = 0
+    overall_paid_invoices = 0
+    overall_reminders_total = 0
+
     rows: List[Dict[str, Any]] = []
     for item in stats.values():
+        revenue_total = round(item["totalAmount"], 2)
+        revenue_current_year = round(item["revenueCurrentYear"], 2)
+        revenue_last_year = round(item["revenueLastYear"], 2)
         avg_payment_days = (
             round(item["paymentDaysTotal"] / item["paymentDaysCount"], 1)
+            if item["paymentDaysCount"]
+            else None
+        )
+        late_paid_rate_pct = (
+            round((item["latePaidInvoices"] / item["paymentDaysCount"]) * 100, 1)
             if item["paymentDaysCount"]
             else None
         )
@@ -1880,6 +1938,33 @@ def _build_customer_payment_stats(
             grade = "B"
         else:
             grade = "A"
+        outstanding_ratio = (item["openAmount"] / item["totalAmount"]) if item["totalAmount"] else 0.0
+        business_weight = (
+            item["revenueCurrentYear"] * 0.6
+            + item["revenueLastYear"] * 0.3
+            + item["totalAmount"] * 0.1
+            - item["openAmount"] * 0.2
+            - item["overdueInvoices"] * 750.0
+            - outstanding_ratio * 1000.0
+        )
+        outstanding_invoices = item["openInvoices"]
+        overdue_invoices = item["overdueInvoices"]
+        open_overdue_invoices = outstanding_invoices
+        open_overdue_amount = round(item["openAmount"], 2)
+
+        overall_open_age_total += item["openAgeDaysTotal"]
+        overall_open_age_count += item["openAgeDaysCount"]
+        overall_outstanding_amount += item["openAmount"]
+        overall_outstanding_invoices += outstanding_invoices
+        overall_revenue_total += item["totalAmount"]
+        overall_revenue_current_year += item["revenueCurrentYear"]
+        overall_revenue_last_year += item["revenueLastYear"]
+        overall_payment_days_total += item["paymentDaysTotal"]
+        overall_payment_days_count += item["paymentDaysCount"]
+        overall_late_paid_invoices += item["latePaidInvoices"]
+        overall_paid_invoices += item["paymentDaysCount"]
+        overall_reminders_total += item["remindersTotal"]
+
         rows.append(
             {
                 "name": item["name"],
@@ -1887,25 +1972,68 @@ def _build_customer_payment_stats(
                 "grade": grade,
                 "totalInvoices": item["totalInvoices"],
                 "paidInvoices": item["paidInvoices"],
-                "openInvoices": item["openInvoices"],
-                "overdueInvoices": item["overdueInvoices"],
-                "totalAmountEur": round(item["totalAmount"], 2),
+                "openInvoices": outstanding_invoices,
+                "overdueInvoices": overdue_invoices,
+                "openOverdueInvoices": open_overdue_invoices,
+                "openOverdueAmountEur": open_overdue_amount,
+                "totalAmountEur": revenue_total,
+                "revenueCurrentYearEur": revenue_current_year,
+                "revenueLastYearEur": revenue_last_year,
                 "paidAmountEur": round(item["paidAmount"], 2),
                 "openAmountEur": round(item["openAmount"], 2),
                 "avgPaymentDays": avg_payment_days,
+                "latePaidRatePct": late_paid_rate_pct,
+                "latePaidInvoices": item["latePaidInvoices"],
+                "veryLatePaidInvoices": item["veryLatePaidInvoices"],
                 "avgOpenAgeDays": avg_open_age_days,
                 "maxPaymentDays": item["maxPaymentDays"],
+                "remindersTotal": int(item["remindersTotal"] or 0),
+                "historyFrom": item["earliestInvoiceDate"].strftime("%Y-%m-%d")
+                if item.get("earliestInvoiceDate")
+                else "",
+                "historyTo": item["latestInvoiceDate"].strftime("%Y-%m-%d")
+                if item.get("latestInvoiceDate")
+                else "",
+                "businessWeight": round(business_weight, 2),
             }
         )
     grade_order = {"A": 0, "B": 1, "C": 2}
     rows.sort(
         key=lambda row: (
             grade_order.get(str(row.get("grade") or ""), 9),
-            -(row.get("totalAmountEur") or 0),
+            -(row.get("businessWeight") or 0),
             str(row.get("name") or "").lower(),
         )
     )
-    return rows
+
+    avg_open_age_all = (
+        round(overall_open_age_total / overall_open_age_count, 1)
+        if overall_open_age_count
+        else None
+    )
+    avg_payment_days_all = (
+        round(overall_payment_days_total / overall_payment_days_count, 1)
+        if overall_payment_days_count
+        else None
+    )
+    late_paid_rate_all = (
+        round((overall_late_paid_invoices / overall_paid_invoices) * 100, 1)
+        if overall_paid_invoices
+        else None
+    )
+    summary = {
+        "customers": len(rows),
+        "revenueTotalEur": round(overall_revenue_total, 2),
+        "revenueCurrentYearEur": round(overall_revenue_current_year, 2),
+        "revenueLastYearEur": round(overall_revenue_last_year, 2),
+        "openOverdueInvoices": int(overall_outstanding_invoices),
+        "openOverdueAmountEur": round(overall_outstanding_amount, 2),
+        "avgOpenAgeDays": avg_open_age_all,
+        "avgPaymentDays": avg_payment_days_all,
+        "latePaidRatePct": late_paid_rate_all,
+        "remindersTotal": int(overall_reminders_total),
+    }
+    return {"rows": rows, "summary": summary}
 
 
 def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, Any]:
@@ -1926,7 +2054,7 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
             due_invoices.append(item)
     due_sum = round(sum(_parse_sevdesk_amount(item) for item in due_invoices), 2)
 
-    all_invoices = client.list_invoices(max_pages=25)
+    all_invoices = client.list_invoices(max_pages=60)
     start_month = datetime(now_dt.year, now_dt.month, 1)
     start_half_year = now_dt - timedelta(days=182)
     start_current_year = datetime(now_dt.year, 1, 1)
@@ -1977,7 +2105,9 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
         "currentYear": _top_customers_for_period(all_invoices, start_current_year, now_dt),
         "lastYear": _top_customers_for_period(all_invoices, start_last_year, end_last_year),
     }
-    customer_payment_stats = _build_customer_payment_stats(all_invoices, now_dt)
+    customer_payment_data = _build_customer_payment_stats(all_invoices, now_dt)
+    customer_payment_stats = customer_payment_data.get("rows") or []
+    customer_payment_summary = customer_payment_data.get("summary") or {}
 
     contact_ids: set[str] = set()
     for bucket in top_customers.values():
@@ -2019,6 +2149,7 @@ def _build_sevdesk_stats(client: SevdeskClient, now_dt: datetime) -> Dict[str, A
         "overdue": {"count": len(overdue_invoices), "sumEur": overdue_sum},
         "topCustomers": top_customers,
         "customerPaymentStats": customer_payment_stats,
+        "customerPaymentSummary": customer_payment_summary,
     }
 
 
@@ -5391,158 +5522,189 @@ def update_customer_metrics_settings(data: CustomerMetricsSettingsUpdate):
 
 
 @app.get("/api/company_stats")
-def get_company_stats(days: int = 30):
+def get_company_stats(days: int = 30, section: Optional[str] = None):
     safe_days = max(1, min(int(days or 30), 365))
     now_ms = int(time.time() * 1000)
     now_dt = datetime.now()
+    section_key = str(section or "").strip().lower()
+    load_all = not section_key
+    load_general = load_all or section_key == "general"
+    load_telephony = load_all or section_key == "telephony"
+    load_reports = load_all or section_key == "reports"
+    load_billing = load_all or section_key == "billing"
+    load_customers = load_all or section_key == "customers"
+    load_sevdesk = load_billing or load_customers
+
     start_of_day = datetime(now_dt.year, now_dt.month, now_dt.day)
     start_of_week = start_of_day - timedelta(days=start_of_day.weekday())
     start_day_ms = int(start_of_day.timestamp() * 1000)
     start_week_ms = int(start_of_week.timestamp() * 1000)
     start_ms = now_ms - safe_days * 24 * 60 * 60 * 1000
+
+    day_tasks_total = 0
+    day_tasks_open = 0
+    day_tasks_done = 0
+    day_tasks_done_today = 0
+    day_tasks_done_week = 0
+    done_elapsed_today = 0
+    done_elapsed_week = 0
+    total_time_ms = 0
+    open_time_ms = 0
+    total_time_tasks = 0
+    open_time_tasks = 0
+    reports_total = 0
+    reports_confirmed = 0
+    reports_opened = 0
+    reports_unread = 0
+    reports_sent = 0
+    month_stats: Dict[str, Dict[str, Any]] = {}
+    hourly_rate = 0.0
+    sevdesk_config: Optional[SevdeskConfig] = None
+
     with SessionLocal() as db:
-        day_tasks_total = db.query(DayTask).count()
-        day_tasks_open = db.query(DayTask).filter(DayTask.status != "done").count()
-        day_tasks_done = db.query(DayTask).filter(DayTask.status == "done").count()
-        day_tasks_done_today = (
-            db.query(DayTask)
-            .filter(DayTask.completed_at >= start_day_ms)
-            .filter(DayTask.status == "done")
-            .count()
-        )
-        day_tasks_done_week = (
-            db.query(DayTask)
-            .filter(DayTask.completed_at >= start_week_ms)
-            .filter(DayTask.status == "done")
-            .count()
-        )
-        done_elapsed_today = (
-            db.query(func.coalesce(func.sum(DayTask.elapsed), 0))
-            .filter(DayTask.completed_at >= start_day_ms)
-            .filter(DayTask.status == "done")
-            .filter(DayTask.time_enabled == True)
-            .scalar()
-            or 0
-        )
-        done_elapsed_week = (
-            db.query(func.coalesce(func.sum(DayTask.elapsed), 0))
-            .filter(DayTask.completed_at >= start_week_ms)
-            .filter(DayTask.status == "done")
-            .filter(DayTask.time_enabled == True)
-            .scalar()
-            or 0
-        )
+        settings = None
+        if load_general or load_sevdesk:
+            settings = _get_customer_metrics_settings(db)
+            try:
+                hourly_rate = float(settings.hourly_rate_eur or 0)
+            except ValueError:
+                hourly_rate = 0.0
 
-        total_time_ms = 0
-        open_time_ms = 0
-        total_time_tasks = 0
-        open_time_tasks = 0
-        for task in db.query(DayTask).filter(DayTask.time_enabled == True).all():
-            total_time_tasks += 1
-            elapsed = task.elapsed or 0
-            if task.running and task.startTime:
-                elapsed += max(0, now_ms - task.startTime)
-            total_time_ms += elapsed
-            if task.status != "done":
-                open_time_tasks += 1
-                open_time_ms += elapsed
+        if load_general:
+            day_tasks_total = db.query(DayTask).count()
+            day_tasks_open = db.query(DayTask).filter(DayTask.status != "done").count()
+            day_tasks_done = db.query(DayTask).filter(DayTask.status == "done").count()
+            day_tasks_done_today = (
+                db.query(DayTask)
+                .filter(DayTask.completed_at >= start_day_ms)
+                .filter(DayTask.status == "done")
+                .count()
+            )
+            day_tasks_done_week = (
+                db.query(DayTask)
+                .filter(DayTask.completed_at >= start_week_ms)
+                .filter(DayTask.status == "done")
+                .count()
+            )
+            done_elapsed_today = (
+                db.query(func.coalesce(func.sum(DayTask.elapsed), 0))
+                .filter(DayTask.completed_at >= start_day_ms)
+                .filter(DayTask.status == "done")
+                .filter(DayTask.time_enabled == True)
+                .scalar()
+                or 0
+            )
+            done_elapsed_week = (
+                db.query(func.coalesce(func.sum(DayTask.elapsed), 0))
+                .filter(DayTask.completed_at >= start_week_ms)
+                .filter(DayTask.status == "done")
+                .filter(DayTask.time_enabled == True)
+                .scalar()
+                or 0
+            )
+            for task in db.query(DayTask).filter(DayTask.time_enabled == True).all():
+                total_time_tasks += 1
+                elapsed = task.elapsed or 0
+                if task.running and task.startTime:
+                    elapsed += max(0, now_ms - task.startTime)
+                total_time_ms += elapsed
+                if task.status != "done":
+                    open_time_tasks += 1
+                    open_time_ms += elapsed
 
-        reports_total = db.query(Report).count()
-        reports_confirmed = (
-            db.query(Report).filter(Report.customer_status == "Bestätigt").count()
-        )
-        reports_opened = (
-            db.query(Report)
-            .filter(
-                or_(
-                    Report.opened_count > 0,
-                    func.lower(Report.customer_status).in_(["gelesen", "bestätigt"]),
+        if load_reports:
+            reports_total = db.query(Report).count()
+            reports_confirmed = (
+                db.query(Report).filter(Report.customer_status == "Bestätigt").count()
+            )
+            reports_opened = (
+                db.query(Report)
+                .filter(
+                    or_(
+                        Report.opened_count > 0,
+                        func.lower(Report.customer_status).in_(["gelesen", "bestätigt"]),
+                    )
                 )
+                .count()
             )
-            .count()
-        )
-        reports_unread = max(0, reports_total - reports_opened)
-        reports_sent = db.query(Report).filter(Report.sent_at > 0).count()
+            reports_unread = max(0, reports_total - reports_opened)
+            reports_sent = db.query(Report).filter(Report.sent_at > 0).count()
 
-        month_cursor = datetime(now_dt.year, now_dt.month, 1)
-        month_starts = []
-        for _ in range(6):
-            month_starts.append(month_cursor)
-            prev = month_cursor - timedelta(days=1)
-            month_cursor = datetime(prev.year, prev.month, 1)
-        month_starts.reverse()
-        first_month_start = month_starts[0]
-        first_month_start_ms = int(first_month_start.timestamp() * 1000)
-        month_stats = {
-            f"{m.year:04d}-{m.month:02d}": {
-                "key": f"{m.year:04d}-{m.month:02d}",
-                "year": m.year,
-                "month": m.month,
-                "total": 0,
-                "sent": 0,
-                "opened": 0,
-                "unread": 0,
-                "confirmed": 0,
+            month_cursor = datetime(now_dt.year, now_dt.month, 1)
+            month_starts = []
+            for _ in range(6):
+                month_starts.append(month_cursor)
+                prev = month_cursor - timedelta(days=1)
+                month_cursor = datetime(prev.year, prev.month, 1)
+            month_starts.reverse()
+            first_month_start = month_starts[0]
+            first_month_start_ms = int(first_month_start.timestamp() * 1000)
+            month_stats = {
+                f"{m.year:04d}-{m.month:02d}": {
+                    "key": f"{m.year:04d}-{m.month:02d}",
+                    "year": m.year,
+                    "month": m.month,
+                    "total": 0,
+                    "sent": 0,
+                    "opened": 0,
+                    "unread": 0,
+                    "confirmed": 0,
+                }
+                for m in month_starts
             }
-            for m in month_starts
-        }
-        report_rows = (
-            db.query(Report)
-            .filter(Report.created_at >= first_month_start_ms)
-            .all()
-        )
-        for report in report_rows:
-            created_at = report.created_at or 0
-            created_dt = datetime.fromtimestamp(created_at / 1000) if created_at else now_dt
-            key = f"{created_dt.year:04d}-{created_dt.month:02d}"
-            bucket = month_stats.get(key)
-            if not bucket:
-                continue
-            is_sent = (report.sent_at or 0) > 0
-            is_read = (report.opened_count or 0) > 0 or (
-                (report.customer_status or "").strip().lower() in {"gelesen", "bestätigt"}
+            report_rows = (
+                db.query(Report)
+                .filter(Report.created_at >= first_month_start_ms)
+                .all()
             )
-            bucket["total"] += 1
-            if is_sent:
-                bucket["sent"] += 1
-            if is_read:
-                bucket["opened"] += 1
-            else:
-                bucket["unread"] += 1
-            if (report.customer_status or "").strip() == "Bestätigt":
-                bucket["confirmed"] += 1
+            for report in report_rows:
+                created_at = report.created_at or 0
+                created_dt = datetime.fromtimestamp(created_at / 1000) if created_at else now_dt
+                key = f"{created_dt.year:04d}-{created_dt.month:02d}"
+                bucket = month_stats.get(key)
+                if not bucket:
+                    continue
+                is_sent = (report.sent_at or 0) > 0
+                is_read = (report.opened_count or 0) > 0 or (
+                    (report.customer_status or "").strip().lower() in {"gelesen", "bestätigt"}
+                )
+                bucket["total"] += 1
+                if is_sent:
+                    bucket["sent"] += 1
+                if is_read:
+                    bucket["opened"] += 1
+                else:
+                    bucket["unread"] += 1
+                if (report.customer_status or "").strip() == "Bestätigt":
+                    bucket["confirmed"] += 1
 
-        settings = _get_customer_metrics_settings(db)
-        try:
-            hourly_rate = float(settings.hourly_rate_eur or 0)
-        except ValueError:
-            hourly_rate = 0.0
-
-        integration = db.query(IntegrationSettings).first()
-        if not integration:
-            integration = IntegrationSettings()
-            db.add(integration)
-            db.commit()
-        sevdesk_config = _build_sevdesk_config(integration, settings)
+        if load_sevdesk:
+            integration = db.query(IntegrationSettings).first()
+            if not integration:
+                integration = IntegrationSettings()
+                db.add(integration)
+                db.commit()
+            sevdesk_config = _build_sevdesk_config(integration, settings)
 
     telephony_minutes = 0
     telephony_missed = 0
-    try:
-        sql = (
-            "SELECT COALESCE(SUM(duration), 0) AS total_seconds, "
-            "COALESCE(SUM(CASE WHEN answered = false THEN 1 ELSE 0 END), 0) AS missed_calls "
-            "FROM telephony_calls "
-            "WHERE start_time >= :since"
-        )
-        with engine.begin() as connection:
-            row = connection.execute(text(sql), {"since": start_ms}).mappings().first()
-            if row:
-                total_seconds = int(row.get("total_seconds") or 0)
-                telephony_minutes = round(total_seconds / 60, 1) if total_seconds else 0
-                telephony_missed = int(row.get("missed_calls") or 0)
-    except Exception:
-        telephony_minutes = 0
-        telephony_missed = 0
+    if load_telephony:
+        try:
+            sql = (
+                "SELECT COALESCE(SUM(duration), 0) AS total_seconds, "
+                "COALESCE(SUM(CASE WHEN answered = false THEN 1 ELSE 0 END), 0) AS missed_calls "
+                "FROM telephony_calls "
+                "WHERE start_time >= :since"
+            )
+            with engine.begin() as connection:
+                row = connection.execute(text(sql), {"since": start_ms}).mappings().first()
+                if row:
+                    total_seconds = int(row.get("total_seconds") or 0)
+                    telephony_minutes = round(total_seconds / 60, 1) if total_seconds else 0
+                    telephony_missed = int(row.get("missed_calls") or 0)
+        except Exception:
+            telephony_minutes = 0
+            telephony_missed = 0
 
     total_time_hours = round(total_time_ms / 3600000, 2) if total_time_ms else 0
     open_time_hours = round(open_time_ms / 3600000, 2) if open_time_ms else 0
@@ -5558,47 +5720,59 @@ def get_company_stats(days: int = 30):
     )
 
     sevdesk_stats: Dict[str, Any] = {"connected": False}
-    if sevdesk_config.api_token:
+    if load_sevdesk and sevdesk_config and sevdesk_config.api_token:
         try:
             sevdesk_stats = _build_sevdesk_stats(SevdeskClient(sevdesk_config), now_dt)
         except SevdeskError as exc:
             sevdesk_stats = {"connected": False, "error": str(exc)}
 
-    return {
-        "dayTasks": {
-            "total": day_tasks_total,
-            "open": day_tasks_open,
-            "done": day_tasks_done,
-            "doneToday": day_tasks_done_today,
-            "doneWeek": day_tasks_done_week,
-        },
-        "timeTracking": {
-            "totalTasks": total_time_tasks,
-            "openTasks": open_time_tasks,
-            "totalHours": total_time_hours,
-            "openHours": open_time_hours,
-            "openMinutes": open_time_minutes,
-            "doneTodayHours": done_time_today_hours,
-            "doneWeekHours": done_time_week_hours,
-        },
-        "telephony": {
+    response: Dict[str, Any] = {}
+    if load_general:
+        response.update(
+            {
+                "dayTasks": {
+                    "total": day_tasks_total,
+                    "open": day_tasks_open,
+                    "done": day_tasks_done,
+                    "doneToday": day_tasks_done_today,
+                    "doneWeek": day_tasks_done_week,
+                },
+                "timeTracking": {
+                    "totalTasks": total_time_tasks,
+                    "openTasks": open_time_tasks,
+                    "totalHours": total_time_hours,
+                    "openHours": open_time_hours,
+                    "openMinutes": open_time_minutes,
+                    "doneTodayHours": done_time_today_hours,
+                    "doneWeekHours": done_time_week_hours,
+                },
+                "revenueEstimateEur": revenue_estimate,
+                "revenueEstimateTodayEur": revenue_estimate_today,
+                "revenueEstimateWeekEur": revenue_estimate_week,
+                "hourlyRateEur": hourly_rate,
+            }
+        )
+    if load_telephony:
+        response["telephony"] = {
             "minutes": telephony_minutes,
             "missed": telephony_missed,
-        },
-        "reports": {
-            "total": reports_total,
-            "sent": reports_sent,
-            "opened": reports_opened,
-            "unread": reports_unread,
-            "confirmed": reports_confirmed,
-        },
-        "reportsMonthly": list(month_stats.values()),
-        "sevdesk": sevdesk_stats,
-        "revenueEstimateEur": revenue_estimate,
-        "revenueEstimateTodayEur": revenue_estimate_today,
-        "revenueEstimateWeekEur": revenue_estimate_week,
-        "hourlyRateEur": hourly_rate,
-    }
+        }
+    if load_reports:
+        response.update(
+            {
+                "reports": {
+                    "total": reports_total,
+                    "sent": reports_sent,
+                    "opened": reports_opened,
+                    "unread": reports_unread,
+                    "confirmed": reports_confirmed,
+                },
+                "reportsMonthly": list(month_stats.values()),
+            }
+        )
+    if load_sevdesk:
+        response["sevdesk"] = sevdesk_stats
+    return response
 
 
 @app.post("/api/reports/{report_id}/send")

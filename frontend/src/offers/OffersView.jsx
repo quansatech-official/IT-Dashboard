@@ -6008,17 +6008,14 @@ export default function OffersView() {
         <div className="flex flex-wrap items-center gap-2 mb-4">
           <button
             type="button"
-            onClick={() => {
-              addOffer();
-              setMainTab("new");
-            }}
+            onClick={() => setMainTab("new")}
             className={`rounded-full px-4 py-1 text-xs uppercase tracking-wide ${
               mainTab === "new"
                 ? "bg-sand-900 text-white"
                 : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
             }`}
           >
-            Neues Angebot
+            Angebot
           </button>
           <button
             type="button"
@@ -6045,6 +6042,16 @@ export default function OffersView() {
           <div className="flex-1" />
           {mainTab === "new" ? (
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  addOffer();
+                  setMainTab("new");
+                }}
+                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              >
+                <FilePlus size={12} /> Neues Angebot
+              </button>
               <button
                 type="button"
                 onClick={handleManualSave}

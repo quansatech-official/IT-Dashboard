@@ -24,6 +24,10 @@ const formatDays = (value) => {
   if (value === null || typeof value === "undefined") return "-";
   return `${formatNumber(value, { minimumFractionDigits: 0, maximumFractionDigits: 1 })} Tage`;
 };
+const formatPercent = (value) => {
+  if (value === null || typeof value === "undefined") return "-";
+  return `${formatNumber(value, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}%`;
+};
 
 const StatCard = ({ title, value, subtitle }) => (
   <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
@@ -83,31 +87,40 @@ const customerTabs = [
 ];
 
 export default function StatsView() {
-  const [stats, setStats] = useState(null);
-  const [status, setStatus] = useState("loading");
+  const [stats, setStats] = useState({});
   const [activeTab, setActiveTab] = useState("general");
+  const [tabStatus, setTabStatus] = useState({});
   const days = 30;
 
   useEffect(() => {
+    const state = tabStatus[activeTab];
+    if (state === "loading" || state === "ready" || state === "error") return;
     let active = true;
-    fetch(`${API}/company_stats?days=${days}`)
+    setTabStatus((prev) => ({ ...prev, [activeTab]: "loading" }));
+    fetch(`${API}/company_stats?days=${days}&section=${encodeURIComponent(activeTab)}`)
       .then((res) => {
         if (!res.ok) throw new Error("stats_failed");
         return res.json();
       })
       .then((data) => {
         if (!active) return;
-        setStats(data);
-        setStatus("ready");
+        setStats((prev) => {
+          const next = { ...prev, ...data };
+          if (data?.sevdesk && typeof data.sevdesk === "object") {
+            next.sevdesk = { ...(prev.sevdesk || {}), ...data.sevdesk };
+          }
+          return next;
+        });
+        setTabStatus((prev) => ({ ...prev, [activeTab]: "ready" }));
       })
       .catch(() => {
         if (!active) return;
-        setStatus("error");
+        setTabStatus((prev) => ({ ...prev, [activeTab]: "error" }));
       });
     return () => {
       active = false;
     };
-  }, [days]);
+  }, [activeTab, days, tabStatus]);
 
   const percent = (part, total) => {
     if (!total) return "0%";
@@ -118,6 +131,10 @@ export default function StatsView() {
   const customerPaymentStats = Array.isArray(stats?.sevdesk?.customerPaymentStats)
     ? stats.sevdesk.customerPaymentStats
     : [];
+  const customerPaymentSummary =
+    stats?.sevdesk?.customerPaymentSummary && typeof stats.sevdesk.customerPaymentSummary === "object"
+      ? stats.sevdesk.customerPaymentSummary
+      : {};
   const customerGradeCounts = useMemo(() => {
     const base = { A: 0, B: 0, C: 0 };
     customerPaymentStats.forEach((item) => {
@@ -128,6 +145,8 @@ export default function StatsView() {
     });
     return base;
   }, [customerPaymentStats]);
+
+  const currentStatus = tabStatus[activeTab] || "idle";
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
@@ -149,40 +168,40 @@ export default function StatsView() {
       </header>
 
       <main className="max-w-6xl mx-auto px-5 py-5 space-y-4">
-        {status === "loading" ? (
+        <section className="rounded-3xl border border-sand-200 bg-white p-2 shadow-soft">
+          <div className="flex flex-wrap gap-2">
+            {customerTabs.map((tab) => {
+              const Icon = tab.icon;
+              const active = tab.key === activeTab;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActiveTab(tab.key)}
+                  className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs uppercase tracking-wide ${
+                    active
+                      ? "bg-sand-900 text-white"
+                      : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                  }`}
+                >
+                  <Icon size={12} /> {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {currentStatus === "loading" || currentStatus === "idle" ? (
           <div className="rounded-2xl border border-sand-200 bg-white p-3 text-sm text-sand-500 flex items-center gap-3">
             <span className="inline-flex h-4 w-4 animate-spin rounded-full border-2 border-sand-300 border-t-transparent" />
             Kennzahlen laden...
           </div>
-        ) : status === "error" ? (
+        ) : currentStatus === "error" ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600">
             Kennzahlen konnten nicht geladen werden.
           </div>
-        ) : stats ? (
+        ) : (
           <>
-            <section className="rounded-3xl border border-sand-200 bg-white p-2 shadow-soft">
-              <div className="flex flex-wrap gap-2">
-                {customerTabs.map((tab) => {
-                  const Icon = tab.icon;
-                  const active = tab.key === activeTab;
-                  return (
-                    <button
-                      key={tab.key}
-                      type="button"
-                      onClick={() => setActiveTab(tab.key)}
-                      className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs uppercase tracking-wide ${
-                        active
-                          ? "bg-sand-900 text-white"
-                          : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
-                      }`}
-                    >
-                      <Icon size={12} /> {tab.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-
             {activeTab === "general" ? (
               <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
                 <div className="flex items-center gap-2 mb-3 text-sand-700">
@@ -403,10 +422,50 @@ export default function StatsView() {
                   </div>
                 ) : (
                   <>
-                    <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                       <StatCard title="A-Kunden" value={formatNumber(customerGradeCounts.A)} subtitle="Zahlungsmoral stabil" />
                       <StatCard title="B-Kunden" value={formatNumber(customerGradeCounts.B)} subtitle="Beobachtung empfohlen" />
                       <StatCard title="C-Kunden" value={formatNumber(customerGradeCounts.C)} subtitle="Erhöhtes Risiko / Überfällig" />
+                      <StatCard
+                        title="Ø Offen (alle Kunden)"
+                        value={formatDays(customerPaymentSummary.avgOpenAgeDays)}
+                        subtitle="Gewichtet über alle offenen Rechnungen"
+                      />
+                      <StatCard
+                        title="Ø Zahlung (Historie)"
+                        value={formatDays(customerPaymentSummary.avgPaymentDays)}
+                        subtitle="Über bezahlte Rechnungen"
+                      />
+                      <StatCard
+                        title="Spätzahler-Quote"
+                        value={formatPercent(customerPaymentSummary.latePaidRatePct)}
+                        subtitle="Anteil >14 Tage"
+                      />
+                      <StatCard
+                        title="Mahnungen (Historie)"
+                        value={formatNumber(customerPaymentSummary.remindersTotal || 0)}
+                        subtitle="Soweit vom Backend gemeldet"
+                      />
+                      <StatCard
+                        title="Umsatz gesamt"
+                        value={formatEur(customerPaymentSummary.revenueTotalEur || 0)}
+                        subtitle="Alle Jahre"
+                      />
+                      <StatCard
+                        title="Umsatz lfd. Jahr"
+                        value={formatEur(customerPaymentSummary.revenueCurrentYearEur || 0)}
+                        subtitle="Aktuelles Jahr"
+                      />
+                      <StatCard
+                        title="Umsatz Vorjahr"
+                        value={formatEur(customerPaymentSummary.revenueLastYearEur || 0)}
+                        subtitle="Vorjahr"
+                      />
+                      <StatCard
+                        title="Offen / überfällig"
+                        value={formatNumber(customerPaymentSummary.openOverdueInvoices || 0)}
+                        subtitle={formatEur(customerPaymentSummary.openOverdueAmountEur || 0)}
+                      />
                     </div>
                     <div className="mt-4 overflow-x-auto rounded-2xl border border-sand-200">
                       <table className="min-w-full text-left text-xs">
@@ -414,11 +473,12 @@ export default function StatsView() {
                           <tr>
                             <th className="px-3 py-2">Kunde</th>
                             <th className="px-3 py-2">Klasse</th>
-                            <th className="px-3 py-2">Ø Zahlung</th>
-                            <th className="px-3 py-2">Offene</th>
-                            <th className="px-3 py-2">Überfällig</th>
-                            <th className="px-3 py-2">Offener Betrag</th>
-                            <th className="px-3 py-2">Gesamtvolumen</th>
+                            <th className="px-3 py-2">Umsatz gesamt</th>
+                            <th className="px-3 py-2">Umsatz lfd.</th>
+                            <th className="px-3 py-2">Umsatz Vorjahr</th>
+                            <th className="px-3 py-2">Zahlungsmoral Historie</th>
+                            <th className="px-3 py-2">Mahnungen</th>
+                            <th className="px-3 py-2">Offen / überfällig</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -431,19 +491,33 @@ export default function StatsView() {
                                     {String(item.grade || "-")}
                                   </span>
                                 </td>
-                                <td className="px-3 py-2 text-sand-700">
-                                  {formatDays(item.avgPaymentDays)}
-                                  <div className="text-[10px] text-sand-400">Offen Ø: {formatDays(item.avgOpenAgeDays)}</div>
-                                </td>
-                                <td className="px-3 py-2 text-sand-700">{formatNumber(item.openInvoices || 0)}</td>
-                                <td className="px-3 py-2 text-sand-700">{formatNumber(item.overdueInvoices || 0)}</td>
-                                <td className="px-3 py-2 text-sand-700">{formatEur(item.openAmountEur || 0)}</td>
                                 <td className="px-3 py-2 text-sand-700">{formatEur(item.totalAmountEur || 0)}</td>
+                                <td className="px-3 py-2 text-sand-700">{formatEur(item.revenueCurrentYearEur || 0)}</td>
+                                <td className="px-3 py-2 text-sand-700">{formatEur(item.revenueLastYearEur || 0)}</td>
+                                <td className="px-3 py-2 text-sand-700">
+                                  Ø Zahlung: {formatDays(item.avgPaymentDays)}
+                                  <div className="text-[10px] text-sand-400">
+                                    Spät: {formatPercent(item.latePaidRatePct)} ({formatNumber(item.latePaidInvoices || 0)} / {formatNumber(item.paidInvoices || 0)})
+                                  </div>
+                                  <div className="text-[10px] text-sand-400">
+                                    Sehr spät {'>'}30T: {formatNumber(item.veryLatePaidInvoices || 0)} · Zeitraum: {item.historyFrom || "-"} bis {item.historyTo || "-"}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-sand-700">
+                                  {formatNumber(item.remindersTotal || 0)}
+                                  <div className="text-[10px] text-sand-400">Historisch</div>
+                                </td>
+                                <td className="px-3 py-2 text-sand-700">
+                                  {formatNumber(item.openOverdueInvoices || item.openInvoices || 0)}
+                                  <div className="text-[10px] text-sand-400">
+                                    davon überfällig: {formatNumber(item.overdueInvoices || 0)} · {formatEur(item.openOverdueAmountEur || item.openAmountEur || 0)}
+                                  </div>
+                                </td>
                               </tr>
                             ))
                           ) : (
                             <tr>
-                              <td colSpan={7} className="px-3 py-4 text-sand-500">
+                              <td colSpan={8} className="px-3 py-4 text-sand-500">
                                 Keine Kunden-Zahlungsmoral vorhanden.
                               </td>
                             </tr>
@@ -456,7 +530,7 @@ export default function StatsView() {
               </section>
             ) : null}
           </>
-        ) : null}
+        )}
       </main>
     </div>
   );
