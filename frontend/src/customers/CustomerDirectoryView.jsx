@@ -291,19 +291,6 @@ export default function CustomerDirectoryView() {
   const [metricsSettingsStatus, setMetricsSettingsStatus] = useState("idle");
   const [contractTariffs, setContractTariffs] = useState([]);
   const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
-  const [tariffDraft, setTariffDraft] = useState({
-    name: "",
-    category: "wartung",
-    base_price_monthly: "0",
-    price_server_monthly: "0",
-    price_client_monthly: "0",
-    price_network_monthly: "0",
-    price_iot_monthly: "0",
-    notes: ""
-  });
-  const [tariffDraftMode, setTariffDraftMode] = useState("create");
-  const [tariffSourceId, setTariffSourceId] = useState(null);
-  const [tariffSaveStatus, setTariffSaveStatus] = useState("idle");
   const [calcInput, setCalcInput] = useState({
     tariffId: null,
     servers: "0",
@@ -555,80 +542,7 @@ export default function CustomerDirectoryView() {
     });
   };
 
-  const resetTariffDraft = () => {
-    setTariffDraft({
-      name: "",
-      category: "wartung",
-      base_price_monthly: "0",
-      price_server_monthly: "0",
-      price_client_monthly: "0",
-      price_network_monthly: "0",
-      price_iot_monthly: "0",
-      notes: ""
-    });
-    setTariffDraftMode("create");
-    setTariffSourceId(null);
-  };
-
-  const startTariffVersion = (tariff) => {
-    if (!tariff) return;
-    setTariffDraft({
-      name: String(tariff.name || ""),
-      category: String(tariff.category || "wartung"),
-      base_price_monthly: String(tariff.base_price_monthly ?? "0"),
-      price_server_monthly: String(tariff.price_server_monthly ?? "0"),
-      price_client_monthly: String(tariff.price_client_monthly ?? "0"),
-      price_network_monthly: String(tariff.price_network_monthly ?? "0"),
-      price_iot_monthly: String(tariff.price_iot_monthly ?? "0"),
-      notes: String(tariff.notes || "")
-    });
-    setTariffDraftMode("version");
-    setTariffSourceId(tariff.id);
-  };
-
-  const saveTariffDraft = async () => {
-    if (!String(tariffDraft.name || "").trim()) {
-      setTariffSaveStatus("error");
-      return;
-    }
-    setTariffSaveStatus("saving");
-    const payload = {
-      name: String(tariffDraft.name || "").trim(),
-      category: String(tariffDraft.category || "wartung").trim().toLowerCase(),
-      base_price_monthly: Number(tariffDraft.base_price_monthly || 0),
-      price_server_monthly: Number(tariffDraft.price_server_monthly || 0),
-      price_client_monthly: Number(tariffDraft.price_client_monthly || 0),
-      price_network_monthly: Number(tariffDraft.price_network_monthly || 0),
-      price_iot_monthly: Number(tariffDraft.price_iot_monthly || 0),
-      notes: String(tariffDraft.notes || "")
-    };
-    try {
-      if (tariffDraftMode === "version" && tariffSourceId) {
-        await api.createContractTariffVersion(tariffSourceId, payload);
-      } else {
-        await api.createContractTariff(payload);
-      }
-      await refreshTariffs();
-      resetTariffDraft();
-      setTariffSaveStatus("saved");
-      setTimeout(() => setTariffSaveStatus("idle"), 1800);
-    } catch {
-      setTariffSaveStatus("error");
-      setTimeout(() => setTariffSaveStatus("idle"), 2200);
-    }
-  };
-
-  const deactivateTariff = async (tariffId) => {
-    if (!tariffId) return;
-    try {
-      await api.deactivateContractTariff(tariffId);
-      await refreshTariffs();
-    } catch {
-      // keep UI stable; errors will be visible on next refresh
-    }
-  };
-
-  const saveContractSnapshot = async () => {
+  const saveTariffSuggestion = async () => {
     if (!activeId || !selectedTariff?.id) return;
     setCalcSaveStatus("saving");
     try {
@@ -647,6 +561,20 @@ export default function CustomerDirectoryView() {
       setCalcSaveStatus("error");
       setTimeout(() => setCalcSaveStatus("idle"), 2200);
     }
+  };
+
+  const applySuggestionToCalculator = (row) => {
+    if (!row) return;
+    setCalcInput((prev) => ({
+      ...prev,
+      tariffId: row.tariff_id || row.tariffId || prev.tariffId || null,
+      servers: String(row.servers ?? 0),
+      clients: String(row.clients ?? 0),
+      networkDevices: String(row.network_devices ?? row.networkDevices ?? 0),
+      iotDevices: String(row.iot_devices ?? row.iotDevices ?? 0),
+      note: String(row.note || "")
+    }));
+    setContractCalcModalOpen(true);
   };
 
   const contractHtmlToPdfDataUri = async (html) => {
@@ -1729,143 +1657,6 @@ export default function CustomerDirectoryView() {
 
   const renderContractCalculationContent = () => (
     <div className="space-y-5">
-      <div className="rounded-2xl border border-sand-200 bg-sand-50 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Tarifkatalog</p>
-            <h3 className="text-lg font-display text-sand-900">Wartung / Monitoring</h3>
-          </div>
-          <span className="text-[11px] text-sand-500">Historie-sicher: Änderungen als neue Version.</span>
-        </div>
-        <div className="mt-3 grid gap-2 md:grid-cols-4">
-          <label className="block md:col-span-2">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Name</span>
-            <input
-              value={tariffDraft.name}
-              onChange={(event) => setTariffDraft((prev) => ({ ...prev, name: event.target.value }))}
-              placeholder="z. B. Wartung Pro"
-              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Kategorie</span>
-            <select
-              value={tariffDraft.category}
-              onChange={(event) => setTariffDraft((prev) => ({ ...prev, category: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-            >
-              <option value="wartung">Wartung</option>
-              <option value="monitoring">Monitoring</option>
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Grundpreis/Monat</span>
-            <input
-              value={tariffDraft.base_price_monthly}
-              onChange={(event) => setTariffDraft((prev) => ({ ...prev, base_price_monthly: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Server/Monat</span>
-            <input
-              value={tariffDraft.price_server_monthly}
-              onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_server_monthly: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Client/Monat</span>
-            <input
-              value={tariffDraft.price_client_monthly}
-              onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_client_monthly: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Netzwerkgerät/Monat</span>
-            <input
-              value={tariffDraft.price_network_monthly}
-              onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_network_monthly: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">IoT/Monat</span>
-            <input
-              value={tariffDraft.price_iot_monthly}
-              onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_iot_monthly: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="block md:col-span-4">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
-            <input
-              value={tariffDraft.notes}
-              onChange={(event) => setTariffDraft((prev) => ({ ...prev, notes: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-            />
-          </label>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={saveTariffDraft}
-            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-          >
-            {tariffDraftMode === "version" ? "Neue Version speichern" : "Tarif anlegen"}
-          </button>
-          {tariffDraftMode === "version" ? (
-            <button
-              type="button"
-              onClick={resetTariffDraft}
-              className="rounded-full border border-sand-300 px-3 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              Abbrechen
-            </button>
-          ) : null}
-          {tariffSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
-          {tariffSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
-          {contractTariffsStatus === "error" ? <span className="text-xs text-rose-600">Tarife konnten nicht geladen werden</span> : null}
-        </div>
-        <div className="mt-3 space-y-2 max-h-52 overflow-auto pr-1">
-          {(contractTariffs || []).map((tariff) => (
-            <div key={tariff.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
-              <div className="flex items-center justify-between gap-2">
-                <p className="font-semibold text-sand-800">
-                  {tariff.name} · {String(tariff.category || "").toUpperCase()} · v{tariff.version}
-                </p>
-                <div className="flex items-center gap-2">
-                  <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${tariff.is_active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-sand-200 bg-sand-100 text-sand-600"}`}>
-                    {tariff.is_active ? "Aktiv" : "Archiv"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => startTariffVersion(tariff)}
-                    className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    Neue Version
-                  </button>
-                  {tariff.is_active ? (
-                    <button
-                      type="button"
-                      onClick={() => deactivateTariff(tariff.id)}
-                      className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                    >
-                      Deaktivieren
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-              <p className="mt-1 text-[11px] text-sand-600">
-                Grundpreis {formatEurPrecise(tariff.base_price_monthly)} · Server {formatEurPrecise(tariff.price_server_monthly)} · Client {formatEurPrecise(tariff.price_client_monthly)} · Netzwerk {formatEurPrecise(tariff.price_network_monthly)} · IoT {formatEurPrecise(tariff.price_iot_monthly)}
-              </p>
-            </div>
-          ))}
-          {!contractTariffs.length ? <p className="text-xs text-sand-500">Noch keine Tarife vorhanden.</p> : null}
-        </div>
-      </div>
-
       <div className="rounded-2xl border border-sand-200 bg-white p-4">
         <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kundenspezifische Kalkulation</p>
         <div className="mt-3 grid gap-2 md:grid-cols-3">
@@ -1920,19 +1711,19 @@ export default function CustomerDirectoryView() {
         <div className="mt-3 flex items-center gap-2">
           <button
             type="button"
-            onClick={saveContractSnapshot}
+            onClick={saveTariffSuggestion}
             disabled={!selectedTariff}
             className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
               selectedTariff ? "border-sand-200 bg-sand-900 text-white" : "border-sand-200 bg-sand-100 text-sand-400"
             }`}
           >
-            Snapshot speichern
+            Tarif als Vorschlag speichern
           </button>
           {calcSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
           {calcSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
         </div>
         <div className="mt-4">
-          <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Historie</p>
+          <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Vorschlags-Historie</p>
           <div className="mt-2 space-y-2 max-h-56 overflow-auto pr-1">
             {(calcHistory || []).map((row) => (
               <div key={row.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
@@ -1952,7 +1743,7 @@ export default function CustomerDirectoryView() {
             ))}
             {calcHistoryStatus === "loading" ? <p className="text-xs text-sand-500">Lade Historie…</p> : null}
             {!calcHistory.length && calcHistoryStatus !== "loading" ? (
-              <p className="text-xs text-sand-500">Noch keine gespeicherten Kalkulationen.</p>
+              <p className="text-xs text-sand-500">Noch keine gespeicherten Vorschläge.</p>
             ) : null}
           </div>
         </div>
@@ -2110,7 +1901,6 @@ export default function CustomerDirectoryView() {
                   type="button"
                   onClick={() => {
                     setContractCalcModalOpen(true);
-                    setEditCustomerId(null);
                   }}
                   className="rounded-full border border-sand-200 bg-sand-900 text-white px-3 py-1 text-[11px] uppercase tracking-wide hover:opacity-90"
                 >
@@ -2126,6 +1916,8 @@ export default function CustomerDirectoryView() {
               </div>
             </div>
             <div className="h-[calc(94vh-132px)] overflow-y-auto p-6 bg-sand-50">
+              {settingsTab === "details" ? (
+                <>
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="block">
                   <span className="text-xs uppercase tracking-wide text-sand-500">Name</span>
@@ -2330,6 +2122,8 @@ export default function CustomerDirectoryView() {
                   ))}
                 </div>
               </div>
+                </>
+              ) : null}
               {settingsTab === "settings" ? (
                 <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">
                   <div className="grid gap-3 md:grid-cols-2">
@@ -2411,10 +2205,7 @@ export default function CustomerDirectoryView() {
                     <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge</p>
                     <button
                       type="button"
-                      onClick={() => {
-                        setContractCalcModalOpen(true);
-                        setEditCustomerId(null);
-                      }}
+                      onClick={() => setContractCalcModalOpen(true)}
                       className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
                     >
                       Vertragskalkulation öffnen
@@ -2436,6 +2227,19 @@ export default function CustomerDirectoryView() {
                           </span>
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewModal({
+                                open: true,
+                                title: item.title || "Vertrag",
+                                html: String(item.html_content || "<p>Keine Vorschau hinterlegt.</p>")
+                              })
+                            }
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                          >
+                            <Eye size={11} /> Vorschau
+                          </button>
                           <button
                             type="button"
                             onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
@@ -2475,6 +2279,45 @@ export default function CustomerDirectoryView() {
                     {!customerContracts.length && contractsStatus !== "loading" ? (
                       <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
                     ) : null}
+                  </div>
+                  <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Vorschläge</p>
+                      <span className="text-[11px] text-sand-500">Aus Vertragskalkulation gespeichert</span>
+                    </div>
+                    <div className="space-y-2 max-h-56 overflow-auto pr-1">
+                      {(calcHistory || []).map((row) => (
+                        <div key={row.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-semibold text-sand-800">
+                              {row.tariff_name || "Tarif"} · {String(row.tariff_category || "").toUpperCase()} · v{row.tariff_version || 1}
+                            </p>
+                            <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-700">
+                              Vorschlag
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[11px] text-sand-600">
+                            {formatEurPrecise(row.monthly_total)} / Monat · {formatEurPrecise(row.yearly_total)} / Jahr
+                          </p>
+                          <p className="text-[10px] text-sand-500">
+                            {new Date(row.created_at || Date.now()).toLocaleString("de-DE")}
+                          </p>
+                          <div className="mt-2">
+                            <button
+                              type="button"
+                              onClick={() => applySuggestionToCalculator(row)}
+                              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                            >
+                              In Kalkulation übernehmen
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {calcHistoryStatus === "loading" ? <p className="text-xs text-sand-500">Lade Vorschläge…</p> : null}
+                      {!calcHistory.length && calcHistoryStatus !== "loading" ? (
+                        <p className="text-xs text-sand-500">Noch keine Vorschläge vorhanden.</p>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -2614,12 +2457,12 @@ export default function CustomerDirectoryView() {
               </thead>
               <tbody className="divide-y divide-sand-200/70">
                 {sortedCustomers.length ? (
-                  sortedCustomers.map((customer) => (
+                  sortedCustomers.map((customer, index) => (
                     <tr
                       key={customer.id}
-                      className={`odd:bg-white even:bg-sand-50/80 ${
-                        customer.id === activeId ? "!bg-sand-100" : ""
-                      } hover:!bg-sand-100/80`}
+                      className={`${
+                        index % 2 === 0 ? "bg-white" : "bg-sand-100/70"
+                      } ${customer.id === activeId ? "ring-1 ring-inset ring-sand-300" : ""} hover:bg-sand-100/90`}
                       onClick={() => setActiveId(customer.id)}
                     >
                       <td className="px-3 py-2 align-top">

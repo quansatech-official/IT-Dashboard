@@ -3301,29 +3301,56 @@ def _render_contract_html(
     ).strip()
     customer_address = re.sub(r"\s+", " ", customer_address)
     customer_display = escape(str(customer.name or "").strip() or "Kunde")
+    template_label = escape((template_key or "vertrag").replace("_", " ").upper())
+    provider_name = escape(str(placeholders.get("provider_name", "")).strip() or "QT Workbench Services")
+    generated_at = escape(str(placeholders.get("generated_at", "")).strip())
+    valid_from = escape(str(placeholders.get("valid_from", "")).strip())
     return (
-        "<div style=\"font-family:Arial,sans-serif; color:#1f2937; line-height:1.55;\">"
+        "<div style=\"font-family:Arial,sans-serif; color:#1f2937; line-height:1.55; background:#f8fafc; padding:18px;\">"
         f"{rendered_header}"
-        "<div style=\"display:flex; justify-content:space-between; align-items:flex-start; gap:14px; margin-bottom:18px;\">"
-        "<div>"
-        f"<div style=\"font-size:10px; letter-spacing:0.2em; text-transform:uppercase; color:#6b7280;\">{escape(template_key.upper())}</div>"
-        f"<h1 style=\"margin:6px 0 4px; font-size:24px; line-height:1.2;\">{escape(title)}</h1>"
-        f"<div style=\"font-size:12px; color:#6b7280;\">Vertragspartner: {customer_display}</div>"
+        "<div style=\"border:1px solid #dbe4ef; border-radius:16px; overflow:hidden; background:#ffffff;\">"
+        "<div style=\"padding:16px 18px; border-bottom:1px solid #e5e7eb;\">"
+        "<table style=\"width:100%; border-collapse:collapse;\">"
+        "<tr>"
+        "<td style=\"vertical-align:top;\">"
+        "<img src=\"/QTLogo.jpg\" alt=\"Logo\" style=\"height:52px; width:auto; object-fit:contain; display:block;\" />"
+        "</td>"
+        "<td style=\"text-align:right; vertical-align:top;\">"
+        f"<div style=\"display:inline-block; border:1px solid #dbe4ef; background:#f8fafc; color:#1e3a5f; padding:4px 9px; border-radius:999px; font-size:10px; letter-spacing:0.16em; text-transform:uppercase;\">{template_label}</div>"
+        f"<div style=\"margin-top:8px; font-size:11px; color:#64748b;\">{provider_name}</div>"
+        "</td>"
+        "</tr>"
+        "</table>"
         "</div>"
-        "<div style=\"text-align:right; font-size:11px; color:#6b7280;\">"
-        f"<div>{escape(placeholders.get('generated_at', ''))}</div>"
-        f"<div>{escape(customer_address) if customer_address else ''}</div>"
-        "</div>"
-        "</div>"
-        "<div style=\"border:1px solid #e5e7eb; border-radius:14px; padding:18px; background:#ffffff;\">"
+        "<div style=\"padding:20px 22px 16px;\">"
+        f"<h1 style=\"margin:0 0 6px; font-size:25px; line-height:1.2; color:#0f172a;\">{escape(title)}</h1>"
+        f"<div style=\"font-size:12px; color:#475569; margin-bottom:14px;\">Vertragspartner: <strong>{customer_display}</strong></div>"
+        "<table style=\"width:100%; border-collapse:collapse; margin-bottom:14px;\">"
+        "<tr>"
+        "<td style=\"width:50%; vertical-align:top; border:1px solid #e2e8f0; border-radius:12px; padding:10px 12px;\">"
+        "<div style=\"font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#94a3b8; margin-bottom:5px;\">Kunde</div>"
+        f"<div style=\"font-size:12px; color:#0f172a; font-weight:600;\">{customer_display}</div>"
+        f"<div style=\"font-size:11px; color:#64748b; margin-top:4px;\">{escape(customer_address) if customer_address else ''}</div>"
+        "</td>"
+        "<td style=\"width:16px;\"></td>"
+        "<td style=\"width:50%; vertical-align:top; border:1px solid #e2e8f0; border-radius:12px; padding:10px 12px;\">"
+        "<div style=\"font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#94a3b8; margin-bottom:5px;\">Vertragsdaten</div>"
+        f"<div style=\"font-size:11px; color:#334155;\">Erstellt am: <strong>{generated_at}</strong></div>"
+        f"<div style=\"font-size:11px; color:#334155; margin-top:3px;\">Gueltig ab: <strong>{valid_from}</strong></div>"
+        "</td>"
+        "</tr>"
+        "</table>"
+        "<div style=\"border:1px solid #e2e8f0; border-radius:12px; padding:16px; background:#ffffff;\">"
         f"{rendered_body}"
         "</div>"
-        "<div style=\"margin-top:24px; display:grid; grid-template-columns:1fr 1fr; gap:18px;\">"
-        "<div style=\"border-top:1px solid #d1d5db; padding-top:10px; font-size:11px; color:#6b7280;\">"
+        "<div style=\"margin-top:22px; display:grid; grid-template-columns:1fr 1fr; gap:18px;\">"
+        "<div style=\"border-top:1px solid #cbd5e1; padding-top:10px; font-size:11px; color:#64748b;\">"
         "Ort, Datum, Auftraggeber"
         "</div>"
-        "<div style=\"border-top:1px solid #d1d5db; padding-top:10px; font-size:11px; color:#6b7280;\">"
+        "<div style=\"border-top:1px solid #cbd5e1; padding-top:10px; font-size:11px; color:#64748b;\">"
         "Ort, Datum, Auftragnehmer"
+        "</div>"
+        "</div>"
         "</div>"
         "</div>"
         f"{rendered_footer}"
@@ -3751,6 +3778,7 @@ def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict
         "mime_type": item.mime_type or "application/pdf",
         "template_key": item.template_key or "",
         "has_html": bool(str(item.html_content or "").strip()),
+        "html_content": item.html_content or "",
         "note": item.note or "",
         "cancel_reason": item.cancel_reason or "",
         "cancelled_at": int(item.cancelled_at or 0),
@@ -4920,6 +4948,202 @@ def _match_sevdesk_row(customer: Customer, rows: List[Dict[str, Any]]) -> Option
     return best if best_score > 0 else None
 
 
+def _extract_invoice_activity_from_row(row: Optional[Dict[str, Any]], now_dt: datetime) -> Tuple[int, Optional[int], bool]:
+    if not isinstance(row, dict):
+        return 0, None, False
+    latest = _parse_sevdesk_date(row.get("historyTo"))
+    if not latest:
+        return 0, None, False
+    latest_ms = int(latest.timestamp() * 1000)
+    days_since = max(0, (now_dt.date() - latest.date()).days)
+    return latest_ms, days_since, days_since >= 60
+
+
+def _clean_invoice_position_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _summarize_invoice_position_texts(rows: List[Dict[str, Any]], *, max_items: int = 3) -> List[str]:
+    snippets: List[str] = []
+    for row in rows:
+        name = _clean_invoice_position_text(row.get("name"))
+        body = _clean_invoice_position_text(row.get("text"))
+        merged = " - ".join(part for part in [name, body] if part).strip(" -")
+        if not merged:
+            continue
+        if len(merged) > 180:
+            merged = merged[:177].rstrip() + "..."
+        if merged.lower() in {item.lower() for item in snippets}:
+            continue
+        snippets.append(merged)
+        if len(snippets) >= max_items:
+            break
+    return snippets
+
+
+def _build_recent_work_summary_ai_text(customer_name: str, invoice_items: List[Dict[str, Any]]) -> str:
+    if not invoice_items:
+        return ""
+    lines: List[str] = []
+    for item in invoice_items[:5]:
+        date_text = str(item.get("date") or "n/a")
+        amount = float(item.get("amountEur") or 0.0)
+        position_snippets = item.get("positionSnippets") or []
+        position_text = "; ".join(str(part) for part in position_snippets[:3] if str(part).strip())
+        lines.append(f"- {date_text} ({amount:.2f} EUR): {position_text or 'Keine Positionsdetails'}")
+    prompt = (
+        "Fasse die letzten durchgefuehrten Arbeiten bei einem IT-Kunden kurz zusammen. "
+        "Antworte auf Deutsch in max. 4 Saetzen, sachlich, konkret, ohne Aufzaehlung.\n\n"
+        f"Kunde: {customer_name or 'Kunde'}\n"
+        f"Rechnungspositionen:\n{chr(10).join(lines)}"
+    )
+    try:
+        return _ollama_generate_text(prompt).strip()
+    except Exception:
+        return ""
+
+
+def _build_customer_recent_work_summary(
+    *,
+    integration: Optional[IntegrationSettings],
+    metrics_settings: Optional[CustomerMetricsSettings],
+    customer: Customer,
+    matched_sevdesk: Optional[Dict[str, Any]],
+    now_dt: datetime,
+) -> Dict[str, Any]:
+    base = {
+        "available": False,
+        "source": "sevdesk",
+        "contactId": "",
+        "lastInvoiceAt": 0,
+        "daysSinceLastInvoice": None,
+        "inactivityDue": False,
+        "items": [],
+        "summary": "",
+    }
+    if not integration:
+        return base
+    config = _build_sevdesk_config(integration, metrics_settings)
+    if not config.api_token:
+        return base
+
+    contact_id = str((matched_sevdesk or {}).get("contactId") or "").strip()
+    if not contact_id and str(customer.creditor_number or "").strip():
+        try:
+            client = SevdeskClient(config, timeout=20)
+            contact = client.get_contact_by_customer_number(str(customer.creditor_number or "").strip())
+            contact_id = str((contact or {}).get("id") or "").strip()
+        except Exception:
+            contact_id = ""
+    if not contact_id:
+        return base
+
+    try:
+        client = SevdeskClient(config, timeout=20)
+        invoices = client.list_invoices(
+            params={
+                "contact[id]": contact_id,
+                "contact[objectName]": "Contact",
+                "invoiceType": config.invoice_type or "RE",
+            },
+            max_pages=8,
+            limit=50,
+        )
+    except Exception:
+        return base
+    if not invoices:
+        return base
+
+    filtered: List[Dict[str, Any]] = []
+    for inv in invoices:
+        status = _parse_int(inv.get("status"))
+        if status in (100, 400):
+            continue
+        inv_date = _parse_sevdesk_date(inv.get("invoiceDate"))
+        if not inv_date:
+            continue
+        amount = _parse_sevdesk_amount(inv)
+        if amount <= 0:
+            continue
+        filtered.append({"invoice": inv, "date": inv_date, "amount": amount})
+    if not filtered:
+        return base
+    filtered.sort(key=lambda item: item["date"], reverse=True)
+    selected = filtered[:5]
+
+    items: List[Dict[str, Any]] = []
+    for entry in selected:
+        inv = entry["invoice"]
+        inv_id = str(inv.get("id") or "").strip()
+        position_rows: List[Dict[str, Any]] = []
+        if inv_id.isdigit():
+            try:
+                pos_payload = client.request(
+                    "GET",
+                    "/InvoicePos",
+                    params={
+                        "invoice[id]": inv_id,
+                        "invoice[objectName]": "Invoice",
+                        "limit": 200,
+                        "offset": 0,
+                    },
+                )
+                objects = pos_payload.get("objects")
+                if isinstance(objects, list):
+                    position_rows = [row for row in objects if isinstance(row, dict)]
+                elif isinstance(objects, dict):
+                    position_rows = [objects]
+            except Exception:
+                position_rows = []
+        snippets = _summarize_invoice_position_texts(position_rows)
+        items.append(
+            {
+                "invoiceId": int(inv_id) if inv_id.isdigit() else 0,
+                "invoiceNumber": str(
+                    inv.get("invoiceNumber")
+                    or inv.get("invoiceNumberDefault")
+                    or inv.get("number")
+                    or ""
+                ).strip(),
+                "date": entry["date"].strftime("%Y-%m-%d"),
+                "amountEur": round(float(entry["amount"] or 0.0), 2),
+                "positionSnippets": snippets,
+            }
+        )
+
+    newest_date = selected[0]["date"]
+    newest_ms = int(newest_date.timestamp() * 1000)
+    days_since = max(0, (now_dt.date() - newest_date.date()).days)
+    inactivity_due = days_since >= 60
+    ai_summary = _build_recent_work_summary_ai_text(str(customer.name or "").strip(), items)
+    if not ai_summary:
+        fallback_snippets = []
+        for item in items[:3]:
+            snippets = item.get("positionSnippets") or []
+            if snippets:
+                fallback_snippets.append(snippets[0])
+        ai_summary = (
+            "Letzte Leistungen: "
+            + ("; ".join(fallback_snippets) if fallback_snippets else "Zu den letzten Rechnungen sind keine Positionsdetails vorhanden.")
+        )
+
+    return {
+        "available": True,
+        "source": "sevdesk",
+        "contactId": contact_id,
+        "lastInvoiceAt": newest_ms,
+        "daysSinceLastInvoice": days_since,
+        "inactivityDue": inactivity_due,
+        "items": items,
+        "summary": ai_summary,
+    }
+
+
 def _customer_task_filter(customer: Customer) -> List[Any]:
     filters = []
     customer_name = (customer.name or "").strip().lower()
@@ -5093,6 +5317,38 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
 
         def _collect_numberish_fields(node: Any) -> None:
             if isinstance(node, dict):
+                # Common payload shape from RMM APIs:
+                # {"name":"Kundennummer","value":"1018"} or {"field":"customer_number","value":"1018"}
+                label_candidates = [
+                    node.get("name"),
+                    node.get("field"),
+                    node.get("label"),
+                    node.get("key"),
+                    node.get("title"),
+                ]
+                value_candidates = [
+                    node.get("value"),
+                    node.get("val"),
+                    node.get("data"),
+                    node.get("content"),
+                ]
+                for raw_label in label_candidates:
+                    label_text = str(raw_label or "").strip().lower()
+                    if not label_text:
+                        continue
+                    label_is_customer_number = (
+                        ("customer" in label_text and ("number" in label_text or "nr" in label_text or "no" in label_text))
+                        or ("client" in label_text and ("number" in label_text or "nr" in label_text or "no" in label_text))
+                        or ("kunden" in label_text and ("nummer" in label_text or "nr" in label_text or "no" in label_text))
+                        or ("kunde" in label_text and ("nummer" in label_text or "nr" in label_text or "no" in label_text))
+                        or "kundennummer" in label_text
+                    )
+                    if not label_is_customer_number:
+                        continue
+                    for raw_value in value_candidates:
+                        normalized = _normalize_customer_number(raw_value)
+                        if normalized:
+                            number_candidates.add(normalized)
                 for key, value in node.items():
                     key_text = str(key or "").strip().lower()
                     looks_like_customer_number = (
@@ -5374,6 +5630,7 @@ def _build_customer_development_context(
         revenue_trend_pct = round(((revenue_current_year - revenue_last_year) / revenue_last_year) * 100.0, 1)
     elif revenue_current_year > 0:
         revenue_trend_pct = 100.0
+    last_invoice_at, days_since_last_invoice, invoice_activity_due = _extract_invoice_activity_from_row(matched_sevdesk, now_dt)
 
     discovery_conditions = [InfraDiscoveryDevice.customer_id == customer.id]
     if str(customer.creditor_number or "").strip():
@@ -5497,6 +5754,19 @@ def _build_customer_development_context(
                 "why": f"Es besteht seit Längerem geringe Aktivität ({inactivity_label}).",
             }
         )
+    if days_since_last_invoice is not None and days_since_last_invoice >= 75:
+        business_risk += 15
+        signals.append(f"Lange ohne umgesetzte Leistung ({days_since_last_invoice} Tage seit letzter Rechnung)")
+        recommendations.append(
+            {
+                "type": "betreuung",
+                "title": "Leistungs-Review mit Reaktivierung anbieten",
+                "why": f"Seit {days_since_last_invoice} Tagen wurde keine neue Leistung fakturiert.",
+            }
+        )
+    elif days_since_last_invoice is not None and days_since_last_invoice >= 45:
+        business_risk += 7
+        signals.append(f"Umsetzungsrhythmus nimmt ab ({days_since_last_invoice} Tage seit letzter Rechnung)")
 
     if unmanaged_count > 0:
         infra_risk += 35
@@ -5602,6 +5872,9 @@ def _build_customer_development_context(
         "lastInteractionAt": last_interaction_ms or 0,
         "daysSinceInteraction": days_since_interaction,
         "contactDue": contact_due,
+        "lastInvoiceAt": last_invoice_at,
+        "daysSinceLastInvoice": days_since_last_invoice,
+        "invoiceActivityDue": invoice_activity_due,
         "infra": {
             "managedAssets": managed_count,
             "discoveredAssets": discovered_base,
@@ -5692,6 +5965,22 @@ def _build_customer_development_context(
         "tacticalRmm": bool(tactical_agents),
         "discovery": discovered_total,
     }
+    integration = db.query(IntegrationSettings).first()
+    metrics_settings = _get_customer_metrics_settings(db)
+    work_summary = _build_customer_recent_work_summary(
+        integration=integration,
+        metrics_settings=metrics_settings,
+        customer=customer,
+        matched_sevdesk=matched_sevdesk,
+        now_dt=now_dt,
+    )
+    light["workSummary"] = work_summary
+    if work_summary.get("available"):
+        ws_days = work_summary.get("daysSinceLastInvoice")
+        if isinstance(ws_days, int):
+            light["daysSinceLastInvoice"] = ws_days
+            light["invoiceActivityDue"] = bool(work_summary.get("inactivityDue"))
+            light["lastInvoiceAt"] = int(work_summary.get("lastInvoiceAt") or 0)
     return light
 
 

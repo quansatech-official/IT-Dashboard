@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Router,
   ScanSearch,
+  Search,
   Server,
   Shield,
   Sparkles,
@@ -56,11 +57,72 @@ const ratioToPercent = (ratio) => {
   return clampPercent(n <= 1 ? n * 100 : n);
 };
 
-const priorityToScale = (priority) => {
-  const n = Number(priority || 0);
-  if (!Number.isFinite(n)) return 1;
-  const normalized = n <= 10 ? n : n / 10;
-  return Math.max(1, Math.min(10, Math.round(normalized)));
+const getPriorityTier = (item) => {
+  const risk = Number(item?.riskScore || 0);
+  const trend = Number(item?.revenueTrendPct || 0);
+  const revenueCurrent = Number(item?.revenueCurrentYearEur || 0);
+  const daysSince = Number(item?.daysSinceInteraction || 0);
+  const contactDue = Boolean(item?.contactDue);
+  const daysSinceLastInvoice = Number(item?.daysSinceLastInvoice || 0);
+  const invoiceActivityDue = Boolean(item?.invoiceActivityDue);
+
+  if (
+    contactDue &&
+    (
+      daysSince >= 60 ||
+      daysSinceLastInvoice >= 75 ||
+      invoiceActivityDue ||
+      trend < -8 ||
+      revenueCurrent <= 1000 ||
+      risk >= 60
+    )
+  ) {
+    return {
+      key: "red",
+      index: 2,
+      label: "Aktivieren",
+      badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
+    };
+  }
+  if (!contactDue && revenueCurrent > 0 && trend >= 0 && risk < 45) {
+    return {
+      key: "green",
+      index: 0,
+      label: "Stabil",
+      badgeClass: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    };
+  }
+  return {
+    key: "amber",
+    index: 1,
+    label: "Beobachten",
+    badgeClass: "border-amber-200 bg-amber-50 text-amber-700",
+  };
+};
+
+const PriorityBar = ({ item }) => {
+  const tier = getPriorityTier(item);
+  const activeClass =
+    tier.key === "green"
+      ? "bg-emerald-500 border-emerald-500"
+      : tier.key === "amber"
+      ? "bg-amber-500 border-amber-500"
+      : "bg-rose-500 border-rose-500";
+  return (
+    <div className="space-y-1">
+      <div className="grid grid-cols-3 gap-1">
+        {[0, 1, 2].map((idx) => (
+          <div
+            key={`tier-${idx}`}
+            className={`h-2 rounded-full border ${idx === tier.index ? activeClass : "border-sand-200 bg-sand-100"}`}
+          />
+        ))}
+      </div>
+      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${tier.badgeClass}`}>
+        {tier.label}
+      </span>
+    </div>
+  );
 };
 
 const revenueComparisonPercents = (lastYear, currentYear) => {
@@ -789,7 +851,7 @@ export default function CustomerDevelopmentView() {
 
                   {detailTab === "overview" ? (
                   <>
-                  <div className="grid gap-3 md:grid-cols-4">
+                  <div className="grid gap-3 md:grid-cols-5">
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
                       <p className="text-[10px] uppercase tracking-wide text-sand-500">Status</p>
                       <span className={`mt-1 inline-flex rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${stateBadgeClass(detailData.developmentState)}`}>
@@ -802,13 +864,28 @@ export default function CustomerDevelopmentView() {
                     </div>
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
                       <p className="text-[10px] uppercase tracking-wide text-sand-500">Priorität</p>
-                      <p className="text-lg font-metrics">{detailData.priority ?? 0}</p>
+                      <div className="mt-1">
+                        <PriorityBar item={detailData || {}} />
+                      </div>
                     </div>
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
                       <p className="text-[10px] uppercase tracking-wide text-sand-500">Vertrag</p>
                       <p className="text-sm text-sand-700">
                         {detailData.hasMaintenanceContract ? "vorhanden" : "kein Vertrag"}
                       </p>
+                    </div>
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Letzte Rechnung</p>
+                      <p className="text-sm text-sand-700">
+                        {typeof detailData.daysSinceLastInvoice === "number"
+                          ? `vor ${detailData.daysSinceLastInvoice} Tagen`
+                          : "n/a"}
+                      </p>
+                      {detailData.invoiceActivityDue ? (
+                        <span className="mt-1 inline-flex rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
+                          Reaktivierung nötig
+                        </span>
+                      ) : null}
                     </div>
                   </div>
 
@@ -914,6 +991,40 @@ export default function CustomerDevelopmentView() {
                           />
                         </div>
                       </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Letzte Arbeiten (Rechnungen)</p>
+                      <span className="text-[11px] text-sand-500">Top 5</span>
+                    </div>
+                    <p className="mt-2 text-sm text-sand-700">
+                      {String(detailData.workSummary?.summary || "").trim() || "Noch keine Zusammenfassung vorhanden."}
+                    </p>
+                    <div className="mt-3 space-y-2">
+                      {(detailData.workSummary?.items || []).slice(0, 5).map((row, idx) => (
+                        <div key={`work-row-${row.invoiceId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-sand-600">
+                            <span className="font-semibold text-sand-800">{row.invoiceNumber || `Rechnung #${row.invoiceId || "n/a"}`}</span>
+                            <span>{row.date || "n/a"} · {formatEur(row.amountEur)}</span>
+                          </div>
+                          {(row.positionSnippets || []).length ? (
+                            <ul className="mt-1.5 space-y-1">
+                              {(row.positionSnippets || []).slice(0, 3).map((snippet, sIdx) => (
+                                <li key={`snippet-${sIdx}`} className="text-[11px] text-sand-700">
+                                  - {snippet}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="mt-1.5 text-[11px] text-sand-500">Keine Positionsdetails vorhanden.</p>
+                          )}
+                        </div>
+                      ))}
+                      {!(detailData.workSummary?.items || []).length ? (
+                        <p className="text-xs text-sand-500">Keine Rechnungspositionen für die letzten Arbeiten gefunden.</p>
+                      ) : null}
                     </div>
                   </div>
 
@@ -1411,8 +1522,30 @@ export default function CustomerDevelopmentView() {
         ) : null}
 
         <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-          <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6 text-xs">
-            <label className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sand-700">
+              <ScanSearch size={14} />
+              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Filterleiste</p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                setFilters({
+                  noContract: false,
+                  revenueFalling: false,
+                  highCommunication: false,
+                  infraRisk: false,
+                  searchNeedle: ""
+                })
+              }
+              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+            >
+              <X size={12} /> Zurücksetzen
+            </button>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5 text-xs">
+            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
+              <Users size={13} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={includeInactive}
@@ -1421,7 +1554,8 @@ export default function CustomerDevelopmentView() {
               />
               Inaktive anzeigen
             </label>
-            <label className="flex items-center gap-2">
+            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
+              <Shield size={13} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={filters.noContract}
@@ -1430,7 +1564,8 @@ export default function CustomerDevelopmentView() {
               />
               Ohne Vertrag
             </label>
-            <label className="flex items-center gap-2">
+            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
+              <TrendingDown size={13} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={filters.revenueFalling}
@@ -1441,7 +1576,8 @@ export default function CustomerDevelopmentView() {
               />
               Umsatz sinkt
             </label>
-            <label className="flex items-center gap-2">
+            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
+              <Clock3 size={13} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={filters.highCommunication}
@@ -1452,7 +1588,8 @@ export default function CustomerDevelopmentView() {
               />
               Hohe Kommunikationslast
             </label>
-            <label className="flex items-center gap-2">
+            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
+              <AlertTriangle size={13} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={filters.infraRisk}
@@ -1461,17 +1598,24 @@ export default function CustomerDevelopmentView() {
               />
               Infrastruktur-Risiko
             </label>
-            <label className="block">
-              <span className="text-[10px] uppercase tracking-wide text-sand-500">Suche</span>
+          </div>
+          <label className="mt-3 block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Suche</span>
+            <div className="mt-1 relative">
+              <Search size={13} className="absolute left-3 top-2.5 text-sand-400" />
               <input
                 value={filters.searchNeedle}
                 onChange={(event) =>
                   setFilters((prev) => ({ ...prev, searchNeedle: event.target.value }))
                 }
                 placeholder="Kunde, Nr., Empfehlung, Signal ..."
-                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-xs"
+                className="w-full rounded-xl border border-sand-200 bg-white pl-8 pr-3 py-2 text-xs"
               />
-            </label>
+            </div>
+          </label>
+          <div className="mt-3 rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Prioritätslogik</p>
+            <p className="mt-1 text-[11px] text-sand-600">Grün: stabiler Umsatz und kein akuter Handlungsbedarf. Orange: beobachten. Rot: Kunde aktivieren.</p>
           </div>
         </section>
 
@@ -1512,23 +1656,7 @@ export default function CustomerDevelopmentView() {
                       </span>
                     </td>
                     <td className="py-2 pr-3">
-                      {(() => {
-                        const scale = priorityToScale(item.priority);
-                        return (
-                          <div className="flex items-center gap-2">
-                            <span className="font-metrics text-sand-800 min-w-[20px]">{scale}</span>
-                            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-sand-200">
-                              <div
-                                className="h-full rounded-full"
-                                style={{
-                                  width: `${scale * 10}%`,
-                                  background: "linear-gradient(90deg, #16a34a 0%, #f59e0b 55%, #dc2626 100%)"
-                                }}
-                              />
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      <PriorityBar item={item} />
                     </td>
                     <td className="py-2 pr-3">
                       <span className={Number(item.revenueTrendPct) < 0 ? "text-rose-600" : "text-emerald-700"}>
@@ -1566,7 +1694,9 @@ export default function CustomerDevelopmentView() {
                   {items.map((item) => (
                     <div key={item.customerId} className="rounded-2xl border border-sand-200 bg-sand-50 p-2">
                       <p className="text-xs font-semibold text-sand-800">{item.customerName}</p>
-                      <p className="text-[11px] text-sand-500">Prio {item.priority}</p>
+                      <div className="mt-1">
+                        <PriorityBar item={item} />
+                      </div>
                       {Boolean(item.contactDue) ? (
                         <p className="mt-1 text-[10px] uppercase tracking-wide text-amber-700">
                           Kontakt fällig{typeof item.daysSinceInteraction === "number" ? ` · ${item.daysSinceInteraction} Tage` : ""}
