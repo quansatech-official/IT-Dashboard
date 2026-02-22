@@ -109,11 +109,11 @@ const loadCachedSmtp = () => {
 };
 
 const defaultContractTemplates = {
-  vertrag: { title: "IT-Servicevertrag", body_template: "", header_html: "", footer_html: "" },
-  wartung: { title: "Wartungsvertrag", body_template: "", header_html: "", footer_html: "" },
-  monitoring: { title: "Monitoringvertrag", body_template: "", header_html: "", footer_html: "" },
-  avv_dsgvo: { title: "Auftragsverarbeitungsvertrag (DSGVO)", body_template: "", header_html: "", footer_html: "" },
-  sonstiges: { title: "Zusatzvereinbarung", body_template: "", header_html: "", footer_html: "" }
+  vertrag: { title: "IT-Servicevertrag", body_template: "" },
+  wartung: { title: "Wartungsvertrag", body_template: "" },
+  monitoring: { title: "Monitoringvertrag", body_template: "" },
+  avv_dsgvo: { title: "Auftragsverarbeitungsvertrag (DSGVO)", body_template: "" },
+  sonstiges: { title: "Zusatzvereinbarung", body_template: "" }
 };
 
 const normalizeContractTemplates = (input) => {
@@ -124,9 +124,7 @@ const normalizeContractTemplates = (input) => {
       const row = value && typeof value === "object" ? value : {};
       merged[key] = {
         title: String(row.title || merged[key]?.title || "").trim(),
-        body_template: String(row.body_template || ""),
-        header_html: String(row.header_html || ""),
-        footer_html: String(row.footer_html || "")
+        body_template: String(row.body_template || "")
       };
     });
   }
@@ -188,7 +186,8 @@ export default function SettingsView() {
     agentsPath: "",
     agentsStatusCode: null,
     sampleCount: 0,
-    error: ""
+    error: "",
+    attemptedUrls: []
   });
   const [pbxStatus, setPbxStatus] = useState("idle");
   const [pbxLoadStatus, setPbxLoadStatus] = useState("loading");
@@ -292,9 +291,12 @@ export default function SettingsView() {
       position_text: "",
       device_description: ""
     },
+    contract_header_html: "",
+    contract_footer_html: "",
     contract_templates: normalizeContractTemplates(null)
   });
   const [contractTemplateDraft, setContractTemplateDraft] = useState({ key: "", title: "" });
+  const [selectedContractTemplateKey, setSelectedContractTemplateKey] = useState("vertrag");
   const [contractTariffs, setContractTariffs] = useState([]);
   const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
   const [tariffDraft, setTariffDraft] = useState({
@@ -555,8 +557,12 @@ export default function SettingsView() {
             position_text: data?.offer_mode_instructions?.position_text || "",
             device_description: data?.offer_mode_instructions?.device_description || ""
           },
+          contract_header_html: data?.contract_header_html || "",
+          contract_footer_html: data?.contract_footer_html || "",
           contract_templates: normalizeContractTemplates(data?.contract_templates)
         });
+        const keys = Object.keys(normalizeContractTemplates(data?.contract_templates));
+        if (keys.length) setSelectedContractTemplateKey(keys[0]);
         setAiPromptsLoadStatus("ready");
       })
       .catch(() => {
@@ -702,6 +708,8 @@ export default function SettingsView() {
           position_text: data?.offer_mode_instructions?.position_text || "",
           device_description: data?.offer_mode_instructions?.device_description || ""
         },
+        contract_header_html: data?.contract_header_html || "",
+        contract_footer_html: data?.contract_footer_html || "",
         contract_templates: normalizeContractTemplates(data?.contract_templates)
       });
       setAiPromptsStatus("saved");
@@ -718,6 +726,8 @@ export default function SettingsView() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          contract_header_html: aiPrompts.contract_header_html || "",
+          contract_footer_html: aiPrompts.contract_footer_html || "",
           contract_templates: aiPrompts.contract_templates
         })
       });
@@ -725,6 +735,8 @@ export default function SettingsView() {
       const data = await res.json();
       setAiPrompts((prev) => ({
         ...prev,
+        contract_header_html: data?.contract_header_html || "",
+        contract_footer_html: data?.contract_footer_html || "",
         contract_templates: normalizeContractTemplates(data?.contract_templates)
       }));
       setContractTemplatesStatus("saved");
@@ -746,13 +758,12 @@ export default function SettingsView() {
           ...(prev.contract_templates || {}),
           [key]: {
             title: String(contractTemplateDraft.title || key).trim(),
-            body_template: "",
-            header_html: "",
-            footer_html: ""
+            body_template: ""
           }
         }
       };
     });
+    setSelectedContractTemplateKey(key);
     setContractTemplateDraft({ key: "", title: "" });
   };
 
@@ -760,8 +771,45 @@ export default function SettingsView() {
     setAiPrompts((prev) => {
       const next = { ...(prev.contract_templates || {}) };
       delete next[key];
+      const remaining = Object.keys(next);
+      if (selectedContractTemplateKey === key && remaining.length) {
+        setSelectedContractTemplateKey(remaining[0]);
+      } else if (selectedContractTemplateKey === key && !remaining.length) {
+        setSelectedContractTemplateKey("");
+      }
       return { ...prev, contract_templates: next };
     });
+  };
+
+  const contractTemplateEntries = Object.entries(aiPrompts.contract_templates || {});
+  const activeContractTemplateKey = contractTemplateEntries.some(([key]) => key === selectedContractTemplateKey)
+    ? selectedContractTemplateKey
+    : (contractTemplateEntries[0]?.[0] || "");
+  const activeContractTemplate = aiPrompts.contract_templates?.[activeContractTemplateKey] || {
+    title: "",
+    body_template: "",
+  };
+  const contractPreviewVars = {
+    provider_name: "QT Workbench Services",
+    customer_name: "Musterkunde GmbH",
+    generated_at: "22.02.2026",
+    valid_from: "01.03.2026",
+    runtime_months: "12",
+    servers: "3",
+    clients: "24",
+    network_devices: "14",
+    iot_devices: "6",
+    monthly_total: "1.250,00 EUR",
+    yearly_total: "15.000,00 EUR",
+    service_scope: "Wartung und Monitoring laut Tarif.",
+    note_block: "Hinweis: Monatliche Leistungserbringung nach Vereinbarung."
+  };
+  const renderTemplatePreview = (value) => {
+    let html = String(value || "");
+    Object.entries(contractPreviewVars).forEach(([key, replacement]) => {
+      html = html.replaceAll(`{${key}}`, replacement);
+    });
+    return html;
   };
 
   const resetTariffDraft = () => {
@@ -995,7 +1043,10 @@ export default function SettingsView() {
             ? null
             : Number(data.agentsStatusCode),
         sampleCount: Number(data?.sampleCount || 0),
-        error: data?.error || ""
+        error: data?.error || "",
+        attemptedUrls: Array.isArray(data?.attemptedUrls)
+          ? data.attemptedUrls.map((entry) => String(entry || "").trim()).filter(Boolean)
+          : []
       });
       setRmmHealthStatus("ready");
     } catch (error) {
@@ -1007,7 +1058,8 @@ export default function SettingsView() {
         agentsPath: "",
         agentsStatusCode: null,
         sampleCount: 0,
-        error: error?.message ? String(error.message) : "RMM Health fehlgeschlagen"
+        error: error?.message ? String(error.message) : "RMM Health fehlgeschlagen",
+        attemptedUrls: []
       });
       setRmmHealthStatus("error");
     }
@@ -1716,99 +1768,110 @@ export default function SettingsView() {
                   </button>
                 </div>
                 <div className="mt-3 grid grid-cols-1 gap-4">
-                  {Object.entries(aiPrompts.contract_templates || {}).map(([key, template]) => (
-                    <div key={key} className="rounded-xl border border-sand-200 bg-white p-3">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <p className="text-[11px] uppercase tracking-wide text-sand-500">{key}</p>
-                        <button
-                          type="button"
-                          onClick={() => removeContractTemplate(key)}
-                          className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                        >
-                          Löschen
-                        </button>
-                      </div>
-                      <label className="block text-xs text-sand-500">
-                        Titel
-                        <input
-                          value={template?.title || ""}
-                          onChange={(event) =>
-                            setAiPrompts((prev) => ({
-                              ...prev,
-                              contract_templates: {
-                                ...prev.contract_templates,
-                                [key]: {
-                                  ...(prev.contract_templates?.[key] || {}),
-                                  title: event.target.value
-                                }
-                              }
-                            }))
-                          }
-                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                        />
-                      </label>
-                      <label className="mt-2 block text-xs text-sand-500">
-                        Header HTML
-                        <textarea
-                          value={template?.header_html || ""}
-                          onChange={(event) =>
-                            setAiPrompts((prev) => ({
-                              ...prev,
-                              contract_templates: {
-                                ...prev.contract_templates,
-                                [key]: {
-                                  ...(prev.contract_templates?.[key] || {}),
-                                  header_html: event.target.value
-                                }
-                              }
-                            }))
-                          }
-                          rows={3}
-                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                        />
-                      </label>
-                      <label className="mt-2 block text-xs text-sand-500">
-                        HTML-Body
-                        <textarea
-                          value={template?.body_template || ""}
-                          onChange={(event) =>
-                            setAiPrompts((prev) => ({
-                              ...prev,
-                              contract_templates: {
-                                ...prev.contract_templates,
-                                [key]: {
-                                  ...(prev.contract_templates?.[key] || {}),
-                                  body_template: event.target.value
-                                }
-                              }
-                            }))
-                          }
-                          rows={6}
-                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                        />
-                      </label>
-                      <label className="mt-2 block text-xs text-sand-500">
-                        Footer HTML
-                        <textarea
-                          value={template?.footer_html || ""}
-                          onChange={(event) =>
-                            setAiPrompts((prev) => ({
-                              ...prev,
-                              contract_templates: {
-                                ...prev.contract_templates,
-                                [key]: {
-                                  ...(prev.contract_templates?.[key] || {}),
-                                  footer_html: event.target.value
-                                }
-                              }
-                            }))
-                          }
-                          rows={3}
-                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                        />
-                      </label>
+                  <div className="rounded-xl border border-sand-200 bg-white p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-sand-500">Globaler Header (für alle Verträge)</p>
+                    <div className="mt-2">
+                      <NotesRichTextEditor
+                        value={aiPrompts.contract_header_html || ""}
+                        onChange={(value) =>
+                          setAiPrompts((prev) => ({ ...prev, contract_header_html: value }))
+                        }
+                        minHeight="120px"
+                      />
                     </div>
-                  ))}
+                  </div>
+
+                  <div className="rounded-xl border border-sand-200 bg-white p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-sand-500">Template auswählen</p>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[220px_1fr_auto]">
+                      <select
+                        value={activeContractTemplateKey}
+                        onChange={(event) => setSelectedContractTemplateKey(event.target.value)}
+                        className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                      >
+                        {contractTemplateEntries.map(([key, template]) => (
+                          <option key={key} value={key}>
+                            {key} · {template?.title || key}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        value={activeContractTemplate?.title || ""}
+                        onChange={(event) => {
+                          if (!activeContractTemplateKey) return;
+                          setAiPrompts((prev) => ({
+                            ...prev,
+                            contract_templates: {
+                              ...prev.contract_templates,
+                              [activeContractTemplateKey]: {
+                                ...(prev.contract_templates?.[activeContractTemplateKey] || {}),
+                                title: event.target.value
+                              }
+                            }
+                          }));
+                        }}
+                        placeholder="Titel"
+                        className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeContractTemplate(activeContractTemplateKey)}
+                        disabled={!activeContractTemplateKey}
+                        className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Löschen
+                      </button>
+                    </div>
+                    <div className="mt-3">
+                      <p className="text-[11px] uppercase tracking-wide text-sand-500">HTML Designer (Body)</p>
+                      <div className="mt-2">
+                        <NotesRichTextEditor
+                          value={activeContractTemplate?.body_template || ""}
+                          onChange={(value) => {
+                            if (!activeContractTemplateKey) return;
+                            setAiPrompts((prev) => ({
+                              ...prev,
+                              contract_templates: {
+                                ...prev.contract_templates,
+                                [activeContractTemplateKey]: {
+                                  ...(prev.contract_templates?.[activeContractTemplateKey] || {}),
+                                  body_template: value
+                                }
+                              }
+                            }));
+                          }}
+                          minHeight="200px"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-sand-200 bg-white p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-sand-500">Globaler Footer (für alle Verträge)</p>
+                    <div className="mt-2">
+                      <NotesRichTextEditor
+                        value={aiPrompts.contract_footer_html || ""}
+                        onChange={(value) =>
+                          setAiPrompts((prev) => ({ ...prev, contract_footer_html: value }))
+                        }
+                        minHeight="100px"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-sand-200 bg-white p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-sand-500">Vorschau</p>
+                    <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-800">
+                      <div
+                        dangerouslySetInnerHTML={{
+                          __html:
+                            renderTemplatePreview(aiPrompts.contract_header_html || "") +
+                            renderTemplatePreview(activeContractTemplate?.body_template || "") +
+                            renderTemplatePreview(aiPrompts.contract_footer_html || "")
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
@@ -2472,6 +2535,20 @@ export default function SettingsView() {
                   <div className="md:col-span-2">
                     <span className="text-sand-500">Fehler:</span>{" "}
                     {rmmHealth.error || "n/a"}
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-sand-500">Getestete Endpunkte:</span>
+                    {(rmmHealth.attemptedUrls || []).length ? (
+                      <ul className="mt-1 space-y-1">
+                        {(rmmHealth.attemptedUrls || []).slice(0, 8).map((entry, index) => (
+                          <li key={`rmm-attempt-${index}`} className="rounded-lg border border-sand-200 bg-white px-2 py-1 font-mono text-[11px] text-sand-700">
+                            {entry}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span> n/a</span>
+                    )}
                   </div>
                 </div>
               </div>

@@ -100,6 +100,90 @@ const getPriorityTier = (item) => {
   };
 };
 
+const normalizeContractFlags = (item) => {
+  if (!Array.isArray(item?.contractFlags)) return [];
+  return item.contractFlags.map((entry) => String(entry || "").trim().toLowerCase()).filter(Boolean);
+};
+
+const contractSummary = (item) => {
+  const flags = normalizeContractFlags(item);
+  const hasMonitoring = flags.includes("monitoring");
+  const hasMaintenance = Boolean(item?.hasMaintenanceContract) || flags.includes("wartung");
+  if (hasMonitoring && hasMaintenance) return "Wartung + Monitoring";
+  if (hasMonitoring) return "Monitoring";
+  if (hasMaintenance) return "Wartung";
+  return "Kein Vertrag";
+};
+
+const inventorySummary = (item) => {
+  const mix = item?.infra?.inventoryMix || {};
+  const server = Number(mix?.server || 0);
+  const firewall = Number(mix?.firewall || 0);
+  const printer = Number(mix?.printer || 0);
+  const network = Number(mix?.network || 0);
+  const iot = Number(mix?.iot || 0);
+  const workstation = Number(mix?.workstation || 0);
+  const total = server + firewall + printer + network + iot + workstation + Number(mix?.other || 0);
+  return {
+    total,
+    text: `Srv ${server} · FW ${firewall} · Drucker ${printer} · Netz ${network}${iot > 0 ? ` · IoT ${iot}` : ""}`,
+  };
+};
+
+const neglectScore = (item) => {
+  const daysSinceInteraction = Number(item?.daysSinceInteraction || 0);
+  const daysSinceInvoice = Number(item?.daysSinceLastInvoice || 0);
+  const trend = Number(item?.revenueTrendPct || 0);
+  const infraRisk = Number(item?.infrastructureRisk || 0);
+  const risk = Number(item?.riskScore || 0);
+  const hasContract = Boolean(item?.hasMaintenanceContract);
+  let score = 0;
+  if (Boolean(item?.contactDue)) score += 30;
+  score += Math.min(28, Math.max(0, daysSinceInteraction) * 0.4);
+  score += Math.min(22, Math.max(0, daysSinceInvoice - 30) * 0.35);
+  if (Boolean(item?.invoiceActivityDue)) score += 18;
+  if (!hasContract) score += 10;
+  if (trend < 0) score += Math.min(14, Math.abs(trend) * 0.25);
+  score += Math.min(14, infraRisk * 0.2);
+  score += Math.min(10, risk * 0.1);
+  return Math.round(Math.max(0, Math.min(100, score)));
+};
+
+const callFocusPoints = (item) => {
+  const points = [];
+  const daysSinceInteraction = Number(item?.daysSinceInteraction || 0);
+  const daysSinceInvoice = Number(item?.daysSinceLastInvoice || 0);
+  const infra = item?.infra || {};
+  if (Boolean(item?.contactDue)) {
+    points.push(
+      `Letzter dokumentierter Kontakt vor ${daysSinceInteraction > 0 ? `${daysSinceInteraction} Tagen` : "längerer Zeit"}.`
+    );
+  }
+  if (Boolean(item?.invoiceActivityDue) || daysSinceInvoice >= 45) {
+    points.push(
+      `Seit ${daysSinceInvoice > 0 ? `${daysSinceInvoice} Tagen` : "länger"} keine neue umgesetzte Leistung fakturiert.`
+    );
+  }
+  if (!Boolean(item?.hasMaintenanceContract)) {
+    points.push("Kein Wartungs-/Monitoringvertrag hinterlegt.");
+  }
+  if (Number(infra?.openUpdates || 0) > 0) {
+    points.push(
+      `Update-Backlog: ${Number(infra?.openUpdates || 0)} offen (Windows ${Number(infra?.windowsUpdates || 0)}, 3rd-Party ${Number(infra?.thirdPartyUpdates || 0)}).`
+    );
+  }
+  if (Number(infra?.osExpiredCount || 0) > 0 || Number(infra?.osEolSoonCount || 0) > 0) {
+    points.push(
+      `OS-Lifecycle: ${Number(infra?.osExpiredCount || 0)} abgelaufen, ${Number(infra?.osEolSoonCount || 0)} zeitnah EOL.`
+    );
+  }
+  const topRec = item?.topRecommendations?.[0];
+  if (topRec?.title) {
+    points.push(`Konkretes Gesprächsthema: ${String(topRec.title)}.`);
+  }
+  return points.slice(0, 4);
+};
+
 const PriorityBar = ({ item }) => {
   const tier = getPriorityTier(item);
   const activeClass =
@@ -195,6 +279,8 @@ const LoadingProgress = ({ label, progress }) => (
 
 export default function CustomerDevelopmentView() {
   const aiModes = [
+    { value: "aktivierung_mail", label: "Aktivierungs-Mail" },
+    { value: "aktivierung_call", label: "Telefonleitfaden" },
     { value: "angebot", label: "Angebot" },
     { value: "kundenbericht", label: "Kundenbericht" },
     { value: "mail", label: "Mail" },
@@ -611,13 +697,21 @@ export default function CustomerDevelopmentView() {
     return suggestions;
   }, [detailData, detailTab, cveScan, detailAi.text]);
 
-  const runAiAssist = async (mode) => {
-    if (!detailModal.customerId && mode !== "newsletter") return;
+  const runAiAssist = async (mode, targetCustomer = null) => {
+    const targetCustomerId =
+      targetCustomer && typeof targetCustomer.customerId !== "undefined"
+        ? Number(targetCustomer.customerId || 0)
+        : Number(detailModal.customerId || 0);
+    const targetCustomerName =
+      targetCustomer && typeof targetCustomer.customerName !== "undefined"
+        ? String(targetCustomer.customerName || "")
+        : String(detailModal.customerName || "");
+    if (!targetCustomerId && mode !== "newsletter") return;
     setAiBusy(true);
     setDetailAi((prev) => ({
       open: true,
-      customerId: detailModal.customerId,
-      customerName: detailModal.customerName || "",
+      customerId: targetCustomerId || null,
+      customerName: targetCustomerName,
       mode,
       text: "",
       error: ""
@@ -630,8 +724,8 @@ export default function CustomerDevelopmentView() {
           mode === "newsletter"
             ? { mode }
             : {
-                customer_id: detailModal.customerId,
-                mode
+                customer_id: targetCustomerId,
+                mode,
               }
         )
       });
@@ -642,8 +736,8 @@ export default function CustomerDevelopmentView() {
       setDetailAi((prev) => ({
         ...prev,
         open: true,
-        customerId: detailModal.customerId,
-        customerName: detailModal.customerName || "",
+        customerId: targetCustomerId || null,
+        customerName: targetCustomerName,
         mode: data?.mode || mode,
         text: data?.text || "",
         error: ""
@@ -652,8 +746,8 @@ export default function CustomerDevelopmentView() {
       setDetailAi((prev) => ({
         ...prev,
         open: true,
-        customerId: detailModal.customerId,
-        customerName: detailModal.customerName || "",
+        customerId: targetCustomerId || null,
+        customerName: targetCustomerName,
         mode,
         text: "",
         error: error?.message ? String(error.message) : "KI Vorschlag fehlgeschlagen"
@@ -717,6 +811,18 @@ export default function CustomerDevelopmentView() {
       text: "",
       error: ""
     });
+  };
+
+  const openDetailAndRunAi = (context, mode) => {
+    if (!context?.customerId) return;
+    openDetail(context);
+    setDetailTab("ki");
+    window.setTimeout(() => {
+      runAiAssist(mode, {
+        customerId: context.customerId,
+        customerName: context.customerName || "",
+      });
+    }, 120);
   };
 
   const runCveScan = async (forceRefresh = true) => {
@@ -883,6 +989,36 @@ export default function CustomerDevelopmentView() {
     return groups;
   }, [filteredContexts]);
 
+  const neglectedCustomers = useMemo(() => {
+    return filteredContexts
+      .map((item) => {
+        const score = neglectScore(item);
+        return {
+          item,
+          score,
+          callPoints: callFocusPoints(item),
+        };
+      })
+      .filter((entry) => entry.score >= 35 || Boolean(entry.item?.contactDue) || Boolean(entry.item?.invoiceActivityDue))
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        const aDays = Number(a.item?.daysSinceInteraction || 0);
+        const bDays = Number(b.item?.daysSinceInteraction || 0);
+        return bDays - aDays;
+      });
+  }, [filteredContexts]);
+
+  const neglectedStats = useMemo(() => {
+    const overdueByContact = filteredContexts.filter((item) => Boolean(item?.contactDue)).length;
+    const overdueByInvoice = filteredContexts.filter((item) => Boolean(item?.invoiceActivityDue)).length;
+    const highPriority = neglectedCustomers.filter((entry) => entry.score >= 60).length;
+    return {
+      overdueByContact,
+      overdueByInvoice,
+      highPriority,
+    };
+  }, [filteredContexts, neglectedCustomers]);
+
   const revenueBars = revenueComparisonPercents(
     detailData?.revenueLastYearEur,
     detailData?.revenueCurrentYearEur
@@ -961,6 +1097,22 @@ export default function CustomerDevelopmentView() {
                   {detailTab === "ki" ? (
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">KI Auswertung</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => runAiAssist("aktivierung_call")}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-sand-900 px-2.5 py-1 text-[10px] uppercase tracking-wide text-white hover:opacity-90"
+                        >
+                          Telefonleitfaden jetzt
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runAiAssist("aktivierung_mail")}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                        >
+                          Aktivierungs-Mail jetzt
+                        </button>
+                      </div>
                       <div className="mt-3 space-y-2">
                         <div className="flex flex-wrap gap-1">
                           {aiModes.map((item) => (
@@ -1217,6 +1369,29 @@ export default function CustomerDevelopmentView() {
                         ))}
                       </div>
                     </div>
+                  </div>
+                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Telefonbriefing</p>
+                      <button
+                        type="button"
+                        onClick={() => runAiAssist("aktivierung_call")}
+                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        <Sparkles size={11} />
+                        KI Leitfaden erzeugen
+                      </button>
+                    </div>
+                    <ul className="mt-2 space-y-1">
+                      {callFocusPoints(detailData || {}).map((line, idx) => (
+                        <li key={`call-brief-${idx}`} className="text-sm text-sand-700">
+                          - {line}
+                        </li>
+                      ))}
+                    </ul>
+                    {!callFocusPoints(detailData || {}).length ? (
+                      <p className="mt-1 text-xs text-sand-500">Keine akuten Gesprächspunkte erkannt.</p>
+                    ) : null}
                   </div>
                   </>
                   ) : null}
@@ -1779,6 +1954,97 @@ export default function CustomerDevelopmentView() {
           </div>
         </section>
 
+        <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sand-700">
+              <Users size={14} />
+              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Aktivierungsradar</p>
+            </div>
+            <span className="text-[11px] text-sand-500">
+              Vernachlässigt: {neglectedCustomers.length} Kunden
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-3 text-xs">
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2">
+              <p className="text-amber-700">Kontakt überfällig</p>
+              <p className="text-sm font-semibold text-amber-900">{neglectedStats.overdueByContact}</p>
+            </div>
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2">
+              <p className="text-rose-700">Lange ohne Umsetzung</p>
+              <p className="text-sm font-semibold text-rose-900">{neglectedStats.overdueByInvoice}</p>
+            </div>
+            <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+              <p className="text-sand-600">Hoher Aktivierungsdruck</p>
+              <p className="text-sm font-semibold text-sand-800">{neglectedStats.highPriority}</p>
+            </div>
+          </div>
+          <div className="mt-3 space-y-2">
+            {neglectedCustomers.slice(0, 6).map((entry) => {
+              const customer = entry.item;
+              const urgencyClass =
+                entry.score >= 60
+                  ? "border-rose-200 bg-rose-50 text-rose-700"
+                  : entry.score >= 45
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-sky-200 bg-sky-50 text-sky-700";
+              return (
+                <div
+                  key={`neglect-${customer.customerId}`}
+                  className="rounded-2xl border border-sand-200 bg-sand-50 p-2.5"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-sand-800">
+                        {customer.customerName || "Unbekannt"}
+                        <span className="ml-2 text-[11px] font-normal text-sand-500">
+                          {customer.customerNumber || "ohne Nr."}
+                        </span>
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-sand-600">
+                        {callFocusPoints(customer).slice(0, 1)[0] || "Kein besonderer Hinweis."}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${urgencyClass}`}>
+                        Aktivierungs-Score {entry.score}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openDetailAndRunAi(customer, "aktivierung_call")}
+                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        <Sparkles size={11} />
+                        Telefonleitfaden
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openDetailAndRunAi(customer, "aktivierung_mail")}
+                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        <Bot size={11} />
+                        Mailvorschlag
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openDetail(customer)}
+                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        <Eye size={11} />
+                        Details
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {!neglectedCustomers.length ? (
+              <p className="text-xs text-sand-500">
+                Keine vernachlässigten Kunden in der aktuellen Filterung erkannt.
+              </p>
+            ) : null}
+          </div>
+        </section>
+
         {status === "error" ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
             Kundenentwicklung konnte nicht geladen werden.
@@ -1791,15 +2057,22 @@ export default function CustomerDevelopmentView() {
               <thead>
                 <tr className="text-sand-500 uppercase tracking-[0.2em]">
                   <th className="py-2 pr-3">Kunde</th>
-                  <th className="py-2 pr-3">Status</th>
+                  <th className="py-2 pr-3">Vertrag & Inventar</th>
                   <th className="py-2 pr-3">Priorität</th>
+                  <th className="py-2 pr-3">Kontakt</th>
                   <th className="py-2 pr-3">Umsatztrend</th>
-                  <th className="py-2 pr-3">Action</th>
+                  <th className="py-2 pr-3">Aktion</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredContexts.map((item) => (
-                  <tr key={item.customerId} className="border-t border-sand-100">
+                {filteredContexts.map((item, index) => {
+                  const inventory = inventorySummary(item);
+                  const score = neglectScore(item);
+                  return (
+                  <tr
+                    key={item.customerId}
+                    className={`border-t border-sand-100 ${index % 2 === 1 ? "bg-sand-50/70" : "bg-white"}`}
+                  >
                     <td className="py-2 pr-3">
                       <div className="font-semibold text-sand-800">{item.customerName || "Unbekannt"}</div>
                       <div className="text-sand-500">{item.customerNumber || "ohne Nr."}</div>
@@ -1811,29 +2084,81 @@ export default function CustomerDevelopmentView() {
                       ) : null}
                     </td>
                     <td className="py-2 pr-3">
-                      <span className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${stateBadgeClass(item.developmentState)}`}>
-                        {item.developmentState}
+                      <span
+                        className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${
+                          Boolean(item.hasMaintenanceContract)
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-amber-200 bg-amber-50 text-amber-700"
+                        }`}
+                      >
+                        {contractSummary(item)}
                       </span>
+                      <p className="mt-1 text-[11px] text-sand-600">
+                        {inventory.text}
+                      </p>
+                      <p className="text-[10px] text-sand-500">
+                        Gesamtinventar (geschätzt): {inventory.total}
+                      </p>
                     </td>
                     <td className="py-2 pr-3">
                       <PriorityBar item={item} />
+                      <p className="mt-1 text-[10px] text-sand-500">Aktivierungs-Score: {score}</p>
+                    </td>
+                    <td className="py-2 pr-3">
+                      <p className="text-[11px] text-sand-700">
+                        Letzter Kontakt:{" "}
+                        {typeof item.daysSinceInteraction === "number"
+                          ? `${item.daysSinceInteraction} Tage`
+                          : "n/a"}
+                      </p>
+                      <p className="text-[11px] text-sand-700">
+                        Letzte Rechnung:{" "}
+                        {typeof item.daysSinceLastInvoice === "number"
+                          ? `${item.daysSinceLastInvoice} Tage`
+                          : "n/a"}
+                      </p>
+                      {Boolean(item.invoiceActivityDue) ? (
+                        <span className="mt-1 inline-flex rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
+                          Umsetzung stockt
+                        </span>
+                      ) : null}
                     </td>
                     <td className="py-2 pr-3">
                       <span className={Number(item.revenueTrendPct) < 0 ? "text-rose-600" : "text-emerald-700"}>
                         {formatPct(item.revenueTrendPct)}
                       </span>
+                      <p className="mt-1 text-[11px] text-sand-600">
+                        {item.topRecommendations?.[0]?.title || "Kein Top-Thema"}
+                      </p>
                     </td>
                     <td className="py-2 pr-3">
-                      <button
-                        type="button"
-                        onClick={() => openDetail(item)}
-                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
-                      >
-                        <Eye size={12} /> Details
-                      </button>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => openDetail(item)}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
+                        >
+                          <Eye size={12} /> Details
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openDetailAndRunAi(item, "aktivierung_call")}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
+                        >
+                          <Sparkles size={12} /> Leitfaden
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openDetailAndRunAi(item, "aktivierung_mail")}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
+                        >
+                          <Bot size={12} /> Mail
+                        </button>
+                      </div>
                     </td>
                   </tr>
-                ))}
+                );
+              })}
               </tbody>
             </table>
             {!filteredContexts.length && status !== "loading" ? (
@@ -1863,13 +2188,22 @@ export default function CustomerDevelopmentView() {
                         </p>
                       ) : null}
                       <div className="mt-1 text-[11px] text-sand-600">{item.topRecommendations?.[0]?.title || "-"}</div>
-                      <button
-                        type="button"
-                        onClick={() => openDetail(item)}
-                        className="mt-2 inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                      >
-                        <Eye size={11} /> Details
-                      </button>
+                      <div className="mt-2 flex flex-wrap items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => openDetail(item)}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                        >
+                          <Eye size={11} /> Details
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openDetailAndRunAi(item, "aktivierung_call")}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                        >
+                          <Sparkles size={11} /> Leitfaden
+                        </button>
+                      </div>
                     </div>
                   ))}
                   {!items.length ? <p className="text-[11px] text-sand-400">Keine Kunden</p> : null}

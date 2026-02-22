@@ -48,6 +48,8 @@ RECENT_WORK_SUMMARY_CACHE_TTL_MS = 15 * 60 * 1000
 _customer_development_cache: Dict[str, Dict[str, Any]] = {}
 _customer_cve_cache: Dict[int, Dict[str, Any]] = {}
 _recent_work_summary_cache: Dict[str, Dict[str, Any]] = {}
+TACTICAL_SITE_CACHE_TTL_MS = 5 * 60 * 1000
+_tactical_site_lookup_cache: Dict[str, Dict[str, Any]] = {}
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -1502,6 +1504,8 @@ class AiPromptsUpdate(BaseModel):
     action_prompt: Optional[str] = None
     offer_base_prompt: Optional[str] = None
     offer_mode_instructions: Optional[Dict[str, str]] = None
+    contract_header_html: Optional[str] = None
+    contract_footer_html: Optional[str] = None
     contract_templates: Optional[Dict[str, Dict[str, str]]] = None
 
 
@@ -3130,6 +3134,8 @@ def _default_ai_prompts() -> Dict[str, Any]:
             ),
             "device_description": "Schreibe eine kurze Produktbeschreibung fuer Material (3-6 Saetze).",
         },
+        "contract_header_html": "",
+        "contract_footer_html": "",
         "contract_templates": {
             "vertrag": {
                 "title": "IT-Servicevertrag",
@@ -3259,6 +3265,16 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
         "action_prompt": data.get("action_prompt", defaults["action_prompt"]),
         "offer_base_prompt": data.get("offer_base_prompt", defaults["offer_base_prompt"]),
         "offer_mode_instructions": merged_modes,
+        "contract_header_html": str(
+            data.get("contract_header_html")
+            or defaults.get("contract_header_html")
+            or ""
+        ),
+        "contract_footer_html": str(
+            data.get("contract_footer_html")
+            or defaults.get("contract_footer_html")
+            or ""
+        ),
         "contract_templates": merged_contract_templates,
         "updated_at": _offer_iso_timestamp(store.updated_at),
     }
@@ -4442,13 +4458,324 @@ def _fetch_tactical_rmm_agents(settings: Optional[IntegrationSettings]) -> Tuple
     if not bool(probe.get("connected")):
         return [], False
     agents = probe.get("agents")
-    return agents if isinstance(agents, list) else [], True
+    if not isinstance(agents, list):
+        return [], True
+    return _enrich_tactical_agents_with_site_context(settings, agents), True
+
+
+def _normalize_tactical_host(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if not re.match(r"^https?://", raw, re.IGNORECASE):
+        raw = f"https://{raw}"
+    parsed = urlparse(raw)
+    scheme = (parsed.scheme or "https").lower()
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    path = str(path or "").rstrip("/")
+    if not netloc:
+        return ""
+    return f"{scheme}://{netloc}{path}".rstrip("/")
+
+
+def _tactical_request(
+    session: requests.Session,
+    host: str,
+    method: str,
+    path: str,
+    *,
+    timeout: int = 8,
+    retries: int = 1,
+    json_payload: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[requests.Response], str]:
+    retryable_status = {429, 500, 502, 503, 504}
+    last_error = ""
+    for attempt in range(max(0, retries) + 1):
+        try:
+            response = session.request(
+                str(method or "GET").upper(),
+                _tactical_url(host, path),
+                timeout=max(1, int(timeout or 8)),
+                json=json_payload,
+            )
+        except requests.RequestException as exc:
+            last_error = str(exc)
+            if attempt < retries:
+                time.sleep(0.2 * (attempt + 1))
+                continue
+            return None, last_error
+        if response.status_code in retryable_status and attempt < retries:
+            last_error = f"HTTP {response.status_code}"
+            time.sleep(0.2 * (attempt + 1))
+            continue
+        return response, ""
+    return None, last_error or "request_failed"
+
+
+def _tactical_payload_rows(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        for key in ("results", "agents", "data", "items", "sites", "clients"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+        marker_keys = {
+            "agent_id",
+            "agentid",
+            "agentId",
+            "hostname",
+            "name",
+            "site",
+            "site_name",
+            "client",
+            "client_name",
+            "status",
+            "id",
+        }
+        if any(key in payload for key in marker_keys):
+            return [payload]
+    return []
+
+
+def _tactical_site_cache_key(settings: Optional[IntegrationSettings]) -> str:
+    if not settings:
+        return ""
+    host = _normalize_tactical_host(settings.rmm_host)
+    header = str(settings.rmm_api_key_header or "X-API-KEY").strip().lower() or "x-api-key"
+    digest = hashlib.sha1(str(settings.rmm_api_key or "").encode("utf-8")).hexdigest()[:12]
+    return f"{host}|{header}|{digest}"
+
+
+def _extract_tactical_site_ref_id(node: Any) -> str:
+    if not isinstance(node, dict):
+        return ""
+    for key in (
+        "site_id",
+        "siteid",
+        "client_id",
+        "clientid",
+        "customer_id",
+        "customerid",
+        "id",
+        "pk",
+        "site",
+        "client",
+        "customer",
+    ):
+        value = node.get(key)
+        if isinstance(value, dict):
+            for nested_key in (
+                "site_id",
+                "siteid",
+                "client_id",
+                "clientid",
+                "customer_id",
+                "customerid",
+                "id",
+                "pk",
+            ):
+                nested = value.get(nested_key)
+                if nested is None:
+                    continue
+                text_value = str(nested).strip()
+                if text_value:
+                    return text_value
+            continue
+        if isinstance(value, (str, int, float)):
+            text_value = str(value).strip()
+            if not text_value:
+                continue
+            if key in {"site", "client", "customer"} and re.search(r"\s", text_value):
+                continue
+            return text_value
+    return ""
+
+
+def _collect_agent_site_ref_ids(agent: Dict[str, Any]) -> List[str]:
+    candidate_ids: List[str] = []
+    for key in (
+        "site_id",
+        "siteid",
+        "client_id",
+        "clientid",
+        "customer_id",
+        "customerid",
+        "site",
+        "client",
+        "customer",
+    ):
+        value = agent.get(key)
+        if isinstance(value, dict):
+            nested_id = _extract_tactical_site_ref_id(value)
+            if nested_id:
+                candidate_ids.append(nested_id)
+            continue
+        if isinstance(value, (str, int, float)):
+            text_value = str(value).strip()
+            if not text_value:
+                continue
+            if key in {"site", "client", "customer"} and re.search(r"\s", text_value):
+                continue
+            candidate_ids.append(text_value)
+    unique_ids: List[str] = []
+    for candidate in candidate_ids:
+        if candidate and candidate not in unique_ids:
+            unique_ids.append(candidate)
+    return unique_ids
+
+
+def _resolve_tactical_site_context(
+    agent: Dict[str, Any],
+    *,
+    by_id: Dict[str, Dict[str, Any]],
+    by_name: Dict[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    for site_ref in _collect_agent_site_ref_ids(agent):
+        normalized_ref = _normalize_customer_number(site_ref)
+        if site_ref in by_id:
+            return by_id[site_ref]
+        if normalized_ref and normalized_ref in by_id:
+            return by_id[normalized_ref]
+    for value in (
+        _agent_field_text(agent, "site_name", "site"),
+        _agent_field_text(agent, "client_name", "client", "customer"),
+    ):
+        normalized_name = _dev_normalize_text(value)
+        if normalized_name and normalized_name in by_name:
+            return by_name[normalized_name]
+    return None
+
+
+def _fetch_tactical_rmm_site_lookup(settings: Optional[IntegrationSettings]) -> Dict[str, Any]:
+    cache_key = _tactical_site_cache_key(settings)
+    now_ms = int(time.time() * 1000)
+    cached = _tactical_site_lookup_cache.get(cache_key) if cache_key else None
+    if cached and (now_ms - int(cached.get("cachedAt") or 0)) < TACTICAL_SITE_CACHE_TTL_MS:
+        payload = cached.get("payload")
+        if isinstance(payload, dict):
+            return payload
+
+    session, host = _build_tactical_rmm_session(settings)
+    if not session or not host:
+        return {"byId": {}, "byName": {}, "sourcePath": "", "count": 0}
+
+    list_candidates = [
+        "/clients/?detail=true&limit=1000",
+        "/clients/?detail=true",
+        "/clients/?limit=1000",
+        "/clients/",
+        "/clients",
+        "/sites/?detail=true&limit=1000",
+        "/sites/?detail=true",
+        "/sites/?limit=1000",
+        "/sites/",
+        "/sites",
+        "/api/v3/clients/?detail=true&limit=1000",
+        "/api/v3/clients/?detail=true",
+        "/api/v3/clients/?limit=1000",
+        "/api/v3/clients/",
+        "/api/v3/clients",
+        "/api/v3/sites/?detail=true&limit=1000",
+        "/api/v3/sites/?detail=true",
+        "/api/v3/sites/?limit=1000",
+        "/api/v3/sites/",
+        "/api/v3/sites",
+    ]
+    rows: List[Dict[str, Any]] = []
+    source_path = ""
+    for path in list_candidates:
+        res, _ = _tactical_request(session, host, "GET", path, timeout=8, retries=1)
+        if not res or not res.ok:
+            continue
+        try:
+            payload = res.json()
+        except ValueError:
+            continue
+        parsed = _tactical_payload_rows(payload)
+        if not parsed:
+            continue
+        rows = parsed
+        source_path = path
+        break
+
+    by_id: Dict[str, Dict[str, Any]] = {}
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        site_id = _extract_tactical_site_ref_id(row)
+        if site_id:
+            by_id[site_id] = row
+            normalized_id = _normalize_customer_number(site_id)
+            if normalized_id:
+                by_id[normalized_id] = row
+        normalized_name = _dev_normalize_text(
+            _agent_field_text(row, "site_name", "site", "name", "client_name", "client", "customer")
+        )
+        if normalized_name and normalized_name not in by_name:
+            by_name[normalized_name] = row
+
+    result = {
+        "byId": by_id,
+        "byName": by_name,
+        "sourcePath": source_path,
+        "count": len(rows),
+    }
+    if cache_key:
+        _tactical_site_lookup_cache[cache_key] = {"cachedAt": now_ms, "payload": result}
+    return result
+
+
+def _enrich_tactical_agents_with_site_context(
+    settings: Optional[IntegrationSettings],
+    agents: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    clean_agents = [row for row in agents if isinstance(row, dict)]
+    if not clean_agents:
+        return []
+    lookup = _fetch_tactical_rmm_site_lookup(settings)
+    by_id = lookup.get("byId") if isinstance(lookup.get("byId"), dict) else {}
+    by_name = lookup.get("byName") if isinstance(lookup.get("byName"), dict) else {}
+    if not by_id and not by_name:
+        return clean_agents
+
+    enriched: List[Dict[str, Any]] = []
+    matched = 0
+    for agent in clean_agents:
+        row = dict(agent)
+        site_context = _resolve_tactical_site_context(row, by_id=by_id, by_name=by_name)
+        if isinstance(site_context, dict):
+            matched += 1
+            row["_site_context"] = site_context
+            if not _agent_field_text(row, "site", "site_name"):
+                site_name = _agent_field_text(site_context, "site", "site_name", "name")
+                if site_name:
+                    row["site_name"] = site_name
+            if not _agent_field_text(row, "client", "client_name", "customer"):
+                client_name = _agent_field_text(site_context, "client", "client_name", "customer", "name")
+                if client_name:
+                    row["client_name"] = client_name
+            for field_key in ("custom_fields", "customFields", "fields", "site_custom_fields"):
+                field_value = site_context.get(field_key)
+                if isinstance(field_value, (dict, list)):
+                    row["site_custom_fields"] = field_value
+                    break
+        enriched.append(row)
+
+    if matched:
+        logger.info(
+            "RMM site-context enrichment matched %s/%s agents (source=%s)",
+            matched,
+            len(enriched),
+            lookup.get("sourcePath") or "unknown",
+        )
+    return enriched
 
 
 def _build_tactical_rmm_session(settings: Optional[IntegrationSettings]) -> Tuple[Optional[requests.Session], str]:
     if not settings:
         return None, ""
-    host = str(settings.rmm_host or "").strip().rstrip("/")
+    host = _normalize_tactical_host(settings.rmm_host)
     api_key = str(settings.rmm_api_key or "").strip()
     api_key_header = str(settings.rmm_api_key_header or "X-API-KEY").strip() or "X-API-KEY"
     if not host or not api_key:
@@ -4486,7 +4813,7 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
             "error": "Integration settings missing",
             "agents": [],
         }
-    host = str(settings.rmm_host or "").strip().rstrip("/")
+    host = _normalize_tactical_host(settings.rmm_host)
     api_key = str(settings.rmm_api_key or "").strip()
     api_key_header = str(settings.rmm_api_key_header or "X-API-KEY").strip() or "X-API-KEY"
     if not host:
@@ -4514,15 +4841,20 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
             "agents": [],
         }
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": "QT-Workbench"})
-    header_value = api_key
-    if api_key_header.lower() == "authorization" and not re.match(r"^(bearer|token)\s+", api_key, re.IGNORECASE):
-        header_value = f"Bearer {api_key}"
-    session.headers.update({api_key_header: header_value})
-    # TacticalRMM expects X-API-KEY. Keep it as compatibility fallback.
-    if api_key_header.lower() != "x-api-key":
-        session.headers.update({"X-API-KEY": api_key})
+    session, host = _build_tactical_rmm_session(settings)
+    if not session:
+        return {
+            "connected": False,
+            "checkedAt": checked_at,
+            "host": host,
+            "hasUser": False,
+            "hasPassword": False,
+            "hasApiKey": bool(api_key),
+            "apiKeyHeader": api_key_header,
+            "error": "RMM session init failed",
+            "agents": [],
+            "attemptedUrls": [],
+        }
 
     # TacticalRMM docs use API base + /agents/ with X-API-KEY header.
     list_candidates = [
@@ -4530,7 +4862,8 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
         "/agents/?detail=false",
         "/agents/",
         "/agents",
-        "/clients/",
+        "/api/agents/",
+        "/api/agents",
         # Compatibility fallback for older/custom deployments.
         "/api/v3/agents/",
         "/api/v3/agents",
@@ -4538,14 +4871,17 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
     agents_path = ""
     agents_status_code = None
     agents_error = ""
+    attempted_urls: List[str] = []
     for path in list_candidates:
         agents_path = path
-        try:
-            res = session.get(_tactical_url(host, path), timeout=8)
-            agents_status_code = res.status_code
-        except requests.RequestException as exc:
-            agents_error = str(exc)
+        request_url = _tactical_url(host, path)
+        res, req_error = _tactical_request(session, host, "GET", path, timeout=8, retries=1)
+        if not res:
+            agents_error = req_error or "request_failed"
+            attempted_urls.append(f"{request_url} -> ERR")
             continue
+        agents_status_code = res.status_code
+        attempted_urls.append(f"{request_url} -> {res.status_code}")
         if not res.ok:
             agents_error = f"HTTP {res.status_code}"
             continue
@@ -4567,6 +4903,7 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
                 "sampleCount": 0,
                 "agents": [],
                 "error": "",
+                "attemptedUrls": attempted_urls,
             }
         if "text/html" in content_type or body_text.startswith("<!doctype") or body_text.startswith("<html"):
             agents_error = "HTML response instead of JSON (check API host/header)"
@@ -4579,7 +4916,8 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
             except Exception:
                 agents_error = "Invalid JSON response"
                 continue
-        if isinstance(payload, list):
+        rows = _tactical_payload_rows(payload)
+        if rows:
             return {
                 "connected": True,
                 "checkedAt": checked_at,
@@ -4592,30 +4930,12 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
                 "authStatusCode": None,
                 "agentsPath": agents_path,
                 "agentsStatusCode": agents_status_code,
-                "sampleCount": len(payload),
-                "agents": payload,
+                "sampleCount": len(rows),
+                "agents": rows,
                 "error": "",
+                "attemptedUrls": attempted_urls,
             }
         if isinstance(payload, dict):
-            for key in ("results", "agents", "data"):
-                value = payload.get(key)
-                if isinstance(value, list):
-                    return {
-                        "connected": True,
-                        "checkedAt": checked_at,
-                        "host": host,
-                        "hasUser": False,
-                        "hasPassword": False,
-                        "hasApiKey": bool(api_key),
-                        "apiKeyHeader": api_key_header,
-                        "authPath": None,
-                        "authStatusCode": None,
-                        "agentsPath": agents_path,
-                        "agentsStatusCode": agents_status_code,
-                        "sampleCount": len(value),
-                        "agents": value,
-                        "error": "",
-                    }
             count_value = payload.get("count")
             if isinstance(count_value, int) and count_value >= 0:
                 return {
@@ -4633,6 +4953,7 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
                     "sampleCount": int(count_value),
                     "agents": [],
                     "error": "",
+                    "attemptedUrls": attempted_urls,
                 }
             agents_error = "No agent list in response"
     error_parts = [part for part in [agents_error] if part]
@@ -4651,6 +4972,7 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
         "sampleCount": 0,
         "agents": [],
         "error": " | ".join(error_parts) if error_parts else "RMM API connection failed",
+        "attemptedUrls": attempted_urls,
     }
 
 
@@ -4681,12 +5003,13 @@ def _fetch_tactical_rmm_agent_detail_map(
         for path in (
             f"/agents/{quote(clean_id)}/",
             f"/agents/{quote(clean_id)}",
+            f"/api/agents/{quote(clean_id)}/",
+            f"/api/agents/{quote(clean_id)}",
             f"/api/v3/agents/{quote(clean_id)}/",
             f"/api/v3/agents/{quote(clean_id)}",
         ):
-            try:
-                res = session.get(_tactical_url(host, path), timeout=8)
-            except requests.RequestException:
+            res, _ = _tactical_request(session, host, "GET", path, timeout=8, retries=1)
+            if not res:
                 continue
             if not res.ok:
                 continue
@@ -4743,6 +5066,10 @@ def _fetch_tactical_rmm_software(
             f"/software?agent={quote(agent_id)}",
             f"/software/?agent_id={quote(agent_id)}",
             f"/software?agent_id={quote(agent_id)}",
+            f"/api/software/?agent={quote(agent_id)}",
+            f"/api/software?agent={quote(agent_id)}",
+            f"/api/software/?agent_id={quote(agent_id)}",
+            f"/api/software?agent_id={quote(agent_id)}",
             f"/api/v3/software/?agent={quote(agent_id)}",
             f"/api/v3/software?agent={quote(agent_id)}",
             f"/api/v3/software/?agent_id={quote(agent_id)}",
@@ -4751,9 +5078,8 @@ def _fetch_tactical_rmm_software(
         payload = None
         used_path = ""
         for path in candidates:
-            try:
-                res = session.get(_tactical_url(host, path), timeout=8)
-            except requests.RequestException:
+            res, _ = _tactical_request(session, host, "GET", path, timeout=8, retries=1)
+            if not res:
                 continue
             if not res.ok:
                 continue
@@ -5593,6 +5919,49 @@ def _build_agent_health_summary(agent: Dict[str, Any], now_dt: datetime) -> Dict
     }
 
 
+def _normalize_inventory_category(value: str) -> str:
+    key = str(value or "").strip().lower()
+    if key in {"server", "firewall", "printer", "network", "iot", "workstation"}:
+        return key
+    return "other"
+
+
+def _managed_agent_inventory_category(agent: Dict[str, Any]) -> str:
+    host = _dev_normalize_text(_agent_field_text(agent, "hostname", "name"))
+    os_text = _dev_normalize_text(
+        _agent_field_text(agent, "operating_system", "operatingSystem", "plat_name", "plat", "platform", "os")
+    )
+    combined = f"{host} {os_text}".strip()
+    if any(token in combined for token in ("windows server", "linux", "server", "hyper v", "esxi", "dc", "srv", "rds", "sql")):
+        return "server"
+    if any(token in combined for token in ("firewall", "fortigate", "sophos", "pfsense", "opnsense", "utm", "fw")):
+        return "firewall"
+    if any(token in combined for token in ("printer", "drucker", "laserjet", "xerox", "canon", "kyocera")):
+        return "printer"
+    if any(token in combined for token in ("switch", "router", "gateway", "ap", "wifi", "wlan", "network")):
+        return "network"
+    return "workstation"
+
+
+def _discovery_inventory_category(row: InfraDiscoveryDevice) -> str:
+    device_type = _dev_normalize_text(str(row.device_type or ""))
+    vendor = _dev_normalize_text(str(row.vendor or ""))
+    hostname = _dev_normalize_text(str(row.hostname or ""))
+    evidence_text = _dev_normalize_text(str(row.evidence or ""))
+    combined = " ".join(part for part in [device_type, vendor, hostname, evidence_text] if part).strip()
+    if any(token in combined for token in ("server", "windows server", "linux", "hyper v", "esxi", "dc", "srv", "rds", "sql")):
+        return "server"
+    if any(token in combined for token in ("firewall", "fortigate", "sophos", "pfsense", "opnsense", "utm", "fw")):
+        return "firewall"
+    if any(token in combined for token in ("printer", "drucker", "laserjet", "xerox", "canon", "kyocera", "brother")):
+        return "printer"
+    if any(token in combined for token in ("iot", "camera", "sensor", "door", "access control")):
+        return "iot"
+    if any(token in combined for token in ("switch", "router", "gateway", "access point", "ap", "wifi", "wlan", "network")):
+        return "network"
+    return "other"
+
+
 def _build_customer_development_context(
     db,
     customer: Customer,
@@ -5698,6 +6067,24 @@ def _build_customer_development_context(
     discovered_base = discovered_total if discovered_total > 0 else managed_count
     coverage_ratio = round((managed_count / discovered_base), 2) if discovered_base > 0 else 0.0
     unmanaged_count = max(discovered_base - managed_count, 0) + discovered_unmanaged
+    inventory_mix = {
+        "server": 0,
+        "firewall": 0,
+        "printer": 0,
+        "network": 0,
+        "iot": 0,
+        "workstation": 0,
+        "other": 0,
+    }
+    for agent in managed_agents:
+        key = _normalize_inventory_category(_managed_agent_inventory_category(agent))
+        inventory_mix[key] = int(inventory_mix.get(key) or 0) + 1
+    for row in customer_discovery_rows:
+        # Managed entries are likely duplicates of RMM agents.
+        if bool(row.managed):
+            continue
+        key = _normalize_inventory_category(_discovery_inventory_category(row))
+        inventory_mix[key] = int(inventory_mix.get(key) or 0) + 1
 
     business_risk = 0
     infra_risk = 0
@@ -5909,6 +6296,7 @@ def _build_customer_development_context(
             "osEolSoonCount": lifecycle_soon,
             "rmmMappingHint": mapping_hint,
             "nameOnlyCandidateCount": len(name_only_matches),
+            "inventoryMix": inventory_mix,
         },
         "businessRisk": business_risk,
         "infrastructureRisk": infra_risk,
@@ -6056,12 +6444,20 @@ def _build_customer_development_payload(
         return payload
 
 
-def _customer_development_ai_prompt(context: Dict[str, Any], mode: str, tone: str) -> str:
+def _customer_development_ai_prompt(
+    context: Dict[str, Any],
+    mode: str,
+    tone: str,
+) -> str:
     customer_name = str(context.get("customerName") or "Kunde")
     state = str(context.get("developmentState") or "STABLE")
     risk = int(context.get("riskScore") or 0)
     trend = float(context.get("revenueTrendPct") or 0)
+    has_contract = bool(context.get("hasMaintenanceContract"))
     infra = context.get("infra") or {}
+    work_summary = context.get("workSummary") or {}
+    days_since_invoice = context.get("daysSinceLastInvoice")
+    invoice_due = bool(context.get("invoiceActivityDue"))
     recommendations = context.get("recommendations") or context.get("topRecommendations") or []
     recommendation_lines = []
     for rec in recommendations[:5]:
@@ -6073,6 +6469,18 @@ def _customer_development_ai_prompt(context: Dict[str, Any], mode: str, tone: st
         recommendation_lines.append("- Keine konkreten Empfehlungen vorhanden.")
     signals = context.get("signals") or context.get("reasons") or []
     signal_lines = [f"- {str(item).strip()}" for item in signals[:6] if str(item).strip()] or ["- Keine kritischen Signale."]
+    work_topics: List[str] = []
+    summary_text = str(work_summary.get("summary") or "").strip()
+    if summary_text:
+        work_topics.append(f"- Zusammenfassung letzte Arbeiten: {summary_text}")
+    for row in (work_summary.get("items") or [])[:3]:
+        snippets = [str(part).strip() for part in (row.get("positionSnippets") or []) if str(part).strip()]
+        if not snippets:
+            continue
+        label = str(row.get("date") or "").strip() or "letzte Rechnung"
+        work_topics.append(f"- {label}: {'; '.join(snippets[:2])}")
+    if not work_topics:
+        work_topics.append("- Keine konkreten Rechnungspositionen vorhanden.")
     mode_key = str(mode or "summary").strip().lower()
     tone_key = str(tone or "sachlich").strip()
 
@@ -6101,6 +6509,16 @@ def _customer_development_ai_prompt(context: Dict[str, Any], mode: str, tone: st
             "Erstelle einen Gesprächsleitfaden (Deutsch) mit 5-7 Stichpunkten "
             "für ein Kundengespräch inkl. Abschlussfrage."
         )
+    elif mode_key == "aktivierung_mail":
+        task_text = (
+            "Erstelle eine aktivierende Kundenmail (Deutsch) mit Betreff und kompaktem Fliesstext. "
+            "Fokus: Reaktivierung, aktuelle Themen aufgreifen, konkreter naechster Termin/Call-to-Action."
+        )
+    elif mode_key == "aktivierung_call":
+        task_text = (
+            "Erstelle einen Telefonleitfaden (Deutsch) zur Kundenreaktivierung mit 6-8 klaren Punkten: "
+            "Einstieg, aktuelle Themen, Nutzenargumentation, Einwandbehandlung, Abschlussfrage mit Terminvereinbarung."
+        )
     elif mode_key == "analyse":
         task_text = (
             "Erstelle eine strukturierte Kundenanalyse (Deutsch) in 5 Abschnitten: "
@@ -6120,9 +6538,13 @@ def _customer_development_ai_prompt(context: Dict[str, Any], mode: str, tone: st
         f"Status: {state}\n"
         f"Risiko: {risk}/100\n"
         f"Umsatztrend: {trend:+.1f}%\n"
+        f"Wartungs-/Monitoringvertrag vorhanden: {'ja' if has_contract else 'nein'}\n"
+        f"Tage seit letzter Rechnung: {days_since_invoice if isinstance(days_since_invoice, int) else 'n/a'}\n"
+        f"Reaktivierung aus Rechnungsaktivitaet noetig: {'ja' if invoice_due else 'nein'}\n"
         f"Infrastruktur: Coverage {int(float(infra.get('coverageRatio') or 0) * 100)}%, "
         f"Unmanaged {int(infra.get('unmanagedCount') or 0)}, "
         f"Offline-Rate {int(float(infra.get('offlineRate') or 0) * 100)}%\n\n"
+        f"Aktuelle Themen:\n{chr(10).join(work_topics)}\n\n"
         f"Signale:\n{chr(10).join(signal_lines)}\n\n"
         f"Empfehlungen:\n{chr(10).join(recommendation_lines)}\n\n"
         "Antwort als reiner Text, kein JSON, kein Markdown."
@@ -6136,6 +6558,7 @@ def _customer_development_ai_fallback(context: Dict[str, Any], mode: str) -> str
     unmanaged = int(infra.get("unmanagedCount") or 0)
     coverage = int(float(infra.get("coverageRatio") or 0) * 100)
     missed = int(context.get("missedCalls") or 0)
+    days_since_invoice = context.get("daysSinceLastInvoice")
     recommendations = context.get("recommendations") or context.get("topRecommendations") or []
     rec_lines = [str((rec or {}).get("title") or "").strip() for rec in recommendations if str((rec or {}).get("title") or "").strip()]
     top = rec_lines[:3] if rec_lines else ["Betreuungs-Check", "Infrastruktur-Bestand prüfen", "Sicherheitsbasis aktualisieren"]
@@ -6157,6 +6580,24 @@ def _customer_development_ai_fallback(context: Dict[str, Any], mode: str) -> str
             f"Angebot 1: {top[0]} – kompaktes Maßnahmenpaket mit klarer Priorisierung.\n"
             f"Angebot 2: Infrastruktur-Basispaket – Asset-Abgleich, Coverage-Plan (aktuell {coverage}%), Übergabebericht.\n"
             "Angebot 3: Betreuungs-/SLA-Paket – definierte Reaktionszeiten und regelmäßige Service-Reviews."
+        )
+    if mode_key == "aktivierung_mail":
+        days_label = f"{days_since_invoice} Tagen" if isinstance(days_since_invoice, int) else "längerer Zeit"
+        return (
+            f"Betreff: Kurzer IT-Statusabgleich für {customer_name}\n\n"
+            f"Guten Tag,\n\n"
+            f"wir möchten den aktuellen IT-Status mit Ihnen abstimmen, da seit {days_label} keine neue Leistung umgesetzt wurde. "
+            f"Ein kurzer Termin hilft, {top[0]} strukturiert einzuplanen und konkrete nächste Schritte festzulegen.\n\n"
+            "Passt Ihnen ein 20-minütiger Termin in dieser oder nächster Woche?"
+        )
+    if mode_key == "aktivierung_call":
+        return (
+            f"1) Einstieg: Kurzbezug auf letzten Kontakt mit {customer_name}.\n"
+            f"2) Anlass: Aktuelle Lage mit Fokus auf {top[0]}.\n"
+            f"3) Nutzen: Risiken reduzieren und Stabilität erhöhen.\n"
+            "4) Bedarf klären: Welche Themen haben aktuell Priorität?\n"
+            "5) Vorschlag: Konkreten nächsten Schritt mit Aufwand nennen.\n"
+            "6) Abschlussfrage: Termin für 20-30 Minuten Abstimmung fixieren."
         )
     return (
         f"Kurzlage {customer_name}: Priorität bei {top[0]}. "
@@ -6432,28 +6873,28 @@ def run_customer_development_discovery(customer_id: int, request: Request):
         raise HTTPException(404, "Matched RMM agent has no agent id")
 
     scripts_payload: Optional[List[Dict[str, Any]]] = None
-    for path in ("/scripts/", "/scripts", "/api/v3/scripts/", "/api/v3/scripts"):
-        try:
-            scripts_res = session.get(_tactical_url(host, path), timeout=25)
-        except Exception:
-            continue
-        if not scripts_res.ok:
+    for path in (
+        "/scripts/?limit=1000",
+        "/scripts/",
+        "/scripts",
+        "/api/scripts/?limit=1000",
+        "/api/scripts/",
+        "/api/scripts",
+        "/api/v3/scripts/?limit=1000",
+        "/api/v3/scripts/",
+        "/api/v3/scripts",
+    ):
+        scripts_res, _ = _tactical_request(session, host, "GET", path, timeout=25, retries=1)
+        if not scripts_res or not scripts_res.ok:
             continue
         try:
             raw_payload = scripts_res.json()
         except Exception:
             continue
-        if isinstance(raw_payload, list):
-            scripts_payload = [item for item in raw_payload if isinstance(item, dict)]
+        parsed_rows = _tactical_payload_rows(raw_payload)
+        if parsed_rows:
+            scripts_payload = parsed_rows
             break
-        if isinstance(raw_payload, dict):
-            for key in ("results", "scripts", "data"):
-                maybe_list = raw_payload.get(key)
-                if isinstance(maybe_list, list):
-                    scripts_payload = [item for item in maybe_list if isinstance(item, dict)]
-                    break
-            if scripts_payload is not None:
-                break
     if scripts_payload is None:
         raise HTTPException(502, "Unexpected script list response from RMM")
 
@@ -6515,18 +6956,28 @@ def run_customer_development_discovery(customer_id: int, request: Request):
 
     # Do not block the API request on long-running discovery scripts.
     # Trigger in background to avoid reverse-proxy 504 timeouts.
-    run_payload = {
-        "output": "wait",
+    run_payload_base = {
         "emails": [],
         "emailMode": "default",
         "custom_field": None,
-        "save_all_output": True,
         "script": script_id,
         "args": args,
         "env_vars": [],
         "run_as_user": False,
         "timeout": 1500,
     }
+    run_payload_variants = [
+        {
+            **run_payload_base,
+            "output": "forget",
+            "save_all_output": False,
+        },
+        {
+            **run_payload_base,
+            "output": "wait",
+            "save_all_output": True,
+        },
+    ]
 
     def _trigger_discovery_background() -> None:
         bg_session, bg_host = _build_tactical_rmm_session(integration)
@@ -6534,27 +6985,47 @@ def run_customer_development_discovery(customer_id: int, request: Request):
             logger.warning("Discovery background trigger failed: missing RMM session/host")
             return
         run_error = ""
+        attempted_paths: List[str] = []
         for path in (
             f"/agents/{quote(target_agent_id)}/runscript/",
             f"/agents/{quote(target_agent_id)}/runscript",
+            f"/api/agents/{quote(target_agent_id)}/runscript/",
+            f"/api/agents/{quote(target_agent_id)}/runscript",
             f"/api/v3/agents/{quote(target_agent_id)}/runscript/",
             f"/api/v3/agents/{quote(target_agent_id)}/runscript",
         ):
-            try:
-                run_res = bg_session.post(_tactical_url(bg_host, path), json=run_payload, timeout=1800)
-            except Exception as exc:
-                run_error = str(exc)
-                continue
-            if not run_res.ok:
-                run_error = f"HTTP {run_res.status_code} on {path}"
-                continue
-            logger.info("Discovery run triggered for customer %s via %s", customer.id, path)
-            return
+            for payload in run_payload_variants:
+                mode = str(payload.get("output") or "wait").strip().lower() or "wait"
+                run_res, req_error = _tactical_request(
+                    bg_session,
+                    bg_host,
+                    "POST",
+                    path,
+                    timeout=1800,
+                    retries=0,
+                    json_payload=payload,
+                )
+                if not run_res:
+                    run_error = req_error or f"request_failed on {path}"
+                    attempted_paths.append(f"{path}[{mode}] -> ERR")
+                    continue
+                attempted_paths.append(f"{path}[{mode}] -> {run_res.status_code}")
+                if not run_res.ok:
+                    run_error = f"HTTP {run_res.status_code} on {path}"
+                    continue
+                logger.info(
+                    "Discovery run triggered for customer %s via %s (output=%s)",
+                    customer.id,
+                    path,
+                    mode,
+                )
+                return
         logger.warning(
-            "Discovery background trigger failed for customer %s agent %s: %s",
+            "Discovery background trigger failed for customer %s agent %s: %s (attempts=%s)",
             customer.id,
             target_agent_id,
             run_error or "unknown API error",
+            "; ".join(attempted_paths[:16]) or "none",
         )
 
     threading.Thread(target=_trigger_discovery_background, daemon=True).start()
@@ -6581,7 +7052,7 @@ def run_customer_development_discovery(customer_id: int, request: Request):
 @app.post("/api/customer_development/ai_assist")
 def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
     mode = str(data.mode or "summary").strip().lower()
-    if mode not in {"summary", "mail", "leitfaden", "analyse", "angebot", "kundenbericht", "newsletter"}:
+    if mode not in {"summary", "mail", "leitfaden", "analyse", "angebot", "kundenbericht", "newsletter", "aktivierung_mail", "aktivierung_call"}:
         mode = "summary"
 
     if mode == "newsletter":
@@ -7753,6 +8224,10 @@ def update_integrations(data: IntegrationSettingsUpdate):
             db.add(settings)
             db.flush()
 
+        incoming = data.dict(exclude_unset=True)
+        rmm_fields_changed = any(
+            field in incoming for field in ("rmm_host", "rmm_api_key", "rmm_api_key_header")
+        )
         sensitive_fields = {
             "rmm_password",
             "rmm_api_key",
@@ -7764,16 +8239,20 @@ def update_integrations(data: IntegrationSettingsUpdate):
             "sevdesk_api_token",
             "icecat_api_token",
         }
-        for field, value in data.dict(exclude_unset=True).items():
+        for field, value in incoming.items():
             if field in sensitive_fields and value in (None, ""):
                 continue
             setattr(settings, field, value)
         # Tactical RMM is API-key based; legacy basic-auth fields are ignored.
-        if "rmm_api_key" in data.dict(exclude_unset=True):
+        if "rmm_api_key" in incoming:
             settings.rmm_user = ""
             settings.rmm_password = ""
 
         db.commit()
+        if rmm_fields_changed:
+            _tactical_site_lookup_cache.clear()
+            _customer_development_cache.clear()
+            _customer_cve_cache.clear()
         return serialize_integration_settings(settings)
 
 
@@ -7823,6 +8302,7 @@ def rmm_health():
         "agentsStatusCode": probe.get("agentsStatusCode"),
         "sampleCount": int(probe.get("sampleCount") or 0),
         "error": probe.get("error") or "",
+        "attemptedUrls": probe.get("attemptedUrls") if isinstance(probe.get("attemptedUrls"), list) else [],
     }
 
 
@@ -8846,6 +9326,8 @@ def update_ai_prompts(data: AiPromptsUpdate):
             "action_prompt": data.action_prompt or current["action_prompt"],
             "offer_base_prompt": data.offer_base_prompt or current["offer_base_prompt"],
             "offer_mode_instructions": data.offer_mode_instructions or current["offer_mode_instructions"],
+            "contract_header_html": data.contract_header_html if data.contract_header_html is not None else current.get("contract_header_html", ""),
+            "contract_footer_html": data.contract_footer_html if data.contract_footer_html is not None else current.get("contract_footer_html", ""),
             "contract_templates": data.contract_templates or current["contract_templates"],
         }
         store.data_json = json.dumps(payload)
@@ -9145,10 +9627,10 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         template_key = str(data.doc_type or "vertrag").strip().lower() or "vertrag"
         template_entry = templates.get(template_key) or templates.get("vertrag") or {}
         template_title = str(template_entry.get("title") or "Vertrag")
-        template_header_html = str(template_entry.get("header_html") or "")
+        template_header_html = str(prompts.get("contract_header_html") or template_entry.get("header_html") or "")
         title = str(data.title or "").strip() or template_title
         body_template = str(template_entry.get("body_template") or "").strip()
-        template_footer_html = str(template_entry.get("footer_html") or "")
+        template_footer_html = str(prompts.get("contract_footer_html") or template_entry.get("footer_html") or "")
         if not body_template:
             raise HTTPException(400, "No contract template configured for selected type")
 
