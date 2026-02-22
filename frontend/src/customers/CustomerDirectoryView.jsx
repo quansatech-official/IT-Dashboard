@@ -1759,7 +1759,7 @@ export default function CustomerDirectoryView() {
         </div>
       ) : null}
       {previewModal.open ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-sand-900/40 px-4 py-8">
           <div className="w-full max-w-5xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
             <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
               <div>

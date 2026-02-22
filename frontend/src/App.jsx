@@ -46,6 +46,35 @@ export default function App() {
     window.localStorage.setItem("qt_theme", theme);
   }, [theme]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const selector = "input, textarea, select, form";
+    const applyPasswordManagerIgnore = (root = document) => {
+      root.querySelectorAll(selector).forEach((el) => {
+        if (!(el instanceof HTMLElement)) return;
+        if (el.dataset.allowPasswordManager === "true") return;
+        el.setAttribute("data-bwignore", "true");
+        el.setAttribute("data-lpignore", "true");
+        el.setAttribute("data-1p-ignore", "true");
+        if ((el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "FORM") && !el.getAttribute("autocomplete")) {
+          el.setAttribute("autocomplete", "off");
+        }
+      });
+    };
+    applyPasswordManagerIgnore(document);
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (!(node instanceof HTMLElement)) return;
+          if (node.matches?.(selector)) applyPasswordManagerIgnore(node.parentElement || document);
+          else applyPasswordManagerIgnore(node);
+        });
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       <IncomingCallQuickTaskPopup />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowDownUp,
@@ -251,31 +251,66 @@ export default function CustomerDevelopmentView() {
     infraRisk: false,
     searchNeedle: ""
   });
+  const loadRequestRef = useRef(0);
+  const loadAbortRef = useRef(null);
 
   const load = async (forceRefresh = false) => {
+    loadRequestRef.current += 1;
+    const requestId = loadRequestRef.current;
+    if (loadAbortRef.current) {
+      try {
+        loadAbortRef.current.abort();
+      } catch {
+        // ignore stale abort errors
+      }
+    }
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort("timeout"), 25000);
     setStatus("loading");
     setLoadingProgress(6);
     try {
       const response = await fetch(
-        `${API}/customer_development?include_inactive=${includeInactive ? "1" : "0"}&refresh=${forceRefresh ? "1" : "0"}`
+        `${API}/customer_development?include_inactive=${includeInactive ? "1" : "0"}&refresh=${forceRefresh ? "1" : "0"}`,
+        { signal: controller.signal }
       );
+      if (requestId !== loadRequestRef.current) return;
       if (!response.ok) throw new Error("load_failed");
       setLoadingProgress((prev) => Math.max(prev, 72));
       const data = await response.json();
+      if (requestId !== loadRequestRef.current) return;
       setLoadingProgress((prev) => Math.max(prev, 96));
       setContexts(Array.isArray(data?.contexts) ? data.contexts : []);
       setLoadingProgress(100);
       // Keep overlay briefly so the progress bar visually reaches 100%.
       window.setTimeout(() => setStatus("ready"), 180);
     } catch {
+      if (requestId !== loadRequestRef.current) return;
       setLoadingProgress(100);
       window.setTimeout(() => setStatus("error"), 180);
+    } finally {
+      window.clearTimeout(timeoutId);
+      if (requestId === loadRequestRef.current) {
+        loadAbortRef.current = null;
+      }
     }
   };
 
   useEffect(() => {
     load(false);
   }, [includeInactive]);
+
+  useEffect(() => {
+    return () => {
+      if (loadAbortRef.current) {
+        try {
+          loadAbortRef.current.abort();
+        } catch {
+          // ignore teardown abort errors
+        }
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (status !== "loading") return;
