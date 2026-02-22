@@ -44,8 +44,10 @@ SEVDESK_CONTACT_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 _sevdesk_contact_cache: Dict[str, Tuple[int, str]] = {}
 CUSTOMER_DEVELOPMENT_CACHE_TTL_MS = 5 * 60 * 1000
 CUSTOMER_CVE_CACHE_TTL_MS = 30 * 60 * 1000
+RECENT_WORK_SUMMARY_CACHE_TTL_MS = 15 * 60 * 1000
 _customer_development_cache: Dict[str, Dict[str, Any]] = {}
 _customer_cve_cache: Dict[int, Dict[str, Any]] = {}
+_recent_work_summary_cache: Dict[str, Dict[str, Any]] = {}
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -5003,7 +5005,9 @@ def _build_recent_work_summary_ai_text(customer_name: str, invoice_items: List[D
         f"Rechnungspositionen:\n{chr(10).join(lines)}"
     )
     try:
-        return _ollama_generate_text(prompt).strip()
+        model_candidates = _resolve_ollama_models(MODEL_PREF_INVOICE_SUMMARY)
+        data, _ = _ollama_generate(prompt, model_candidates=model_candidates, timeout=10)
+        return str(data.get("response") or "").strip()
     except Exception:
         return ""
 
@@ -5015,6 +5019,7 @@ def _build_customer_recent_work_summary(
     customer: Customer,
     matched_sevdesk: Optional[Dict[str, Any]],
     now_dt: datetime,
+    include_ai: bool = False,
 ) -> Dict[str, Any]:
     base = {
         "available": False,
@@ -5028,6 +5033,7 @@ def _build_customer_recent_work_summary(
     }
     if not integration:
         return base
+    now_ms = int(time.time() * 1000)
     config = _build_sevdesk_config(integration, metrics_settings)
     if not config.api_token:
         return base
@@ -5035,7 +5041,7 @@ def _build_customer_recent_work_summary(
     contact_id = str((matched_sevdesk or {}).get("contactId") or "").strip()
     if not contact_id and str(customer.creditor_number or "").strip():
         try:
-            client = SevdeskClient(config, timeout=20)
+            client = SevdeskClient(config, timeout=8)
             contact = client.get_contact_by_customer_number(str(customer.creditor_number or "").strip())
             contact_id = str((contact or {}).get("id") or "").strip()
         except Exception:
@@ -5043,8 +5049,15 @@ def _build_customer_recent_work_summary(
     if not contact_id:
         return base
 
+    cache_key = f"{int(customer.id)}:{contact_id}:{1 if include_ai else 0}"
+    cached = _recent_work_summary_cache.get(cache_key)
+    if cached and (now_ms - int(cached.get("cachedAt") or 0)) < RECENT_WORK_SUMMARY_CACHE_TTL_MS:
+        payload = cached.get("payload")
+        if isinstance(payload, dict):
+            return payload
+
     try:
-        client = SevdeskClient(config, timeout=20)
+        client = SevdeskClient(config, timeout=8)
         invoices = client.list_invoices(
             params={
                 "contact[id]": contact_id,
@@ -5089,7 +5102,7 @@ def _build_customer_recent_work_summary(
                     params={
                         "invoice[id]": inv_id,
                         "invoice[objectName]": "Invoice",
-                        "limit": 200,
+                        "limit": 120,
                         "offset": 0,
                     },
                 )
@@ -5120,19 +5133,20 @@ def _build_customer_recent_work_summary(
     newest_ms = int(newest_date.timestamp() * 1000)
     days_since = max(0, (now_dt.date() - newest_date.date()).days)
     inactivity_due = days_since >= 60
-    ai_summary = _build_recent_work_summary_ai_text(str(customer.name or "").strip(), items)
-    if not ai_summary:
-        fallback_snippets = []
-        for item in items[:3]:
-            snippets = item.get("positionSnippets") or []
-            if snippets:
-                fallback_snippets.append(snippets[0])
-        ai_summary = (
-            "Letzte Leistungen: "
-            + ("; ".join(fallback_snippets) if fallback_snippets else "Zu den letzten Rechnungen sind keine Positionsdetails vorhanden.")
-        )
+    fallback_snippets: List[str] = []
+    for item in items[:3]:
+        snippets = item.get("positionSnippets") or []
+        if snippets:
+            fallback_snippets.append(snippets[0])
+    fallback_summary = (
+        "Letzte Leistungen: "
+        + ("; ".join(fallback_snippets) if fallback_snippets else "Zu den letzten Rechnungen sind keine Positionsdetails vorhanden.")
+    )
+    ai_summary = ""
+    if include_ai:
+        ai_summary = _build_recent_work_summary_ai_text(str(customer.name or "").strip(), items)
 
-    return {
+    result = {
         "available": True,
         "source": "sevdesk",
         "contactId": contact_id,
@@ -5140,8 +5154,12 @@ def _build_customer_recent_work_summary(
         "daysSinceLastInvoice": days_since,
         "inactivityDue": inactivity_due,
         "items": items,
-        "summary": ai_summary,
+        "summary": fallback_summary,
+        "aiSummary": ai_summary,
+        "hasAiSummary": bool(str(ai_summary or "").strip()),
     }
+    _recent_work_summary_cache[cache_key] = {"cachedAt": now_ms, "payload": result}
+    return result
 
 
 def _customer_task_filter(customer: Customer) -> List[Any]:
@@ -6232,6 +6250,32 @@ def get_customer_development_for_customer(customer_id: int, refresh: bool = Fals
     if not contexts:
         raise HTTPException(404, "Customer not found")
     return contexts[0]
+
+
+@app.get("/api/customers/{customer_id}/development/work_summary_ai")
+def get_customer_development_work_summary_ai(customer_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        integration = db.query(IntegrationSettings).first()
+        metrics_settings = _get_customer_metrics_settings(db)
+        now_dt = datetime.now()
+        summary = _build_customer_recent_work_summary(
+            integration=integration,
+            metrics_settings=metrics_settings,
+            customer=customer,
+            matched_sevdesk=None,
+            now_dt=now_dt,
+            include_ai=True,
+        )
+        return {
+            "customerId": customer.id,
+            "available": bool(summary.get("available")),
+            "summary": str(summary.get("summary") or ""),
+            "aiSummary": str(summary.get("aiSummary") or ""),
+            "hasAiSummary": bool(summary.get("hasAiSummary")),
+        }
 
 
 @app.get("/api/customers/{customer_id}/development/cve_scan")

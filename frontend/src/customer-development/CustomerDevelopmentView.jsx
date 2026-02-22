@@ -223,6 +223,11 @@ export default function CustomerDevelopmentView() {
   const [detailStatus, setDetailStatus] = useState("idle");
   const [detailProgress, setDetailProgress] = useState(0);
   const [detailData, setDetailData] = useState(null);
+  const [workSummaryAi, setWorkSummaryAi] = useState({
+    status: "idle",
+    text: "",
+    error: "",
+  });
   const [aiProgress, setAiProgress] = useState(0);
   const [cveScan, setCveScan] = useState({
     status: "idle",
@@ -253,6 +258,10 @@ export default function CustomerDevelopmentView() {
   });
   const loadRequestRef = useRef(0);
   const loadAbortRef = useRef(null);
+  const detailRequestRef = useRef(0);
+  const detailAbortRef = useRef(null);
+  const workSummaryRequestRef = useRef(0);
+  const workSummaryAbortRef = useRef(null);
 
   const load = async (forceRefresh = false) => {
     loadRequestRef.current += 1;
@@ -313,6 +322,30 @@ export default function CustomerDevelopmentView() {
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (detailAbortRef.current) {
+        try {
+          detailAbortRef.current.abort();
+        } catch {
+          // ignore teardown abort errors
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (workSummaryAbortRef.current) {
+        try {
+          workSummaryAbortRef.current.abort();
+        } catch {
+          // ignore teardown abort errors
+        }
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (status !== "loading") return;
     const timer = window.setInterval(() => {
       setLoadingProgress((prev) => {
@@ -331,24 +364,98 @@ export default function CustomerDevelopmentView() {
 
   const loadDetail = (forceRefresh = false) => {
     if (!detailModal.open || !detailModal.customerId) return;
+    detailRequestRef.current += 1;
+    const requestId = detailRequestRef.current;
+    if (detailAbortRef.current) {
+      try {
+        detailAbortRef.current.abort();
+      } catch {
+        // ignore stale abort errors
+      }
+    }
+    const controller = new AbortController();
+    detailAbortRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort("timeout"), 25000);
     setDetailStatus("loading");
     setDetailProgress(8);
-    fetch(`${API}/customers/${detailModal.customerId}/development?refresh=${forceRefresh ? "1" : "0"}`)
+    fetch(`${API}/customers/${detailModal.customerId}/development?refresh=${forceRefresh ? "1" : "0"}`, {
+      signal: controller.signal,
+    })
       .then((res) => {
+        if (requestId !== detailRequestRef.current) return null;
         if (!res.ok) throw new Error("detail_failed");
         setDetailProgress((prev) => Math.max(prev, 58));
         return res.json();
       })
       .then((data) => {
+        if (requestId !== detailRequestRef.current) return;
+        if (data === null) return;
         setDetailProgress(100);
         setDetailData(data || null);
+        setWorkSummaryAi({ status: "idle", text: "", error: "" });
         setDetailStatus("ready");
       })
       .catch(() => {
+        if (requestId !== detailRequestRef.current) return;
         setDetailProgress(100);
         setDetailStatus("error");
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
+        if (requestId === detailRequestRef.current) {
+          detailAbortRef.current = null;
+        }
       });
   };
+
+  useEffect(() => {
+    if (!detailModal.open || !detailData?.customerId) return;
+    if (!detailData?.workSummary?.available) {
+      setWorkSummaryAi({ status: "idle", text: "", error: "" });
+      return;
+    }
+    workSummaryRequestRef.current += 1;
+    const requestId = workSummaryRequestRef.current;
+    if (workSummaryAbortRef.current) {
+      try {
+        workSummaryAbortRef.current.abort();
+      } catch {
+        // ignore stale abort errors
+      }
+    }
+    const controller = new AbortController();
+    workSummaryAbortRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort("timeout"), 70000);
+    setWorkSummaryAi({ status: "loading", text: "", error: "" });
+    fetch(`${API}/customers/${detailData.customerId}/development/work_summary_ai`, {
+      signal: controller.signal,
+    })
+      .then((res) => {
+        if (requestId !== workSummaryRequestRef.current) return null;
+        if (!res.ok) throw new Error("ai_summary_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (requestId !== workSummaryRequestRef.current) return;
+        if (data === null) return;
+        const text = String(data?.aiSummary || data?.summary || "").trim();
+        if (!text) {
+          setWorkSummaryAi({ status: "error", text: "", error: "Keine KI-Zusammenfassung verfügbar." });
+          return;
+        }
+        setWorkSummaryAi({ status: "ready", text, error: "" });
+      })
+      .catch(() => {
+        if (requestId !== workSummaryRequestRef.current) return;
+        setWorkSummaryAi({ status: "error", text: "", error: "KI-Zusammenfassung konnte nicht geladen werden." });
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
+        if (requestId === workSummaryRequestRef.current) {
+          workSummaryAbortRef.current = null;
+        }
+      });
+  }, [detailModal.open, detailData?.customerId, detailData?.workSummary?.available]);
 
   const filteredContexts = useMemo(() => {
     return contexts.filter((item) => {
@@ -1037,6 +1144,24 @@ export default function CustomerDevelopmentView() {
                     <p className="mt-2 text-sm text-sand-700">
                       {String(detailData.workSummary?.summary || "").trim() || "Noch keine Zusammenfassung vorhanden."}
                     </p>
+                    <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">KI-Zusammenfassung</p>
+                      {workSummaryAi.status === "loading" ? (
+                        <div className="mt-1 flex items-center gap-2 text-xs text-sand-600">
+                          <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-sand-300 border-t-sand-700 animate-spin" />
+                          Wird nachgeladen...
+                        </div>
+                      ) : null}
+                      {workSummaryAi.status === "ready" ? (
+                        <p className="mt-1 text-sm text-sand-700">{workSummaryAi.text}</p>
+                      ) : null}
+                      {workSummaryAi.status === "error" ? (
+                        <p className="mt-1 text-xs text-amber-700">{workSummaryAi.error}</p>
+                      ) : null}
+                      {workSummaryAi.status === "idle" ? (
+                        <p className="mt-1 text-xs text-sand-500">Wird bei geöffnetem Detail automatisch geladen.</p>
+                      ) : null}
+                    </div>
                     <div className="mt-3 space-y-2">
                       {(detailData.workSummary?.items || []).slice(0, 5).map((row, idx) => (
                         <div key={`work-row-${row.invoiceId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">

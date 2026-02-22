@@ -87,6 +87,8 @@ const api = {
     }),
   listCustomerContracts: (customerId) =>
     fetch(`${API}/customers/${customerId}/contracts`).then((r) => r.json()),
+  getCustomerDevelopment: (customerId, refresh = false) =>
+    fetch(`${API}/customers/${customerId}/development?refresh=${refresh ? "1" : "0"}`).then((r) => r.json()),
   previewCustomerContract: (customerId, payload) =>
     fetch(`${API}/customers/${customerId}/contracts/preview`, {
       method: "POST",
@@ -302,6 +304,7 @@ export default function CustomerDirectoryView() {
   const [calcHistory, setCalcHistory] = useState([]);
   const [calcHistoryStatus, setCalcHistoryStatus] = useState("idle");
   const [calcSaveStatus, setCalcSaveStatus] = useState("idle");
+  const [calcImportStatus, setCalcImportStatus] = useState("idle");
   const [customerContracts, setCustomerContracts] = useState([]);
   const [contractsStatus, setContractsStatus] = useState("idle");
   const [contractPreviewStatus, setContractPreviewStatus] = useState("idle");
@@ -575,6 +578,66 @@ export default function CustomerDirectoryView() {
       note: String(row.note || "")
     }));
     setContractCalcModalOpen(true);
+  };
+
+  const importCalcValuesFromRmm = async () => {
+    if (!activeId) return;
+    setCalcImportStatus("loading");
+    try {
+      const data = await api.getCustomerDevelopment(activeId, true);
+      const managed = Array.isArray(data?.managedInfrastructureDevices) ? data.managedInfrastructureDevices : [];
+      const discovered = Array.isArray(data?.discoveredInfrastructureDevices) ? data.discoveredInfrastructureDevices : [];
+      if (!managed.length && !discovered.length) {
+        setCalcImportStatus("empty");
+        setTimeout(() => setCalcImportStatus("idle"), 2200);
+        return;
+      }
+      const serverCount = managed.filter((device) => {
+        const os = String(device?.os || "").toLowerCase();
+        const host = String(device?.hostname || "").toLowerCase();
+        return (
+          os.includes("server") ||
+          host.includes("srv") ||
+          host.includes("dc") ||
+          host.includes("fs") ||
+          host.includes("rds")
+        );
+      }).length;
+      const clientCount = Math.max(managed.length - serverCount, 0);
+      const networkCount = discovered.filter((device) => {
+        const type = String(device?.deviceType || "").toLowerCase();
+        const protocol = String(device?.protocol || "").toLowerCase();
+        return (
+          type.includes("router") ||
+          type.includes("switch") ||
+          type.includes("firewall") ||
+          type.includes("gateway") ||
+          type.includes("printer") ||
+          protocol.includes("snmp")
+        );
+      }).length;
+      const iotCount = discovered.filter((device) => {
+        const type = String(device?.deviceType || "").toLowerCase();
+        return type.includes("iot") || type.includes("camera") || type.includes("sensor");
+      }).length;
+
+      setCalcInput((prev) => ({
+        ...prev,
+        servers: String(serverCount),
+        clients: String(clientCount),
+        networkDevices: String(networkCount),
+        iotDevices: String(iotCount),
+        note: String(
+          prev.note ||
+            `Auto-Import RMM/Discovery: ${managed.length} Agents, ${discovered.length} Discovery-Geräte`
+        ),
+      }));
+      setCalcImportStatus("done");
+      setTimeout(() => setCalcImportStatus("idle"), 1800);
+    } catch {
+      setCalcImportStatus("error");
+      setTimeout(() => setCalcImportStatus("idle"), 2200);
+    }
   };
 
   const contractHtmlToPdfDataUri = async (html) => {
@@ -1656,16 +1719,16 @@ export default function CustomerDirectoryView() {
   };
 
   const renderContractCalculationContent = () => (
-    <div className="space-y-5">
-      <div className="rounded-2xl border border-sand-200 bg-white p-4">
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
         <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kundenspezifische Kalkulation</p>
-        <div className="mt-3 grid gap-2 md:grid-cols-3">
-          <label className="block md:col-span-3">
+        <div className="mt-2.5 grid gap-2 md:grid-cols-4">
+          <label className="block md:col-span-2">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">Tarif</span>
             <select
               value={calcInput.tariffId || ""}
               onChange={(event) => setCalcInput((prev) => ({ ...prev, tariffId: Number(event.target.value) || null }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             >
               <option value="">Tarif wählen</option>
               {(contractTariffs || [])
@@ -1677,54 +1740,67 @@ export default function CustomerDirectoryView() {
                 ))}
             </select>
           </label>
+          <div className="md:col-span-2 flex items-end">
+            <button
+              type="button"
+              onClick={importCalcValuesFromRmm}
+              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+            >
+              Vorschlagswerte aus RMM laden
+            </button>
+          </div>
           <label className="block">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">Server</span>
-            <input value={calcInput.servers} onChange={(event) => setCalcInput((prev) => ({ ...prev, servers: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+            <input value={calcInput.servers} onChange={(event) => setCalcInput((prev) => ({ ...prev, servers: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
           </label>
           <label className="block">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">Clients</span>
-            <input value={calcInput.clients} onChange={(event) => setCalcInput((prev) => ({ ...prev, clients: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+            <input value={calcInput.clients} onChange={(event) => setCalcInput((prev) => ({ ...prev, clients: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
           </label>
           <label className="block">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">Netzwerkgeräte</span>
-            <input value={calcInput.networkDevices} onChange={(event) => setCalcInput((prev) => ({ ...prev, networkDevices: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+            <input value={calcInput.networkDevices} onChange={(event) => setCalcInput((prev) => ({ ...prev, networkDevices: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
           </label>
           <label className="block">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">IoT</span>
-            <input value={calcInput.iotDevices} onChange={(event) => setCalcInput((prev) => ({ ...prev, iotDevices: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+            <input value={calcInput.iotDevices} onChange={(event) => setCalcInput((prev) => ({ ...prev, iotDevices: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
           </label>
-          <label className="block md:col-span-2">
+          <label className="block md:col-span-4">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
-            <input value={calcInput.note} onChange={(event) => setCalcInput((prev) => ({ ...prev, note: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+            <input value={calcInput.note} onChange={(event) => setCalcInput((prev) => ({ ...prev, note: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
           </label>
         </div>
-        <div className="mt-3 grid gap-2 md:grid-cols-2">
-          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+        <div className="mt-2.5 grid gap-2 md:grid-cols-[1fr_1fr_auto] items-center">
+          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
             <p className="text-[10px] uppercase tracking-wide text-sand-500">Monat</p>
-            <p className="text-lg font-semibold text-sand-900">{formatEurPrecise(contractPreview.monthly)}</p>
+            <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractPreview.monthly)}</p>
           </div>
-          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
             <p className="text-[10px] uppercase tracking-wide text-sand-500">Jahr</p>
-            <p className="text-lg font-semibold text-sand-900">{formatEurPrecise(contractPreview.yearly)}</p>
+            <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractPreview.yearly)}</p>
           </div>
-        </div>
-        <div className="mt-3 flex items-center gap-2">
           <button
             type="button"
             onClick={saveTariffSuggestion}
             disabled={!selectedTariff}
-            className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
+            className={`inline-flex items-center justify-center gap-2 rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
               selectedTariff ? "border-sand-200 bg-sand-900 text-white" : "border-sand-200 bg-sand-100 text-sand-400"
             }`}
           >
             Tarif als Vorschlag speichern
           </button>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           {calcSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
           {calcSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
+          {calcImportStatus === "loading" ? <span className="text-xs text-sand-500">Importiere aus RMM…</span> : null}
+          {calcImportStatus === "done" ? <span className="text-xs text-emerald-600">Werte übernommen</span> : null}
+          {calcImportStatus === "empty" ? <span className="text-xs text-amber-700">Keine RMM/Discovery-Daten gefunden</span> : null}
+          {calcImportStatus === "error" ? <span className="text-xs text-rose-600">RMM-Import fehlgeschlagen</span> : null}
         </div>
-        <div className="mt-4">
+        <div className="mt-3">
           <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Vorschlags-Historie</p>
-          <div className="mt-2 space-y-2 max-h-56 overflow-auto pr-1">
+          <div className="mt-1.5 space-y-1.5 max-h-48 overflow-auto pr-1">
             {(calcHistory || []).map((row) => (
               <div key={row.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
                 <p className="font-semibold text-sand-800">
@@ -1862,18 +1938,7 @@ export default function CustomerDirectoryView() {
                       : "border-sand-200 bg-white hover:bg-sand-100"
                   }`}
                 >
-                  Details
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSettingsTab("settings")}
-                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
-                    settingsTab === "settings"
-                      ? "border-sand-900 bg-sand-900 text-white"
-                      : "border-sand-200 bg-white hover:bg-sand-100"
-                  }`}
-                >
-                  Kennzahlenbasis
+                  Stammdaten
                 </button>
                 <button
                   type="button"
@@ -1915,16 +1980,19 @@ export default function CustomerDirectoryView() {
                 </button>
               </div>
             </div>
-            <div className="h-[calc(94vh-132px)] overflow-y-auto p-6 bg-sand-50">
+            <div className="h-[calc(94vh-132px)] overflow-y-auto p-4 bg-sand-50">
               {settingsTab === "details" ? (
                 <>
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="mb-2">
+                <p className="text-xs uppercase tracking-[0.25em] text-sand-500">Stammdaten</p>
+              </div>
+              <div className="grid gap-2 md:grid-cols-3">
                 <label className="block">
                   <span className="text-xs uppercase tracking-wide text-sand-500">Name</span>
                   <input
                     value={editCustomer.name}
                     onChange={(event) => updateCustomer(editCustomer.id, { name: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
                 <label className="block">
@@ -1932,7 +2000,7 @@ export default function CustomerDirectoryView() {
                   <input
                     value={editCustomer.creditorNumber}
                     onChange={(event) => updateCustomer(editCustomer.id, { creditorNumber: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
                 <label className="block">
@@ -1940,7 +2008,7 @@ export default function CustomerDirectoryView() {
                   <input
                     value={editCustomer.shortCode}
                     onChange={(event) => updateCustomer(editCustomer.id, { shortCode: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
                 <label className="block md:col-span-3">
@@ -1949,12 +2017,12 @@ export default function CustomerDirectoryView() {
                     type="email"
                     value={editCustomer.email}
                     onChange={(event) => updateCustomer(editCustomer.id, { email: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-1.5 text-sm text-sand-700">
                   <input
                     type="checkbox"
                     checked={Boolean(editCustomer.customerReport)}
@@ -1963,7 +2031,7 @@ export default function CustomerDirectoryView() {
                   />
                   Kundenbericht
                 </label>
-                <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
+                <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-1.5 text-sm text-sand-700">
                   <input
                     type="checkbox"
                     checked={Boolean(editCustomer.newsletter)}
@@ -1972,7 +2040,7 @@ export default function CustomerDirectoryView() {
                   />
                   Newsletter
                 </label>
-                <label className="block rounded-xl border border-sand-200 bg-white px-3 py-2">
+                <label className="block rounded-xl border border-sand-200 bg-white px-3 py-1.5">
                   <span className="text-[10px] uppercase tracking-wide text-sand-500">Kundenstatus</span>
                   <select
                     value={String(editCustomer.status || "active")}
@@ -1984,7 +2052,7 @@ export default function CustomerDirectoryView() {
                   </select>
                 </label>
               </div>
-              <div className="mt-3 rounded-xl border border-sand-200 bg-white px-3 py-2">
+              <div className="mt-2 rounded-xl border border-sand-200 bg-white px-3 py-1.5">
                 <p className="text-[10px] uppercase tracking-wide text-sand-500 mb-2">Vertragsstatus</p>
                 <div className="flex flex-wrap items-center gap-3 text-sm text-sand-700">
                   {[
@@ -2012,13 +2080,13 @@ export default function CustomerDirectoryView() {
                   ))}
                 </div>
               </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
                 <label className="block md:col-span-2">
                   <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
                   <input
                     value={editCustomer.street}
                     onChange={(event) => updateCustomer(editCustomer.id, { street: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
                 <label className="block">
@@ -2026,7 +2094,7 @@ export default function CustomerDirectoryView() {
                   <input
                     value={editCustomer.postalCode}
                     onChange={(event) => updateCustomer(editCustomer.id, { postalCode: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
                 <label className="block">
@@ -2034,7 +2102,7 @@ export default function CustomerDirectoryView() {
                   <input
                     value={editCustomer.city}
                     onChange={(event) => updateCustomer(editCustomer.id, { city: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
                 <label className="block">
@@ -2042,11 +2110,11 @@ export default function CustomerDirectoryView() {
                   <input
                     value={editCustomer.country}
                     onChange={(event) => updateCustomer(editCustomer.id, { country: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
               </div>
-              <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
+              <div className="mt-2 rounded-2xl border border-sand-200 bg-white p-2.5">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Rufnummern</p>
                   <button
@@ -2057,23 +2125,23 @@ export default function CustomerDirectoryView() {
                     <Plus size={11} /> Neu
                   </button>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   {editCustomer.phones?.map((phone) => (
                     <div
                       key={phone.id}
-                      className="grid items-center gap-2 md:grid-cols-[minmax(0,180px)_minmax(0,240px)_auto_auto_auto]"
+                      className="grid items-center gap-1.5 md:grid-cols-[minmax(0,180px)_minmax(0,240px)_auto_auto_auto]"
                     >
                       <input
                         value={phone.label}
                         onChange={(event) => updatePhone(phone.id, { label: event.target.value })}
                         placeholder="z. B. Arbeit"
-                        className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        className="rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                       />
                       <input
                         value={phone.number}
                         onChange={(event) => updatePhone(phone.id, { number: event.target.value })}
                         placeholder="+49 40 123456"
-                        className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        className="rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                       />
                       {pbxMatches.has(normalizeDigits(phone.number)) ? null : (
                         <button
@@ -2123,72 +2191,6 @@ export default function CustomerDirectoryView() {
                 </div>
               </div>
                 </>
-              ) : null}
-              {settingsTab === "settings" ? (
-                <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="block md:col-span-2">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">Firmenstandort</span>
-                      <input
-                        value={metricsSettings.office_address}
-                        onChange={(event) =>
-                          setMetricsSettings((prev) => ({
-                            ...prev,
-                            office_address: event.target.value
-                          }))
-                        }
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">Kilometergeld (EUR/km)</span>
-                      <input
-                        value={metricsSettings.km_rate_eur}
-                        onChange={(event) =>
-                          setMetricsSettings((prev) => ({
-                            ...prev,
-                            km_rate_eur: event.target.value
-                          }))
-                        }
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">Stundensatz (EUR)</span>
-                      <input
-                        value={metricsSettings.hourly_rate_eur}
-                        onChange={(event) =>
-                          setMetricsSettings((prev) => ({
-                            ...prev,
-                            hourly_rate_eur: event.target.value
-                          }))
-                        }
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                  </div>
-                  <div className="mt-3 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        setMetricsSettingsStatus("saving");
-                        try {
-                          const saved = await api.saveMetricsSettings(metricsSettings);
-                          setMetricsSettings(saved);
-                          setMetricsSettingsStatus("saved");
-                        } catch {
-                          setMetricsSettingsStatus("error");
-                        }
-                        setTimeout(() => setMetricsSettingsStatus("idle"), 2000);
-                      }}
-                      className="rounded-full border border-sand-200 bg-sand-900 text-white px-3 py-1 text-xs uppercase tracking-wide"
-                    >
-                      Kennzahlen speichern
-                    </button>
-                    {metricsSettingsStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
-                    {metricsSettingsStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
-                  </div>
-                </div>
               ) : null}
               {settingsTab === "development" ? (
                 <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
@@ -2461,8 +2463,12 @@ export default function CustomerDirectoryView() {
                     <tr
                       key={customer.id}
                       className={`${
-                        index % 2 === 0 ? "bg-white" : "bg-sand-100/70"
-                      } ${customer.id === activeId ? "ring-1 ring-inset ring-sand-300" : ""} hover:bg-sand-100/90`}
+                        customer.id === activeId
+                          ? "bg-sand-200/70"
+                          : index % 2 === 0
+                          ? "bg-white"
+                          : "bg-slate-100"
+                      } hover:bg-sand-100`}
                       onClick={() => setActiveId(customer.id)}
                     >
                       <td className="px-3 py-2 align-top">
