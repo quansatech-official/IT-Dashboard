@@ -23,6 +23,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import quote
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set
 
@@ -49,6 +50,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--snmp", action="store_true", help="Enable SNMP probe (requires snmpget in PATH)")
     parser.add_argument("--snmp-community", default="public", help="SNMP v2c community")
     parser.add_argument("--snmp-timeout-seconds", type=int, default=2, help="SNMP probe timeout")
+    parser.add_argument(
+        "--snmp-walk-oid",
+        default="1.3.6.1.2.1.1",
+        help="SNMP walk base OID (default system tree)",
+    )
+    parser.add_argument("--rmm-host", default="", help="Tactical RMM host, e.g. https://rmmapi.example.com")
+    parser.add_argument("--rmm-api-key", default="", help="Tactical RMM API key")
+    parser.add_argument("--rmm-api-key-header", default="X-API-KEY", help="Tactical API key header")
+    parser.add_argument("--rmm-agent-id", default="", help="Agent ID for subnet derivation")
+    parser.add_argument("--derive-prefix", type=int, default=24, help="CIDR prefix for derived subnets")
     parser.add_argument(
         "--managed-ip",
         action="append",
@@ -175,9 +186,145 @@ def _snmp_probe(ip: str, community: str, timeout_seconds: int) -> str:
         return ""
 
 
+def _snmp_walk_summary(ip: str, community: str, timeout_seconds: int, walk_oid: str) -> Dict[str, str]:
+    walk_bin = shutil.which("snmpwalk")
+    if walk_bin:
+        cmd = [
+            walk_bin,
+            "-v2c",
+            "-c",
+            community,
+            "-t",
+            str(max(1, timeout_seconds)),
+            "-r",
+            "0",
+            ip,
+            walk_oid or "1.3.6.1.2.1.1",
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if proc.returncode == 0:
+                lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+                summary = {"sysdescr": "", "sysname": ""}
+                for line in lines:
+                    lower = line.lower()
+                    if (".1.3.6.1.2.1.1.1.0" in lower or "sysdescr" in lower) and not summary["sysdescr"]:
+                        summary["sysdescr"] = line
+                    if (".1.3.6.1.2.1.1.5.0" in lower or "sysname" in lower) and not summary["sysname"]:
+                        summary["sysname"] = line
+                if not summary["sysdescr"] and lines:
+                    summary["sysdescr"] = lines[0]
+                return summary
+        except Exception:
+            pass
+    # Fallback to single OID probe when snmpwalk isn't available.
+    sysdescr = _snmp_probe(ip, community, timeout_seconds)
+    return {"sysdescr": sysdescr, "sysname": ""}
+
+
 def _iter_cidr_hosts(cidr: str) -> List[str]:
     network = ipaddress.ip_network(cidr, strict=False)
     return [str(ip) for ip in network.hosts()]
+
+
+def _http_get_json(url: str, headers: Dict[str, str], timeout: int = 12) -> object:
+    req = urllib.request.Request(url, method="GET", headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        raw = response.read().decode("utf-8", errors="replace").strip()
+    if not raw:
+        return {}
+    return json.loads(raw)
+
+
+def _build_rmm_headers(api_key: str, header_name: str) -> Dict[str, str]:
+    key = str(api_key or "").strip()
+    hdr = str(header_name or "X-API-KEY").strip() or "X-API-KEY"
+    headers = {"Accept": "application/json"}
+    if not key:
+        return headers
+    value = key
+    if hdr.lower() == "authorization" and not key.lower().startswith(("bearer ", "token ")):
+        value = f"Bearer {key}"
+    headers[hdr] = value
+    if hdr.lower() != "x-api-key":
+        headers["X-API-KEY"] = key
+    return headers
+
+
+def _extract_ips_recursive(node: object, out: Set[str]) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            key_text = str(key or "").strip().lower()
+            if key_text in {"ip", "local_ip", "ip_address", "address"} and isinstance(value, str):
+                candidate = value.strip()
+                try:
+                    ipaddress.ip_address(candidate)
+                    out.add(candidate)
+                except Exception:
+                    pass
+            _extract_ips_recursive(value, out)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _extract_ips_recursive(item, out)
+        return
+    if isinstance(node, str):
+        token = node.strip()
+        try:
+            ipaddress.ip_address(token)
+            out.add(token)
+        except Exception:
+            pass
+
+
+def _derive_subnets_from_rmm_agent(
+    rmm_host: str,
+    rmm_api_key: str,
+    rmm_api_key_header: str,
+    rmm_agent_id: str,
+    prefix: int,
+) -> List[str]:
+    host = str(rmm_host or "").strip().rstrip("/")
+    agent_id = str(rmm_agent_id or "").strip()
+    if not host or not rmm_api_key or not agent_id:
+        return []
+    headers = _build_rmm_headers(rmm_api_key, rmm_api_key_header)
+    endpoints = [
+        f"{host}/api/v3/agents/{quote(agent_id)}/",
+        f"{host}/api/v3/agents/{quote(agent_id)}",
+        f"{host}/api/v3/agents?agent_id={quote(agent_id)}",
+        f"{host}/api/v3/agents/?agent_id={quote(agent_id)}",
+    ]
+    payload = None
+    for url in endpoints:
+        try:
+            payload = _http_get_json(url, headers=headers)
+            if payload:
+                break
+        except Exception:
+            continue
+    if payload is None:
+        return []
+    if isinstance(payload, dict):
+        data = payload.get("results") if isinstance(payload.get("results"), list) else payload
+        if isinstance(data, list) and data:
+            payload = data[0]
+        elif isinstance(data, dict):
+            payload = data
+    ips: Set[str] = set()
+    _extract_ips_recursive(payload, ips)
+    cidrs: Set[str] = set()
+    safe_prefix = max(16, min(30, int(prefix or 24)))
+    for ip in ips:
+        try:
+            addr = ipaddress.ip_address(ip)
+            if not addr.is_private:
+                continue
+            network = ipaddress.ip_network(f"{ip}/{safe_prefix}", strict=False)
+            cidrs.add(str(network))
+        except Exception:
+            continue
+    return sorted(cidrs)
 
 
 @dataclass
@@ -283,6 +430,7 @@ def _discover_hosts(
     snmp_enabled: bool,
     snmp_community: str,
     snmp_timeout_seconds: int,
+    snmp_walk_oid: str,
     managed_ips: Set[str],
 ) -> List[DiscoveredHost]:
     results: List[DiscoveredHost] = []
@@ -305,7 +453,8 @@ def _discover_hosts(
             protocol = "ping"
             sysdescr = ""
             if snmp_enabled:
-                sysdescr = _snmp_probe(ip, snmp_community, snmp_timeout_seconds)
+                walk = _snmp_walk_summary(ip, snmp_community, snmp_timeout_seconds, snmp_walk_oid)
+                sysdescr = str(walk.get("sysdescr") or "").strip()
             if sysdescr:
                 protocol = "snmp"
             evidence: List[str] = []
@@ -417,8 +566,22 @@ def main() -> int:
         print("[ERROR] Provide at least one of --customer-id, --customer-number, --customer-name")
         return 2
     subnets = [str(item).strip() for item in (args.subnet or []) if str(item).strip()]
+    if args.rmm_host and args.rmm_api_key and args.rmm_agent_id:
+        derived = _derive_subnets_from_rmm_agent(
+            rmm_host=str(args.rmm_host or "").strip(),
+            rmm_api_key=str(args.rmm_api_key or "").strip(),
+            rmm_api_key_header=str(args.rmm_api_key_header or "X-API-KEY").strip() or "X-API-KEY",
+            rmm_agent_id=str(args.rmm_agent_id or "").strip(),
+            prefix=max(16, min(30, int(args.derive_prefix or 24))),
+        )
+        if derived:
+            print(f"[INFO] Derived subnets from RMM agent {args.rmm_agent_id}: {', '.join(derived)}")
+            subnets.extend(derived)
+        else:
+            print(f"[WARN] No subnets derived from RMM agent {args.rmm_agent_id}")
+    subnets = sorted(set(subnets))
     if not subnets:
-        print("[ERROR] Provide at least one --subnet")
+        print("[ERROR] Provide at least one --subnet or RMM derivation args (--rmm-host/--rmm-api-key/--rmm-agent-id)")
         return 2
 
     cache_key = "|".join(
@@ -449,6 +612,7 @@ def main() -> int:
         snmp_enabled=bool(args.snmp),
         snmp_community=str(args.snmp_community or "public"),
         snmp_timeout_seconds=max(1, int(args.snmp_timeout_seconds or 2)),
+        snmp_walk_oid=str(args.snmp_walk_oid or "1.3.6.1.2.1.1").strip(),
         managed_ips=managed_ips,
     )
     print(f"[INFO] Hosts discovered: {len(discovered)}")
