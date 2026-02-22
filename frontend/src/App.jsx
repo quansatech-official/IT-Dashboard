@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  LineChart,
+  TrendingUp,
   BarChart3,
   Brain,
   ClipboardList,
@@ -88,16 +88,6 @@ export default function App() {
               Kundenorientierung
             </p>
             <button
-              onClick={() => setActiveView("customers")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "customers"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <Users size={18} /> Kundenstamm
-            </button>
-            <button
               onClick={() => setActiveView("customer-development")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
                 activeView === "customer-development"
@@ -105,7 +95,7 @@ export default function App() {
                   : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
               } flex items-center gap-3`}
             >
-              <LineChart size={18} /> Kundenentwicklung
+              <TrendingUp size={18} /> Entwicklung
             </button>
             <button
               onClick={() => setActiveView("offers")}
@@ -116,6 +106,16 @@ export default function App() {
               } flex items-center gap-3`}
             >
               <Receipt size={18} /> Angebote
+            </button>
+            <button
+              onClick={() => setActiveView("purchasing")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "purchasing"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <ShoppingCart size={18} /> Einkauf
             </button>
             <button
               onClick={() => setActiveView("report")}
@@ -136,6 +136,16 @@ export default function App() {
               Betriebsintern
             </p>
             <button
+              onClick={() => setActiveView("customers")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "customers"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <Users size={18} /> Kundenstamm
+            </button>
+            <button
               onClick={() => setActiveView("stats")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
                 activeView === "stats"
@@ -154,16 +164,6 @@ export default function App() {
               } flex items-center gap-3`}
             >
               <Wrench size={18} /> Tools
-            </button>
-            <button
-              onClick={() => setActiveView("purchasing")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "purchasing"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <ShoppingCart size={18} /> Einkauf
             </button>
             <button
               onClick={() => setActiveView("knowledge")}

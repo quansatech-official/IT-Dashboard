@@ -30,13 +30,24 @@ const clampPercent = (value) => {
 };
 
 export default function CustomerDevelopmentView() {
+  const aiModes = [
+    { value: "angebot", label: "Angebot" },
+    { value: "kundenbericht", label: "Kundenbericht" },
+    { value: "mail", label: "Mail" },
+    { value: "leitfaden", label: "Leitfaden" },
+    { value: "analyse", label: "Analyse" },
+    { value: "summary", label: "Summary" },
+    { value: "newsletter", label: "Newsletter" }
+  ];
   const [contexts, setContexts] = useState([]);
   const [status, setStatus] = useState("idle");
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [aiBusy, setAiBusy] = useState(false);
-  const [aiResult, setAiResult] = useState({
+  const [detailAi, setDetailAi] = useState({
     open: false,
+    customerId: null,
     customerName: "",
-    mode: "summary",
+    mode: "angebot",
     text: "",
     error: ""
   });
@@ -59,6 +70,7 @@ export default function CustomerDevelopmentView() {
 
   const load = async () => {
     setStatus("loading");
+    setLoadingProgress(6);
     try {
       const response = await fetch(
         `${API}/customer_development?include_inactive=${includeInactive ? "1" : "0"}`
@@ -66,8 +78,10 @@ export default function CustomerDevelopmentView() {
       if (!response.ok) throw new Error("load_failed");
       const data = await response.json();
       setContexts(Array.isArray(data?.contexts) ? data.contexts : []);
+      setLoadingProgress(100);
       setStatus("ready");
     } catch {
+      setLoadingProgress(100);
       setStatus("error");
     }
   };
@@ -75,6 +89,18 @@ export default function CustomerDevelopmentView() {
   useEffect(() => {
     load();
   }, [includeInactive]);
+
+  useEffect(() => {
+    if (status !== "loading") return;
+    const timer = window.setInterval(() => {
+      setLoadingProgress((prev) => {
+        if (prev >= 92) return prev;
+        const step = prev < 30 ? 8 : prev < 60 ? 5 : 3;
+        return Math.min(92, prev + step);
+      });
+    }, 160);
+    return () => window.clearInterval(timer);
+  }, [status]);
 
   useEffect(() => {
     if (!detailModal.open || !detailModal.customerId) return;
@@ -116,10 +142,15 @@ export default function CustomerDevelopmentView() {
     });
   }, [contexts, filters]);
 
-  const createTask = async (context) => {
+  const createTask = async () => {
+    if (!detailModal.customerId) return;
+    const suggestionTitle =
+      detailData?.topRecommendations?.[0]?.title ||
+      detailData?.recommendations?.[0]?.title ||
+      "Follow-up Kundenentwicklung";
     const title = window.prompt(
       "Aufgabentitel",
-      `${context.customerName}: ${context.topRecommendations?.[0]?.title || "Follow-up Kundenentwicklung"}`
+      `${detailModal.customerName || "Kunde"}: ${suggestionTitle}`
     );
     if (!title || !title.trim()) return;
     await fetch(`${API}/day_tasks`, {
@@ -127,28 +158,24 @@ export default function CustomerDevelopmentView() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title: title.trim(),
-        customer: context.customerName || "",
-        customer_number: context.customerNumber || "",
+        customer: detailModal.customerName || "",
+        customer_number: detailData?.customerNumber || "",
         status: "todo"
       })
     });
   };
 
-  const runAiAssist = async (context) => {
-    const modeInput = window.prompt(
-      "KI Modus: summary | mail | leitfaden | analyse | angebot | kundenbericht | newsletter",
-      "angebot"
-    );
-    if (modeInput === null) return;
-    const mode = String(modeInput || "summary").trim().toLowerCase();
+  const runAiAssist = async (mode) => {
+    if (!detailModal.customerId && mode !== "newsletter") return;
     setAiBusy(true);
-    setAiResult({
+    setDetailAi((prev) => ({
       open: true,
-      customerName: context.customerName || "",
+      customerId: detailModal.customerId,
+      customerName: detailModal.customerName || "",
       mode,
       text: "",
       error: ""
-    });
+    }));
     try {
       const response = await fetch(`${API}/customer_development/ai_assist`, {
         method: "POST",
@@ -157,7 +184,7 @@ export default function CustomerDevelopmentView() {
           mode === "newsletter"
             ? { mode }
             : {
-                customer_id: context.customerId,
+                customer_id: detailModal.customerId,
                 mode
               }
         )
@@ -166,21 +193,25 @@ export default function CustomerDevelopmentView() {
       if (!response.ok) {
         throw new Error(data?.detail || "KI Vorschlag fehlgeschlagen");
       }
-      setAiResult({
+      setDetailAi((prev) => ({
+        ...prev,
         open: true,
-        customerName: context.customerName || "",
+        customerId: detailModal.customerId,
+        customerName: detailModal.customerName || "",
         mode: data?.mode || mode,
         text: data?.text || "",
         error: ""
-      });
+      }));
     } catch (error) {
-      setAiResult({
+      setDetailAi((prev) => ({
+        ...prev,
         open: true,
-        customerName: context.customerName || "",
+        customerId: detailModal.customerId,
+        customerName: detailModal.customerName || "",
         mode,
         text: "",
         error: error?.message ? String(error.message) : "KI Vorschlag fehlgeschlagen"
-      });
+      }));
     } finally {
       setAiBusy(false);
     }
@@ -189,6 +220,14 @@ export default function CustomerDevelopmentView() {
   const openDetail = (context) => {
     setDetailData(null);
     setDetailStatus("idle");
+    setDetailAi({
+      open: false,
+      customerId: context.customerId,
+      customerName: context.customerName || "",
+      mode: "angebot",
+      text: "",
+      error: ""
+    });
     setDetailModal({
       open: true,
       customerId: context.customerId,
@@ -200,6 +239,14 @@ export default function CustomerDevelopmentView() {
     setDetailModal({ open: false, customerId: null, customerName: "" });
     setDetailData(null);
     setDetailStatus("idle");
+    setDetailAi({
+      open: false,
+      customerId: null,
+      customerName: "",
+      mode: "angebot",
+      text: "",
+      error: ""
+    });
   };
 
   const grouped = useMemo(() => {
@@ -239,6 +286,61 @@ export default function CustomerDevelopmentView() {
                 <p className="text-sm text-rose-600">Details konnten nicht geladen werden.</p>
               ) : detailData ? (
                 <div className="space-y-4">
+                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Handlungen</p>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={createTask}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
+                        >
+                          <Plus size={12} /> Aufgabe
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDetailAi((prev) => ({
+                              ...prev,
+                              open: !prev.open
+                            }))
+                          }
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
+                        >
+                          KI
+                        </button>
+                      </div>
+                    </div>
+                    {detailAi.open ? (
+                      <div className="mt-3 space-y-2">
+                        <div className="flex flex-wrap gap-1">
+                          {aiModes.map((item) => (
+                            <button
+                              key={item.value}
+                              type="button"
+                              onClick={() => runAiAssist(item.value)}
+                              className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
+                                detailAi.mode === item.value
+                                  ? "border-sand-900 bg-sand-900 text-white"
+                                  : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                              }`}
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                        {aiBusy ? <p className="text-sm text-sand-500">KI generiert Vorschlag…</p> : null}
+                        {detailAi.error ? <p className="text-sm text-rose-600">{detailAi.error}</p> : null}
+                        <textarea
+                          readOnly
+                          value={detailAi.text}
+                          placeholder={`Vorschlag für "${detailAi.mode}" erscheint hier nach Auswahl.`}
+                          className="w-full min-h-[160px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+
                   <div className="grid gap-3 md:grid-cols-4">
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
                       <p className="text-[10px] uppercase tracking-wide text-sand-500">Status</p>
@@ -453,6 +555,25 @@ export default function CustomerDevelopmentView() {
       </header>
 
       <main className="max-w-6xl mx-auto px-5 py-5 space-y-4">
+        {status === "loading" ? (
+          <section className="rounded-3xl border border-sand-200 bg-sand-100/70 p-8 shadow-soft min-h-[220px] flex items-center justify-center">
+            <div className="w-full max-w-md space-y-3">
+              <p className="text-center text-xs uppercase tracking-[0.25em] text-sand-500">
+                Daten werden gesammelt
+              </p>
+              <div className="relative h-3 rounded-full bg-sand-200 border border-sand-300 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-sand-500 transition-[width] duration-150"
+                  style={{ width: `${Math.max(0, Math.min(100, loadingProgress))}%` }}
+                />
+              </div>
+              <p className="text-center text-sm font-semibold text-sand-700">
+                {Math.max(0, Math.min(100, Math.round(loadingProgress)))}%
+              </p>
+            </div>
+          </section>
+        ) : null}
+
         <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
           <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6 text-xs">
             <label className="flex items-center gap-2">
@@ -564,29 +685,13 @@ export default function CustomerDevelopmentView() {
                     </td>
                     <td className="py-2 pr-3 text-sand-700">{item.topRecommendations?.[0]?.title || "-"}</td>
                     <td className="py-2 pr-3">
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => createTask(item)}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
-                        >
-                          <Plus size={12} /> Aufgabe
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => runAiAssist(item)}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
-                        >
-                          KI
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openDetail(item)}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
-                        >
-                          <Eye size={12} /> Details
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openDetail(item)}
+                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
+                      >
+                        <Eye size={12} /> Details
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -651,32 +756,6 @@ export default function CustomerDevelopmentView() {
           </div>
         </section>
 
-        {aiResult.open ? (
-          <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-            <div className="flex items-center justify-between">
-              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">
-                KI Vorschlag · {aiResult.customerName} · {aiResult.mode}
-              </p>
-              <button
-                type="button"
-                onClick={() => setAiResult({ open: false, customerName: "", mode: "summary", text: "", error: "" })}
-                className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide"
-              >
-                Schließen
-              </button>
-            </div>
-            {aiBusy ? <p className="mt-2 text-sm text-sand-500">KI generiert Vorschlag…</p> : null}
-            {aiResult.error ? (
-              <p className="mt-2 text-sm text-rose-600">{aiResult.error}</p>
-            ) : (
-              <textarea
-                readOnly
-                value={aiResult.text}
-                className="mt-2 w-full min-h-[180px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
-              />
-            )}
-          </section>
-        ) : null}
       </main>
     </div>
   );

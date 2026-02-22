@@ -339,6 +339,11 @@ export default function CustomerDirectoryView() {
   }, [sortedCustomers, activeId]);
 
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
+  const totalCustomers = customers.length;
+  const inactiveCustomers = customers.filter(
+    (customer) => String(customer.status || "active").toLowerCase() === "inactive"
+  ).length;
+  const activeCustomers = Math.max(0, totalCustomers - inactiveCustomers);
 
   useEffect(() => {
     if (!activeCustomer?.id) {
@@ -1319,7 +1324,7 @@ export default function CustomerDirectoryView() {
                 <h2 className="text-base font-display text-sand-900">Kundendatei</h2>
               </div>
               <span className="rounded-full border border-sand-200 px-3 py-1 text-xs text-sand-600">
-                {customers.length} Kunde{customers.length === 1 ? "" : "n"}
+                Gesamt {totalCustomers} · Aktiv {activeCustomers} · Inaktiv {inactiveCustomers}
               </span>
             </div>
             <label className="relative block mb-3">

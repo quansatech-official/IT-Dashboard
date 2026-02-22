@@ -325,7 +325,7 @@ class IntegrationSettings(Base):
     rmm_user = Column(String, default="")
     rmm_password = Column(String, default="")
     rmm_api_key = Column(String, default="")
-    rmm_api_key_header = Column(String, default="Authorization")
+    rmm_api_key_header = Column(String, default="X-API-KEY")
     pbx_base_url = Column(String, default="")
     pbx_username = Column(String, default="")
     pbx_password = Column(String, default="")
@@ -499,7 +499,7 @@ def _ensure_integration_settings_columns() -> None:
     if "rmm_api_key" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN rmm_api_key VARCHAR DEFAULT ''")
     if "rmm_api_key_header" not in columns:
-        statements.append("ALTER TABLE integration_settings ADD COLUMN rmm_api_key_header VARCHAR DEFAULT 'Authorization'")
+        statements.append("ALTER TABLE integration_settings ADD COLUMN rmm_api_key_header VARCHAR DEFAULT 'X-API-KEY'")
     if "pbx_username" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_username VARCHAR DEFAULT ''")
     if "pbx_password" not in columns:
@@ -2681,11 +2681,8 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
     return {
         "id": settings.id,
         "rmm_host": settings.rmm_host,
-        "rmm_user": settings.rmm_user,
-        "rmm_password": "",
-        "has_rmm_password": bool(settings.rmm_password),
         "rmm_api_key": "",
-        "rmm_api_key_header": settings.rmm_api_key_header or "Authorization",
+        "rmm_api_key_header": settings.rmm_api_key_header or "X-API-KEY",
         "has_rmm_api_key": bool(settings.rmm_api_key),
         "pbx_base_url": settings.pbx_base_url,
         "pbx_username": settings.pbx_username,
@@ -3831,72 +3828,46 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
             "agents": [],
         }
     host = str(settings.rmm_host or "").strip().rstrip("/")
-    user = str(settings.rmm_user or "").strip()
-    password = str(settings.rmm_password or "").strip()
     api_key = str(settings.rmm_api_key or "").strip()
-    api_key_header = str(settings.rmm_api_key_header or "Authorization").strip() or "Authorization"
+    api_key_header = str(settings.rmm_api_key_header or "X-API-KEY").strip() or "X-API-KEY"
     if not host:
         return {
             "connected": False,
             "checkedAt": checked_at,
             "host": "",
-            "hasUser": bool(user),
-            "hasPassword": bool(password),
+            "hasUser": False,
+            "hasPassword": False,
             "hasApiKey": bool(api_key),
             "apiKeyHeader": api_key_header,
             "error": "Missing rmm_host",
             "agents": [],
         }
+    if not api_key:
+        return {
+            "connected": False,
+            "checkedAt": checked_at,
+            "host": host,
+            "hasUser": False,
+            "hasPassword": False,
+            "hasApiKey": False,
+            "apiKeyHeader": api_key_header,
+            "error": "Missing rmm_api_key",
+            "agents": [],
+        }
 
     session = requests.Session()
     session.headers.update({"User-Agent": "QT-Workbench"})
-    if api_key:
-        header_value = api_key
-        if api_key_header.lower() == "authorization" and not re.match(r"^(bearer|token)\s+", api_key, re.IGNORECASE):
-            header_value = f"Bearer {api_key}"
-        session.headers.update({api_key_header: header_value})
-    if user and password:
-        session.auth = (user, password)
-    auth_candidates = [
-        "/api-token-auth/",
-        "/api/v3/token/",
-        "/api/v3/auth/token/",
-    ]
-    auth_path = ""
-    auth_status_code = None
-    auth_error = ""
-    token = ""
-    if user and password and not api_key:
-        for path in auth_candidates:
-            auth_path = path
-            try:
-                auth_res = session.post(
-                    f"{host}{path}",
-                    json={"username": user, "password": password},
-                    timeout=6,
-                )
-                auth_status_code = auth_res.status_code
-            except requests.RequestException as exc:
-                auth_error = str(exc)
-                continue
-            if not auth_res.ok:
-                auth_error = f"HTTP {auth_res.status_code}"
-                continue
-            try:
-                payload = auth_res.json()
-            except ValueError:
-                payload = {}
-            token = (
-                str(payload.get("token") or payload.get("access") or payload.get("access_token") or "")
-                .strip()
-            )
-            if token:
-                auth_error = ""
-                break
-    if token:
-        session.headers.update({"Authorization": f"Bearer {token}"})
+    header_value = api_key
+    if api_key_header.lower() == "authorization" and not re.match(r"^(bearer|token)\s+", api_key, re.IGNORECASE):
+        header_value = f"Bearer {api_key}"
+    session.headers.update({api_key_header: header_value})
 
+    # TacticalRMM docs use API base + /agents/ with X-API-KEY header.
     list_candidates = [
+        "/agents/?detail=false",
+        "/agents/",
+        "/agents",
+        # Compatibility fallback for older/custom deployments.
         "/api/v3/agents/",
         "/api/v3/agents",
     ]
@@ -3924,12 +3895,12 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
                 "connected": True,
                 "checkedAt": checked_at,
                 "host": host,
-                "hasUser": bool(user),
-                "hasPassword": bool(password),
+                "hasUser": False,
+                "hasPassword": False,
                 "hasApiKey": bool(api_key),
                 "apiKeyHeader": api_key_header,
-                "authPath": auth_path or None,
-                "authStatusCode": auth_status_code,
+                "authPath": None,
+                "authStatusCode": None,
                 "agentsPath": agents_path,
                 "agentsStatusCode": agents_status_code,
                 "sampleCount": len(payload),
@@ -3944,12 +3915,12 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
                         "connected": True,
                         "checkedAt": checked_at,
                         "host": host,
-                        "hasUser": bool(user),
-                        "hasPassword": bool(password),
+                        "hasUser": False,
+                        "hasPassword": False,
                         "hasApiKey": bool(api_key),
                         "apiKeyHeader": api_key_header,
-                        "authPath": auth_path or None,
-                        "authStatusCode": auth_status_code,
+                        "authPath": None,
+                        "authStatusCode": None,
                         "agentsPath": agents_path,
                         "agentsStatusCode": agents_status_code,
                         "sampleCount": len(value),
@@ -3957,17 +3928,17 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
                         "error": "",
                     }
             agents_error = "No agent list in response"
-    error_parts = [part for part in [auth_error, agents_error] if part]
+    error_parts = [part for part in [agents_error] if part]
     return {
         "connected": False,
         "checkedAt": checked_at,
         "host": host,
-        "hasUser": bool(user),
-        "hasPassword": bool(password),
+        "hasUser": False,
+        "hasPassword": False,
         "hasApiKey": bool(api_key),
         "apiKeyHeader": api_key_header,
-        "authPath": auth_path or None,
-        "authStatusCode": auth_status_code,
+        "authPath": None,
+        "authStatusCode": None,
         "agentsPath": agents_path or None,
         "agentsStatusCode": agents_status_code,
         "sampleCount": 0,
@@ -3982,6 +3953,14 @@ def _extract_customer_number_from_contact(contact: Dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _normalize_customer_number(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    # Match customer numbers resilient against separators/spacing changes.
+    return re.sub(r"[^A-Za-z0-9]+", "", raw).upper()
 
 
 def _build_sevdesk_customer_rows(
@@ -4574,11 +4553,14 @@ def sync_customers_from_sevdesk():
             raise HTTPException(502, f"Sevdesk sync failed: {exc}") from exc
 
         existing = db.query(Customer).all()
-        by_number = {
-            str(customer.creditor_number or "").strip(): customer
-            for customer in existing
-            if str(customer.creditor_number or "").strip()
-        }
+        by_number: Dict[str, Customer] = {}
+        for customer in existing:
+            raw_number = str(customer.creditor_number or "").strip()
+            normalized_number = _normalize_customer_number(raw_number)
+            if raw_number:
+                by_number[raw_number] = customer
+            if normalized_number and normalized_number not in by_number:
+                by_number[normalized_number] = customer
         by_name = {
             _dev_normalize_text(customer.name): customer
             for customer in existing
@@ -4587,16 +4569,22 @@ def sync_customers_from_sevdesk():
 
         created = 0
         updated = 0
-        activated = 0
         seen_numbers: set[str] = set()
         for contact in contacts:
             number = _extract_customer_number_from_contact(contact)
+            normalized_number = _normalize_customer_number(number)
             name = _sevdesk_contact_display_name(contact)
             if number:
                 seen_numbers.add(number)
+            if normalized_number:
+                seen_numbers.add(normalized_number)
             if not name and not number:
                 continue
-            customer = by_number.get(number) if number else None
+            customer = None
+            if number:
+                customer = by_number.get(number)
+            if not customer and normalized_number:
+                customer = by_number.get(normalized_number)
             if not customer and name:
                 customer = by_name.get(_dev_normalize_text(name))
             if customer:
@@ -4606,10 +4594,6 @@ def sync_customers_from_sevdesk():
                     changed = True
                 if name and _dev_normalize_text(name) != _dev_normalize_text(customer.name):
                     customer.name = name
-                    changed = True
-                if (customer.status or "active").lower() == "inactive":
-                    customer.status = "active"
-                    activated += 1
                     changed = True
                 if changed:
                     updated += 1
@@ -4626,10 +4610,15 @@ def sync_customers_from_sevdesk():
         inactivated = 0
         if seen_numbers:
             for customer in existing:
-                number = str(customer.creditor_number or "").strip()
-                if not number:
+                number_raw = str(customer.creditor_number or "").strip()
+                number_normalized = _normalize_customer_number(number_raw)
+                if not number_raw and not number_normalized:
                     continue
-                if number not in seen_numbers and (customer.status or "active").lower() != "inactive":
+                if (
+                    number_raw not in seen_numbers
+                    and number_normalized not in seen_numbers
+                    and (customer.status or "active").lower() != "inactive"
+                ):
                     customer.status = "inactive"
                     inactivated += 1
         db.commit()
@@ -4637,7 +4626,7 @@ def sync_customers_from_sevdesk():
             "status": "ok",
             "created": created,
             "updated": updated,
-            "reactivated": activated,
+            "reactivated": 0,
             "inactivated": inactivated,
             "contacts": len(contacts),
         }
@@ -5543,6 +5532,10 @@ def update_integrations(data: IntegrationSettingsUpdate):
             if field in sensitive_fields and value in (None, ""):
                 continue
             setattr(settings, field, value)
+        # Tactical RMM is API-key based; legacy basic-auth fields are ignored.
+        if "rmm_api_key" in data.dict(exclude_unset=True):
+            settings.rmm_user = ""
+            settings.rmm_password = ""
 
         db.commit()
         return serialize_integration_settings(settings)
@@ -5587,7 +5580,7 @@ def rmm_health():
         "hasUser": bool(probe.get("hasUser")),
         "hasPassword": bool(probe.get("hasPassword")),
         "hasApiKey": bool(probe.get("hasApiKey")),
-        "apiKeyHeader": probe.get("apiKeyHeader") or "Authorization",
+        "apiKeyHeader": probe.get("apiKeyHeader") or "X-API-KEY",
         "authPath": probe.get("authPath"),
         "authStatusCode": probe.get("authStatusCode"),
         "agentsPath": probe.get("agentsPath"),

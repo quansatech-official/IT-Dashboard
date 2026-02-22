@@ -47,12 +47,9 @@ const defaultPbx = {
 
 const defaultRmm = {
   rmm_host: "",
-  rmm_user: "",
-  rmm_password: "",
-  has_rmm_password: false,
   rmm_api_key: "",
   has_rmm_api_key: false,
-  rmm_api_key_header: "Authorization"
+  rmm_api_key_header: "X-API-KEY"
 };
 
 const defaultMarketplace = {
@@ -151,9 +148,7 @@ export default function SettingsView() {
     connected: null,
     checkedAt: "",
     hasApiKey: false,
-    apiKeyHeader: "Authorization",
-    authPath: "",
-    authStatusCode: null,
+    apiKeyHeader: "X-API-KEY",
     agentsPath: "",
     agentsStatusCode: null,
     sampleCount: 0,
@@ -357,12 +352,9 @@ export default function SettingsView() {
         setRmm((prev) => ({
           ...prev,
           rmm_host: data?.rmm_host || "",
-          rmm_user: data?.rmm_user || "",
-          rmm_password: "",
-          has_rmm_password: Boolean(data?.has_rmm_password),
           rmm_api_key: "",
           has_rmm_api_key: Boolean(data?.has_rmm_api_key),
-          rmm_api_key_header: data?.rmm_api_key_header || "Authorization"
+          rmm_api_key_header: data?.rmm_api_key_header || "X-API-KEY"
         }));
         setPbx((prev) => ({
           ...prev,
@@ -781,12 +773,7 @@ export default function SettingsView() {
         connected: Boolean(data?.connected),
         checkedAt: data?.checkedAt || "",
         hasApiKey: Boolean(data?.hasApiKey),
-        apiKeyHeader: data?.apiKeyHeader || "Authorization",
-        authPath: data?.authPath || "",
-        authStatusCode:
-          data?.authStatusCode === null || typeof data?.authStatusCode === "undefined"
-            ? null
-            : Number(data.authStatusCode),
+        apiKeyHeader: data?.apiKeyHeader || "X-API-KEY",
         agentsPath: data?.agentsPath || "",
         agentsStatusCode:
           data?.agentsStatusCode === null || typeof data?.agentsStatusCode === "undefined"
@@ -801,9 +788,7 @@ export default function SettingsView() {
         connected: false,
         checkedAt: new Date().toISOString(),
         hasApiKey: false,
-        apiKeyHeader: "Authorization",
-        authPath: "",
-        authStatusCode: null,
+        apiKeyHeader: "X-API-KEY",
         agentsPath: "",
         agentsStatusCode: null,
         sampleCount: 0,
@@ -821,8 +806,6 @@ export default function SettingsView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           rmm_host: rmm.rmm_host,
-          rmm_user: rmm.rmm_user,
-          rmm_password: rmm.rmm_password,
           rmm_api_key: rmm.rmm_api_key,
           rmm_api_key_header: rmm.rmm_api_key_header
         })
@@ -832,12 +815,9 @@ export default function SettingsView() {
       setRmm((prev) => ({
         ...prev,
         rmm_host: data?.rmm_host || "",
-        rmm_user: data?.rmm_user || "",
-        rmm_password: "",
-        has_rmm_password: Boolean(data?.has_rmm_password),
         rmm_api_key: "",
         has_rmm_api_key: Boolean(data?.has_rmm_api_key),
-        rmm_api_key_header: data?.rmm_api_key_header || "Authorization"
+        rmm_api_key_header: data?.rmm_api_key_header || "X-API-KEY"
       }));
       setRmmStatus("saved");
       refreshRmmHealth();
@@ -1867,7 +1847,7 @@ export default function SettingsView() {
           {rmmOpen ? (
             <>
               <p className="mt-4 text-xs text-sand-500 mb-4">
-                Tactical RMM Zugangsdaten und Connection-Test. Discovery startet erst nach stabiler API-Verbindung.
+                Tactical RMM API-Key Verbindung und Connection-Test. Discovery startet erst nach stabiler API-Verbindung.
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="md:col-span-2">
@@ -1889,7 +1869,7 @@ export default function SettingsView() {
                       setRmm((prev) => ({ ...prev, rmm_api_key_header: event.target.value }))
                     }
                     className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="Authorization"
+                    placeholder="X-API-KEY"
                   />
                 </div>
                 <div>
@@ -1904,31 +1884,8 @@ export default function SettingsView() {
                     placeholder={rmm.has_rmm_api_key ? "Gespeichert" : "••••••••"}
                   />
                   <p className="mt-1 text-[11px] text-sand-400">
-                    Bei Header `Authorization` wird automatisch `Bearer` vorangestellt, falls nicht vorhanden.
+                    Empfohlen laut TacticalRMM: Header `X-API-KEY`.
                   </p>
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Fallback User (optional)</label>
-                  <input
-                    value={rmm.rmm_user}
-                    onChange={(event) =>
-                      setRmm((prev) => ({ ...prev, rmm_user: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="api_user"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Fallback Passwort (optional)</label>
-                  <input
-                    type="password"
-                    value={rmm.rmm_password}
-                    onChange={(event) =>
-                      setRmm((prev) => ({ ...prev, rmm_password: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder={rmm.has_rmm_password ? "Gespeichert" : "••••••••"}
-                  />
                 </div>
               </div>
               <div className="mt-6 flex items-center gap-3">
@@ -1971,15 +1928,7 @@ export default function SettingsView() {
                   </div>
                   <div>
                     <span className="text-sand-500">API Key:</span>{" "}
-                    {rmmHealth.hasApiKey ? `ja (${rmmHealth.apiKeyHeader || "Authorization"})` : "nein"}
-                  </div>
-                  <div>
-                    <span className="text-sand-500">Auth Endpoint:</span>{" "}
-                    {rmmHealth.authPath || "n/a"}
-                  </div>
-                  <div>
-                    <span className="text-sand-500">Auth Status:</span>{" "}
-                    {rmmHealth.authStatusCode ?? "n/a"}
+                    {rmmHealth.hasApiKey ? `ja (${rmmHealth.apiKeyHeader || "X-API-KEY"})` : "nein"}
                   </div>
                   <div>
                     <span className="text-sand-500">Agents Endpoint:</span>{" "}
