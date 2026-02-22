@@ -16,6 +16,7 @@ import ipaddress
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -60,6 +61,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--rmm-api-key-header", default="X-API-KEY", help="Tactical API key header")
     parser.add_argument("--rmm-agent-id", default="", help="Agent ID for subnet derivation")
     parser.add_argument("--derive-prefix", type=int, default=24, help="CIDR prefix for derived subnets")
+    parser.add_argument(
+        "--auto-local-prefix",
+        type=int,
+        default=24,
+        help="CIDR prefix for local interface fallback derivation",
+    )
     parser.add_argument(
         "--managed-ip",
         action="append",
@@ -327,6 +334,89 @@ def _derive_subnets_from_rmm_agent(
     return sorted(cidrs)
 
 
+def _is_private_candidate(ip_text: str) -> bool:
+    try:
+        ip_obj = ipaddress.ip_address(str(ip_text or "").strip())
+        if not isinstance(ip_obj, ipaddress.IPv4Address):
+            return False
+        if ip_obj.is_loopback or ip_obj.is_link_local:
+            return False
+        return bool(ip_obj.is_private)
+    except Exception:
+        return False
+
+
+def _derive_subnets_from_windows_ipconfig() -> List[str]:
+    try:
+        proc = subprocess.run(["ipconfig"], capture_output=True, text=True, check=False)
+    except Exception:
+        return []
+    if proc.returncode != 0:
+        return []
+    text = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    blocks = re.split(r"\n\s*\n", text)
+    subnets: Set[str] = set()
+    ip_pattern = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})")
+    for block in blocks:
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        ip_value = ""
+        mask_value = ""
+        for line in lines:
+            lower = line.lower()
+            matches = ip_pattern.findall(line)
+            if not matches:
+                continue
+            if ("ipv4" in lower or "ipv4-adresse" in lower or "ipv4 address" in lower) and not ip_value:
+                for candidate in matches:
+                    if _is_private_candidate(candidate):
+                        ip_value = candidate
+                        break
+            if ("subnet" in lower or "maske" in lower) and not mask_value:
+                mask_value = matches[-1]
+        if ip_value and mask_value:
+            try:
+                network = ipaddress.ip_network(f"{ip_value}/{mask_value}", strict=False)
+                subnets.add(str(network))
+            except Exception:
+                continue
+    return sorted(subnets)
+
+
+def _derive_subnets_from_local_interfaces(default_prefix: int) -> List[str]:
+    cidrs: Set[str] = set()
+    if _is_windows():
+        for cidr in _derive_subnets_from_windows_ipconfig():
+            cidrs.add(cidr)
+    fallback_ips: Set[str] = set()
+    try:
+        local_name = socket.gethostname()
+        for entry in socket.getaddrinfo(local_name, None, socket.AF_INET):
+            ip_value = str(entry[4][0] or "").strip()
+            if _is_private_candidate(ip_value):
+                fallback_ips.add(ip_value)
+    except Exception:
+        pass
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("8.8.8.8", 53))
+        probe_ip = str(probe.getsockname()[0] or "").strip()
+        probe.close()
+        if _is_private_candidate(probe_ip):
+            fallback_ips.add(probe_ip)
+    except Exception:
+        pass
+    safe_prefix = max(16, min(30, int(default_prefix or 24)))
+    for ip_value in fallback_ips:
+        try:
+            network = ipaddress.ip_network(f"{ip_value}/{safe_prefix}", strict=False)
+            cidrs.add(str(network))
+        except Exception:
+            continue
+    return sorted(cidrs)
+
+
 @dataclass
 class DiscoveredHost:
     ip: str
@@ -580,6 +670,16 @@ def main() -> int:
         else:
             print(f"[WARN] No subnets derived from RMM agent {args.rmm_agent_id}")
     subnets = sorted(set(subnets))
+    if not subnets:
+        local_subnets = _derive_subnets_from_local_interfaces(
+            default_prefix=max(16, min(30, int(args.auto_local_prefix or 24)))
+        )
+        if local_subnets:
+            print(f"[INFO] Derived local subnets from agent interfaces: {', '.join(local_subnets)}")
+            subnets.extend(local_subnets)
+            subnets = sorted(set(subnets))
+        else:
+            print("[WARN] Could not derive subnet from local interfaces")
     if not subnets:
         print("[ERROR] Provide at least one --subnet or RMM derivation args (--rmm-host/--rmm-api-key/--rmm-agent-id)")
         return 2

@@ -15,10 +15,11 @@ Dieses Setup ergänzt die bestehende Tactical-RMM-API-Anbindung um einen Netzsca
 - Datei: `backend/scripts/rmm_infra_discovery_scan.py`
 - Aufgabe:
   - Ping sweep je Subnetz
-  - optional SNMP-Probe (`--snmp`)
+  - optional SNMP-Walk (`--snmp`, nutzt `snmpwalk`, fallback `snmpget`)
   - Heuristik für `device_type`, `vendor`, `confidence`, `evidence`
   - Upload an IT-Dashboard
   - lokales TTL-Cache, damit nicht bei jedem Lauf neu gescannt wird
+  - optionale Subnetz-Ableitung aus Tactical-RMM-Agent-Details
 
 ## 3) Beispiel-Aufruf (Tactical RMM Script)
 
@@ -32,6 +33,23 @@ python3 rmm_infra_discovery_scan.py \
   --subnet "192.168.100.0/24" \
   --snmp \
   --snmp-community "public" \
+  --cache-ttl-seconds 1800
+```
+
+Subnetz automatisch aus RMM-Agent-Detail ableiten:
+
+```bash
+python3 rmm_infra_discovery_scan.py \
+  --api-url "https://dein-dashboard.example.com/api" \
+  --discovery-token "DEIN_DISCOVERY_TOKEN" \
+  --customer-number "K-1023" \
+  --customer-name "Cont-Aigner GmbH" \
+  --rmm-host "https://rmmapi.example.com" \
+  --rmm-api-key "DEIN_TACTICAL_API_KEY" \
+  --rmm-api-key-header "X-API-KEY" \
+  --rmm-agent-id "AGENT_ID" \
+  --derive-prefix 24 \
+  --snmp \
   --cache-ttl-seconds 1800
 ```
 
@@ -58,7 +76,10 @@ python .\rmm_infra_discovery_scan.py `
 - `--discovery-token`: Header `X-Discovery-Token` (optional, aber empfohlen)
 - `--customer-id` oder `--customer-number` oder `--customer-name`: Zuordnung im Dashboard
 - `--subnet`: Scanbereich, mehrfach möglich
+- `--rmm-host` + `--rmm-api-key` + `--rmm-agent-id`: optional automatische Subnetz-Ableitung
+- `--derive-prefix`: Präfix für abgeleitete Netze (z. B. `24`)
 - `--snmp`: SNMP-Probe aktivieren
+- `--snmp-walk-oid`: SNMP Walk-Basis-OID (Default `1.3.6.1.2.1.1`)
 - `--managed-ip`: IP als managed markieren (mehrfach möglich)
 - `--cache-ttl-seconds`: lokale Cache-Zeit
 
