@@ -61,8 +61,31 @@ const blankPhone = () => ({
   number: ""
 });
 
-const normalizeCustomer = (customer) => ({
-  ...customer,
+const normalizeContractFlags = (flags) => {
+  if (!Array.isArray(flags)) return [];
+  const values = [];
+  const seen = new Set();
+  flags.forEach((entry) => {
+    let key = String(entry || "").trim().toLowerCase();
+    if (key === "sla" || key === "servicelevelagreement") key = "wartung";
+    if (key !== "monitoring" && key !== "wartung") return;
+    if (seen.has(key)) return;
+    seen.add(key);
+    values.push(key);
+  });
+  return values;
+};
+
+const normalizeCustomer = (customer) => {
+  const contractFlags = normalizeContractFlags(
+    Array.isArray(customer.contract_flags)
+      ? customer.contract_flags
+      : Array.isArray(customer.contractFlags)
+      ? customer.contractFlags
+      : []
+  );
+  return {
+    ...customer,
   creditorNumber:
     customer.creditor_number ?? customer.creditorNumber ?? customer.internal_number ?? "",
   shortCode: customer.short_code ?? customer.shortCode ?? "",
@@ -84,15 +107,11 @@ const normalizeCustomer = (customer) => ({
     true,
   status: String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active",
   maintenanceContract:
-    customer.maintenance_contract ??
-    customer.maintenanceContract ??
-    false,
-  contractFlags: Array.isArray(customer.contract_flags)
-    ? customer.contract_flags
-    : Array.isArray(customer.contractFlags)
-    ? customer.contractFlags
-    : []
-});
+    Boolean(customer.maintenance_contract ?? customer.maintenanceContract ?? false) ||
+    contractFlags.includes("wartung"),
+  contractFlags
+  };
+};
 
 const customerPayload = (customer) => ({
   name: customer.name || "Neuer Kunde",
@@ -107,7 +126,7 @@ const customerPayload = (customer) => ({
   newsletter: Boolean(customer.newsletter),
   status: String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active",
   maintenance_contract: Boolean(customer.maintenanceContract),
-  contract_flags: Array.isArray(customer.contractFlags) ? customer.contractFlags : [],
+  contract_flags: normalizeContractFlags(customer.contractFlags),
   phones: (customer.phones || [])
     .filter((phone) => (phone.label || "").trim() || (phone.number || "").trim())
     .map((phone) => ({
@@ -132,6 +151,7 @@ export default function CustomerDirectoryView() {
   const [customers, setCustomers] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [query, setQuery] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
   const [importStatus, setImportStatus] = useState("");
   const [syncBusy, setSyncBusy] = useState(false);
   const [metrics, setMetrics] = useState(null);
@@ -276,8 +296,11 @@ export default function CustomerDirectoryView() {
 
   const filteredCustomers = useMemo(() => {
     const trimmed = query.trim().toLowerCase();
-    if (!trimmed) return customers;
-    const filtered = customers.filter((customer) => {
+    const baseList = showInactive
+      ? customers
+      : customers.filter((customer) => String(customer.status || "active").toLowerCase() !== "inactive");
+    if (!trimmed) return baseList;
+    const filtered = baseList.filter((customer) => {
       const phoneMatch = customer.phones?.some((phone) =>
         `${phone.label} ${phone.number}`.toLowerCase().includes(trimmed)
       );
@@ -290,7 +313,7 @@ export default function CustomerDirectoryView() {
       );
     });
     return filtered;
-  }, [customers, query]);
+  }, [customers, query, showInactive]);
 
   const sortedCustomers = useMemo(() => {
     const list = filteredCustomers.slice();
@@ -304,6 +327,16 @@ export default function CustomerDirectoryView() {
     });
     return list;
   }, [filteredCustomers]);
+
+  useEffect(() => {
+    if (!sortedCustomers.length) {
+      setActiveId(null);
+      return;
+    }
+    if (!sortedCustomers.some((customer) => customer.id === activeId)) {
+      setActiveId(sortedCustomers[0].id);
+    }
+  }, [sortedCustomers, activeId]);
 
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
 
@@ -1299,6 +1332,15 @@ export default function CustomerDirectoryView() {
                 className="w-full rounded-2xl border border-sand-200 pl-9 pr-3 py-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-sand-300"
               />
             </label>
+            <label className="mb-2 flex items-center gap-2 text-xs text-sand-600">
+              <input
+                type="checkbox"
+                checked={showInactive}
+                onChange={(event) => setShowInactive(event.target.checked)}
+                className="h-4 w-4"
+              />
+              Inaktive Kunden einblenden
+            </label>
             <div className="mt-3 space-y-1.5 max-h-[520px] overflow-auto pr-1">
               {filteredCustomers.length ? (
                 sortedCustomers.map((customer) => {
@@ -1621,8 +1663,7 @@ export default function CustomerDirectoryView() {
                     <div className="grid gap-2 sm:grid-cols-2">
                       {[
                         { id: "monitoring", label: "Monitoring" },
-                        { id: "wartung", label: "Wartung" },
-                        { id: "sla", label: "SLA" }
+                        { id: "wartung", label: "Wartung (inkl. SLA)" }
                       ].map((contract) => (
                         <label
                           key={contract.id}

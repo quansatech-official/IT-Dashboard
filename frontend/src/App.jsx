@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  TrendingDown,
+  LineChart,
   BarChart3,
   Brain,
   ClipboardList,
@@ -105,7 +105,7 @@ export default function App() {
                   : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
               } flex items-center gap-3`}
             >
-              <TrendingDown size={18} /> Kundenentwicklung
+              <LineChart size={18} /> Kundenentwicklung
             </button>
             <button
               onClick={() => setActiveView("offers")}

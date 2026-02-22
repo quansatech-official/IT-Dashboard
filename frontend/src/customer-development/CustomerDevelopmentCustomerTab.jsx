@@ -14,6 +14,10 @@ const stateBadgeClass = (state) => {
 export default function CustomerDevelopmentCustomerTab({ customerId, customerName, customerNumber }) {
   const [context, setContext] = useState(null);
   const [status, setStatus] = useState("idle");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMode, setAiMode] = useState("summary");
+  const [aiText, setAiText] = useState("");
+  const [aiError, setAiError] = useState("");
 
   const load = async () => {
     if (!customerId) return;
@@ -49,6 +53,31 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
         status: "todo"
       })
     });
+  };
+
+  const runAiAssist = async (mode = "summary") => {
+    if (!customerId) return;
+    setAiMode(mode);
+    setAiBusy(true);
+    setAiError("");
+    setAiText("");
+    try {
+      const response = await fetch(`${API}/customer_development/ai_assist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customer_id: customerId,
+          mode
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.detail || "KI Vorschlag fehlgeschlagen");
+      setAiText(data?.text || "");
+    } catch (error) {
+      setAiError(error?.message ? String(error.message) : "KI Vorschlag fehlgeschlagen");
+    } finally {
+      setAiBusy(false);
+    }
   };
 
   if (!customerId) {
@@ -157,6 +186,74 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
             <p className="text-sm text-sand-500">Keine Empfehlungen vorhanden.</p>
           )}
         </div>
+      </div>
+
+      <div className="rounded-2xl border border-sand-200 bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm uppercase tracking-[0.2em] text-sand-500">KI Assist</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => runAiAssist("summary")}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+            >
+              Summary
+            </button>
+            <button
+              type="button"
+              onClick={() => runAiAssist("mail")}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+            >
+              Mail
+            </button>
+            <button
+              type="button"
+              onClick={() => runAiAssist("leitfaden")}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+            >
+              Leitfaden
+            </button>
+            <button
+              type="button"
+              onClick={() => runAiAssist("analyse")}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+            >
+              Analyse
+            </button>
+            <button
+              type="button"
+              onClick={() => runAiAssist("angebot")}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+            >
+              Angebot
+            </button>
+            <button
+              type="button"
+              onClick={() => runAiAssist("kundenbericht")}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+            >
+              Bericht
+            </button>
+            <button
+              type="button"
+              onClick={() => runAiAssist("newsletter")}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+            >
+              Newsletter
+            </button>
+          </div>
+        </div>
+        {aiBusy ? <p className="mt-2 text-sm text-sand-500">KI generiert Vorschlag…</p> : null}
+        {aiError ? <p className="mt-2 text-sm text-rose-600">{aiError}</p> : null}
+        {aiText ? (
+          <textarea
+            readOnly
+            value={aiText}
+            className="mt-2 w-full min-h-[180px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
+          />
+        ) : (
+          !aiBusy && <p className="mt-2 text-sm text-sand-500">Noch kein KI-Vorschlag geladen ({aiMode}).</p>
+        )}
       </div>
     </div>
   );

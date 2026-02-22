@@ -294,18 +294,6 @@ export default function ReportView() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [isPdfExporting, setIsPdfExporting] = useState(false);
-  const [integrationSettings, setIntegrationSettings] = useState({
-    rmm_host: "",
-    rmm_user: "",
-    rmm_password: ""
-  });
-
-  const updateIntegration = (patch) =>
-    setIntegrationSettings((prev) => ({
-      ...prev,
-      ...patch
-    }));
-
   const [reportEmailComposer, setReportEmailComposer] = useState({
     open: false,
     to: "",
@@ -611,24 +599,11 @@ export default function ReportView() {
       }
     };
 
-    const loadIntegrations = async () => {
-      try {
-        const res = await fetch("/api/integrations");
-        const data = await res.json();
-        if (data) {
-          setIntegrationSettings((prev) => ({ ...prev, ...data }));
-        }
-      } catch (error) {
-        // Keep defaults.
-      }
-    };
-
     loadCustomers();
     loadCatalog();
     loadCustomerActions();
     loadSummaries();
     loadReports();
-    loadIntegrations();
   }, [loadReports]);
 
 
@@ -947,21 +922,6 @@ export default function ReportView() {
       setFreeText("");
     } finally {
       setIsAiGenerating(false);
-    }
-  };
-
-  const saveIntegrations = async () => {
-    try {
-      const res = await fetch("/api/integrations", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(integrationSettings)
-      });
-      const data = await res.json();
-      setIntegrationSettings((prev) => ({ ...prev, ...data }));
-      setToast("Anbindungen gespeichert.");
-    } catch (error) {
-      setToast("Speichern fehlgeschlagen.");
     }
   };
 
@@ -2015,66 +1975,6 @@ export default function ReportView() {
         </main>
       )}
 
-      {section === "integrations" && (
-        <main className="w-full px-6 py-8 space-y-6">
-          <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft space-y-2">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-lg font-display">Anbindungen pflegen</h2>
-                <p className="text-sm text-sand-600">
-                  Zugangsdaten und Links für das RMM/Grafana Dashboard.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={saveIntegrations}
-                className="inline-flex items-center gap-2 rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-              >
-                <Save size={14} /> Speichern
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-6">
-            <div className="bg-white/90 backdrop-blur border border-sand-200 rounded-3xl p-6 shadow-soft space-y-4">
-              <div>
-                <h3 className="text-base font-display">Grafana Login</h3>
-                <p className="text-sm text-sand-600">URL, Benutzer und Passwort.</p>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <label className="text-xs uppercase tracking-wide text-sand-600">
-                  URL
-                  <input
-                    value={integrationSettings.rmm_host}
-                    onChange={(event) => updateIntegration({ rmm_host: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    placeholder="https://rmm.quansatech.at"
-                  />
-                </label>
-                <label className="text-xs uppercase tracking-wide text-sand-600">
-                  Benutzer
-                  <input
-                    value={integrationSettings.rmm_user}
-                    onChange={(event) => updateIntegration({ rmm_user: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    placeholder="grafana_user"
-                  />
-                </label>
-                <label className="text-xs uppercase tracking-wide text-sand-600 md:col-span-2">
-                  Passwort
-                  <input
-                    type="password"
-                    value={integrationSettings.rmm_password}
-                    onChange={(event) => updateIntegration({ rmm_password: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    placeholder="••••••••"
-                  />
-                </label>
-              </div>
-            </div>
-          </div>
-        </main>
-      )}
       <EmailComposerModal
         open={reportEmailComposer.open}
         title="IT-Kundenbericht per E-Mail senden"

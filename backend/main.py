@@ -324,6 +324,8 @@ class IntegrationSettings(Base):
     rmm_host = Column(String, default="")
     rmm_user = Column(String, default="")
     rmm_password = Column(String, default="")
+    rmm_api_key = Column(String, default="")
+    rmm_api_key_header = Column(String, default="Authorization")
     pbx_base_url = Column(String, default="")
     pbx_username = Column(String, default="")
     pbx_password = Column(String, default="")
@@ -494,6 +496,10 @@ def _ensure_integration_settings_columns() -> None:
     statements = []
     if "pbx_base_url" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_base_url VARCHAR DEFAULT ''")
+    if "rmm_api_key" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN rmm_api_key VARCHAR DEFAULT ''")
+    if "rmm_api_key_header" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN rmm_api_key_header VARCHAR DEFAULT 'Authorization'")
     if "pbx_username" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN pbx_username VARCHAR DEFAULT ''")
     if "pbx_password" not in columns:
@@ -1164,6 +1170,8 @@ class IntegrationSettingsUpdate(BaseModel):
     rmm_host: Optional[str] = None
     rmm_user: Optional[str] = None
     rmm_password: Optional[str] = None
+    rmm_api_key: Optional[str] = None
+    rmm_api_key_header: Optional[str] = None
     pbx_base_url: Optional[str] = None
     pbx_username: Optional[str] = None
     pbx_password: Optional[str] = None
@@ -1236,6 +1244,12 @@ class InfraDiscoveryItem(BaseModel):
 
 class InfraDiscoveryIngestRequest(BaseModel):
     items: List[InfraDiscoveryItem]
+
+
+class CustomerDevelopmentAiRequest(BaseModel):
+    customer_id: Optional[int] = None
+    mode: str = "summary"
+    tone: Optional[str] = "sachlich"
 
 
 class OfferSettingsUpdate(BaseModel):
@@ -2330,7 +2344,7 @@ def serialize_day_task_group(g: DayTaskGroup) -> Dict[str, Any]:
 def _normalize_contract_flags(flags: Optional[List[Any]]) -> List[str]:
     if not isinstance(flags, list):
         return []
-    allowed = {"monitoring", "wartung", "sla"}
+    allowed = {"monitoring", "wartung"}
     normalized: List[str] = []
     seen = set()
     for value in flags:
@@ -2339,8 +2353,8 @@ def _normalize_contract_flags(flags: Optional[List[Any]]) -> List[str]:
             key = "wartung"
         if key in {"monitoringvertrag", "rmm"}:
             key = "monitoring"
-        if key in {"servicelevelagreement"}:
-            key = "sla"
+        if key in {"servicelevelagreement", "sla"}:
+            key = "wartung"
         if key not in allowed or key in seen:
             continue
         seen.add(key)
@@ -2668,7 +2682,11 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "id": settings.id,
         "rmm_host": settings.rmm_host,
         "rmm_user": settings.rmm_user,
-        "rmm_password": settings.rmm_password,
+        "rmm_password": "",
+        "has_rmm_password": bool(settings.rmm_password),
+        "rmm_api_key": "",
+        "rmm_api_key_header": settings.rmm_api_key_header or "Authorization",
+        "has_rmm_api_key": bool(settings.rmm_api_key),
         "pbx_base_url": settings.pbx_base_url,
         "pbx_username": settings.pbx_username,
         "has_pbx_password": bool(settings.pbx_password),
@@ -3796,33 +3814,73 @@ def _dev_score_to_state(score: float) -> str:
 
 
 def _fetch_tactical_rmm_agents(settings: Optional[IntegrationSettings]) -> Tuple[List[Dict[str, Any]], bool]:
-    if not settings:
+    probe = _probe_tactical_rmm(settings)
+    if not bool(probe.get("connected")):
         return [], False
+    agents = probe.get("agents")
+    return agents if isinstance(agents, list) else [], True
+
+
+def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, Any]:
+    checked_at = datetime.now().isoformat()
+    if not settings:
+        return {
+            "connected": False,
+            "checkedAt": checked_at,
+            "error": "Integration settings missing",
+            "agents": [],
+        }
     host = str(settings.rmm_host or "").strip().rstrip("/")
     user = str(settings.rmm_user or "").strip()
     password = str(settings.rmm_password or "").strip()
+    api_key = str(settings.rmm_api_key or "").strip()
+    api_key_header = str(settings.rmm_api_key_header or "Authorization").strip() or "Authorization"
     if not host:
-        return [], False
+        return {
+            "connected": False,
+            "checkedAt": checked_at,
+            "host": "",
+            "hasUser": bool(user),
+            "hasPassword": bool(password),
+            "hasApiKey": bool(api_key),
+            "apiKeyHeader": api_key_header,
+            "error": "Missing rmm_host",
+            "agents": [],
+        }
 
     session = requests.Session()
     session.headers.update({"User-Agent": "QT-Workbench"})
+    if api_key:
+        header_value = api_key
+        if api_key_header.lower() == "authorization" and not re.match(r"^(bearer|token)\s+", api_key, re.IGNORECASE):
+            header_value = f"Bearer {api_key}"
+        session.headers.update({api_key_header: header_value})
+    if user and password:
+        session.auth = (user, password)
     auth_candidates = [
         "/api-token-auth/",
         "/api/v3/token/",
         "/api/v3/auth/token/",
     ]
+    auth_path = ""
+    auth_status_code = None
+    auth_error = ""
     token = ""
-    if user and password:
+    if user and password and not api_key:
         for path in auth_candidates:
+            auth_path = path
             try:
                 auth_res = session.post(
                     f"{host}{path}",
                     json={"username": user, "password": password},
                     timeout=6,
                 )
-            except requests.RequestException:
+                auth_status_code = auth_res.status_code
+            except requests.RequestException as exc:
+                auth_error = str(exc)
                 continue
             if not auth_res.ok:
+                auth_error = f"HTTP {auth_res.status_code}"
                 continue
             try:
                 payload = auth_res.json()
@@ -3833,6 +3891,7 @@ def _fetch_tactical_rmm_agents(settings: Optional[IntegrationSettings]) -> Tuple
                 .strip()
             )
             if token:
+                auth_error = ""
                 break
     if token:
         session.headers.update({"Authorization": f"Bearer {token}"})
@@ -3841,25 +3900,80 @@ def _fetch_tactical_rmm_agents(settings: Optional[IntegrationSettings]) -> Tuple
         "/api/v3/agents/",
         "/api/v3/agents",
     ]
+    agents_path = ""
+    agents_status_code = None
+    agents_error = ""
     for path in list_candidates:
+        agents_path = path
         try:
             res = session.get(f"{host}{path}", timeout=8)
-        except requests.RequestException:
+            agents_status_code = res.status_code
+        except requests.RequestException as exc:
+            agents_error = str(exc)
             continue
         if not res.ok:
+            agents_error = f"HTTP {res.status_code}"
             continue
         try:
             payload = res.json()
         except ValueError:
+            agents_error = "Invalid JSON response"
             continue
         if isinstance(payload, list):
-            return payload, True
+            return {
+                "connected": True,
+                "checkedAt": checked_at,
+                "host": host,
+                "hasUser": bool(user),
+                "hasPassword": bool(password),
+                "hasApiKey": bool(api_key),
+                "apiKeyHeader": api_key_header,
+                "authPath": auth_path or None,
+                "authStatusCode": auth_status_code,
+                "agentsPath": agents_path,
+                "agentsStatusCode": agents_status_code,
+                "sampleCount": len(payload),
+                "agents": payload,
+                "error": "",
+            }
         if isinstance(payload, dict):
             for key in ("results", "agents", "data"):
                 value = payload.get(key)
                 if isinstance(value, list):
-                    return value, True
-    return [], False
+                    return {
+                        "connected": True,
+                        "checkedAt": checked_at,
+                        "host": host,
+                        "hasUser": bool(user),
+                        "hasPassword": bool(password),
+                        "hasApiKey": bool(api_key),
+                        "apiKeyHeader": api_key_header,
+                        "authPath": auth_path or None,
+                        "authStatusCode": auth_status_code,
+                        "agentsPath": agents_path,
+                        "agentsStatusCode": agents_status_code,
+                        "sampleCount": len(value),
+                        "agents": value,
+                        "error": "",
+                    }
+            agents_error = "No agent list in response"
+    error_parts = [part for part in [auth_error, agents_error] if part]
+    return {
+        "connected": False,
+        "checkedAt": checked_at,
+        "host": host,
+        "hasUser": bool(user),
+        "hasPassword": bool(password),
+        "hasApiKey": bool(api_key),
+        "apiKeyHeader": api_key_header,
+        "authPath": auth_path or None,
+        "authStatusCode": auth_status_code,
+        "agentsPath": agents_path or None,
+        "agentsStatusCode": agents_status_code,
+        "sampleCount": 0,
+        "agents": [],
+        "error": " | ".join(error_parts) if error_parts else "RMM API connection failed",
+    }
 
 
 def _extract_customer_number_from_contact(contact: Dict[str, Any]) -> str:
@@ -4009,7 +4123,7 @@ def _build_customer_development_context(
 ) -> Dict[str, Any]:
     contract_flags = _parse_contract_flags(customer.contract_flags)
     has_contract = bool(customer.maintenance_contract) or bool(
-        set(contract_flags) & {"wartung", "monitoring", "sla"}
+        set(contract_flags) & {"wartung", "monitoring"}
     )
     task_filters = _customer_task_filter(customer)
     open_day_tasks = 0
@@ -4085,16 +4199,33 @@ def _build_customer_development_context(
 
     if not has_contract:
         business_risk += 20
-        signals.append("Kein Wartungsvertrag hinterlegt")
+        signals.append("Kein Wartungs-/Monitoringvertrag hinterlegt")
         recommendations.append(
-            {"type": "betreuung", "title": "Wartungsvertrag prüfen", "why": "Kein Vertrag im Kundenstamm."}
+            {"type": "betreuung", "title": "Vertragslage prüfen", "why": "Kein Wartungs- oder Monitoringvertrag im Kundenstamm."}
         )
-    if revenue_trend_pct <= -15:
-        business_risk += 25
-        signals.append(f"Umsatztrend fallend ({revenue_trend_pct}%)")
+    # Umsatztrend nur kontextabhängig bewerten:
+    # Einmalige Investitionsspitzen (z. B. Serverkauf) im Vorjahr sollen
+    # keinen automatischen Risiko-Status erzeugen.
+    trend_drop_is_strong = revenue_trend_pct <= -35
+    is_high_value_customer = revenue_last_year >= 8000 or revenue_current_year >= 8000
+    low_current_revenue = revenue_current_year <= 2500
+    weak_binding_signals = (
+        not has_contract
+        or (open_day_tasks + open_time_tasks) >= 8
+        or telephony["missed"] >= 5
+    )
+    if trend_drop_is_strong and low_current_revenue and weak_binding_signals:
+        business_risk += 15
+        signals.append(f"Umsatzprofil rückläufig ({revenue_trend_pct}%)")
         recommendations.append(
-            {"type": "betreuung", "title": "Umsatzrückgang besprechen", "why": "Deutlicher Rückgang gegenüber Vorjahr."}
+            {
+                "type": "betreuung",
+                "title": "Kundenentwicklung aktiv prüfen",
+                "why": "Deutlicher Rückgang bei gleichzeitig schwachen Bindungssignalen.",
+            }
         )
+    elif trend_drop_is_strong and is_high_value_customer:
+        signals.append("Umsatzprofil volatil (möglicher Einmaleffekt)")
     if comm_load >= 120 or telephony["missed"] >= 5:
         business_risk += 15
         signals.append("Hohe Kommunikationslast")
@@ -4211,6 +4342,115 @@ def _build_customer_development_payload(
         }
 
 
+def _customer_development_ai_prompt(context: Dict[str, Any], mode: str, tone: str) -> str:
+    customer_name = str(context.get("customerName") or "Kunde")
+    state = str(context.get("developmentState") or "STABLE")
+    risk = int(context.get("riskScore") or 0)
+    trend = float(context.get("revenueTrendPct") or 0)
+    infra = context.get("infra") or {}
+    recommendations = context.get("recommendations") or context.get("topRecommendations") or []
+    recommendation_lines = []
+    for rec in recommendations[:5]:
+        title = str(rec.get("title") or "").strip()
+        why = str(rec.get("why") or "").strip()
+        if title:
+            recommendation_lines.append(f"- {title}: {why}")
+    if not recommendation_lines:
+        recommendation_lines.append("- Keine konkreten Empfehlungen vorhanden.")
+    signals = context.get("signals") or context.get("reasons") or []
+    signal_lines = [f"- {str(item).strip()}" for item in signals[:6] if str(item).strip()] or ["- Keine kritischen Signale."]
+    mode_key = str(mode or "summary").strip().lower()
+    tone_key = str(tone or "sachlich").strip()
+
+    if mode_key == "mail":
+        task_text = (
+            "Erstelle eine kurze Kundenmail (Deutsch) mit Betreffzeile und Nachrichtentext. "
+            "Ziel: proaktiv Betreuung anbieten und nächste Schritte vorschlagen."
+        )
+    elif mode_key == "angebot":
+        task_text = (
+            "Erstelle 3 plausible, konkret verkaufbare Angebotsvorschläge (Deutsch) "
+            "für diesen Kunden. Pro Vorschlag: Titel, Nutzen, grober Umfang, nächste Aktion."
+        )
+    elif mode_key == "kundenbericht":
+        task_text = (
+            "Erstelle 3 spezifische Vorschläge, die im nächsten Kundenbericht gezeigt werden sollen "
+            "(Deutsch): Problembezug, warum jetzt, empfohlene Maßnahme."
+        )
+    elif mode_key == "newsletter":
+        task_text = (
+            "Erstelle 3 allgemein nutzbare Newsletter-Themen (Deutsch), "
+            "die aus den Kundensignalen ableitbar sind. Je Thema: Überschrift + 2-3 Sätze."
+        )
+    elif mode_key == "leitfaden":
+        task_text = (
+            "Erstelle einen Gesprächsleitfaden (Deutsch) mit 5-7 Stichpunkten "
+            "für ein Kundengespräch inkl. Abschlussfrage."
+        )
+    elif mode_key == "analyse":
+        task_text = (
+            "Erstelle eine strukturierte Kundenanalyse (Deutsch) in 5 Abschnitten: "
+            "1) Kurzlage, 2) Chancen, 3) Risiken, 4) Priorisierte Maßnahmen (Top 3), "
+            "5) Empfohlener nächster Termin/Touchpoint."
+        )
+    else:
+        task_text = (
+            "Erstelle eine kompakte Management-Zusammenfassung (Deutsch, 4-6 Sätze) "
+            "mit klarer Priorisierung und nächster Aktion."
+        )
+
+    return (
+        f"{task_text}\n"
+        f"Ton: {tone_key}\n\n"
+        f"Kunde: {customer_name}\n"
+        f"Status: {state}\n"
+        f"Risiko: {risk}/100\n"
+        f"Umsatztrend: {trend:+.1f}%\n"
+        f"Infrastruktur: Coverage {int(float(infra.get('coverageRatio') or 0) * 100)}%, "
+        f"Unmanaged {int(infra.get('unmanagedCount') or 0)}, "
+        f"Offline-Rate {int(float(infra.get('offlineRate') or 0) * 100)}%\n\n"
+        f"Signale:\n{chr(10).join(signal_lines)}\n\n"
+        f"Empfehlungen:\n{chr(10).join(recommendation_lines)}\n\n"
+        "Antwort als reiner Text, kein JSON, kein Markdown."
+    )
+
+
+def _customer_development_ai_fallback(context: Dict[str, Any], mode: str) -> str:
+    mode_key = str(mode or "summary").strip().lower()
+    customer_name = str(context.get("customerName") or "Kunde")
+    infra = context.get("infra") or {}
+    unmanaged = int(infra.get("unmanagedCount") or 0)
+    coverage = int(float(infra.get("coverageRatio") or 0) * 100)
+    missed = int(context.get("missedCalls") or 0)
+    recommendations = context.get("recommendations") or context.get("topRecommendations") or []
+    rec_lines = [str((rec or {}).get("title") or "").strip() for rec in recommendations if str((rec or {}).get("title") or "").strip()]
+    top = rec_lines[:3] if rec_lines else ["Betreuungs-Check", "Infrastruktur-Bestand prüfen", "Sicherheitsbasis aktualisieren"]
+
+    if mode_key == "kundenbericht":
+        return (
+            f"1) {top[0]}: Für {customer_name} im Bericht als priorisierte Maßnahme aufnehmen.\n"
+            f"2) Infrastrukturtransparenz erhöhen: Coverage aktuell bei {coverage}% mit {unmanaged} unmanaged Geräten.\n"
+            f"3) Kommunikationsstabilität: Verpasste Anrufe ({missed}) als Anlass für klaren Betreuungsrhythmus nutzen."
+        )
+    if mode_key == "newsletter":
+        return (
+            "Thema 1: Warum Asset-Transparenz Kosten spart – unmanaged Geräte früh erkennen.\n"
+            "Thema 2: Wartung statt Feuerwehr – wie regelmäßige Betreuung Störungen reduziert.\n"
+            "Thema 3: Kommunikationsklarheit im IT-Service – feste Touchpoints statt Ad-hoc-Reaktionen."
+        )
+    if mode_key == "angebot":
+        return (
+            f"Angebot 1: {top[0]} – kompaktes Maßnahmenpaket mit klarer Priorisierung.\n"
+            f"Angebot 2: Infrastruktur-Basispaket – Asset-Abgleich, Coverage-Plan (aktuell {coverage}%), Übergabebericht.\n"
+            "Angebot 3: Betreuungs-/SLA-Paket – definierte Reaktionszeiten und regelmäßige Service-Reviews."
+        )
+    return (
+        f"Kurzlage {customer_name}: Priorität bei {top[0]}. "
+        f"Infrastruktur: {unmanaged} unmanaged Geräte, Coverage {coverage}%. "
+        "Nächster Schritt: konkrete Maßnahme terminieren."
+    )
+
+
 # ================= CUSTOMERS =================
 @app.get("/api/customers")
 def get_customers():
@@ -4235,6 +4475,76 @@ def get_customer_development_for_customer(customer_id: int):
     if not contexts:
         raise HTTPException(404, "Customer not found")
     return contexts[0]
+
+
+@app.post("/api/customer_development/ai_assist")
+def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
+    mode = str(data.mode or "summary").strip().lower()
+    if mode not in {"summary", "mail", "leitfaden", "analyse", "angebot", "kundenbericht", "newsletter"}:
+        mode = "summary"
+
+    if mode == "newsletter":
+        payload = _build_customer_development_payload(include_inactive=False, full=False)
+        contexts = payload.get("contexts") or []
+        if not contexts:
+            raise HTTPException(404, "No customer contexts available")
+        top = contexts[:10]
+        avg_risk = round(
+            sum(float(item.get("riskScore") or 0) for item in top) / max(1, len(top)),
+            1,
+        )
+        signals: Dict[str, int] = {}
+        for item in top:
+            for signal in (item.get("signals") or [])[:3]:
+                label = str(signal or "").strip()
+                if not label:
+                    continue
+                signals[label] = signals.get(label, 0) + 1
+        signal_lines = sorted(signals.items(), key=lambda pair: pair[1], reverse=True)[:8]
+        prompt = (
+            "Erstelle 3 allgemein nutzbare Newsletter-Themen fuer IT-Kunden.\n"
+            "Die Themen sollen auf den haeufigsten Kundensignalen basieren.\n"
+            "Pro Thema: Ueberschrift + 2-3 Saetze Nutzen/Problembezug.\n"
+            f"Ton: {str(data.tone or 'sachlich')}\n"
+            f"Durchschnittliches Risiko (Top-Kunden): {avg_risk}\n"
+            "Haeufige Signale:\n"
+            + "\n".join([f"- {name} ({count}x)" for name, count in signal_lines])
+            + "\nAntwort als reiner Text, kein JSON, kein Markdown."
+        )
+        text_result = _ollama_generate_text(prompt).strip()
+        if not text_result:
+            text_result = _customer_development_ai_fallback(top[0], mode)
+        return {
+            "customer_id": None,
+            "mode": mode,
+            "tone": str(data.tone or "sachlich"),
+            "text": text_result,
+            "generated_at": int(time.time() * 1000),
+        }
+
+    if data.customer_id is None:
+        raise HTTPException(400, "customer_id required for this mode")
+    payload = _build_customer_development_payload(
+        include_inactive=True,
+        customer_id=int(data.customer_id),
+        full=True,
+    )
+    contexts = payload.get("contexts") or []
+    if not contexts:
+        raise HTTPException(404, "Customer not found")
+    context = contexts[0]
+    mode = str(data.mode or "summary").strip().lower()
+    prompt = _customer_development_ai_prompt(context, mode=mode, tone=str(data.tone or "sachlich"))
+    text_result = _ollama_generate_text(prompt).strip()
+    if not text_result:
+        text_result = _customer_development_ai_fallback(context, mode)
+    return {
+        "customer_id": int(data.customer_id) if data.customer_id is not None else None,
+        "mode": mode,
+        "tone": str(data.tone or "sachlich"),
+        "text": text_result,
+        "generated_at": int(time.time() * 1000),
+    }
 
 
 def _sevdesk_contact_display_name(contact: Dict[str, Any]) -> str:
@@ -5220,6 +5530,7 @@ def update_integrations(data: IntegrationSettingsUpdate):
 
         sensitive_fields = {
             "rmm_password",
+            "rmm_api_key",
             "pbx_password",
             "pbx_refresh_token",
             "pbx_api_key_secret",
@@ -5258,6 +5569,32 @@ def get_icecat_status():
     except requests.RequestException as exc:
         raise HTTPException(502, f"Marketplace import error: {exc}") from exc
     return response.json()
+
+
+@app.get("/api/rmm/health")
+def rmm_health():
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+    probe = _probe_tactical_rmm(settings)
+    return {
+        "connected": bool(probe.get("connected")),
+        "checkedAt": probe.get("checkedAt") or "",
+        "host": probe.get("host") or "",
+        "hasUser": bool(probe.get("hasUser")),
+        "hasPassword": bool(probe.get("hasPassword")),
+        "hasApiKey": bool(probe.get("hasApiKey")),
+        "apiKeyHeader": probe.get("apiKeyHeader") or "Authorization",
+        "authPath": probe.get("authPath"),
+        "authStatusCode": probe.get("authStatusCode"),
+        "agentsPath": probe.get("agentsPath"),
+        "agentsStatusCode": probe.get("agentsStatusCode"),
+        "sampleCount": int(probe.get("sampleCount") or 0),
+        "error": probe.get("error") or "",
+    }
 
 
 @app.get("/api/sevdesk/health")

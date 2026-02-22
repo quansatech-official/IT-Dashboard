@@ -45,6 +45,16 @@ const defaultPbx = {
   has_pbx_api_key_secret: false
 };
 
+const defaultRmm = {
+  rmm_host: "",
+  rmm_user: "",
+  rmm_password: "",
+  has_rmm_password: false,
+  rmm_api_key: "",
+  has_rmm_api_key: false,
+  rmm_api_key_header: "Authorization"
+};
+
 const defaultMarketplace = {
   td_synnex_base_url: "https://api.streamone.com",
   td_synnex_token_url: "https://api.streamone.com/oauth/token",
@@ -133,6 +143,22 @@ export default function SettingsView() {
     lastCallSnapshot: null
   });
   const [pbx, setPbx] = useState(defaultPbx);
+  const [rmm, setRmm] = useState(defaultRmm);
+  const [rmmOpen, setRmmOpen] = useState(false);
+  const [rmmStatus, setRmmStatus] = useState("idle");
+  const [rmmHealthStatus, setRmmHealthStatus] = useState("idle");
+  const [rmmHealth, setRmmHealth] = useState({
+    connected: null,
+    checkedAt: "",
+    hasApiKey: false,
+    apiKeyHeader: "Authorization",
+    authPath: "",
+    authStatusCode: null,
+    agentsPath: "",
+    agentsStatusCode: null,
+    sampleCount: 0,
+    error: ""
+  });
   const [pbxStatus, setPbxStatus] = useState("idle");
   const [pbxLoadStatus, setPbxLoadStatus] = useState("loading");
   const [pbxApiStatus, setPbxApiStatus] = useState("idle");
@@ -328,6 +354,16 @@ export default function SettingsView() {
       })
       .then((data) => {
         if (!active) return;
+        setRmm((prev) => ({
+          ...prev,
+          rmm_host: data?.rmm_host || "",
+          rmm_user: data?.rmm_user || "",
+          rmm_password: "",
+          has_rmm_password: Boolean(data?.has_rmm_password),
+          rmm_api_key: "",
+          has_rmm_api_key: Boolean(data?.has_rmm_api_key),
+          rmm_api_key_header: data?.rmm_api_key_header || "Authorization"
+        }));
         setPbx((prev) => ({
           ...prev,
           pbx_base_url: data?.pbx_base_url || "",
@@ -402,6 +438,11 @@ export default function SettingsView() {
     if (sevdeskLoadStatus !== "ready") return;
     refreshSevdeskHealth();
   }, [sevdeskLoadStatus]);
+
+  useEffect(() => {
+    if (!rmmOpen) return;
+    refreshRmmHealth();
+  }, [rmmOpen]);
 
   useEffect(() => {
     if (!marketplaceOpen) return;
@@ -728,6 +769,82 @@ export default function SettingsView() {
       setPbxStatus("error");
     }
     setTimeout(() => setPbxStatus("idle"), 2000);
+  };
+
+  const refreshRmmHealth = async () => {
+    setRmmHealthStatus("loading");
+    try {
+      const res = await fetch(`${API}/rmm/health`);
+      if (!res.ok) throw new Error("health_failed");
+      const data = await res.json();
+      setRmmHealth({
+        connected: Boolean(data?.connected),
+        checkedAt: data?.checkedAt || "",
+        hasApiKey: Boolean(data?.hasApiKey),
+        apiKeyHeader: data?.apiKeyHeader || "Authorization",
+        authPath: data?.authPath || "",
+        authStatusCode:
+          data?.authStatusCode === null || typeof data?.authStatusCode === "undefined"
+            ? null
+            : Number(data.authStatusCode),
+        agentsPath: data?.agentsPath || "",
+        agentsStatusCode:
+          data?.agentsStatusCode === null || typeof data?.agentsStatusCode === "undefined"
+            ? null
+            : Number(data.agentsStatusCode),
+        sampleCount: Number(data?.sampleCount || 0),
+        error: data?.error || ""
+      });
+      setRmmHealthStatus("ready");
+    } catch (error) {
+      setRmmHealth({
+        connected: false,
+        checkedAt: new Date().toISOString(),
+        hasApiKey: false,
+        apiKeyHeader: "Authorization",
+        authPath: "",
+        authStatusCode: null,
+        agentsPath: "",
+        agentsStatusCode: null,
+        sampleCount: 0,
+        error: error?.message ? String(error.message) : "RMM Health fehlgeschlagen"
+      });
+      setRmmHealthStatus("error");
+    }
+  };
+
+  const saveRmmSettings = async () => {
+    setRmmStatus("saving");
+    try {
+      const res = await fetch(`${API}/integrations`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rmm_host: rmm.rmm_host,
+          rmm_user: rmm.rmm_user,
+          rmm_password: rmm.rmm_password,
+          rmm_api_key: rmm.rmm_api_key,
+          rmm_api_key_header: rmm.rmm_api_key_header
+        })
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      setRmm((prev) => ({
+        ...prev,
+        rmm_host: data?.rmm_host || "",
+        rmm_user: data?.rmm_user || "",
+        rmm_password: "",
+        has_rmm_password: Boolean(data?.has_rmm_password),
+        rmm_api_key: "",
+        has_rmm_api_key: Boolean(data?.has_rmm_api_key),
+        rmm_api_key_header: data?.rmm_api_key_header || "Authorization"
+      }));
+      setRmmStatus("saved");
+      refreshRmmHealth();
+    } catch (error) {
+      setRmmStatus("error");
+    }
+    setTimeout(() => setRmmStatus("idle"), 2000);
   };
 
   const saveSevdeskSettings = async () => {
@@ -1709,6 +1826,176 @@ export default function SettingsView() {
                   <div className="md:col-span-2">
                     <span className="text-sand-500">Response Preview:</span>{" "}
                     {apiTestInfo.preview || "n/a"}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setRmmOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">RMM Verbindung</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-sand-600">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  rmmHealth.connected === null
+                    ? "bg-sand-300"
+                    : rmmHealth.connected === true
+                    ? "bg-emerald-500"
+                    : "bg-rose-500"
+                }`}
+              />
+              <span>
+                API{" "}
+                {rmmHealth.connected === null
+                  ? "unbekannt"
+                  : rmmHealth.connected
+                  ? "aktiv"
+                  : "getrennt"}
+              </span>
+              <span className="text-sm text-sand-500">{rmmOpen ? "–" : "+"}</span>
+            </div>
+          </button>
+          {rmmOpen ? (
+            <>
+              <p className="mt-4 text-xs text-sand-500 mb-4">
+                Tactical RMM Zugangsdaten und Connection-Test. Discovery startet erst nach stabiler API-Verbindung.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="text-xs text-sand-500">RMM Host</label>
+                  <input
+                    value={rmm.rmm_host}
+                    onChange={(event) =>
+                      setRmm((prev) => ({ ...prev, rmm_host: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="https://rmm.example.tld"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">API Key Header</label>
+                  <input
+                    value={rmm.rmm_api_key_header}
+                    onChange={(event) =>
+                      setRmm((prev) => ({ ...prev, rmm_api_key_header: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="Authorization"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">API Key</label>
+                  <input
+                    type="password"
+                    value={rmm.rmm_api_key}
+                    onChange={(event) =>
+                      setRmm((prev) => ({ ...prev, rmm_api_key: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={rmm.has_rmm_api_key ? "Gespeichert" : "••••••••"}
+                  />
+                  <p className="mt-1 text-[11px] text-sand-400">
+                    Bei Header `Authorization` wird automatisch `Bearer` vorangestellt, falls nicht vorhanden.
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Fallback User (optional)</label>
+                  <input
+                    value={rmm.rmm_user}
+                    onChange={(event) =>
+                      setRmm((prev) => ({ ...prev, rmm_user: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="api_user"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Fallback Passwort (optional)</label>
+                  <input
+                    type="password"
+                    value={rmm.rmm_password}
+                    onChange={(event) =>
+                      setRmm((prev) => ({ ...prev, rmm_password: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={rmm.has_rmm_password ? "Gespeichert" : "••••••••"}
+                  />
+                </div>
+              </div>
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  onClick={saveRmmSettings}
+                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                >
+                  Speichern
+                </button>
+                <button
+                  type="button"
+                  onClick={refreshRmmHealth}
+                  className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-600"
+                >
+                  Status neu laden
+                </button>
+                {rmmStatus === "saved" && (
+                  <span className="text-sm text-emerald-600">Gespeichert</span>
+                )}
+                {rmmStatus === "error" && (
+                  <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+                )}
+                {rmmHealthStatus === "loading" && (
+                  <span className="text-sm text-sand-500">Prüfe Verbindung…</span>
+                )}
+              </div>
+              <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-700">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <div>
+                    <span className="text-sand-500">Letzter Check:</span>{" "}
+                    {rmmHealth.checkedAt ? new Date(rmmHealth.checkedAt).toLocaleString("de-DE") : "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Status:</span>{" "}
+                    {rmmHealth.connected === null
+                      ? "unbekannt"
+                      : rmmHealth.connected
+                      ? "ok"
+                      : "fehlgeschlagen"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">API Key:</span>{" "}
+                    {rmmHealth.hasApiKey ? `ja (${rmmHealth.apiKeyHeader || "Authorization"})` : "nein"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Auth Endpoint:</span>{" "}
+                    {rmmHealth.authPath || "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Auth Status:</span>{" "}
+                    {rmmHealth.authStatusCode ?? "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Agents Endpoint:</span>{" "}
+                    {rmmHealth.agentsPath || "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Agents Status:</span>{" "}
+                    {rmmHealth.agentsStatusCode ?? "n/a"}
+                  </div>
+                  <div>
+                    <span className="text-sand-500">Agent Count:</span>{" "}
+                    {rmmHealth.sampleCount ?? 0}
+                  </div>
+                  <div className="md:col-span-2">
+                    <span className="text-sand-500">Fehler:</span>{" "}
+                    {rmmHealth.error || "n/a"}
                   </div>
                 </div>
               </div>

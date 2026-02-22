@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowDownUp, Plus, Shield, TrendingDown, Users } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Eye, Plus, Shield, TrendingDown, Users, X } from "lucide-react";
 
 const API = "/api";
 
@@ -17,9 +17,36 @@ const formatPct = (value) => {
   return `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
 };
 
+const formatEur = (value) => {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return "€ 0";
+  return `€ ${n.toLocaleString("de-DE", { maximumFractionDigits: 0 })}`;
+};
+
+const clampPercent = (value) => {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, n));
+};
+
 export default function CustomerDevelopmentView() {
   const [contexts, setContexts] = useState([]);
   const [status, setStatus] = useState("idle");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiResult, setAiResult] = useState({
+    open: false,
+    customerName: "",
+    mode: "summary",
+    text: "",
+    error: ""
+  });
+  const [detailModal, setDetailModal] = useState({
+    open: false,
+    customerId: null,
+    customerName: ""
+  });
+  const [detailStatus, setDetailStatus] = useState("idle");
+  const [detailData, setDetailData] = useState(null);
   const [includeInactive, setIncludeInactive] = useState(false);
   const [viewMode, setViewMode] = useState("list");
   const [filters, setFilters] = useState({
@@ -48,6 +75,29 @@ export default function CustomerDevelopmentView() {
   useEffect(() => {
     load();
   }, [includeInactive]);
+
+  useEffect(() => {
+    if (!detailModal.open || !detailModal.customerId) return;
+    let active = true;
+    setDetailStatus("loading");
+    fetch(`${API}/customers/${detailModal.customerId}/development`)
+      .then((res) => {
+        if (!res.ok) throw new Error("detail_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        setDetailData(data || null);
+        setDetailStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setDetailStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [detailModal.open, detailModal.customerId]);
 
   const filteredContexts = useMemo(() => {
     return contexts.filter((item) => {
@@ -84,6 +134,74 @@ export default function CustomerDevelopmentView() {
     });
   };
 
+  const runAiAssist = async (context) => {
+    const modeInput = window.prompt(
+      "KI Modus: summary | mail | leitfaden | analyse | angebot | kundenbericht | newsletter",
+      "angebot"
+    );
+    if (modeInput === null) return;
+    const mode = String(modeInput || "summary").trim().toLowerCase();
+    setAiBusy(true);
+    setAiResult({
+      open: true,
+      customerName: context.customerName || "",
+      mode,
+      text: "",
+      error: ""
+    });
+    try {
+      const response = await fetch(`${API}/customer_development/ai_assist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          mode === "newsletter"
+            ? { mode }
+            : {
+                customer_id: context.customerId,
+                mode
+              }
+        )
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.detail || "KI Vorschlag fehlgeschlagen");
+      }
+      setAiResult({
+        open: true,
+        customerName: context.customerName || "",
+        mode: data?.mode || mode,
+        text: data?.text || "",
+        error: ""
+      });
+    } catch (error) {
+      setAiResult({
+        open: true,
+        customerName: context.customerName || "",
+        mode,
+        text: "",
+        error: error?.message ? String(error.message) : "KI Vorschlag fehlgeschlagen"
+      });
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const openDetail = (context) => {
+    setDetailData(null);
+    setDetailStatus("idle");
+    setDetailModal({
+      open: true,
+      customerId: context.customerId,
+      customerName: context.customerName || ""
+    });
+  };
+
+  const closeDetail = () => {
+    setDetailModal({ open: false, customerId: null, customerName: "" });
+    setDetailData(null);
+    setDetailStatus("idle");
+  };
+
   const grouped = useMemo(() => {
     const groups = { STABLE: [], POTENTIAL: [], ATTENTION: [], RISK: [], INACTIVE: [] };
     filteredContexts.forEach((item) => {
@@ -95,6 +213,200 @@ export default function CustomerDevelopmentView() {
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
+      {detailModal.open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-5xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+            <div className="flex items-center justify-between border-b border-sand-200 px-5 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Details</p>
+                <h3 className="text-lg font-display text-sand-900">
+                  {detailModal.customerName || "Kunde"} · Kundenanalyse
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={closeDetail}
+                className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                title="Schließen"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="max-h-[75vh] overflow-auto p-5 bg-sand-50">
+              {detailStatus === "loading" ? (
+                <p className="text-sm text-sand-500">Lade Analytics…</p>
+              ) : detailStatus === "error" ? (
+                <p className="text-sm text-rose-600">Details konnten nicht geladen werden.</p>
+              ) : detailData ? (
+                <div className="space-y-4">
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Status</p>
+                      <span className={`mt-1 inline-flex rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${stateBadgeClass(detailData.developmentState)}`}>
+                        {detailData.developmentState || "STABLE"}
+                      </span>
+                    </div>
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Risiko</p>
+                      <p className="text-lg font-metrics">{detailData.riskScore ?? 0}/100</p>
+                    </div>
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Priorität</p>
+                      <p className="text-lg font-metrics">{detailData.priority ?? 0}</p>
+                    </div>
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Vertrag</p>
+                      <p className="text-sm text-sand-700">
+                        {detailData.hasMaintenanceContract ? "vorhanden" : "kein Vertrag"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Umsatzvergleich</p>
+                      <div className="mt-2 space-y-2">
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] text-sand-600">
+                            <span>Vorjahr</span>
+                            <span>{formatEur(detailData.revenueLastYearEur)}</span>
+                          </div>
+                          <div className="h-2 rounded-full bg-sand-100">
+                            <div
+                              className="h-2 rounded-full bg-sand-500"
+                              style={{
+                                width: `${clampPercent(
+                                  (Number(detailData.revenueLastYearEur || 0) /
+                                    Math.max(
+                                      Number(detailData.revenueLastYearEur || 0),
+                                      Number(detailData.revenueCurrentYearEur || 0),
+                                      1
+                                    )) *
+                                    100
+                                )}%`
+                              }}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] text-sand-600">
+                            <span>Aktuelles Jahr</span>
+                            <span>{formatEur(detailData.revenueCurrentYearEur)}</span>
+                          </div>
+                          <div className="h-2 rounded-full bg-sand-100">
+                            <div
+                              className={`h-2 rounded-full ${
+                                Number(detailData.revenueTrendPct || 0) < 0 ? "bg-rose-400" : "bg-emerald-500"
+                              }`}
+                              style={{
+                                width: `${clampPercent(
+                                  (Number(detailData.revenueCurrentYearEur || 0) /
+                                    Math.max(
+                                      Number(detailData.revenueLastYearEur || 0),
+                                      Number(detailData.revenueCurrentYearEur || 0),
+                                      1
+                                    )) *
+                                    100
+                                )}%`
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[11px] text-sand-500">
+                        Trend: {formatPct(detailData.revenueTrendPct)}
+                      </p>
+                    </div>
+
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Risikozusammensetzung</p>
+                      <div className="mt-2 space-y-2">
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] text-sand-600">
+                            <span>Business Risk</span>
+                            <span>{detailData.businessRisk ?? 0}</span>
+                          </div>
+                          <div className="h-2 rounded-full bg-sand-100">
+                            <div
+                              className="h-2 rounded-full bg-amber-400"
+                              style={{ width: `${clampPercent(detailData.businessRisk)}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <div className="flex items-center justify-between text-[11px] text-sand-600">
+                            <span>Infra Risk</span>
+                            <span>{detailData.infrastructureRisk ?? 0}</span>
+                          </div>
+                          <div className="h-2 rounded-full bg-sand-100">
+                            <div
+                              className="h-2 rounded-full bg-rose-400"
+                              style={{ width: `${clampPercent(detailData.infrastructureRisk)}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                    <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Infrastruktur Analytics</p>
+                    <div className="mt-2 grid gap-2 md:grid-cols-3 text-xs">
+                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                        <p className="text-sand-500">Coverage</p>
+                        <p className="font-semibold text-sand-800">
+                          {Math.round((detailData.infra?.coverageRatio || 0) * 100)}%
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                        <p className="text-sand-500">Unmanaged</p>
+                        <p className="font-semibold text-sand-800">{detailData.infra?.unmanagedCount || 0}</p>
+                      </div>
+                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                        <p className="text-sand-500">Offline Rate</p>
+                        <p className="font-semibold text-sand-800">
+                          {Math.round((detailData.infra?.offlineRate || 0) * 100)}%
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Signale</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {(detailData.reasons || detailData.signals || []).length ? (
+                          (detailData.reasons || detailData.signals || []).map((signal, idx) => (
+                            <span
+                              key={`${signal}-${idx}`}
+                              className="rounded-full border border-sand-200 bg-sand-50 px-2 py-1 text-xs text-sand-700"
+                            >
+                              {signal}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-xs text-sand-500">Keine besonderen Signale.</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Empfehlungen</p>
+                      <div className="mt-2 space-y-2">
+                        {(detailData.recommendations || detailData.topRecommendations || []).slice(0, 5).map((rec, idx) => (
+                          <div key={`${rec?.title || "r"}-${idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                            <p className="text-xs font-semibold text-sand-800">{rec?.title || "Empfehlung"}</p>
+                            <p className="text-[11px] text-sand-500">{rec?.why || ""}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-6xl mx-auto px-5 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
@@ -252,13 +564,29 @@ export default function CustomerDevelopmentView() {
                     </td>
                     <td className="py-2 pr-3 text-sand-700">{item.topRecommendations?.[0]?.title || "-"}</td>
                     <td className="py-2 pr-3">
-                      <button
-                        type="button"
-                        onClick={() => createTask(item)}
-                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
-                      >
-                        <Plus size={12} /> Aufgabe
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => createTask(item)}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
+                        >
+                          <Plus size={12} /> Aufgabe
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runAiAssist(item)}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
+                        >
+                          KI
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openDetail(item)}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
+                        >
+                          <Eye size={12} /> Details
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -284,6 +612,13 @@ export default function CustomerDevelopmentView() {
                       <p className="text-xs font-semibold text-sand-800">{item.customerName}</p>
                       <p className="text-[11px] text-sand-500">Prio {item.priority}</p>
                       <div className="mt-1 text-[11px] text-sand-600">{item.topRecommendations?.[0]?.title || "-"}</div>
+                      <button
+                        type="button"
+                        onClick={() => openDetail(item)}
+                        className="mt-2 inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        <Eye size={11} /> Details
+                      </button>
                     </div>
                   ))}
                   {!items.length ? <p className="text-[11px] text-sand-400">Keine Kunden</p> : null}
@@ -315,6 +650,33 @@ export default function CustomerDevelopmentView() {
             Empfehlungen sind heuristisch (Phase 1)
           </div>
         </section>
+
+        {aiResult.open ? (
+          <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
+            <div className="flex items-center justify-between">
+              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">
+                KI Vorschlag · {aiResult.customerName} · {aiResult.mode}
+              </p>
+              <button
+                type="button"
+                onClick={() => setAiResult({ open: false, customerName: "", mode: "summary", text: "", error: "" })}
+                className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide"
+              >
+                Schließen
+              </button>
+            </div>
+            {aiBusy ? <p className="mt-2 text-sm text-sand-500">KI generiert Vorschlag…</p> : null}
+            {aiResult.error ? (
+              <p className="mt-2 text-sm text-rose-600">{aiResult.error}</p>
+            ) : (
+              <textarea
+                readOnly
+                value={aiResult.text}
+                className="mt-2 w-full min-h-[180px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
+              />
+            )}
+          </section>
+        ) : null}
       </main>
     </div>
   );
