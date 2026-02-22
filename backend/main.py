@@ -3131,6 +3131,8 @@ def _default_ai_prompts() -> Dict[str, Any]:
         "contract_templates": {
             "vertrag": {
                 "title": "IT-Servicevertrag",
+                "header_html": "",
+                "footer_html": "",
                 "body_template": (
                     "<p>Zwischen <strong>{provider_name}</strong> und <strong>{customer_name}</strong> "
                     "wird folgender IT-Servicevertrag geschlossen.</p>"
@@ -3142,6 +3144,8 @@ def _default_ai_prompts() -> Dict[str, Any]:
             },
             "wartung": {
                 "title": "Wartungsvertrag",
+                "header_html": "",
+                "footer_html": "",
                 "body_template": (
                     "<p>Dieser Wartungsvertrag regelt den laufenden technischen Support fuer "
                     "<strong>{customer_name}</strong>.</p>"
@@ -3158,6 +3162,8 @@ def _default_ai_prompts() -> Dict[str, Any]:
             },
             "monitoring": {
                 "title": "Monitoringvertrag",
+                "header_html": "",
+                "footer_html": "",
                 "body_template": (
                     "<p>Der Monitoringvertrag umfasst proaktive Ueberwachung, Alarmierung und "
                     "Betriebsdokumentation fuer die IT-Umgebung von <strong>{customer_name}</strong>.</p>"
@@ -3174,6 +3180,8 @@ def _default_ai_prompts() -> Dict[str, Any]:
             },
             "avv_dsgvo": {
                 "title": "Auftragsverarbeitungsvertrag (DSGVO)",
+                "header_html": "",
+                "footer_html": "",
                 "body_template": (
                     "<p>Dieser Vertrag zur Auftragsverarbeitung gemaess Art. 28 DSGVO wird zwischen "
                     "<strong>{provider_name}</strong> und <strong>{customer_name}</strong> geschlossen.</p>"
@@ -3185,6 +3193,8 @@ def _default_ai_prompts() -> Dict[str, Any]:
             },
             "sonstiges": {
                 "title": "Zusatzvereinbarung",
+                "header_html": "",
+                "footer_html": "",
                 "body_template": (
                     "<p>Diese Zusatzvereinbarung ergaenzt bestehende Leistungen fuer "
                     "<strong>{customer_name}</strong>.</p>"
@@ -3226,15 +3236,22 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
     contract_defaults = defaults.get("contract_templates") or {}
     contract_data = data.get("contract_templates")
     merged_contract_templates: Dict[str, Dict[str, str]] = {}
-    for key, default_entry in contract_defaults.items():
+    keys: Set[str] = set()
+    keys.update([str(key).strip() for key in contract_defaults.keys() if str(key).strip()])
+    if isinstance(contract_data, dict):
+        keys.update([str(key).strip() for key in contract_data.keys() if str(key).strip()])
+    for key in sorted(keys):
+        default_entry = contract_defaults.get(key) if isinstance(contract_defaults.get(key), dict) else {}
         current_entry = contract_data.get(key) if isinstance(contract_data, dict) else {}
         if not isinstance(current_entry, dict):
             current_entry = {}
         merged_contract_templates[key] = {
             "title": str(current_entry.get("title") or default_entry.get("title") or "").strip(),
+            "header_html": str(current_entry.get("header_html") or default_entry.get("header_html") or ""),
             "body_template": str(
                 current_entry.get("body_template") or default_entry.get("body_template") or ""
             ),
+            "footer_html": str(current_entry.get("footer_html") or default_entry.get("footer_html") or ""),
         }
     return {
         "action_prompt": data.get("action_prompt", defaults["action_prompt"]),
@@ -3267,10 +3284,14 @@ def _render_contract_html(
     customer: Customer,
     title: str,
     template_key: str,
+    header_html: str,
     body_template: str,
+    footer_html: str,
     placeholders: Dict[str, str],
 ) -> str:
     rendered_body = _render_prompt(body_template or "", placeholders)
+    rendered_header = _render_prompt(header_html or "", placeholders)
+    rendered_footer = _render_prompt(footer_html or "", placeholders)
     customer_address = " ".join(
         [
             str(customer.street or "").strip(),
@@ -3282,6 +3303,7 @@ def _render_contract_html(
     customer_display = escape(str(customer.name or "").strip() or "Kunde")
     return (
         "<div style=\"font-family:Arial,sans-serif; color:#1f2937; line-height:1.55;\">"
+        f"{rendered_header}"
         "<div style=\"display:flex; justify-content:space-between; align-items:flex-start; gap:14px; margin-bottom:18px;\">"
         "<div>"
         f"<div style=\"font-size:10px; letter-spacing:0.2em; text-transform:uppercase; color:#6b7280;\">{escape(template_key.upper())}</div>"
@@ -3304,6 +3326,7 @@ def _render_contract_html(
         "Ort, Datum, Auftragnehmer"
         "</div>"
         "</div>"
+        f"{rendered_footer}"
         "</div>"
     )
 
@@ -4947,6 +4970,86 @@ def _customer_telephony_metrics(phone_numbers: List[str], start_ms: int) -> Dict
         return {"minutes": 0, "missed": 0, "calls": 0}
 
 
+def _customer_last_interaction_ms(
+    db,
+    customer: Customer,
+    phone_numbers: List[str],
+) -> int:
+    last_points: List[int] = []
+
+    task_filters = _customer_task_filter(customer)
+    if task_filters:
+        last_task = (
+            db.query(func.max(DayTask.created_at))
+            .filter(or_(*task_filters))
+            .scalar()
+        )
+        try:
+            task_ms = int(last_task or 0)
+            if task_ms > 0:
+                last_points.append(task_ms)
+        except Exception:
+            pass
+
+    customer_name = str(customer.name or "").strip().lower()
+    report_query = db.query(func.max(Report.created_at))
+    if customer_name:
+        report_query = report_query.filter(
+            or_(
+                Report.customer_id == customer.id,
+                func.lower(func.trim(Report.customer)) == customer_name,
+            )
+        )
+    else:
+        report_query = report_query.filter(Report.customer_id == customer.id)
+    last_report = report_query.scalar()
+    try:
+        report_ms = int(last_report or 0)
+        if report_ms > 0:
+            last_points.append(report_ms)
+    except Exception:
+        pass
+
+    last_delivery = (
+        db.query(func.max(DeliveryNote.created_at))
+        .filter(DeliveryNote.customer_id == customer.id)
+        .scalar()
+    )
+    try:
+        delivery_ms = int(last_delivery or 0)
+        if delivery_ms > 0:
+            last_points.append(delivery_ms)
+    except Exception:
+        pass
+
+    phone_digits: List[str] = []
+    for number in phone_numbers:
+        normalized = _normalize_phone(number)
+        if normalized and normalized not in phone_digits:
+            phone_digits.append(normalized)
+    if phone_digits:
+        conditions = []
+        params: Dict[str, Any] = {}
+        for idx, digits in enumerate(phone_digits):
+            params[f"p{idx}"] = f"%{digits}"
+            conditions.append(
+                f"(regexp_replace(from_number, '\\\\D', '', 'g') LIKE :p{idx} "
+                f"OR regexp_replace(to_number, '\\\\D', '', 'g') LIKE :p{idx})"
+            )
+        where_clause = " OR ".join(conditions)
+        sql = "SELECT COALESCE(MAX(start_time), 0) AS last_call_ms FROM telephony_calls WHERE " + where_clause
+        try:
+            with engine.begin() as connection:
+                row = connection.execute(text(sql), params).mappings().first()
+                call_ms = int((row or {}).get("last_call_ms") or 0)
+                if call_ms > 0:
+                    last_points.append(call_ms)
+        except Exception:
+            pass
+
+    return max(last_points) if last_points else 0
+
+
 def _agent_is_online(agent: Dict[str, Any]) -> bool:
     value = str(
         agent.get("status")
@@ -4981,6 +5084,12 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
     customer_number_key = _normalize_customer_number(customer.creditor_number)
     if customer_number_key:
         number_candidates: Set[str] = set()
+        customer_number_int: Optional[int] = None
+        if customer_number_key.isdigit():
+            try:
+                customer_number_int = int(customer_number_key)
+            except Exception:
+                customer_number_int = None
 
         def _collect_numberish_fields(node: Any) -> None:
             if isinstance(node, dict):
@@ -4989,11 +5098,52 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                     looks_like_customer_number = (
                         ("customer" in key_text and ("number" in key_text or "nr" in key_text or "no" in key_text))
                         or ("client" in key_text and ("number" in key_text or "nr" in key_text or "no" in key_text))
+                        or ("kunden" in key_text and ("nummer" in key_text or "nr" in key_text or "no" in key_text))
+                        or ("kunde" in key_text and ("nummer" in key_text or "nr" in key_text or "no" in key_text))
+                        or "kundennummer" in key_text
                     )
                     if looks_like_customer_number and value is not None:
                         normalized = _normalize_customer_number(value)
                         if normalized:
                             number_candidates.add(normalized)
+                    # TacticalRMM often uses ids in generic keys (client/site/customer),
+                    # not always explicit "*number" field names.
+                    if key_text in {
+                        "client",
+                        "client_id",
+                        "clientid",
+                        "site",
+                        "site_id",
+                        "siteid",
+                        "customer",
+                        "customer_id",
+                        "customerid",
+                    }:
+                        if isinstance(value, (str, int, float)):
+                            normalized = _normalize_customer_number(value)
+                            if normalized:
+                                number_candidates.add(normalized)
+                        elif isinstance(value, dict):
+                            for nested_key in (
+                                "id",
+                                "client_id",
+                                "clientid",
+                                "site_id",
+                                "siteid",
+                                "customer_id",
+                                "customerid",
+                                "number",
+                                "customer_number",
+                                "customernumber",
+                                "kundennummer",
+                                "kunden_nummer",
+                                "kunden_nr",
+                                "kundennr",
+                            ):
+                                nested_value = value.get(nested_key)
+                                normalized = _normalize_customer_number(nested_value)
+                                if normalized:
+                                    number_candidates.add(normalized)
                     _collect_numberish_fields(value)
                 return
             if isinstance(node, list):
@@ -5003,7 +5153,18 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
         _collect_numberish_fields(agent)
         if not number_candidates:
             return False
-        return customer_number_key in number_candidates
+        if customer_number_key in number_candidates:
+            return True
+        # Also allow numeric equivalence for mappings like "0012" vs "12".
+        if customer_number_int is not None:
+            for candidate in number_candidates:
+                if candidate.isdigit():
+                    try:
+                        if int(candidate) == customer_number_int:
+                            return True
+                    except Exception:
+                        continue
+        return False
 
     customer_name_term = _dev_normalize_text(customer.name)
     if not customer_name_term:
@@ -5200,6 +5361,9 @@ def _build_customer_development_context(
 
     phone_numbers = [phone.number for phone in customer.phones]
     telephony = _customer_telephony_metrics(phone_numbers, now_ms - 30 * 24 * 60 * 60 * 1000)
+    last_interaction_ms = _customer_last_interaction_ms(db, customer, phone_numbers)
+    days_since_interaction = int((now_ms - last_interaction_ms) / 86400000) if last_interaction_ms > 0 else None
+    contact_due = bool(days_since_interaction is None or days_since_interaction >= 45)
     comm_load = round(float(telephony["minutes"]) + float(telephony["missed"]) * 5.0, 1)
 
     matched_sevdesk = _match_sevdesk_row(customer, sevdesk_rows)
@@ -5319,6 +5483,20 @@ def _build_customer_development_context(
         recommendations.append(
             {"type": "betreuung", "title": "Offene Aufgaben bündeln", "why": "Mehrere offene Punkte beim Kunden."}
         )
+    if contact_due:
+        business_risk += 8
+        if days_since_interaction is None:
+            inactivity_label = "keine dokumentierte Aktivität"
+        else:
+            inactivity_label = f"letzte Aktivität vor {days_since_interaction} Tagen"
+        signals.append(f"Kontaktfällig ({inactivity_label})")
+        recommendations.append(
+            {
+                "type": "betreuung",
+                "title": "Proaktiven Kundenkontakt einplanen",
+                "why": f"Es besteht seit Längerem geringe Aktivität ({inactivity_label}).",
+            }
+        )
 
     if unmanaged_count > 0:
         infra_risk += 35
@@ -5421,6 +5599,9 @@ def _build_customer_development_context(
         "communicationFrequency": telephony["calls"],
         "communicationLoad": comm_load,
         "missedCalls": telephony["missed"],
+        "lastInteractionAt": last_interaction_ms or 0,
+        "daysSinceInteraction": days_since_interaction,
+        "contactDue": contact_due,
         "infra": {
             "managedAssets": managed_count,
             "discoveredAssets": discovered_base,
@@ -5896,8 +6077,21 @@ def run_customer_development_discovery(customer_id: int, request: Request):
     if not connected:
         raise HTTPException(502, "RMM agent list unavailable")
     matched_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
+    name_only_matches = [agent for agent in tactical_agents if _agent_matches_customer_name_only(agent, customer)]
     if not matched_agents:
-        raise HTTPException(404, "No matching RMM agent for this customer")
+        hint = "Keine zugeordneten RMM-Agenten für diesen Kunden gefunden."
+        if _normalize_customer_number(customer.creditor_number) and name_only_matches:
+            hint = (
+                "Hinweis: Im RMM sind passende Sites/Agenten per Name vorhanden, "
+                "aber ohne Kundennummer im Customfield (z. B. 'Kundennummer'). "
+                "Bitte Kundennummer je Site/Kunde im RMM hinterlegen."
+            )
+        return {
+            "started": False,
+            "hint": hint,
+            "matchedAgents": 0,
+            "nameOnlyCandidates": len(name_only_matches),
+        }
     matched_agents.sort(key=lambda agent: (not _agent_is_online(agent), str(agent.get("hostname") or "")))
     target_agent = matched_agents[0]
     target_agent_id = _extract_agent_id(target_agent)
@@ -8618,8 +8812,10 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         template_key = str(data.doc_type or "vertrag").strip().lower() or "vertrag"
         template_entry = templates.get(template_key) or templates.get("vertrag") or {}
         template_title = str(template_entry.get("title") or "Vertrag")
+        template_header_html = str(template_entry.get("header_html") or "")
         title = str(data.title or "").strip() or template_title
         body_template = str(template_entry.get("body_template") or "").strip()
+        template_footer_html = str(template_entry.get("footer_html") or "")
         if not body_template:
             raise HTTPException(400, "No contract template configured for selected type")
 
@@ -8687,7 +8883,9 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             customer=customer,
             title=title,
             template_key=template_key,
+            header_html=template_header_html,
             body_template=body_template,
+            footer_html=template_footer_html,
             placeholders=placeholder_values,
         )
         safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", title).strip("_") or "vertrag"

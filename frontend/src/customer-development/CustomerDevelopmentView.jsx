@@ -56,6 +56,13 @@ const ratioToPercent = (ratio) => {
   return clampPercent(n <= 1 ? n * 100 : n);
 };
 
+const priorityToScale = (priority) => {
+  const n = Number(priority || 0);
+  if (!Number.isFinite(n)) return 1;
+  const normalized = n <= 10 ? n : n / 10;
+  return Math.max(1, Math.min(10, Math.round(normalized)));
+};
+
 const revenueComparisonPercents = (lastYear, currentYear) => {
   const last = Math.max(0, Number(lastYear || 0));
   const current = Math.max(0, Number(currentYear || 0));
@@ -586,6 +593,15 @@ export default function CustomerDevelopmentView() {
         }
         const plain = textPayload?.trim();
         throw new Error(plain || "Discovery konnte nicht gestartet werden");
+      }
+      if (data && data.started === false) {
+        setDiscoveryProgress(100);
+        setDiscoveryRun({
+          status: "ready",
+          message: String(data?.hint || "Discovery nicht gestartet."),
+          error: "",
+        });
+        return;
       }
       setDiscoveryProgress(100);
       const agentLabel = data?.agentHostname ? ` auf ${String(data.agentHostname)}` : "";
@@ -1474,8 +1490,6 @@ export default function CustomerDevelopmentView() {
                   <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3">Priorität</th>
                   <th className="py-2 pr-3">Umsatztrend</th>
-                  <th className="py-2 pr-3">Infra</th>
-                  <th className="py-2 pr-3">Top-Empfehlung</th>
                   <th className="py-2 pr-3">Action</th>
                 </tr>
               </thead>
@@ -1485,25 +1499,42 @@ export default function CustomerDevelopmentView() {
                     <td className="py-2 pr-3">
                       <div className="font-semibold text-sand-800">{item.customerName || "Unbekannt"}</div>
                       <div className="text-sand-500">{item.customerNumber || "ohne Nr."}</div>
+                      {Boolean(item.contactDue) ? (
+                        <div className="mt-1 inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+                          Kontakt fällig
+                          {typeof item.daysSinceInteraction === "number" ? ` · ${item.daysSinceInteraction} Tage` : ""}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="py-2 pr-3">
                       <span className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${stateBadgeClass(item.developmentState)}`}>
                         {item.developmentState}
                       </span>
                     </td>
-                    <td className="py-2 pr-3 font-metrics">{item.priority}</td>
+                    <td className="py-2 pr-3">
+                      {(() => {
+                        const scale = priorityToScale(item.priority);
+                        return (
+                          <div className="flex items-center gap-2">
+                            <span className="font-metrics text-sand-800 min-w-[20px]">{scale}</span>
+                            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-sand-200">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${scale * 10}%`,
+                                  background: "linear-gradient(90deg, #16a34a 0%, #f59e0b 55%, #dc2626 100%)"
+                                }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td className="py-2 pr-3">
                       <span className={Number(item.revenueTrendPct) < 0 ? "text-rose-600" : "text-emerald-700"}>
                         {formatPct(item.revenueTrendPct)}
                       </span>
                     </td>
-                    <td className="py-2 pr-3">
-                      <div className="flex items-center gap-2">
-                        <Shield size={12} className="text-sand-400" />
-                        {Math.round(ratioToPercent(item.infra?.coverageRatio))}% · {item.infra?.unmanagedCount || 0} unmg.
-                      </div>
-                    </td>
-                    <td className="py-2 pr-3 text-sand-700">{item.topRecommendations?.[0]?.title || "-"}</td>
                     <td className="py-2 pr-3">
                       <button
                         type="button"
@@ -1536,6 +1567,11 @@ export default function CustomerDevelopmentView() {
                     <div key={item.customerId} className="rounded-2xl border border-sand-200 bg-sand-50 p-2">
                       <p className="text-xs font-semibold text-sand-800">{item.customerName}</p>
                       <p className="text-[11px] text-sand-500">Prio {item.priority}</p>
+                      {Boolean(item.contactDue) ? (
+                        <p className="mt-1 text-[10px] uppercase tracking-wide text-amber-700">
+                          Kontakt fällig{typeof item.daysSinceInteraction === "number" ? ` · ${item.daysSinceInteraction} Tage` : ""}
+                        </p>
+                      ) : null}
                       <div className="mt-1 text-[11px] text-sand-600">{item.topRecommendations?.[0]?.title || "-"}</div>
                       <button
                         type="button"

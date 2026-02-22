@@ -108,6 +108,42 @@ const loadCachedSmtp = () => {
   }
 };
 
+const defaultContractTemplates = {
+  vertrag: { title: "IT-Servicevertrag", body_template: "", header_html: "", footer_html: "" },
+  wartung: { title: "Wartungsvertrag", body_template: "", header_html: "", footer_html: "" },
+  monitoring: { title: "Monitoringvertrag", body_template: "", header_html: "", footer_html: "" },
+  avv_dsgvo: { title: "Auftragsverarbeitungsvertrag (DSGVO)", body_template: "", header_html: "", footer_html: "" },
+  sonstiges: { title: "Zusatzvereinbarung", body_template: "", header_html: "", footer_html: "" }
+};
+
+const normalizeContractTemplates = (input) => {
+  const merged = { ...defaultContractTemplates };
+  if (input && typeof input === "object") {
+    Object.entries(input).forEach(([key, value]) => {
+      if (!key) return;
+      const row = value && typeof value === "object" ? value : {};
+      merged[key] = {
+        title: String(row.title || merged[key]?.title || "").trim(),
+        body_template: String(row.body_template || ""),
+        header_html: String(row.header_html || ""),
+        footer_html: String(row.footer_html || "")
+      };
+    });
+  }
+  return merged;
+};
+
+const formatEurPrecise = (value) => {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "€ 0,00";
+  return number.toLocaleString("de-DE", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+};
+
 
 export default function SettingsView() {
   const [smtp, setSmtp] = useState(loadCachedSmtp);
@@ -233,6 +269,7 @@ export default function SettingsView() {
   const [smtpOpen, setSmtpOpen] = useState(false);
   const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
   const [contractTemplatesOpen, setContractTemplatesOpen] = useState(false);
+  const [contractTariffsOpen, setContractTariffsOpen] = useState(false);
   const [apiTestOpen, setApiTestOpen] = useState(false);
   const [apiTestPath, setApiTestPath] = useState("/api/telephony/calls");
   const [apiTestStatus, setApiTestStatus] = useState("idle");
@@ -255,14 +292,24 @@ export default function SettingsView() {
       position_text: "",
       device_description: ""
     },
-    contract_templates: {
-      vertrag: { title: "", body_template: "" },
-      wartung: { title: "", body_template: "" },
-      monitoring: { title: "", body_template: "" },
-      avv_dsgvo: { title: "", body_template: "" },
-      sonstiges: { title: "", body_template: "" }
-    }
+    contract_templates: normalizeContractTemplates(null)
   });
+  const [contractTemplateDraft, setContractTemplateDraft] = useState({ key: "", title: "" });
+  const [contractTariffs, setContractTariffs] = useState([]);
+  const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
+  const [tariffDraft, setTariffDraft] = useState({
+    name: "",
+    category: "wartung",
+    base_price_monthly: "",
+    price_server_monthly: "",
+    price_client_monthly: "",
+    price_network_monthly: "",
+    price_iot_monthly: "",
+    notes: ""
+  });
+  const [tariffDraftMode, setTariffDraftMode] = useState("create");
+  const [tariffSourceId, setTariffSourceId] = useState(null);
+  const [tariffSaveStatus, setTariffSaveStatus] = useState("idle");
   const [aiPromptsStatus, setAiPromptsStatus] = useState("idle");
   const [contractTemplatesStatus, setContractTemplatesStatus] = useState("idle");
   const [aiPromptsLoadStatus, setAiPromptsLoadStatus] = useState("loading");
@@ -452,6 +499,24 @@ export default function SettingsView() {
   }, [marketplaceOpen]);
 
   useEffect(() => {
+    if (!contractTariffsOpen) return;
+    setContractTariffsStatus("loading");
+    fetch(`${API}/contract_tariffs?active_only=0`)
+      .then((res) => {
+        if (!res.ok) throw new Error("load_failed");
+        return res.json();
+      })
+      .then((data) => {
+        setContractTariffs(Array.isArray(data) ? data : []);
+        setContractTariffsStatus("ready");
+      })
+      .catch(() => {
+        setContractTariffs([]);
+        setContractTariffsStatus("error");
+      });
+  }, [contractTariffsOpen]);
+
+  useEffect(() => {
     let active = true;
     fetch(`${API}/debug/tables`)
       .then((res) => {
@@ -490,28 +555,7 @@ export default function SettingsView() {
             position_text: data?.offer_mode_instructions?.position_text || "",
             device_description: data?.offer_mode_instructions?.device_description || ""
           },
-          contract_templates: {
-            vertrag: {
-              title: data?.contract_templates?.vertrag?.title || "",
-              body_template: data?.contract_templates?.vertrag?.body_template || ""
-            },
-            wartung: {
-              title: data?.contract_templates?.wartung?.title || "",
-              body_template: data?.contract_templates?.wartung?.body_template || ""
-            },
-            monitoring: {
-              title: data?.contract_templates?.monitoring?.title || "",
-              body_template: data?.contract_templates?.monitoring?.body_template || ""
-            },
-            avv_dsgvo: {
-              title: data?.contract_templates?.avv_dsgvo?.title || "",
-              body_template: data?.contract_templates?.avv_dsgvo?.body_template || ""
-            },
-            sonstiges: {
-              title: data?.contract_templates?.sonstiges?.title || "",
-              body_template: data?.contract_templates?.sonstiges?.body_template || ""
-            }
-          }
+          contract_templates: normalizeContractTemplates(data?.contract_templates)
         });
         setAiPromptsLoadStatus("ready");
       })
@@ -658,28 +702,7 @@ export default function SettingsView() {
           position_text: data?.offer_mode_instructions?.position_text || "",
           device_description: data?.offer_mode_instructions?.device_description || ""
         },
-        contract_templates: {
-          vertrag: {
-            title: data?.contract_templates?.vertrag?.title || "",
-            body_template: data?.contract_templates?.vertrag?.body_template || ""
-          },
-          wartung: {
-            title: data?.contract_templates?.wartung?.title || "",
-            body_template: data?.contract_templates?.wartung?.body_template || ""
-          },
-          monitoring: {
-            title: data?.contract_templates?.monitoring?.title || "",
-            body_template: data?.contract_templates?.monitoring?.body_template || ""
-          },
-          avv_dsgvo: {
-            title: data?.contract_templates?.avv_dsgvo?.title || "",
-            body_template: data?.contract_templates?.avv_dsgvo?.body_template || ""
-          },
-          sonstiges: {
-            title: data?.contract_templates?.sonstiges?.title || "",
-            body_template: data?.contract_templates?.sonstiges?.body_template || ""
-          }
-        }
+        contract_templates: normalizeContractTemplates(data?.contract_templates)
       });
       setAiPromptsStatus("saved");
     } catch (error) {
@@ -702,34 +725,129 @@ export default function SettingsView() {
       const data = await res.json();
       setAiPrompts((prev) => ({
         ...prev,
-        contract_templates: {
-          vertrag: {
-            title: data?.contract_templates?.vertrag?.title || "",
-            body_template: data?.contract_templates?.vertrag?.body_template || ""
-          },
-          wartung: {
-            title: data?.contract_templates?.wartung?.title || "",
-            body_template: data?.contract_templates?.wartung?.body_template || ""
-          },
-          monitoring: {
-            title: data?.contract_templates?.monitoring?.title || "",
-            body_template: data?.contract_templates?.monitoring?.body_template || ""
-          },
-          avv_dsgvo: {
-            title: data?.contract_templates?.avv_dsgvo?.title || "",
-            body_template: data?.contract_templates?.avv_dsgvo?.body_template || ""
-          },
-          sonstiges: {
-            title: data?.contract_templates?.sonstiges?.title || "",
-            body_template: data?.contract_templates?.sonstiges?.body_template || ""
-          }
-        }
+        contract_templates: normalizeContractTemplates(data?.contract_templates)
       }));
       setContractTemplatesStatus("saved");
     } catch (error) {
       setContractTemplatesStatus("error");
     }
     setTimeout(() => setContractTemplatesStatus("idle"), 2000);
+  };
+
+  const addContractTemplate = () => {
+    const rawKey = String(contractTemplateDraft.key || "").trim().toLowerCase();
+    const key = rawKey.replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+    if (!key) return;
+    setAiPrompts((prev) => {
+      if (prev.contract_templates?.[key]) return prev;
+      return {
+        ...prev,
+        contract_templates: {
+          ...(prev.contract_templates || {}),
+          [key]: {
+            title: String(contractTemplateDraft.title || key).trim(),
+            body_template: "",
+            header_html: "",
+            footer_html: ""
+          }
+        }
+      };
+    });
+    setContractTemplateDraft({ key: "", title: "" });
+  };
+
+  const removeContractTemplate = (key) => {
+    setAiPrompts((prev) => {
+      const next = { ...(prev.contract_templates || {}) };
+      delete next[key];
+      return { ...prev, contract_templates: next };
+    });
+  };
+
+  const resetTariffDraft = () => {
+    setTariffDraft({
+      name: "",
+      category: "wartung",
+      base_price_monthly: "",
+      price_server_monthly: "",
+      price_client_monthly: "",
+      price_network_monthly: "",
+      price_iot_monthly: "",
+      notes: ""
+    });
+    setTariffDraftMode("create");
+    setTariffSourceId(null);
+  };
+
+  const startTariffVersion = (tariff) => {
+    if (!tariff) return;
+    setTariffDraft({
+      name: String(tariff.name || ""),
+      category: String(tariff.category || "wartung"),
+      base_price_monthly: String(tariff.base_price_monthly ?? ""),
+      price_server_monthly: String(tariff.price_server_monthly ?? ""),
+      price_client_monthly: String(tariff.price_client_monthly ?? ""),
+      price_network_monthly: String(tariff.price_network_monthly ?? ""),
+      price_iot_monthly: String(tariff.price_iot_monthly ?? ""),
+      notes: String(tariff.notes || "")
+    });
+    setTariffDraftMode("version");
+    setTariffSourceId(Number(tariff.id));
+  };
+
+  const refreshTariffs = async () => {
+    const res = await fetch(`${API}/contract_tariffs?active_only=0`);
+    if (!res.ok) throw new Error("load_failed");
+    const data = await res.json();
+    setContractTariffs(Array.isArray(data) ? data : []);
+  };
+
+  const saveTariffDraft = async () => {
+    const name = String(tariffDraft.name || "").trim();
+    if (!name) {
+      setTariffSaveStatus("error");
+      setTimeout(() => setTariffSaveStatus("idle"), 1800);
+      return;
+    }
+    setTariffSaveStatus("saving");
+    try {
+      const payload = {
+        name,
+        category: String(tariffDraft.category || "wartung"),
+        base_price_monthly: Number(tariffDraft.base_price_monthly || 0),
+        price_server_monthly: Number(tariffDraft.price_server_monthly || 0),
+        price_client_monthly: Number(tariffDraft.price_client_monthly || 0),
+        price_network_monthly: Number(tariffDraft.price_network_monthly || 0),
+        price_iot_monthly: Number(tariffDraft.price_iot_monthly || 0),
+        notes: String(tariffDraft.notes || "")
+      };
+      const endpoint =
+        tariffDraftMode === "version" && tariffSourceId
+          ? `${API}/contract_tariffs/${tariffSourceId}/new_version`
+          : `${API}/contract_tariffs`;
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error("save_failed");
+      await refreshTariffs();
+      resetTariffDraft();
+      setTariffSaveStatus("saved");
+    } catch {
+      setTariffSaveStatus("error");
+    }
+    setTimeout(() => setTariffSaveStatus("idle"), 1800);
+  };
+
+  const deactivateTariff = async (tariffId) => {
+    try {
+      const res = await fetch(`${API}/contract_tariffs/${tariffId}/deactivate`, { method: "POST" });
+      if (!res.ok) throw new Error("deactivate_failed");
+      await refreshTariffs();
+    } catch {
+      // ignore for now
+    }
   };
 
 
@@ -1572,19 +1690,48 @@ export default function SettingsView() {
                 <p className="text-[11px] text-sand-500">
                   Platzhalter z. B.: {"{customer_name}"}, {"{monthly_total}"}, {"{yearly_total}"}, {"{valid_from}"}, {"{runtime_months}"}
                 </p>
+                <div className="mt-3 grid grid-cols-1 gap-2 rounded-xl border border-sand-200 bg-white p-3 md:grid-cols-[1fr_1fr_auto]">
+                  <input
+                    value={contractTemplateDraft.key}
+                    onChange={(event) =>
+                      setContractTemplateDraft((prev) => ({ ...prev, key: event.target.value }))
+                    }
+                    placeholder="Template-Key (z. B. angebot_wartung)"
+                    className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                  />
+                  <input
+                    value={contractTemplateDraft.title}
+                    onChange={(event) =>
+                      setContractTemplateDraft((prev) => ({ ...prev, title: event.target.value }))
+                    }
+                    placeholder="Titel"
+                    className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                  />
+                  <button
+                    type="button"
+                    onClick={addContractTemplate}
+                    className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                  >
+                    Erstellen
+                  </button>
+                </div>
                 <div className="mt-3 grid grid-cols-1 gap-4">
-                  {[
-                    ["vertrag", "Standardvertrag"],
-                    ["wartung", "Wartungsvertrag"],
-                    ["monitoring", "Monitoringvertrag"],
-                    ["avv_dsgvo", "AVV DSGVO"],
-                    ["sonstiges", "Sonstiges"]
-                  ].map(([key, label]) => (
+                  {Object.entries(aiPrompts.contract_templates || {}).map(([key, template]) => (
                     <div key={key} className="rounded-xl border border-sand-200 bg-white p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-[11px] uppercase tracking-wide text-sand-500">{key}</p>
+                        <button
+                          type="button"
+                          onClick={() => removeContractTemplate(key)}
+                          className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                        >
+                          Löschen
+                        </button>
+                      </div>
                       <label className="block text-xs text-sand-500">
-                        {label} · Titel
+                        Titel
                         <input
-                          value={aiPrompts.contract_templates?.[key]?.title || ""}
+                          value={template?.title || ""}
                           onChange={(event) =>
                             setAiPrompts((prev) => ({
                               ...prev,
@@ -1601,9 +1748,29 @@ export default function SettingsView() {
                         />
                       </label>
                       <label className="mt-2 block text-xs text-sand-500">
+                        Header HTML
+                        <textarea
+                          value={template?.header_html || ""}
+                          onChange={(event) =>
+                            setAiPrompts((prev) => ({
+                              ...prev,
+                              contract_templates: {
+                                ...prev.contract_templates,
+                                [key]: {
+                                  ...(prev.contract_templates?.[key] || {}),
+                                  header_html: event.target.value
+                                }
+                              }
+                            }))
+                          }
+                          rows={3}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                        />
+                      </label>
+                      <label className="mt-2 block text-xs text-sand-500">
                         HTML-Body
                         <textarea
-                          value={aiPrompts.contract_templates?.[key]?.body_template || ""}
+                          value={template?.body_template || ""}
                           onChange={(event) =>
                             setAiPrompts((prev) => ({
                               ...prev,
@@ -1617,6 +1784,26 @@ export default function SettingsView() {
                             }))
                           }
                           rows={6}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                        />
+                      </label>
+                      <label className="mt-2 block text-xs text-sand-500">
+                        Footer HTML
+                        <textarea
+                          value={template?.footer_html || ""}
+                          onChange={(event) =>
+                            setAiPrompts((prev) => ({
+                              ...prev,
+                              contract_templates: {
+                                ...prev.contract_templates,
+                                [key]: {
+                                  ...(prev.contract_templates?.[key] || {}),
+                                  footer_html: event.target.value
+                                }
+                              }
+                            }))
+                          }
+                          rows={3}
                           className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
                         />
                       </label>
@@ -1640,6 +1827,158 @@ export default function SettingsView() {
                 {contractTemplatesStatus === "error" && (
                   <span className="text-rose-600">Speichern fehlgeschlagen</span>
                 )}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setContractTariffsOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Tarifpflege Verträge</p>
+            </div>
+            <span className="text-sm text-sand-500">{contractTariffsOpen ? "–" : "+"}</span>
+          </button>
+          {contractTariffsOpen ? (
+            <>
+              <p className="mt-2 text-sm text-sand-600">
+                Tarife für Wartung/Monitoring zentral verwalten. Änderungen als neue Version bleiben historisch sauber.
+              </p>
+              <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <div className="grid gap-2 md:grid-cols-4">
+                  <label className="block md:col-span-2">
+                    <span className="text-[10px] uppercase tracking-wide text-sand-500">Name</span>
+                    <input
+                      value={tariffDraft.name}
+                      onChange={(event) => setTariffDraft((prev) => ({ ...prev, name: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      placeholder="z. B. Wartung Pro"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] uppercase tracking-wide text-sand-500">Kategorie</span>
+                    <select
+                      value={tariffDraft.category}
+                      onChange={(event) => setTariffDraft((prev) => ({ ...prev, category: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    >
+                      <option value="wartung">Wartung</option>
+                      <option value="monitoring">Monitoring</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] uppercase tracking-wide text-sand-500">Grundpreis/Monat</span>
+                    <input
+                      value={tariffDraft.base_price_monthly}
+                      onChange={(event) => setTariffDraft((prev) => ({ ...prev, base_price_monthly: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] uppercase tracking-wide text-sand-500">Server/Monat</span>
+                    <input
+                      value={tariffDraft.price_server_monthly}
+                      onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_server_monthly: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] uppercase tracking-wide text-sand-500">Client/Monat</span>
+                    <input
+                      value={tariffDraft.price_client_monthly}
+                      onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_client_monthly: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] uppercase tracking-wide text-sand-500">Netzwerkgerät/Monat</span>
+                    <input
+                      value={tariffDraft.price_network_monthly}
+                      onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_network_monthly: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] uppercase tracking-wide text-sand-500">IoT/Monat</span>
+                    <input
+                      value={tariffDraft.price_iot_monthly}
+                      onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_iot_monthly: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="block md:col-span-4">
+                    <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
+                    <input
+                      value={tariffDraft.notes}
+                      onChange={(event) => setTariffDraft((prev) => ({ ...prev, notes: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    />
+                  </label>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={saveTariffDraft}
+                    className="rounded-full border border-sand-200 bg-sand-900 px-3 py-2 uppercase tracking-wide text-white hover:opacity-90"
+                  >
+                    {tariffDraftMode === "version" ? "Neue Version speichern" : "Tarif anlegen"}
+                  </button>
+                  {tariffDraftMode === "version" ? (
+                    <button
+                      type="button"
+                      onClick={resetTariffDraft}
+                      className="rounded-full border border-sand-300 px-3 py-2 uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      Abbrechen
+                    </button>
+                  ) : null}
+                  {tariffSaveStatus === "saved" ? <span className="text-emerald-600">Gespeichert</span> : null}
+                  {tariffSaveStatus === "error" ? <span className="text-rose-600">Speichern fehlgeschlagen</span> : null}
+                  {contractTariffsStatus === "error" ? <span className="text-rose-600">Tarife konnten nicht geladen werden</span> : null}
+                </div>
+                <div className="mt-3 space-y-2 max-h-64 overflow-auto pr-1">
+                  {(contractTariffs || []).map((tariff) => (
+                    <div key={tariff.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-semibold text-sand-800">
+                          {tariff.name} · {String(tariff.category || "").toUpperCase()} · v{tariff.version}
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${tariff.is_active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-sand-200 bg-sand-100 text-sand-600"}`}>
+                            {tariff.is_active ? "Aktiv" : "Archiv"}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => startTariffVersion(tariff)}
+                            className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                          >
+                            Neue Version
+                          </button>
+                          {tariff.is_active ? (
+                            <button
+                              type="button"
+                              onClick={() => deactivateTariff(tariff.id)}
+                              className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                            >
+                              Deaktivieren
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                      <p className="mt-1 text-[11px] text-sand-600">
+                        Grundpreis {formatEurPrecise(tariff.base_price_monthly)} · Server {formatEurPrecise(tariff.price_server_monthly)} · Client {formatEurPrecise(tariff.price_client_monthly)} · Netzwerk {formatEurPrecise(tariff.price_network_monthly)} · IoT {formatEurPrecise(tariff.price_iot_monthly)}
+                      </p>
+                    </div>
+                  ))}
+                  {!contractTariffs.length && contractTariffsStatus !== "loading" ? (
+                    <p className="text-xs text-sand-500">Noch keine Tarife vorhanden.</p>
+                  ) : null}
+                </div>
               </div>
             </>
           ) : null}

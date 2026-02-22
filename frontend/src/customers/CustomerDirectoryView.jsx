@@ -2046,8 +2046,8 @@ export default function CustomerDirectoryView() {
         </div>
       ) : null}
       {editCustomer ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
-          <div className="w-full max-w-6xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-3 py-3 md:px-4 md:py-6">
+          <div className="h-[94vh] w-[96vw] max-w-[1440px] rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
             <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kunde bearbeiten</p>
@@ -2065,31 +2065,44 @@ export default function CustomerDirectoryView() {
                 <button
                   type="button"
                   onClick={() => setSettingsTab("details")}
-                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                    settingsTab === "details"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white hover:bg-sand-100"
+                  }`}
                 >
-                  Kundenansicht
+                  Details
                 </button>
                 <button
                   type="button"
                   onClick={() => setSettingsTab("settings")}
-                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                    settingsTab === "settings"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white hover:bg-sand-100"
+                  }`}
                 >
                   Kennzahlenbasis
                 </button>
                 <button
                   type="button"
                   onClick={() => setSettingsTab("development")}
-                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                    settingsTab === "development"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white hover:bg-sand-100"
+                  }`}
                 >
                   Kundenentwicklung
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setSettingsTab("details");
-                    setEditCustomerId(null);
-                  }}
-                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                  onClick={() => setSettingsTab("contracts")}
+                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                    settingsTab === "contracts"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white hover:bg-sand-100"
+                  }`}
                 >
                   Verträge
                 </button>
@@ -2112,7 +2125,7 @@ export default function CustomerDirectoryView() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[88vh] overflow-y-auto p-6 bg-sand-50">
+            <div className="h-[calc(94vh-132px)] overflow-y-auto p-6 bg-sand-50">
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="block">
                   <span className="text-xs uppercase tracking-wide text-sand-500">Name</span>
@@ -2232,7 +2245,239 @@ export default function CustomerDirectoryView() {
                     className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
                   />
                 </label>
+                <label className="block">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">Land</span>
+                  <input
+                    value={editCustomer.country}
+                    onChange={(event) => updateCustomer(editCustomer.id, { country: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                  />
+                </label>
               </div>
+              <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Rufnummern</p>
+                  <button
+                    type="button"
+                    onClick={addPhone}
+                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <Plus size={11} /> Neu
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {editCustomer.phones?.map((phone) => (
+                    <div
+                      key={phone.id}
+                      className="grid items-center gap-2 md:grid-cols-[minmax(0,180px)_minmax(0,240px)_auto_auto_auto]"
+                    >
+                      <input
+                        value={phone.label}
+                        onChange={(event) => updatePhone(phone.id, { label: event.target.value })}
+                        placeholder="z. B. Arbeit"
+                        className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                      <input
+                        value={phone.number}
+                        onChange={(event) => updatePhone(phone.id, { number: event.target.value })}
+                        placeholder="+49 40 123456"
+                        className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                      {pbxMatches.has(normalizeDigits(phone.number)) ? null : (
+                        <button
+                          type="button"
+                          onClick={() => addPhoneToPbx(phone)}
+                          disabled={!pbxApiActive}
+                          className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs text-sand-600 ${
+                            pbxApiActive
+                              ? "border-sand-200 bg-white hover:bg-sand-100"
+                              : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
+                          }`}
+                          title="Ins Anlagen-Telefonbuch übernehmen"
+                        >
+                          <BookPlus size={12} />
+                        </button>
+                      )}
+                      {String(phone.number || "").trim() ? (
+                        <button
+                          type="button"
+                          onClick={() => openClickToDial(phone)}
+                          disabled={!isC2DReady}
+                          className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs ${
+                            isC2DReady
+                              ? "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                              : "border-sand-200 bg-sand-100 text-sand-400 opacity-60 cursor-not-allowed"
+                          }`}
+                          title={
+                            !telephonyHealthy
+                              ? "Telefonie-API nicht erreichbar"
+                              : !extensions.length
+                              ? "Keine Nebenstelle verfügbar"
+                              : "Click-to-dial starten"
+                          }
+                        >
+                          <PhoneOutgoing size={12} />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => removePhone(phone.id)}
+                        className="inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs text-rose-700 hover:bg-rose-100"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {settingsTab === "settings" ? (
+                <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block md:col-span-2">
+                      <span className="text-xs uppercase tracking-wide text-sand-500">Firmenstandort</span>
+                      <input
+                        value={metricsSettings.office_address}
+                        onChange={(event) =>
+                          setMetricsSettings((prev) => ({
+                            ...prev,
+                            office_address: event.target.value
+                          }))
+                        }
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs uppercase tracking-wide text-sand-500">Kilometergeld (EUR/km)</span>
+                      <input
+                        value={metricsSettings.km_rate_eur}
+                        onChange={(event) =>
+                          setMetricsSettings((prev) => ({
+                            ...prev,
+                            km_rate_eur: event.target.value
+                          }))
+                        }
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs uppercase tracking-wide text-sand-500">Stundensatz (EUR)</span>
+                      <input
+                        value={metricsSettings.hourly_rate_eur}
+                        onChange={(event) =>
+                          setMetricsSettings((prev) => ({
+                            ...prev,
+                            hourly_rate_eur: event.target.value
+                          }))
+                        }
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setMetricsSettingsStatus("saving");
+                        try {
+                          const saved = await api.saveMetricsSettings(metricsSettings);
+                          setMetricsSettings(saved);
+                          setMetricsSettingsStatus("saved");
+                        } catch {
+                          setMetricsSettingsStatus("error");
+                        }
+                        setTimeout(() => setMetricsSettingsStatus("idle"), 2000);
+                      }}
+                      className="rounded-full border border-sand-200 bg-sand-900 text-white px-3 py-1 text-xs uppercase tracking-wide"
+                    >
+                      Kennzahlen speichern
+                    </button>
+                    {metricsSettingsStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
+                    {metricsSettingsStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
+                  </div>
+                </div>
+              ) : null}
+              {settingsTab === "development" ? (
+                <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
+                  <CustomerDevelopmentCustomerTab
+                    customerId={editCustomer.id}
+                    customerName={editCustomer.name || ""}
+                    customerNumber={editCustomer.creditorNumber || ""}
+                  />
+                </div>
+              ) : null}
+              {settingsTab === "contracts" ? (
+                <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setContractCalcModalOpen(true);
+                        setEditCustomerId(null);
+                      }}
+                      className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      Vertragskalkulation öffnen
+                    </button>
+                  </div>
+                  <div className="space-y-2 max-h-64 overflow-auto pr-1">
+                    {(customerContracts || []).map((item) => (
+                      <div key={item.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold text-sand-800">{item.title || "Vertrag"}</p>
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                              String(item.status || "active") === "cancelled"
+                                ? "border-rose-200 bg-rose-50 text-rose-700"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            }`}
+                          >
+                            {String(item.status || "active") === "cancelled" ? "Storniert" : "Aktiv"}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                          >
+                            <FileDown size={11} /> PDF
+                          </button>
+                          {String(item.status || "active") === "cancelled" ? (
+                            <button
+                              type="button"
+                              onClick={() => reactivateContractDocument(item.id)}
+                              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                            >
+                              Reaktivieren
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => cancelContractDocument(item.id)}
+                              className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                            >
+                              Stornieren
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => deleteContractDocument(item.id)}
+                            className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                          >
+                            <Trash2 size={11} /> Löschen
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
+                    {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
+                    {!customerContracts.length && contractsStatus !== "loading" ? (
+                      <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -2367,18 +2612,14 @@ export default function CustomerDirectoryView() {
                   <th className="px-3 py-2 text-right">Aktion</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-sand-200/70">
                 {sortedCustomers.length ? (
-                  sortedCustomers.map((customer, idx) => (
+                  sortedCustomers.map((customer) => (
                     <tr
                       key={customer.id}
-                      className={`${
-                        customer.id === activeId
-                          ? "bg-sand-100"
-                          : idx % 2 === 0
-                          ? "bg-white"
-                          : "bg-sand-50/70"
-                      } hover:bg-sand-100/80`}
+                      className={`odd:bg-white even:bg-sand-50/80 ${
+                        customer.id === activeId ? "!bg-sand-100" : ""
+                      } hover:!bg-sand-100/80`}
                       onClick={() => setActiveId(customer.id)}
                     >
                       <td className="px-3 py-2 align-top">
@@ -2457,6 +2698,7 @@ export default function CustomerDirectoryView() {
                           onClick={(event) => {
                             event.stopPropagation();
                             setActiveId(customer.id);
+                            setSettingsTab("details");
                             setEditCustomerId(customer.id);
                           }}
                           className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
