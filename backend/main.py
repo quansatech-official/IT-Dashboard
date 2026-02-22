@@ -4361,6 +4361,14 @@ def _dev_customer_match_terms(customer: Customer) -> List[str]:
     terms = []
     for value in [customer.name, customer.creditor_number, customer.short_code]:
         normalized = _dev_normalize_text(value)
+        if not normalized:
+            continue
+        compact = normalized.replace(" ", "")
+        # Avoid overly broad matches such as tiny numeric short codes ("12").
+        if compact.isdigit() and len(compact) < 4:
+            continue
+        if len(compact) < 4:
+            continue
         if normalized:
             terms.append(normalized)
     return terms
@@ -4970,18 +4978,50 @@ def _agent_field_text(agent: Dict[str, Any], *keys: str) -> str:
 
 
 def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
-    terms = _dev_customer_match_terms(customer)
-    if not terms:
+    customer_number_key = _normalize_customer_number(customer.creditor_number)
+    if customer_number_key:
+        number_candidates: Set[str] = set()
+
+        def _collect_numberish_fields(node: Any) -> None:
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    key_text = str(key or "").strip().lower()
+                    looks_like_customer_number = (
+                        ("customer" in key_text and ("number" in key_text or "nr" in key_text or "no" in key_text))
+                        or ("client" in key_text and ("number" in key_text or "nr" in key_text or "no" in key_text))
+                    )
+                    if looks_like_customer_number and value is not None:
+                        normalized = _normalize_customer_number(value)
+                        if normalized:
+                            number_candidates.add(normalized)
+                    _collect_numberish_fields(value)
+                return
+            if isinstance(node, list):
+                for item in node:
+                    _collect_numberish_fields(item)
+
+        _collect_numberish_fields(agent)
+        if not number_candidates:
+            return False
+        return customer_number_key in number_candidates
+
+    customer_name_term = _dev_normalize_text(customer.name)
+    if not customer_name_term:
         return False
-    searchable = " ".join(
-        [
-            _agent_field_text(agent, "site", "site_name"),
-            _agent_field_text(agent, "client", "client_name", "customer"),
-            _agent_field_text(agent, "hostname", "name"),
-        ]
-    )
+    searchable = " ".join([_agent_field_text(agent, "site", "site_name"), _agent_field_text(agent, "client", "client_name", "customer")])
     haystack = _dev_normalize_text(searchable)
-    return any(term and term in haystack for term in terms)
+    padded = f" {haystack} "
+    return f" {customer_name_term} " in padded
+
+
+def _agent_matches_customer_name_only(agent: Dict[str, Any], customer: Customer) -> bool:
+    customer_name_term = _dev_normalize_text(customer.name)
+    if not customer_name_term:
+        return False
+    searchable = " ".join([_agent_field_text(agent, "site", "site_name"), _agent_field_text(agent, "client", "client_name", "customer")])
+    haystack = _dev_normalize_text(searchable)
+    padded = f" {haystack} "
+    return f" {customer_name_term} " in padded
 
 
 def _collect_int_values_by_key_fragments(
@@ -5197,6 +5237,7 @@ def _build_customer_development_context(
     discovered_unmanaged = sum(1 for row in customer_discovery_rows if not bool(row.managed))
 
     managed_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
+    name_only_matches = [agent for agent in tactical_agents if _agent_matches_customer_name_only(agent, customer)]
     if full and managed_agents:
         managed_agent_ids = [_extract_agent_id(agent) for agent in managed_agents if _extract_agent_id(agent)]
         if managed_agent_ids:
@@ -5352,6 +5393,15 @@ def _build_customer_development_context(
         )
 
     total_risk = min(100, business_risk + infra_risk)
+    mapping_hint = ""
+    if managed_count == 0:
+        if _normalize_customer_number(customer.creditor_number) and name_only_matches:
+            mapping_hint = (
+                "RMM-Agenten gefunden, aber ohne passende Kundennummer-Zuordnung. "
+                "Bitte Kundennummer im RMM (Client/Site/Agent-Felder) hinterlegen."
+            )
+        else:
+            mapping_hint = "Keine zugeordneten RMM-Agenten für diesen Kunden gefunden."
     development_state = "INACTIVE" if (customer.status or "active").lower() == "inactive" else _dev_score_to_state(total_risk)
     priority_score = round(total_risk + min(20.0, revenue_current_year / 10000.0), 1)
     top_recommendations = recommendations[:3]
@@ -5385,6 +5435,8 @@ def _build_customer_development_context(
             "openCves": total_open_cves,
             "osExpiredCount": lifecycle_expired,
             "osEolSoonCount": lifecycle_soon,
+            "rmmMappingHint": mapping_hint,
+            "nameOnlyCandidateCount": len(name_only_matches),
         },
         "businessRisk": business_risk,
         "infrastructureRisk": infra_risk,
@@ -5729,6 +5781,7 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
         integration = db.query(IntegrationSettings).first()
         tactical_agents, tactical_connected = _fetch_tactical_rmm_agents(integration)
         matched_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
+        name_only_matches = [agent for agent in tactical_agents if _agent_matches_customer_name_only(agent, customer)]
         agent_ids = [_extract_agent_id(agent) for agent in matched_agents if _extract_agent_id(agent)]
         if agent_ids:
             detail_map = _fetch_tactical_rmm_agent_detail_map(integration, agent_ids)
@@ -5812,6 +5865,12 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
         "customerId": customer_id,
         "scannedSoftware": scanned,
         "matchedAgents": len(agent_ids),
+        "nameOnlyCandidates": len(name_only_matches),
+        "mappingHint": (
+            "RMM-Agenten via Name gefunden, aber ohne Kundennummer-Zuordnung im RMM."
+            if len(agent_ids) == 0 and _normalize_customer_number(customer.creditor_number) and len(name_only_matches) > 0
+            else ""
+        ),
         "rmmConnected": bool(tactical_connected),
         "agents": agents_payload,
         "generatedAt": now_ms,

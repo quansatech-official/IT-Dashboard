@@ -159,6 +159,8 @@ export default function CustomerDevelopmentView() {
     status: "idle",
     scannedSoftware: 0,
     matchedAgents: 0,
+    nameOnlyCandidates: 0,
+    mappingHint: "",
     agents: [],
     fromCache: false,
     error: ""
@@ -458,6 +460,8 @@ export default function CustomerDevelopmentView() {
       status: "idle",
       scannedSoftware: 0,
       matchedAgents: 0,
+      nameOnlyCandidates: 0,
+      mappingHint: "",
       agents: [],
       fromCache: false,
       error: ""
@@ -487,6 +491,8 @@ export default function CustomerDevelopmentView() {
       status: "idle",
       scannedSoftware: 0,
       matchedAgents: 0,
+      nameOnlyCandidates: 0,
+      mappingHint: "",
       agents: [],
       fromCache: false,
       error: ""
@@ -509,6 +515,8 @@ export default function CustomerDevelopmentView() {
       status: "loading",
       scannedSoftware: 0,
       matchedAgents: 0,
+      nameOnlyCandidates: 0,
+      mappingHint: "",
       agents: [],
       fromCache: false,
       error: ""
@@ -528,6 +536,8 @@ export default function CustomerDevelopmentView() {
         status: "ready",
         scannedSoftware: Number(data?.scannedSoftware || 0),
         matchedAgents: Number(data?.matchedAgents || 0),
+        nameOnlyCandidates: Number(data?.nameOnlyCandidates || 0),
+        mappingHint: String(data?.mappingHint || ""),
         agents: Array.isArray(data?.agents) ? data.agents : [],
         fromCache: Boolean(data?.fromCache),
         error: ""
@@ -538,6 +548,8 @@ export default function CustomerDevelopmentView() {
         status: "error",
         scannedSoftware: 0,
         matchedAgents: 0,
+        nameOnlyCandidates: 0,
+        mappingHint: "",
         agents: [],
         fromCache: false,
         error:
@@ -967,16 +979,57 @@ export default function CustomerDevelopmentView() {
                           </p>
                         </div>
                       </div>
+                      {detailData?.infra?.rmmMappingHint ? (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 p-2">
+                          <p className="text-xs text-amber-800">{detailData.infra.rmmMappingHint}</p>
+                        </div>
+                      ) : null}
                       <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Handlungsempfehlungen</p>
-                        <div className="mt-2 space-y-2">
+                        <div className="mt-2 grid gap-2 md:grid-cols-2">
                           {(detailData.infraActionHints || []).length ? (
-                            (detailData.infraActionHints || []).map((rec, idx) => (
-                              <div key={`${rec?.title || "infra-rec"}-${idx}`} className="rounded-lg border border-sand-200 bg-white px-2 py-1.5">
-                                <p className="text-xs font-semibold text-sand-800">{rec?.title || "Empfehlung"}</p>
-                                <p className="text-[11px] text-sand-600">{rec?.why || ""}</p>
-                              </div>
-                            ))
+                            (detailData.infraActionHints || []).map((rec, idx) => {
+                              const recType = String(rec?.type || "").toLowerCase();
+                              const isSecurity = recType === "security";
+                              const isLifecycle = recType === "lifecycle";
+                              const RecIcon = isSecurity ? Shield : isLifecycle ? Clock3 : AlertTriangle;
+                              const typeClass = isSecurity
+                                ? "border-rose-200 bg-rose-50 text-rose-700"
+                                : isLifecycle
+                                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                                  : "border-sand-200 bg-sand-100 text-sand-700";
+                              const cardClass = isSecurity
+                                ? "border-rose-200"
+                                : isLifecycle
+                                  ? "border-amber-200"
+                                  : "border-sand-200";
+                              const typeLabel = isSecurity ? "Security" : isLifecycle ? "Lifecycle" : "Hinweis";
+                              return (
+                                <div
+                                  key={`${rec?.title || "infra-rec"}-${idx}`}
+                                  className={`rounded-xl border bg-white p-2.5 ${cardClass}`}
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex min-w-0 items-start gap-2">
+                                      <div className={`mt-0.5 rounded-lg border p-1 ${typeClass}`}>
+                                        <RecIcon size={13} />
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-xs font-semibold text-sand-900 leading-5">
+                                          {rec?.title || "Empfehlung"}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${typeClass}`}>
+                                      {typeLabel}
+                                    </span>
+                                  </div>
+                                  <p className="mt-1.5 text-[11px] leading-5 text-sand-600">
+                                    {rec?.why || ""}
+                                  </p>
+                                </div>
+                              );
+                            })
                           ) : (
                             <p className="text-xs text-sand-500">Keine akuten Infrastruktur-Maßnahmen erkannt.</p>
                           )}
@@ -985,89 +1038,123 @@ export default function CustomerDevelopmentView() {
                       <div className="space-y-2">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agenten</p>
                         {(detailData.managedInfrastructureDevices || []).length ? (
-                          (detailData.managedInfrastructureDevices || []).map((device, idx) => (
-                            <div key={`${device?.agentId || idx}`} className="rounded-2xl border border-sand-200 bg-gradient-to-r from-white to-sand-50 p-3 text-xs text-sand-700">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <div className="h-8 w-8 rounded-lg border border-sand-200 bg-white text-sand-700 flex items-center justify-center shrink-0">
-                                    {(() => {
-                                      const AgentIcon = getAgentIcon(device);
-                                      return <AgentIcon size={15} />;
-                                    })()}
+                          (detailData.managedInfrastructureDevices || []).map((device, idx) => {
+                            const expanded = Boolean(expandedInfraAgents[device?.agentId || `idx-${idx}`]);
+                            const errorCount = Number(device?.errorCount || 0);
+                            const warningCount = Number(device?.warningCount || 0);
+                            const updatesCount = Number(device?.openUpdates || 0);
+                            const lifecycleStatus = String(device?.lifecycle?.status || "").toLowerCase();
+                            const lifecycleLabel =
+                              lifecycleStatus === "expired"
+                                ? "EOL erreicht"
+                                : lifecycleStatus === "soon"
+                                  ? "EOL bald"
+                                  : "Im Support";
+                            const lifecycleClass =
+                              lifecycleStatus === "expired"
+                                ? "border-rose-200 bg-rose-50 text-rose-700"
+                                : lifecycleStatus === "soon"
+                                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                                  : "border-emerald-200 bg-emerald-50 text-emerald-700";
+                            return (
+                              <div key={`${device?.agentId || idx}`} className="rounded-2xl border border-sand-200 bg-white p-3 text-xs text-sand-700 shadow-sm">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-sand-200 bg-sand-50 text-sand-700">
+                                      {(() => {
+                                        const AgentIcon = getAgentIcon(device);
+                                        return <AgentIcon size={16} />;
+                                      })()}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="truncate text-sm font-semibold text-sand-900">{device?.hostname || "Unbekannter Agent"}</p>
+                                      <p className="truncate text-[11px] text-sand-500">
+                                        {device?.client || "Client n/a"} · {device?.site || "Site n/a"}
+                                      </p>
+                                    </div>
                                   </div>
-                                  <div className="min-w-0">
-                                    <p className="font-semibold text-sand-800 truncate">{device?.hostname || "Unbekannter Agent"}</p>
-                                    <p className="text-[11px] text-sand-500 truncate">{device?.client || "Client n/a"} · {device?.site || "Site n/a"}</p>
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span
+                                      className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                        typeof device?.online === "boolean"
+                                          ? device.online
+                                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                            : "border-rose-200 bg-rose-50 text-rose-700"
+                                          : "border-sand-200 bg-white text-sand-600"
+                                      }`}
+                                    >
+                                      {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
+                                    </span>
+                                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${lifecycleClass}`}>
+                                      {lifecycleLabel}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setExpandedInfraAgents((prev) => ({
+                                          ...prev,
+                                          [device?.agentId || `idx-${idx}`]: !prev[device?.agentId || `idx-${idx}`]
+                                        }))
+                                      }
+                                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                                    >
+                                      {expanded ? "Details ausblenden" : "Details anzeigen"}
+                                      {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                                    </button>
                                   </div>
                                 </div>
-                                <div className="inline-flex items-center gap-2">
-                                  <span
-                                    className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                                      typeof device?.online === "boolean"
-                                        ? device.online
-                                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                          : "border-rose-200 bg-rose-50 text-rose-700"
-                                        : "border-sand-200 bg-white text-sand-600"
-                                    }`}
-                                  >
-                                    {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
-                                  </span>
-                                  {Number(device?.errorCount || 0) > 0 ? (
-                                    <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
-                                      Fehler {Number(device?.errorCount || 0)}
-                                    </span>
-                                  ) : null}
-                                  {Number(device?.warningCount || 0) > 0 ? (
-                                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
-                                      Warnungen {Number(device?.warningCount || 0)}
-                                    </span>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setExpandedInfraAgents((prev) => ({
-                                        ...prev,
-                                        [device?.agentId || `idx-${idx}`]: !prev[device?.agentId || `idx-${idx}`]
-                                      }))
-                                    }
-                                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                                  >
-                                    Details
-                                    {expandedInfraAgents[device?.agentId || `idx-${idx}`] ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                                  </button>
+
+                                <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5">
+                                    <p className="text-[10px] uppercase tracking-wide text-rose-700">Fehler</p>
+                                    <p className="text-sm font-semibold text-rose-800">{errorCount}</p>
+                                  </div>
+                                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5">
+                                    <p className="text-[10px] uppercase tracking-wide text-amber-700">Warnungen</p>
+                                    <p className="text-sm font-semibold text-amber-800">{warningCount}</p>
+                                  </div>
+                                  <div className="rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5">
+                                    <p className="text-[10px] uppercase tracking-wide text-sky-700">Updates</p>
+                                    <p className="text-sm font-semibold text-sky-800">{updatesCount}</p>
+                                  </div>
+                                  <div className={`rounded-lg border px-2 py-1.5 ${lifecycleClass}`}>
+                                    <p className="text-[10px] uppercase tracking-wide">Lifecycle</p>
+                                    <p className="text-sm font-semibold">{device?.lifecycle?.eol_date || "n/a"}</p>
+                                  </div>
                                 </div>
-                              </div>
-                              <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-sand-600">
-                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5">RMM</span>
-                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5">OS: {device?.os || "n/a"}</span>
-                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5">Version: {device?.version || "n/a"}</span>
-                                {Number(device?.openUpdates || 0) > 0 ? (
-                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5">
-                                    Updates offen: {Number(device?.openUpdates || 0)}
+
+                                <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-sand-600">
+                                  <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">RMM</span>
+                                  <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">
+                                    OS: {device?.os || "n/a"}
                                   </span>
+                                </div>
+
+                                {expanded ? (
+                                  <div className="mt-2 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2 text-[11px] text-sand-700 space-y-1.5">
+                                    <p>
+                                      <span className="font-semibold text-sand-800">Updates:</span> {updatesCount}
+                                      {" "} (Windows {Number(device?.windowsUpdates || 0)} · 3rd-Party {Number(device?.thirdPartyUpdates || 0)} · CVE {Number(device?.openCves || 0)})
+                                    </p>
+                                    {lifecycleStatus === "expired" ? (
+                                      <p className="text-rose-700">
+                                        <span className="font-semibold">OS Lifecycle:</span> Support abgelaufen (EOL {device?.lifecycle?.eol_date || "n/a"})
+                                      </p>
+                                    ) : lifecycleStatus === "soon" ? (
+                                      <p className="text-amber-700">
+                                        <span className="font-semibold">OS Lifecycle:</span> Support endet bald (EOL {device?.lifecycle?.eol_date || "n/a"})
+                                      </p>
+                                    ) : (
+                                      <p className="text-emerald-700">
+                                        <span className="font-semibold">OS Lifecycle:</span> Support aktiv
+                                      </p>
+                                    )}
+                                    <p className="inline-flex items-center gap-1 text-sand-600"><Clock3 size={12} /> Last Seen: {formatDateTime(device?.lastSeen)}</p>
+                                  </div>
                                 ) : null}
                               </div>
-                              {expandedInfraAgents[device?.agentId || `idx-${idx}`] ? (
-                                <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-600 space-y-1">
-                                  <p>Agent ID: {device?.agentId || "n/a"}</p>
-                                  <p>OS: {device?.os || "n/a"}</p>
-                                  <p>Agent Version: {device?.version || "n/a"}</p>
-                                  <p>Fehler: {Number(device?.errorCount || 0)} · Warnungen: {Number(device?.warningCount || 0)}</p>
-                                  <p>
-                                    Updates offen: {Number(device?.openUpdates || 0)} (Windows {Number(device?.windowsUpdates || 0)} · 3rd-Party {Number(device?.thirdPartyUpdates || 0)} · CVE {Number(device?.openCves || 0)})
-                                  </p>
-                                  {device?.lifecycle?.status === "expired" ? (
-                                    <p className="text-rose-700">OS Lifecycle: Support abgelaufen (EOL {device?.lifecycle?.eol_date || "n/a"})</p>
-                                  ) : device?.lifecycle?.status === "soon" ? (
-                                    <p className="text-amber-700">
-                                      OS Lifecycle: Support endet bald (EOL {device?.lifecycle?.eol_date || "n/a"})
-                                    </p>
-                                  ) : null}
-                                  <p className="inline-flex items-center gap-1"><Clock3 size={12} /> Last Seen: {formatDateTime(device?.lastSeen)}</p>
-                                </div>
-                              ) : null}
-                            </div>
-                          ))
+                            );
+                          })
                         ) : (
                           <p className="text-sm text-sand-500">Keine zugeordneten RMM-Agenten gefunden.</p>
                         )}
@@ -1164,7 +1251,7 @@ export default function CustomerDevelopmentView() {
                           </p>
                           {Number(cveScan.matchedAgents || 0) === 0 ? (
                             <p className="text-sm text-sand-500">
-                              Keine zugeordneten RMM-Agenten für diesen Kunden gefunden.
+                              {cveScan.mappingHint || "Keine zugeordneten RMM-Agenten für diesen Kunden gefunden."}
                             </p>
                           ) : null}
                           {Number(cveScan.matchedAgents || 0) > 0 && Number(cveScan.scannedSoftware || 0) === 0 ? (
@@ -1177,7 +1264,7 @@ export default function CustomerDevelopmentView() {
                               <div key={`${agent?.agentId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2 space-y-2">
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                   <p className="text-xs font-semibold text-sand-800">
-                                    {agent?.hostname || "Unbekannter Agent"} ({agent?.agentId || "n/a"})
+                                    {agent?.hostname || "Unbekannter Agent"}
                                   </p>
                                   <span className="text-[10px] text-sand-500">
                                     Findings: {agent?.findingCount || 0} · Software: {agent?.softwareCount || 0}
@@ -1187,9 +1274,7 @@ export default function CustomerDevelopmentView() {
                                   {agent?.client || "Client n/a"} · {agent?.site || "Site n/a"} ·{" "}
                                   {typeof agent?.online === "boolean" ? (agent.online ? "Online" : "Offline") : "Status n/a"}
                                 </p>
-                                <p className="text-[11px] text-sand-600">
-                                  OS: {agent?.os || "n/a"} · Agent Version: {agent?.version || "n/a"} · Last Seen: {agent?.lastSeen || "n/a"}
-                                </p>
+                                <p className="text-[11px] text-sand-600">OS: {agent?.os || "n/a"} · Last Seen: {agent?.lastSeen || "n/a"}</p>
                                 {(agent?.findings || []).length ? (
                                   <div className="space-y-1">
                                     {(agent.findings || []).map((item, itemIdx) => (

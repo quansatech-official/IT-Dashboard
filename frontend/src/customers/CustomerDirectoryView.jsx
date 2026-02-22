@@ -2047,7 +2047,7 @@ export default function CustomerDirectoryView() {
       ) : null}
       {editCustomer ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
-          <div className="w-full max-w-4xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+          <div className="w-full max-w-6xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
             <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kunde bearbeiten</p>
@@ -2060,7 +2060,59 @@ export default function CustomerDirectoryView() {
                 Schließen
               </button>
             </div>
-            <div className="max-h-[78vh] overflow-y-auto p-6 bg-sand-50">
+            <div className="border-b border-sand-200 px-6 py-3 bg-white">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("details")}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Kundenansicht
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("settings")}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Kennzahlenbasis
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("development")}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Kundenentwicklung
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettingsTab("details");
+                    setEditCustomerId(null);
+                  }}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Verträge
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setContractCalcModalOpen(true);
+                    setEditCustomerId(null);
+                  }}
+                  className="rounded-full border border-sand-200 bg-sand-900 text-white px-3 py-1 text-[11px] uppercase tracking-wide hover:opacity-90"
+                >
+                  Vertragskalkulation
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleRemove(editCustomer.id)}
+                  className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                >
+                  Kunde löschen
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[88vh] overflow-y-auto p-6 bg-sand-50">
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="block">
                   <span className="text-xs uppercase tracking-wide text-sand-500">Name</span>
@@ -2317,10 +2369,16 @@ export default function CustomerDirectoryView() {
               </thead>
               <tbody>
                 {sortedCustomers.length ? (
-                  sortedCustomers.map((customer) => (
+                  sortedCustomers.map((customer, idx) => (
                     <tr
                       key={customer.id}
-                      className={customer.id === activeId ? "bg-sand-50" : "bg-white"}
+                      className={`${
+                        customer.id === activeId
+                          ? "bg-sand-100"
+                          : idx % 2 === 0
+                          ? "bg-white"
+                          : "bg-sand-50/70"
+                      } hover:bg-sand-100/80`}
                       onClick={() => setActiveId(customer.id)}
                     >
                       <td className="px-3 py-2 align-top">
@@ -2401,9 +2459,11 @@ export default function CustomerDirectoryView() {
                             setActiveId(customer.id);
                             setEditCustomerId(customer.id);
                           }}
-                          className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                          className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                          title="Bearbeiten"
+                          aria-label="Bearbeiten"
                         >
-                          Bearbeiten
+                          <Eye size={13} />
                         </button>
                       </td>
                     </tr>
@@ -2418,790 +2478,6 @@ export default function CustomerDirectoryView() {
               </tbody>
             </table>
           </div>
-        </section>
-
-        <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-            <div className="flex flex-wrap items-center gap-2 border-b border-sand-200 pb-3 mb-4">
-              <button
-                type="button"
-                onClick={() => setSettingsTab("details")}
-                className={`rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
-                  settingsTab === "details"
-                    ? "border-sand-900 bg-sand-900 text-white"
-                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
-                }`}
-              >
-                Kunde
-              </button>
-              <button
-                type="button"
-                onClick={() => setSettingsTab("settings")}
-                className={`rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
-                  settingsTab === "settings"
-                    ? "border-sand-900 bg-sand-900 text-white"
-                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
-                }`}
-              >
-                Kennzahlenbasis
-              </button>
-              <button
-                type="button"
-                onClick={() => setSettingsTab("development")}
-                className={`rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
-                  settingsTab === "development"
-                    ? "border-sand-900 bg-sand-900 text-white"
-                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
-                }`}
-              >
-                Kundenentwicklung
-              </button>
-              <button
-                type="button"
-                onClick={() => setContractCalcModalOpen(true)}
-                className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-              >
-                Vertragskalkulation (Popup)
-              </button>
-            </div>
-            {settingsTab === "settings" ? (
-              <div className="space-y-4">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <label className="block md:col-span-2">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">
-                      Firmenstandort
-                    </span>
-                    <input
-                      value={metricsSettings.office_address}
-                      onChange={(event) =>
-                        setMetricsSettings((prev) => ({
-                          ...prev,
-                          office_address: event.target.value
-                        }))
-                      }
-                      placeholder="z. B. Steyrtalstraße 88, 4523 Neuzeug"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">
-                      Kilometergeld (€/km)
-                    </span>
-                    <input
-                      value={metricsSettings.km_rate_eur}
-                      onChange={(event) =>
-                        setMetricsSettings((prev) => ({
-                          ...prev,
-                          km_rate_eur: event.target.value
-                        }))
-                      }
-                      placeholder="0.80"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">
-                      Stundensatz (€)
-                    </span>
-                    <input
-                      value={metricsSettings.hourly_rate_eur}
-                      onChange={(event) =>
-                        setMetricsSettings((prev) => ({
-                          ...prev,
-                          hourly_rate_eur: event.target.value
-                        }))
-                      }
-                      placeholder="90"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">
-                      Mindeststrecke (km)
-                    </span>
-                    <input
-                      value={metricsSettings.min_distance_km}
-                      onChange={(event) =>
-                        setMetricsSettings((prev) => ({
-                          ...prev,
-                          min_distance_km: event.target.value
-                        }))
-                      }
-                      placeholder="15"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">
-                      Mindestbetrag (€)
-                    </span>
-                    <input
-                      value={metricsSettings.min_fee_eur}
-                      onChange={(event) =>
-                        setMetricsSettings((prev) => ({
-                          ...prev,
-                          min_fee_eur: event.target.value
-                        }))
-                      }
-                      placeholder="15"
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                </div>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setMetricsSettingsStatus("saving");
-                    try {
-                      const saved = await api.saveMetricsSettings(metricsSettings);
-                      setMetricsSettings(saved);
-                      setMetricsSettingsStatus("saved");
-                    } catch (error) {
-                      setMetricsSettingsStatus("error");
-                    }
-                    setTimeout(() => setMetricsSettingsStatus("idle"), 2000);
-                  }}
-                  className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-                >
-                  Speichern
-                </button>
-                {metricsSettingsStatus === "saved" ? (
-                  <span className="text-xs text-emerald-600">Gespeichert</span>
-                ) : metricsSettingsStatus === "error" ? (
-                  <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
-                ) : null}
-              </div>
-            ) : settingsTab === "contract" ? (
-              renderContractCalculationContent()
-            ) : settingsTab === "development" ? (
-              <CustomerDevelopmentCustomerTab
-                customerId={activeCustomer?.id}
-                customerName={activeCustomer?.name || ""}
-                customerNumber={activeCustomer?.creditorNumber || ""}
-              />
-            ) : activeCustomer ? (
-              <div className="space-y-4">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Stammdaten</p>
-                    <h2 className="text-xl font-display text-sand-900">
-                      {activeCustomer.name?.trim() || "Kunde bearbeiten"}
-                    </h2>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRemove(activeCustomer.id)}
-                    className="inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                  >
-                    <Trash2 size={12} /> Entfernen
-                  </button>
-                </div>
-
-                <div className="grid gap-3 md:grid-cols-3">
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">Name</span>
-                    <input
-                      value={activeCustomer.name}
-                      onChange={(event) =>
-                        updateCustomer(activeCustomer.id, { name: event.target.value })
-                      }
-                      placeholder="z. B. Quansatech GmbH"
-                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">
-                      Kundennummer (Faktura)
-                    </span>
-                    <input
-                      value={activeCustomer.creditorNumber}
-                      onChange={(event) =>
-                        updateCustomer(activeCustomer.id, { creditorNumber: event.target.value })
-                      }
-                      placeholder="z. B. 1042"
-                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">
-                      Kundenkürzel
-                    </span>
-                    <input
-                      value={activeCustomer.shortCode}
-                      onChange={(event) =>
-                        updateCustomer(activeCustomer.id, { shortCode: event.target.value })
-                      }
-                      placeholder="z. B. QT"
-                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">E-Mail-Adresse</span>
-                    <div className="mt-1 flex items-center gap-2 rounded-xl border border-sand-200 px-3 py-2">
-                      <Mail size={14} className="text-sand-400" />
-                      <input
-                        value={activeCustomer.email}
-                        onChange={(event) =>
-                          updateCustomer(activeCustomer.id, { email: event.target.value })
-                        }
-                        placeholder="name@kunde.de"
-                        className="w-full text-sm focus:outline-none"
-                        type="email"
-                      />
-                    </div>
-                  </label>
-                </div>
-
-                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kommunikation</p>
-                    {!activeCustomer.customerReport ? (
-                      <span className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600">
-                        Kundenbericht deaktiviert
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="mt-3 grid gap-3 md:grid-cols-2">
-                    <label className="flex items-center gap-3 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(activeCustomer.customerReport)}
-                        onChange={(event) =>
-                          updateCustomer(activeCustomer.id, {
-                            customerReport: event.target.checked
-                          })
-                        }
-                        className="h-4 w-4"
-                      />
-                      <span>Kundenbericht</span>
-                    </label>
-                    <label className="flex items-center gap-3 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(activeCustomer.newsletter)}
-                        onChange={(event) =>
-                          updateCustomer(activeCustomer.id, {
-                            newsletter: event.target.checked
-                          })
-                        }
-                        className="h-4 w-4"
-                      />
-                      <span>Newsletter</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge & Status</p>
-                  </div>
-                  <div className="mt-3 grid gap-3 md:grid-cols-2">
-                    <label className="block">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">Kundenstatus</span>
-                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                        <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
-                          <input
-                            type="checkbox"
-                            checked={String(activeCustomer.status || "active") === "active"}
-                            onChange={(event) => {
-                              if (event.target.checked) {
-                                updateCustomer(activeCustomer.id, { status: "active" });
-                              }
-                            }}
-                            className="h-4 w-4"
-                          />
-                          <span>Aktiv</span>
-                        </label>
-                        <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
-                          <input
-                            type="checkbox"
-                            checked={String(activeCustomer.status || "active") === "inactive"}
-                            onChange={(event) => {
-                              if (event.target.checked) {
-                                updateCustomer(activeCustomer.id, { status: "inactive" });
-                              }
-                            }}
-                            className="h-4 w-4"
-                          />
-                          <span>Inaktiv</span>
-                        </label>
-                      </div>
-                    </label>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {[
-                        { id: "monitoring", label: "Monitoring" },
-                        { id: "wartung", label: "Wartung (inkl. SLA)" }
-                      ].map((contract) => (
-                        <label
-                          key={contract.id}
-                          className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={Boolean((activeCustomer.contractFlags || []).includes(contract.id))}
-                            onChange={(event) => {
-                              const current = new Set(activeCustomer.contractFlags || []);
-                              if (event.target.checked) current.add(contract.id);
-                              else current.delete(contract.id);
-                              const nextFlags = Array.from(current);
-                              updateCustomer(activeCustomer.id, {
-                                contractFlags: nextFlags,
-                                maintenanceContract: nextFlags.includes("wartung")
-                              });
-                            }}
-                            className="h-4 w-4"
-                          />
-                          <span>{contract.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="block md:col-span-2">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
-                    <input
-                      value={activeCustomer.street}
-                      onChange={(event) =>
-                        updateCustomer(activeCustomer.id, { street: event.target.value })
-                      }
-                      placeholder="z. B. Steyrtalstraße 88"
-                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">PLZ</span>
-                    <input
-                      value={activeCustomer.postalCode}
-                      onChange={(event) =>
-                        updateCustomer(activeCustomer.id, { postalCode: event.target.value })
-                      }
-                      placeholder="z. B. 4523"
-                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">Ort</span>
-                    <input
-                      value={activeCustomer.city}
-                      onChange={(event) =>
-                        updateCustomer(activeCustomer.id, { city: event.target.value })
-                      }
-                      placeholder="z. B. Neuzeug"
-                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-wide text-sand-500">Land</span>
-                    <input
-                      value={activeCustomer.country}
-                      onChange={(event) =>
-                        updateCustomer(activeCustomer.id, { country: event.target.value })
-                      }
-                      placeholder="z. B. Österreich"
-                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                    />
-                  </label>
-                </div>
-
-                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
-                  <div className="flex items-center justify-between gap-3 mb-2">
-                    <div className="flex items-center gap-2 text-sand-700">
-                      <Phone size={16} />
-                      <p className="text-sm uppercase tracking-[0.3em] text-sand-500">
-                        Rufnummern
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={addPhone}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                    >
-                      <Plus size={12} /> Rufnummer
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    {activeCustomer.phones?.map((phone) => (
-                      <div
-                        key={phone.id}
-                        className="grid gap-2 md:grid-cols-[140px_180px_repeat(3,auto)] items-center"
-                      >
-                        <input
-                          value={phone.label}
-                          onChange={(event) => updatePhone(phone.id, { label: event.target.value })}
-                          placeholder="z. B. Arbeit"
-                          className="rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
-                        />
-                        <input
-                          value={phone.number}
-                          onChange={(event) => updatePhone(phone.id, { number: event.target.value })}
-                          placeholder="+49 40 123456"
-                          className="rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300 max-w-[180px]"
-                        />
-                        {pbxMatches.has(normalizeDigits(phone.number)) ? null : (
-                          <button
-                            type="button"
-                            onClick={() => addPhoneToPbx(phone)}
-                            disabled={!pbxApiActive}
-                            className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs text-sand-600 ${
-                              pbxApiActive
-                                ? "border-sand-200 bg-white hover:bg-sand-100"
-                                : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
-                            }`}
-                            title="Ins Anlagen-Telefonbuch übernehmen"
-                          >
-                            <BookPlus size={12} />
-                          </button>
-                        )}
-                        {String(phone.number || "").trim() ? (
-                          <button
-                            type="button"
-                            onClick={() => openClickToDial(phone)}
-                            disabled={!isC2DReady}
-                            className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs ${
-                              isC2DReady
-                                ? "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
-                                : "border-sand-200 bg-sand-100 text-sand-400 opacity-60 cursor-not-allowed"
-                            }`}
-                            title={
-                              !telephonyHealthy
-                                ? "Telefonie-API nicht erreichbar"
-                                : !extensions.length
-                                ? "Keine Nebenstelle verfügbar"
-                                : "Click-to-dial starten"
-                            }
-                          >
-                            <PhoneOutgoing size={12} />
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          onClick={() => removePhone(phone.id)}
-                          className="inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs text-rose-700 hover:bg-rose-100"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-sand-200 bg-white p-4">
-                  <div className="flex items-center gap-2 text-sand-700 mb-3">
-                    <Building2 size={16} />
-                    <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Operative Kennzahlen</p>
-                  </div>
-                  {metricsStatus === "loading" ? (
-                    <p className="text-sm text-sand-500">Lädt Kennzahlen…</p>
-                  ) : metricsStatus === "error" ? (
-                    <p className="text-sm text-rose-600">Kennzahlen konnten nicht geladen werden.</p>
-                  ) : metrics ? (
-                    <div className="grid gap-3 sm:grid-cols-5 text-sm text-sand-700">
-                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Entfernung</p>
-                        <p className="text-base font-semibold">
-                          {metrics.distanceKm != null ? `${metrics.distanceKm} km` : "Adresse fehlt"}
-                        </p>
-                        <p className="text-xs text-sand-500">
-                          {metrics.mileageEur != null ? `Vorschlag: € ${metrics.mileageEur}` : ""}
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">
-                          Offene Tasks
-                        </p>
-                        <p className="text-base font-semibold">{metrics.openTasks}</p>
-                        <p className="text-xs text-sand-500">
-                          Tagesplan: {metrics.openDayTasks ?? 0} · Zeit: {metrics.openTimeTasks ?? 0}
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">
-                          Offene Zeit
-                        </p>
-                        <p className="text-base font-semibold">
-                          {metrics.openTimeMinutes ?? 0} Min
-                        </p>
-                        <p className="text-xs text-sand-500">
-                          Umsatz: € {Number(metrics.estimatedRevenueEur ?? 0).toFixed(2)}
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">
-                          Umsatz (Sevdesk)
-                        </p>
-                        <p className="text-base font-semibold">
-                          {formatEur(metrics.revenueCurrentYearEur)}
-                        </p>
-                        <p className="text-xs text-sand-500">
-                          Vorjahr: {formatEur(metrics.revenueLastYearEur)}
-                        </p>
-                        <p className="text-xs text-sand-500">
-                          Veränderung:{" "}
-                          {metrics.revenueDeltaEur == null
-                            ? "n/a"
-                            : `${metrics.revenueDeltaEur >= 0 ? "+" : ""}${formatEur(
-                                metrics.revenueDeltaEur
-                              )}`}
-                          {metrics.revenueDeltaPct != null
-                            ? ` (${metrics.revenueDeltaPct >= 0 ? "+" : ""}${metrics.revenueDeltaPct}%)`
-                            : ""}
-                        </p>
-                      </div>
-                      <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">
-                          Telefonie (30 Tage)
-                        </p>
-                        <p className="text-base font-semibold">
-                          {metrics.totalMinutes} Min
-                        </p>
-                        <p className="text-xs text-sand-500">Verpasst: {metrics.missedCalls}</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-sand-500">Noch keine Kennzahlen.</p>
-                  )}
-                </div>
-
-                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge</p>
-                    <span className="text-[11px] text-sand-500">
-                      Bestehende Vertragsdokumente für diesen Kunden.
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setContractCalcModalOpen(true)}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-                    >
-                      Vertragskalkulation öffnen
-                    </button>
-                  </div>
-                  <div className="space-y-2 max-h-56 overflow-auto pr-1">
-                    {(customerContracts || []).map((item) => (
-                      <div key={item.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold text-sand-800">{item.title || "Vertrag"}</p>
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                              String(item.status || "active") === "cancelled"
-                                ? "border-rose-200 bg-rose-50 text-rose-700"
-                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            }`}
-                          >
-                            {String(item.status || "active") === "cancelled" ? "Storniert" : "Aktiv"}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-[11px] text-sand-600">
-                          Typ: {String(item.doc_type || "vertrag")} · Datei: {item.file_name || "n/a"}
-                        </p>
-                        <p className="text-[10px] text-sand-500">
-                          {new Date(item.created_at || Date.now()).toLocaleString("de-DE")}
-                          {item.cancelled_at ? ` · storniert am ${new Date(item.cancelled_at).toLocaleString("de-DE")}` : ""}
-                        </p>
-                        {item.cancel_reason ? <p className="text-[10px] text-rose-600">Grund: {item.cancel_reason}</p> : null}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
-                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                          >
-                            <FileDown size={11} /> PDF
-                          </button>
-                          {String(item.status || "active") === "cancelled" ? (
-                            <button
-                              type="button"
-                              onClick={() => reactivateContractDocument(item.id)}
-                              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                            >
-                              Reaktivieren
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => cancelContractDocument(item.id)}
-                              className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                            >
-                              Stornieren
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => deleteContractDocument(item.id)}
-                            className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                          >
-                            <Trash2 size={11} /> Löschen
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
-                    {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
-                    {!customerContracts.length && contractsStatus !== "loading" ? (
-                      <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-sand-200 bg-white p-4">
-                  <div className="flex items-center gap-2 text-sand-700 mb-3">
-                    <BadgeCheck size={16} />
-                    <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Berichte</p>
-                  </div>
-                  {reportStatus === "loading" ? (
-                    <p className="text-sm text-sand-500">Berichte laden…</p>
-                  ) : reportStatus === "error" ? (
-                    <p className="text-sm text-rose-600">Berichte konnten nicht geladen werden.</p>
-                  ) : reportOverview.length ? (
-                    <div className="space-y-2">
-                      {reportOverview.slice(0, 5).map((report) => (
-                        <div
-                          key={report.id}
-                          className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-700"
-                        >
-                          <div>
-                            <div className="font-semibold">
-                              {report.period || "Bericht"}
-                            </div>
-                            <div className="text-xs text-sand-500">
-                              {report.created_at
-                                ? new Date(report.created_at).toLocaleDateString("de-DE")
-                                : ""}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs uppercase tracking-wide text-sand-500">
-                              {report.opened_count
-                                ? `${report.opened_count}x gelesen`
-                                : "nicht gelesen"}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => openReportPreview(report)}
-                              className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
-                              title="Vorschau"
-                            >
-                              <Eye size={12} />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                      {reportOverview.length > 5 ? (
-                        <p className="text-xs text-sand-500">
-                          +{reportOverview.length - 5} weitere Berichte
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-sand-500">Keine Berichte vorhanden.</p>
-                  )}
-                </div>
-
-                <div className="rounded-2xl border border-sand-200 bg-white p-4">
-                  <div className="flex items-center gap-2 text-sand-700 mb-3">
-                    <FileDown size={16} />
-                    <p className="text-sm uppercase tracking-[0.3em] text-sand-500">
-                      Lieferscheine
-                    </p>
-                  </div>
-                  {deliveryStatus === "loading" ? (
-                    <p className="text-sm text-sand-500">Lieferscheine laden…</p>
-                  ) : deliveryStatus === "error" ? (
-                    <p className="text-sm text-rose-600">Lieferscheine konnten nicht geladen werden.</p>
-                  ) : deliveryNotes.length ? (
-                    <div className="space-y-2">
-                      {deliveryNotes.slice(0, 5).map((note) => (
-                        <div
-                          key={note.id}
-                          className="flex items-center justify-between rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-700"
-                        >
-                          <div>
-                            <div className="font-semibold">Lieferschein</div>
-                            <div className="text-xs text-sand-500">
-                              {note.created_at
-                                ? new Date(note.created_at).toLocaleDateString("de-DE")
-                                : ""}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => openDeliveryPreview(note)}
-                              className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
-                              title="Vorschau"
-                            >
-                              <Eye size={12} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => exportDeliveryPdf(note)}
-                              className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
-                              title="PDF exportieren"
-                            >
-                              <FileDown size={12} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeDeliveryNote(note.id)}
-                              className="inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 p-2 text-rose-600 hover:bg-rose-100"
-                              title="Löschen"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                      {deliveryNotes.length > 5 ? (
-                        <p className="text-xs text-sand-500">
-                          +{deliveryNotes.length - 5} weitere Lieferscheine
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-sand-500">Keine Lieferscheine vorhanden.</p>
-                  )}
-                </div>
-
-                <div className="rounded-2xl border border-sand-200 bg-white p-4">
-                  <div className="grid gap-3 sm:grid-cols-3 text-xs text-sand-600">
-                    <div className="flex items-center gap-2">
-                      <BadgeCheck size={14} />
-                      <span>Stammdaten gepflegt</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Building2 size={14} />
-                      <span>Faktura bereit</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Mail size={14} />
-                      <span>E-Mail verfügbar</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-center gap-4">
-                <div className="h-12 w-12 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
-                  <Users size={18} />
-                </div>
-                <div>
-                  <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Start</p>
-                  <h2 className="text-xl font-display text-sand-900">Ersten Kunden anlegen</h2>
-                  <p className="text-sm text-sand-500 mt-2">
-                    Lege Namen, Nummern, E-Mail und mehrere Rufnummern pro Kunde ab.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleCreate}
-                  className="inline-flex items-center gap-2 rounded-2xl border border-sand-200 bg-sand-900 text-white px-4 py-2 text-sm hover:opacity-90"
-                >
-                  <Plus size={16} /> Kundenstamm starten
-                </button>
-              </div>
-            )}
         </section>
         {importPreview ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
