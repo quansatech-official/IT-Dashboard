@@ -79,8 +79,23 @@ export default function CustomerDevelopmentView() {
     customerId: null,
     customerName: ""
   });
+  const [detailTab, setDetailTab] = useState("overview");
   const [detailStatus, setDetailStatus] = useState("idle");
   const [detailData, setDetailData] = useState(null);
+  const [cveScan, setCveScan] = useState({
+    status: "idle",
+    scannedSoftware: 0,
+    matchedAgents: 0,
+    agents: [],
+    fromCache: false,
+    error: ""
+  });
+  const [reportSuggestion, setReportSuggestion] = useState({
+    status: "idle",
+    title: "",
+    text: "",
+    error: ""
+  });
   const [includeInactive, setIncludeInactive] = useState(false);
   const [viewMode, setViewMode] = useState("list");
   const [filters, setFilters] = useState({
@@ -91,26 +106,29 @@ export default function CustomerDevelopmentView() {
     recommendationNeedle: ""
   });
 
-  const load = async () => {
+  const load = async (forceRefresh = false) => {
     setStatus("loading");
     setLoadingProgress(6);
     try {
       const response = await fetch(
-        `${API}/customer_development?include_inactive=${includeInactive ? "1" : "0"}`
+        `${API}/customer_development?include_inactive=${includeInactive ? "1" : "0"}&refresh=${forceRefresh ? "1" : "0"}`
       );
       if (!response.ok) throw new Error("load_failed");
+      setLoadingProgress((prev) => Math.max(prev, 72));
       const data = await response.json();
+      setLoadingProgress((prev) => Math.max(prev, 96));
       setContexts(Array.isArray(data?.contexts) ? data.contexts : []);
       setLoadingProgress(100);
-      setStatus("ready");
+      // Keep overlay briefly so the progress bar visually reaches 100%.
+      window.setTimeout(() => setStatus("ready"), 180);
     } catch {
       setLoadingProgress(100);
-      setStatus("error");
+      window.setTimeout(() => setStatus("error"), 180);
     }
   };
 
   useEffect(() => {
-    load();
+    load(false);
   }, [includeInactive]);
 
   useEffect(() => {
@@ -127,26 +145,25 @@ export default function CustomerDevelopmentView() {
 
   useEffect(() => {
     if (!detailModal.open || !detailModal.customerId) return;
-    let active = true;
+    loadDetail(false);
+  }, [detailModal.open, detailModal.customerId]);
+
+  const loadDetail = (forceRefresh = false) => {
+    if (!detailModal.open || !detailModal.customerId) return;
     setDetailStatus("loading");
-    fetch(`${API}/customers/${detailModal.customerId}/development`)
+    fetch(`${API}/customers/${detailModal.customerId}/development?refresh=${forceRefresh ? "1" : "0"}`)
       .then((res) => {
         if (!res.ok) throw new Error("detail_failed");
         return res.json();
       })
       .then((data) => {
-        if (!active) return;
         setDetailData(data || null);
         setDetailStatus("ready");
       })
       .catch(() => {
-        if (!active) return;
         setDetailStatus("error");
       });
-    return () => {
-      active = false;
-    };
-  }, [detailModal.open, detailModal.customerId]);
+  };
 
   const filteredContexts = useMemo(() => {
     return contexts.filter((item) => {
@@ -243,6 +260,16 @@ export default function CustomerDevelopmentView() {
   const openDetail = (context) => {
     setDetailData(null);
     setDetailStatus("idle");
+    setDetailTab("overview");
+    setCveScan({
+      status: "idle",
+      scannedSoftware: 0,
+      matchedAgents: 0,
+      agents: [],
+      fromCache: false,
+      error: ""
+    });
+    setReportSuggestion({ status: "idle", title: "", text: "", error: "" });
     setDetailAi({
       open: false,
       customerId: context.customerId,
@@ -262,6 +289,16 @@ export default function CustomerDevelopmentView() {
     setDetailModal({ open: false, customerId: null, customerName: "" });
     setDetailData(null);
     setDetailStatus("idle");
+    setDetailTab("overview");
+    setCveScan({
+      status: "idle",
+      scannedSoftware: 0,
+      matchedAgents: 0,
+      agents: [],
+      fromCache: false,
+      error: ""
+    });
+    setReportSuggestion({ status: "idle", title: "", text: "", error: "" });
     setDetailAi({
       open: false,
       customerId: null,
@@ -270,6 +307,74 @@ export default function CustomerDevelopmentView() {
       text: "",
       error: ""
     });
+  };
+
+  const previewReportSuggestion = async (recommendationIndex) => {
+    if (!detailModal.customerId) return;
+    setReportSuggestion({ status: "loading", title: "", text: "", error: "" });
+    try {
+      const response = await fetch(`${API}/customer_development/report_suggestion_preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customer_id: detailModal.customerId,
+          recommendation_index: recommendationIndex
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.detail || "Vorschau konnte nicht geladen werden");
+      }
+      setReportSuggestion({
+        status: "ready",
+        title: data?.suggestion?.title || "Berichtsvorschlag",
+        text: data?.suggestion?.preview_text || "",
+        error: ""
+      });
+    } catch (error) {
+      setReportSuggestion({
+        status: "error",
+        title: "",
+        text: "",
+        error: error?.message ? String(error.message) : "Vorschau konnte nicht geladen werden"
+      });
+    }
+  };
+
+  const runCveScan = async (forceRefresh = true) => {
+    if (!detailModal.customerId) return;
+    setCveScan({
+      status: "loading",
+      scannedSoftware: 0,
+      matchedAgents: 0,
+      agents: [],
+      fromCache: false,
+      error: ""
+    });
+    try {
+      const response = await fetch(
+        `${API}/customers/${detailModal.customerId}/development/cve_scan?refresh=${forceRefresh ? "1" : "0"}`
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.detail || "CVE Analyse fehlgeschlagen");
+      setCveScan({
+        status: "ready",
+        scannedSoftware: Number(data?.scannedSoftware || 0),
+        matchedAgents: Number(data?.matchedAgents || 0),
+        agents: Array.isArray(data?.agents) ? data.agents : [],
+        fromCache: Boolean(data?.fromCache),
+        error: ""
+      });
+    } catch (error) {
+      setCveScan({
+        status: "error",
+        scannedSoftware: 0,
+        matchedAgents: 0,
+        agents: [],
+        fromCache: false,
+        error: error?.message ? String(error.message) : "CVE Analyse fehlgeschlagen"
+      });
+    }
   };
 
   const grouped = useMemo(() => {
@@ -289,8 +394,8 @@ export default function CustomerDevelopmentView() {
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       {detailModal.open ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
-          <div className="w-full max-w-5xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-sand-900/40 px-4 pt-5 pb-8">
+          <div className="w-full max-w-6xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
             <div className="flex items-center justify-between border-b border-sand-200 px-5 py-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Details</p>
@@ -307,7 +412,30 @@ export default function CustomerDevelopmentView() {
                 <X size={14} />
               </button>
             </div>
-            <div className="max-h-[75vh] overflow-auto p-5 bg-sand-50">
+            <div className="border-b border-sand-200 bg-white px-5 py-2">
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: "overview", label: "Übersicht" },
+                  { id: "ki", label: "KI Auswertung" },
+                  { id: "infra", label: "Infrastruktur" },
+                  { id: "cve", label: "CVE Analyse" }
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setDetailTab(tab.id)}
+                    className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                      detailTab === tab.id
+                        ? "border-sand-900 bg-sand-900 text-white"
+                        : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="max-h-[83vh] overflow-auto p-5 bg-sand-50">
               {detailStatus === "loading" ? (
                 <p className="text-sm text-sand-500">Lade Analytics…</p>
               ) : detailStatus === "error" ? (
@@ -327,12 +455,7 @@ export default function CustomerDevelopmentView() {
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            setDetailAi((prev) => ({
-                              ...prev,
-                              open: !prev.open
-                            }))
-                          }
+                          onClick={() => setDetailTab("ki")}
                           className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
                         >
                           KI Auswertung
@@ -341,7 +464,7 @@ export default function CustomerDevelopmentView() {
                     </div>
                   </div>
 
-                  {detailAi.open ? (
+                  {detailTab === "ki" ? (
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">KI Auswertung</p>
                       <div className="mt-3 space-y-2">
@@ -373,6 +496,32 @@ export default function CustomerDevelopmentView() {
                     </div>
                   ) : null}
 
+                  {detailTab === "overview" && reportSuggestion.status !== "idle" ? (
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">
+                        Berichtsvorschau (ohne Änderung am Kundenbericht)
+                      </p>
+                      {reportSuggestion.status === "loading" ? (
+                        <p className="mt-2 text-sm text-sand-500">Erzeuge Vorschau…</p>
+                      ) : null}
+                      {reportSuggestion.error ? (
+                        <p className="mt-2 text-sm text-rose-600">{reportSuggestion.error}</p>
+                      ) : null}
+                      {reportSuggestion.status === "ready" && !reportSuggestion.error ? (
+                        <div className="mt-2 space-y-2">
+                          <p className="text-sm font-semibold text-sand-800">{reportSuggestion.title}</p>
+                          <textarea
+                            readOnly
+                            value={reportSuggestion.text}
+                            className="w-full min-h-[130px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {detailTab === "overview" ? (
+                  <>
                   <div className="grid gap-3 md:grid-cols-4">
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
                       <p className="text-[10px] uppercase tracking-wide text-sand-500">Status</p>
@@ -526,11 +675,135 @@ export default function CustomerDevelopmentView() {
                           <div key={`${rec?.title || "r"}-${idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2">
                             <p className="text-xs font-semibold text-sand-800">{rec?.title || "Empfehlung"}</p>
                             <p className="text-[11px] text-sand-500">{rec?.why || ""}</p>
+                            <button
+                              type="button"
+                              onClick={() => previewReportSuggestion(idx)}
+                              className="mt-2 inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                            >
+                              In Bericht vorschlagen
+                            </button>
                           </div>
                         ))}
                       </div>
                     </div>
                   </div>
+                  </>
+                  ) : null}
+
+                  {detailTab === "infra" ? (
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Infrastruktur (RMM + Discovery)</p>
+                        <button
+                          type="button"
+                          onClick={() => loadDetail(true)}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
+                        >
+                          Aktualisieren
+                        </button>
+                      </div>
+                      <p className="mt-1 text-[11px] text-sand-500">
+                        Quelle: Tactical RMM Agents + Discovery-Ingest aus RMM-Script (Ping/SNMP).
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {(detailData.infrastructureDevices || []).length ? (
+                          (detailData.infrastructureDevices || []).map((device, idx) => (
+                            <div key={`${device?.source || "d"}-${device?.hostname || idx}-${idx}`} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-700">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="font-semibold text-sand-800">{device?.hostname || "Unbekanntes Gerät"}</p>
+                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide">
+                                  {device?.source === "tactical_rmm" ? "RMM" : device?.source || "Discovery"}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-[11px] text-sand-600">
+                                {device?.ip ? `IP ${device.ip}` : "IP n/a"}
+                                {device?.mac ? ` · MAC ${device.mac}` : ""}
+                                {device?.protocol ? ` · ${String(device.protocol).toUpperCase()}` : ""}
+                                {typeof device?.online === "boolean" ? ` · ${device.online ? "Online" : "Offline"}` : ""}
+                              </p>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-sm text-sand-500">
+                            Keine Geräte gefunden. Prüfe RMM-Zuordnung und Discovery-Agent (Ping/SNMP).
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {detailTab === "cve" ? (
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs uppercase tracking-[0.2em] text-sand-500">CVE Analyse</p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => runCveScan(false)}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
+                          >
+                            Cache laden
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => runCveScan(true)}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
+                          >
+                            Neu scannen
+                          </button>
+                        </div>
+                      </div>
+                      {cveScan.status === "loading" ? <p className="text-sm text-sand-500">Scanne Software gegen öffentliche CVE-Datenbanken…</p> : null}
+                      {cveScan.error ? <p className="text-sm text-rose-600">{cveScan.error}</p> : null}
+                      {cveScan.status === "ready" ? (
+                        <div className="space-y-2">
+                          <p className="text-xs text-sand-500">
+                            Geprüfte Software: {cveScan.scannedSoftware} · RMM Agents: {cveScan.matchedAgents}
+                            {cveScan.fromCache ? " · aus Cache" : " · live"}
+                          </p>
+                          {(cveScan.agents || []).length ? (
+                            (cveScan.agents || []).map((agent, idx) => (
+                              <div key={`${agent?.agentId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2 space-y-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="text-xs font-semibold text-sand-800">
+                                    {agent?.hostname || "Unbekannter Agent"} ({agent?.agentId || "n/a"})
+                                  </p>
+                                  <span className="text-[10px] text-sand-500">
+                                    Findings: {agent?.findingCount || 0} · Software: {agent?.softwareCount || 0}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-sand-600">
+                                  {agent?.client || "Client n/a"} · {agent?.site || "Site n/a"} ·{" "}
+                                  {typeof agent?.online === "boolean" ? (agent.online ? "Online" : "Offline") : "Status n/a"}
+                                </p>
+                                {(agent?.findings || []).length ? (
+                                  <div className="space-y-1">
+                                    {(agent.findings || []).map((item, itemIdx) => (
+                                      <div key={`${item?.name || "s"}-${itemIdx}`} className="rounded-lg border border-sand-200 bg-white px-2 py-1.5">
+                                        <p className="text-xs font-semibold text-sand-800">
+                                          {item?.name || "Software"} {item?.version ? `(${item.version})` : ""}
+                                        </p>
+                                        <p className="text-[11px] text-sand-600">
+                                          CVEs: {(item?.cves || []).map((cve) => cve?.id).filter(Boolean).join(", ") || "keine"}
+                                        </p>
+                                        <p className="text-[11px] text-sand-600">
+                                          Neuere/Fix-Versionen: {(item?.fixedVersions || []).join(", ") || "keine Daten"}
+                                        </p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-[11px] text-sand-500">Keine Treffer auf diesem Agent.</p>
+                                )}
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-sm text-sand-500">Keine CVE-Treffer in den geprüften Einträgen gefunden.</p>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -573,7 +846,7 @@ export default function CustomerDevelopmentView() {
             </button>
             <button
               type="button"
-              onClick={load}
+              onClick={() => load(true)}
               className="rounded-full border border-sand-200 bg-white px-3 py-1 uppercase tracking-wide"
             >
               Aktualisieren
