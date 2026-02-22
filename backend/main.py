@@ -5675,8 +5675,21 @@ def run_customer_development_discovery(customer_id: int, request: Request):
     if api_url_override:
         api_url = str(api_url_override).rstrip("/")
     else:
-        api_base = str(request.base_url).rstrip("/")
-        api_url = f"{api_base}/api"
+        forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+        forwarded_host = str(request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+        host_header = forwarded_host or str(request.headers.get("host") or "").strip()
+        if not host_header:
+            host_header = str(urlparse(str(request.base_url)).netloc or "").strip()
+        scheme = forwarded_proto or str(request.url.scheme or "http").strip().lower() or "http"
+        host_lc = host_header.lower()
+        if scheme == "http" and host_lc and not (
+            host_lc.startswith("localhost")
+            or host_lc.startswith("127.0.0.1")
+            or host_lc.startswith("0.0.0.0")
+            or host_lc.startswith("::1")
+        ):
+            scheme = "https"
+        api_url = f"{scheme}://{host_header.rstrip('/')}/api"
     discovery_token = str(os.environ.get("INFRA_DISCOVERY_TOKEN") or "").strip()
     args = [
         "--api-url", api_url,
@@ -5702,7 +5715,7 @@ def run_customer_development_discovery(customer_id: int, request: Request):
         "emails": [],
         "emailMode": "default",
         "custom_field": None,
-        "save_all_output": False,
+        "save_all_output": True,
         "script": script_id,
         "args": args,
         "env_vars": [],
@@ -8537,6 +8550,27 @@ def download_customer_contract_document(customer_id: int, contract_id: int):
             media_type=str(row.mime_type or "application/pdf"),
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+
+
+@app.delete("/api/customers/{customer_id}/contracts/{contract_id}")
+def delete_customer_contract_document(customer_id: int, contract_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerContractDocument)
+            .filter(
+                CustomerContractDocument.id == contract_id,
+                CustomerContractDocument.customer_id == customer.id,
+            )
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Contract document not found")
+        db.delete(row)
+        db.commit()
+        return {"status": "deleted", "id": contract_id}
 
 
 @app.get("/api/company_stats")

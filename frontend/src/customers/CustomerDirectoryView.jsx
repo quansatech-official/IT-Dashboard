@@ -125,6 +125,14 @@ const api = {
       if (!r.ok) throw new Error(data?.detail || "contract_reactivate_failed");
       return data;
     }),
+  deleteCustomerContract: (customerId, contractId) =>
+    fetch(`${API}/customers/${customerId}/contracts/${contractId}`, {
+      method: "DELETE"
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "contract_delete_failed");
+      return data;
+    }),
   syncSevdesk: () =>
     fetch(`${API}/customers/sync_sevdesk`, {
       method: "POST"
@@ -265,6 +273,7 @@ export default function CustomerDirectoryView() {
   const [c2dExtension, setC2dExtension] = useState("");
   const [c2dStatus, setC2dStatus] = useState("");
   const [c2dBusy, setC2dBusy] = useState(false);
+  const [editCustomerId, setEditCustomerId] = useState(null);
   const [toast, setToast] = useState("");
   const [previewModal, setPreviewModal] = useState({
     open: false,
@@ -815,6 +824,17 @@ export default function CustomerDirectoryView() {
     }
   };
 
+  const deleteContractDocument = async (contractId) => {
+    if (!activeId || !contractId) return;
+    if (!window.confirm("Vertrag wirklich endgültig löschen?")) return;
+    try {
+      await api.deleteCustomerContract(activeId, contractId);
+      setCustomerContracts((prev) => prev.filter((item) => item.id !== contractId));
+    } catch {
+      setToast("Löschen fehlgeschlagen.");
+    }
+  };
+
   useEffect(() => {
     if (!customers.length) {
       setActiveId(null);
@@ -871,6 +891,7 @@ export default function CustomerDirectoryView() {
   }, [sortedCustomers, activeId]);
 
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
+  const editCustomer = customers.find((customer) => customer.id === editCustomerId) || null;
   const totalCustomers = customers.length;
   const inactiveCustomers = customers.filter(
     (customer) => String(customer.status || "active").toLowerCase() === "inactive"
@@ -1790,6 +1811,146 @@ export default function CustomerDirectoryView() {
           </div>
         </div>
       ) : null}
+      {editCustomer ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-4xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+            <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kunde bearbeiten</p>
+                <h3 className="text-lg font-display text-sand-900">{editCustomer.name || "Kunde"}</h3>
+              </div>
+              <button
+                onClick={() => setEditCustomerId(null)}
+                className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+              >
+                Schließen
+              </button>
+            </div>
+            <div className="max-h-[78vh] overflow-y-auto p-6 bg-sand-50">
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="block">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">Name</span>
+                  <input
+                    value={editCustomer.name}
+                    onChange={(event) => updateCustomer(editCustomer.id, { name: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">Kundennummer</span>
+                  <input
+                    value={editCustomer.creditorNumber}
+                    onChange={(event) => updateCustomer(editCustomer.id, { creditorNumber: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">Kürzel</span>
+                  <input
+                    value={editCustomer.shortCode}
+                    onChange={(event) => updateCustomer(editCustomer.id, { shortCode: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block md:col-span-3">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">E-Mail</span>
+                  <input
+                    type="email"
+                    value={editCustomer.email}
+                    onChange={(event) => updateCustomer(editCustomer.id, { email: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editCustomer.customerReport)}
+                    onChange={(event) => updateCustomer(editCustomer.id, { customerReport: event.target.checked })}
+                    className="h-4 w-4"
+                  />
+                  Kundenbericht
+                </label>
+                <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editCustomer.newsletter)}
+                    onChange={(event) => updateCustomer(editCustomer.id, { newsletter: event.target.checked })}
+                    className="h-4 w-4"
+                  />
+                  Newsletter
+                </label>
+                <label className="block rounded-xl border border-sand-200 bg-white px-3 py-2">
+                  <span className="text-[10px] uppercase tracking-wide text-sand-500">Kundenstatus</span>
+                  <select
+                    value={String(editCustomer.status || "active")}
+                    onChange={(event) => updateCustomer(editCustomer.id, { status: event.target.value })}
+                    className="mt-1 w-full rounded-lg border border-sand-200 px-2 py-1 text-sm"
+                  >
+                    <option value="active">Aktiv</option>
+                    <option value="inactive">Inaktiv</option>
+                  </select>
+                </label>
+              </div>
+              <div className="mt-3 rounded-xl border border-sand-200 bg-white px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500 mb-2">Vertragsstatus</p>
+                <div className="flex flex-wrap items-center gap-3 text-sm text-sand-700">
+                  {[
+                    { id: "wartung", label: "Wartung" },
+                    { id: "monitoring", label: "Monitoring" }
+                  ].map((contract) => (
+                    <label key={contract.id} className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={Boolean((editCustomer.contractFlags || []).includes(contract.id))}
+                        onChange={(event) => {
+                          const current = new Set(editCustomer.contractFlags || []);
+                          if (event.target.checked) current.add(contract.id);
+                          else current.delete(contract.id);
+                          const nextFlags = Array.from(current);
+                          updateCustomer(editCustomer.id, {
+                            contractFlags: nextFlags,
+                            maintenanceContract: nextFlags.includes("wartung")
+                          });
+                        }}
+                        className="h-4 w-4"
+                      />
+                      {contract.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <label className="block md:col-span-2">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
+                  <input
+                    value={editCustomer.street}
+                    onChange={(event) => updateCustomer(editCustomer.id, { street: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">PLZ</span>
+                  <input
+                    value={editCustomer.postalCode}
+                    onChange={(event) => updateCustomer(editCustomer.id, { postalCode: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">Ort</span>
+                  <input
+                    value={editCustomer.city}
+                    onChange={(event) => updateCustomer(editCustomer.id, { city: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-6xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 rounded-2xl border border-sand-200 bg-gradient-to-r from-white via-sand-50 to-sand-100 px-3 py-2.5 shadow-soft">
@@ -1850,16 +2011,14 @@ export default function CustomerDirectoryView() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-5">
-        <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
-          <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Übersicht</p>
-                <h2 className="text-base font-display text-sand-900">Kundendatei</h2>
-              </div>
+      <main className="max-w-6xl mx-auto px-4 py-5 space-y-4">
+        <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Übersicht</p>
+              <h2 className="text-base font-display text-sand-900">Kundendatei</h2>
             </div>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-700">
                 Gesamt {totalCustomers}
               </span>
@@ -1870,7 +2029,9 @@ export default function CustomerDirectoryView() {
                 Inaktiv {inactiveCustomers}
               </span>
             </div>
-            <label className="relative block mb-3">
+          </div>
+          <div className="mb-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] items-center">
+            <label className="relative block">
               <span className="sr-only">Suche</span>
               <Search size={14} className="absolute left-3 top-3 text-sand-400" />
               <input
@@ -1880,7 +2041,7 @@ export default function CustomerDirectoryView() {
                 className="w-full rounded-2xl border border-sand-200 pl-9 pr-3 py-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-sand-300"
               />
             </label>
-            <label className="mb-2 flex items-center gap-2 text-xs text-sand-600">
+            <label className="flex items-center gap-2 text-xs text-sand-600">
               <input
                 type="checkbox"
                 checked={showInactive}
@@ -1889,47 +2050,124 @@ export default function CustomerDirectoryView() {
               />
               Inaktive Kunden einblenden
             </label>
-            <div className="mt-3 space-y-1.5 max-h-[calc(100dvh-260px)] overflow-auto pr-1">
-              {filteredCustomers.length ? (
-                sortedCustomers.map((customer) => {
-                  return (
-                    <button
+          </div>
+          <div className="overflow-auto rounded-2xl border border-sand-200">
+            <table className="min-w-full text-xs">
+              <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
+                <tr>
+                  <th className="px-3 py-2 text-left">Kunde</th>
+                  <th className="px-3 py-2 text-left">Kommunikation</th>
+                  <th className="px-3 py-2 text-left">Kundenstatus</th>
+                  <th className="px-3 py-2 text-left">Vertragsstatus</th>
+                  <th className="px-3 py-2 text-right">Aktion</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedCustomers.length ? (
+                  sortedCustomers.map((customer) => (
+                    <tr
                       key={customer.id}
-                      type="button"
+                      className={customer.id === activeId ? "bg-sand-50" : "bg-white"}
                       onClick={() => setActiveId(customer.id)}
-                      className={`w-full text-left rounded-2xl border px-2.5 py-1 transition ${
-                        customer.id === activeId
-                          ? "border-sand-900 bg-sand-900 text-white"
-                          : "border-sand-200 bg-sand-50 text-sand-700 hover:bg-sand-100"
-                      }`}
                     >
-                      <div className="text-[11px] font-semibold leading-tight">
-                        {customer.name?.trim() || "Unbenannter Kunde"}
-                      </div>
-                      <div className="mt-0.5 text-[9px] text-sand-500 leading-tight">
-                        {customer.creditorNumber || customer.shortCode ? (
-                          <>
-                            {customer.creditorNumber
-                              ? `Kunden-Nr. ${customer.creditorNumber}`
-                              : "Ohne Nummer"}
-                            {customer.shortCode ? ` · ${customer.shortCode}` : ""}
-                          </>
-                        ) : (
-                          "Ohne Nummer"
-                        )}
-                      </div>
-                    </button>
-                  );
-                })
-              ) : (
-                <div className="rounded-2xl border border-dashed border-sand-200 p-4 text-xs text-sand-500">
-                  Keine Treffer. Tipp: über den Namen oder die interne Nummer suchen.
-                </div>
-              )}
-            </div>
-          </section>
+                      <td className="px-3 py-2 align-top">
+                        <p className="font-semibold text-sand-900">{customer.name?.trim() || "Unbenannter Kunde"}</p>
+                        <p className="text-[11px] text-sand-500">
+                          {customer.creditorNumber || "Ohne Nr."}
+                          {customer.shortCode ? ` · ${customer.shortCode}` : ""}
+                        </p>
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(customer.customerReport)}
+                              onChange={(event) =>
+                                updateCustomer(customer.id, { customerReport: event.target.checked })
+                              }
+                              className="h-3.5 w-3.5"
+                            />
+                            Bericht
+                          </label>
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(customer.newsletter)}
+                              onChange={(event) =>
+                                updateCustomer(customer.id, { newsletter: event.target.checked })
+                              }
+                              className="h-3.5 w-3.5"
+                            />
+                            Newsletter
+                          </label>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <select
+                          value={String(customer.status || "active")}
+                          onChange={(event) => updateCustomer(customer.id, { status: event.target.value })}
+                          className="rounded-lg border border-sand-200 px-2 py-1 text-xs"
+                        >
+                          <option value="active">Aktiv</option>
+                          <option value="inactive">Inaktiv</option>
+                        </select>
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {[
+                            { id: "wartung", label: "Wartung" },
+                            { id: "monitoring", label: "Monitoring" }
+                          ].map((contract) => (
+                            <label key={contract.id} className="inline-flex items-center gap-1">
+                              <input
+                                type="checkbox"
+                                checked={Boolean((customer.contractFlags || []).includes(contract.id))}
+                                onChange={(event) => {
+                                  const current = new Set(customer.contractFlags || []);
+                                  if (event.target.checked) current.add(contract.id);
+                                  else current.delete(contract.id);
+                                  const nextFlags = Array.from(current);
+                                  updateCustomer(customer.id, {
+                                    contractFlags: nextFlags,
+                                    maintenanceContract: nextFlags.includes("wartung")
+                                  });
+                                }}
+                                className="h-3.5 w-3.5"
+                              />
+                              {contract.label}
+                            </label>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 align-top text-right">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setActiveId(customer.id);
+                            setEditCustomerId(customer.id);
+                          }}
+                          className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                        >
+                          Bearbeiten
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-sand-500">
+                      Keine Treffer.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
-          <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+        <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
             <div className="flex flex-wrap items-center gap-2 border-b border-sand-200 pb-3 mb-4">
               <button
                 type="button"
@@ -2501,159 +2739,6 @@ export default function CustomerDirectoryView() {
                   </div>
                 </div>
 
-                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge</p>
-                    <span className="text-[11px] text-sand-500">
-                      Verträge pro Kunde (z. B. AVV DSGVO), downloadbar und stornierbar.
-                    </span>
-                  </div>
-                  <div className="grid gap-2 md:grid-cols-3">
-                    <label className="block md:col-span-2">
-                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Titel</span>
-                      <input
-                        value={contractDraft.title}
-                        onChange={(event) => setContractDraft((prev) => ({ ...prev, title: event.target.value }))}
-                        placeholder="z. B. Auftragsdatenverarbeitung (DSGVO)"
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Typ</span>
-                      <select
-                        value={contractDraft.docType}
-                        onChange={(event) => setContractDraft((prev) => ({ ...prev, docType: event.target.value }))}
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                      >
-                        <option value="vertrag">Vertrag</option>
-                        <option value="avv_dsgvo">AVV DSGVO</option>
-                        <option value="monitoring">Monitoring</option>
-                        <option value="wartung">Wartung</option>
-                        <option value="sonstiges">Sonstiges</option>
-                      </select>
-                    </label>
-                    <label className="block">
-                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
-                      <input
-                        value={contractDraft.note}
-                        onChange={(event) => setContractDraft((prev) => ({ ...prev, note: event.target.value }))}
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Gültig ab</span>
-                      <input
-                        type="date"
-                        value={contractDraft.validFrom}
-                        onChange={(event) => setContractDraft((prev) => ({ ...prev, validFrom: event.target.value }))}
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Laufzeit (Monate)</span>
-                      <input
-                        type="number"
-                        min={1}
-                        value={contractDraft.runtimeMonths}
-                        onChange={(event) =>
-                          setContractDraft((prev) => ({ ...prev, runtimeMonths: event.target.value }))
-                        }
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                      />
-                    </label>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => generateContractPreview(true)}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-                    >
-                      <Eye size={12} /> Vorschau
-                    </button>
-                    <button
-                      type="button"
-                      onClick={exportGeneratedContractPdf}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-                    >
-                      <FileDown size={12} /> PDF downloaden
-                    </button>
-                    <button
-                      type="button"
-                      onClick={saveGeneratedContract}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-                    >
-                      <Plus size={12} /> Als Vertrag speichern
-                    </button>
-                    {contractPreviewStatus === "saved" ? (
-                      <span className="text-xs text-emerald-600">Vorschau aktualisiert</span>
-                    ) : null}
-                    {contractPreviewStatus === "error" ? (
-                      <span className="text-xs text-rose-600">Vorschau fehlgeschlagen</span>
-                    ) : null}
-                    {contractSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
-                    {contractSaveStatus === "error" ? (
-                      <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
-                    ) : null}
-                  </div>
-                  <div className="space-y-2 max-h-56 overflow-auto pr-1">
-                    {(customerContracts || []).map((item) => (
-                      <div key={item.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold text-sand-800">{item.title || "Vertrag"}</p>
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                              String(item.status || "active") === "cancelled"
-                                ? "border-rose-200 bg-rose-50 text-rose-700"
-                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            }`}
-                          >
-                            {String(item.status || "active") === "cancelled" ? "Storniert" : "Aktiv"}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-[11px] text-sand-600">
-                          Typ: {String(item.doc_type || "vertrag")} · Datei: {item.file_name || "n/a"}
-                        </p>
-                        <p className="text-[10px] text-sand-500">
-                          {new Date(item.created_at || Date.now()).toLocaleString("de-DE")}
-                          {item.cancelled_at ? ` · storniert am ${new Date(item.cancelled_at).toLocaleString("de-DE")}` : ""}
-                        </p>
-                        {item.cancel_reason ? <p className="text-[10px] text-rose-600">Grund: {item.cancel_reason}</p> : null}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
-                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                          >
-                            <FileDown size={11} /> PDF
-                          </button>
-                          {String(item.status || "active") === "cancelled" ? (
-                            <button
-                              type="button"
-                              onClick={() => reactivateContractDocument(item.id)}
-                              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                            >
-                              Reaktivieren
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => cancelContractDocument(item.id)}
-                              className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                            >
-                              Stornieren
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
-                    {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
-                    {!customerContracts.length && contractsStatus !== "loading" ? (
-                      <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
-                    ) : null}
-                  </div>
-                </div>
-
                 <div className="grid gap-3 md:grid-cols-2">
                   <label className="block md:col-span-2">
                     <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
@@ -2860,6 +2945,166 @@ export default function CustomerDirectoryView() {
                   )}
                 </div>
 
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge</p>
+                    <span className="text-[11px] text-sand-500">
+                      Verträge pro Kunde (z. B. AVV DSGVO), downloadbar und stornierbar.
+                    </span>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-3">
+                    <label className="block md:col-span-2">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Titel</span>
+                      <input
+                        value={contractDraft.title}
+                        onChange={(event) => setContractDraft((prev) => ({ ...prev, title: event.target.value }))}
+                        placeholder="z. B. Auftragsdatenverarbeitung (DSGVO)"
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Typ</span>
+                      <select
+                        value={contractDraft.docType}
+                        onChange={(event) => setContractDraft((prev) => ({ ...prev, docType: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      >
+                        <option value="vertrag">Vertrag</option>
+                        <option value="avv_dsgvo">AVV DSGVO</option>
+                        <option value="monitoring">Monitoring</option>
+                        <option value="wartung">Wartung</option>
+                        <option value="sonstiges">Sonstiges</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
+                      <input
+                        value={contractDraft.note}
+                        onChange={(event) => setContractDraft((prev) => ({ ...prev, note: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Gültig ab</span>
+                      <input
+                        type="date"
+                        value={contractDraft.validFrom}
+                        onChange={(event) => setContractDraft((prev) => ({ ...prev, validFrom: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Laufzeit (Monate)</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={contractDraft.runtimeMonths}
+                        onChange={(event) =>
+                          setContractDraft((prev) => ({ ...prev, runtimeMonths: event.target.value }))
+                        }
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => generateContractPreview(true)}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      <Eye size={12} /> Vorschau
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportGeneratedContractPdf}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      <FileDown size={12} /> PDF downloaden
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveGeneratedContract}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                    >
+                      <Plus size={12} /> Als Vertrag speichern
+                    </button>
+                    {contractPreviewStatus === "saved" ? (
+                      <span className="text-xs text-emerald-600">Vorschau aktualisiert</span>
+                    ) : null}
+                    {contractPreviewStatus === "error" ? (
+                      <span className="text-xs text-rose-600">Vorschau fehlgeschlagen</span>
+                    ) : null}
+                    {contractSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
+                    {contractSaveStatus === "error" ? (
+                      <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2 max-h-56 overflow-auto pr-1">
+                    {(customerContracts || []).map((item) => (
+                      <div key={item.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold text-sand-800">{item.title || "Vertrag"}</p>
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                              String(item.status || "active") === "cancelled"
+                                ? "border-rose-200 bg-rose-50 text-rose-700"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            }`}
+                          >
+                            {String(item.status || "active") === "cancelled" ? "Storniert" : "Aktiv"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-sand-600">
+                          Typ: {String(item.doc_type || "vertrag")} · Datei: {item.file_name || "n/a"}
+                        </p>
+                        <p className="text-[10px] text-sand-500">
+                          {new Date(item.created_at || Date.now()).toLocaleString("de-DE")}
+                          {item.cancelled_at ? ` · storniert am ${new Date(item.cancelled_at).toLocaleString("de-DE")}` : ""}
+                        </p>
+                        {item.cancel_reason ? <p className="text-[10px] text-rose-600">Grund: {item.cancel_reason}</p> : null}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                          >
+                            <FileDown size={11} /> PDF
+                          </button>
+                          {String(item.status || "active") === "cancelled" ? (
+                            <button
+                              type="button"
+                              onClick={() => reactivateContractDocument(item.id)}
+                              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                            >
+                              Reaktivieren
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => cancelContractDocument(item.id)}
+                              className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                            >
+                              Stornieren
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => deleteContractDocument(item.id)}
+                            className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                          >
+                            <Trash2 size={11} /> Löschen
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
+                    {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
+                    {!customerContracts.length && contractsStatus !== "loading" ? (
+                      <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
+                    ) : null}
+                  </div>
+                </div>
+
                 <div className="rounded-2xl border border-sand-200 bg-white p-4">
                   <div className="flex items-center gap-2 text-sand-700 mb-3">
                     <BadgeCheck size={16} />
@@ -3017,8 +3262,7 @@ export default function CustomerDirectoryView() {
                 </button>
               </div>
             )}
-          </section>
-        </div>
+        </section>
         {importPreview ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
             <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-soft">
