@@ -4549,11 +4549,17 @@ def _build_customer_development_context(
             func.lower(func.trim(InfraDiscoveryDevice.customer_name))
             == func.lower(func.trim(customer.name))
         )
-    customer_discovery_rows = (
-        db.query(InfraDiscoveryDevice)
-        .filter(or_(*discovery_conditions))
-        .all()
-    )
+    customer_discovery_rows = db.query(InfraDiscoveryDevice).filter(or_(*discovery_conditions)).all()
+    # Fallback match by normalized customer name for historical rows without strict id/number mapping.
+    if not customer_discovery_rows and str(customer.name or "").strip():
+        normalized_customer_name = _dev_normalize_text(customer.name)
+        if normalized_customer_name:
+            name_candidates = db.query(InfraDiscoveryDevice).filter(InfraDiscoveryDevice.customer_id.is_(None)).all()
+            customer_discovery_rows = [
+                row
+                for row in name_candidates
+                if _dev_normalize_text(str(row.customer_name or "")) == normalized_customer_name
+            ]
     discovered_total = len(customer_discovery_rows)
     discovered_unmanaged = sum(1 for row in customer_discovery_rows if not bool(row.managed))
 
@@ -4720,6 +4726,8 @@ def _build_customer_development_context(
     light["recommendations"] = recommendations
     light["telephony"] = telephony
     light["reasons"] = signals
+    light["managedInfrastructureDevices"] = managed_devices
+    light["discoveredInfrastructureDevices"] = discovered_devices
     light["infrastructureDevices"] = managed_devices + discovered_devices
     light["source"] = {
         "sevdesk": bool(sevdesk_rows),
@@ -5075,6 +5083,109 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
     return payload
 
 
+@app.post("/api/customers/{customer_id}/development/discovery_run")
+def run_customer_development_discovery(customer_id: int, request: Request):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        integration = db.query(IntegrationSettings).first()
+
+    session, host = _build_tactical_rmm_session(integration)
+    if not session or not host:
+        raise HTTPException(400, "RMM integration missing host or API key")
+
+    tactical_agents, connected = _fetch_tactical_rmm_agents(integration)
+    if not connected:
+        raise HTTPException(502, "RMM agent list unavailable")
+    matched_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
+    if not matched_agents:
+        raise HTTPException(404, "No matching RMM agent for this customer")
+    matched_agents.sort(key=lambda agent: (not _agent_is_online(agent), str(agent.get("hostname") or "")))
+    target_agent = matched_agents[0]
+    target_agent_id = _extract_agent_id(target_agent)
+    if not target_agent_id:
+        raise HTTPException(404, "Matched RMM agent has no agent id")
+
+    try:
+        scripts_res = session.get(f"{host}/scripts/", timeout=25)
+        scripts_res.raise_for_status()
+        scripts_payload = scripts_res.json()
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to list RMM scripts: {exc}") from exc
+    if not isinstance(scripts_payload, list):
+        raise HTTPException(502, "Unexpected script list response from RMM")
+
+    target_script = None
+    for script in scripts_payload:
+        name = str(script.get("name") or "").strip().lower()
+        if name == "workbench_infradiscover":
+            target_script = script
+            break
+    if target_script is None:
+        for script in scripts_payload:
+            name = str(script.get("name") or "").strip().lower()
+            if "infra" in name and "discover" in name:
+                target_script = script
+                break
+    if target_script is None:
+        raise HTTPException(404, "Discovery script not found in RMM (expected Workbench_InfraDiscover)")
+
+    script_id = target_script.get("id")
+    if not isinstance(script_id, int):
+        raise HTTPException(502, "Invalid discovery script id from RMM")
+
+    api_base = str(request.base_url).rstrip("/")
+    api_url = f"{api_base}/api"
+    discovery_token = str(os.environ.get("INFRA_DISCOVERY_TOKEN") or "").strip()
+    args = [
+        "--api-url", api_url,
+        "--customer-id", str(customer.id),
+        "--customer-number", str(customer.creditor_number or "").strip(),
+        "--customer-name", str(customer.name or "").strip(),
+        "--source", "rmm_agent_scan",
+        "--rmm-host", host,
+        "--rmm-api-key", str(integration.rmm_api_key or "").strip() if integration else "",
+        "--rmm-api-key-header", str((integration.rmm_api_key_header or "X-API-KEY") if integration else "X-API-KEY"),
+        "--rmm-agent-id", target_agent_id,
+        "--derive-prefix", "24",
+        "--cache-ttl-seconds", "1800",
+        "--force",
+    ]
+    if discovery_token:
+        args.extend(["--discovery-token", discovery_token])
+
+    run_payload = {
+        "output": "wait",
+        "emails": [],
+        "emailMode": "default",
+        "custom_field": None,
+        "save_all_output": False,
+        "script": script_id,
+        "args": args,
+        "env_vars": [],
+        "run_as_user": False,
+        "timeout": 1500,
+    }
+    try:
+        run_res = session.post(f"{host}/agents/{quote(target_agent_id)}/runscript/", json=run_payload, timeout=1800)
+        run_res.raise_for_status()
+        run_data = run_res.json()
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to trigger discovery run: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "customerId": customer.id,
+        "customerName": customer.name or "",
+        "agentId": target_agent_id,
+        "agentHostname": str(target_agent.get("hostname") or target_agent.get("name") or "").strip(),
+        "scriptId": script_id,
+        "scriptName": str(target_script.get("name") or "").strip(),
+        "rmmResponse": run_data if isinstance(run_data, dict) else {},
+    }
+
+
 @app.post("/api/customer_development/ai_assist")
 def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
     mode = str(data.mode or "summary").strip().lower()
@@ -5341,6 +5452,34 @@ def ingest_infrastructure_discovery(
     updated = 0
     with SessionLocal() as db:
         for item in payload.items:
+            resolved_customer_id = item.customer_id
+            if resolved_customer_id is None:
+                number_value = str(item.customer_number or "").strip()
+                name_value = str(item.customer_name or "").strip()
+                customer_match = None
+                if number_value:
+                    normalized_number = _normalize_customer_number(number_value)
+                    customer_match = (
+                        db.query(Customer)
+                        .filter(
+                            or_(
+                                func.lower(func.trim(Customer.creditor_number))
+                                == func.lower(func.trim(number_value)),
+                                func.lower(func.trim(Customer.creditor_number))
+                                == func.lower(func.trim(normalized_number)),
+                            )
+                        )
+                        .first()
+                    )
+                if not customer_match and name_value:
+                    customer_match = (
+                        db.query(Customer)
+                        .filter(func.lower(func.trim(Customer.name)) == func.lower(func.trim(name_value)))
+                        .first()
+                    )
+                if customer_match:
+                    resolved_customer_id = customer_match.id
+
             seen_at = int(item.seen_at or now_ms)
             existing = (
                 db.query(InfraDiscoveryDevice)
@@ -5351,11 +5490,12 @@ def ingest_infrastructure_discovery(
                     == func.lower(func.trim(item.ip or "")),
                     func.lower(func.trim(InfraDiscoveryDevice.mac))
                     == func.lower(func.trim(item.mac or "")),
-                    InfraDiscoveryDevice.customer_id == item.customer_id,
+                    InfraDiscoveryDevice.customer_id == resolved_customer_id,
                 )
                 .first()
             )
             if existing:
+                existing.customer_id = resolved_customer_id
                 existing.customer_number = item.customer_number or existing.customer_number
                 existing.customer_name = item.customer_name or existing.customer_name
                 existing.hostname = item.hostname or existing.hostname
@@ -5370,7 +5510,7 @@ def ingest_infrastructure_discovery(
                 continue
             db.add(
                 InfraDiscoveryDevice(
-                    customer_id=item.customer_id,
+                    customer_id=resolved_customer_id,
                     customer_number=item.customer_number or "",
                     customer_name=item.customer_name or "",
                     source=item.source or "agent",

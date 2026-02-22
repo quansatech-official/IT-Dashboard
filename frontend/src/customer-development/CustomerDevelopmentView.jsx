@@ -1,5 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowDownUp, Eye, Plus, Shield, TrendingDown, Users, X } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDownUp,
+  Bot,
+  Eye,
+  FileSearch,
+  Plus,
+  RefreshCw,
+  ScanSearch,
+  Shield,
+  Sparkles,
+  TrendingDown,
+  Users,
+  X,
+} from "lucide-react";
 
 const API = "/api";
 
@@ -53,6 +67,22 @@ const revenueComparisonPercents = (lastYear, currentYear) => {
   };
 };
 
+const LoadingProgress = ({ label, progress }) => (
+  <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">{label}</p>
+      <p className="text-xs font-semibold text-sand-700">{Math.max(0, Math.min(100, Math.round(progress)))}%</p>
+    </div>
+    <div className="mt-2 h-2 overflow-hidden rounded-full border border-sand-200 bg-white">
+      <div
+        className="h-full rounded-full bg-sand-500 transition-[width] duration-200"
+        style={{ width: `${Math.max(0, Math.min(100, progress))}%` }}
+      />
+    </div>
+    <div className="mt-2 h-1.5 w-24 rounded-full bg-sand-300 animate-pulse" />
+  </div>
+);
+
 export default function CustomerDevelopmentView() {
   const aiModes = [
     { value: "angebot", label: "Angebot" },
@@ -81,7 +111,9 @@ export default function CustomerDevelopmentView() {
   });
   const [detailTab, setDetailTab] = useState("overview");
   const [detailStatus, setDetailStatus] = useState("idle");
+  const [detailProgress, setDetailProgress] = useState(0);
   const [detailData, setDetailData] = useState(null);
+  const [aiProgress, setAiProgress] = useState(0);
   const [cveScan, setCveScan] = useState({
     status: "idle",
     scannedSoftware: 0,
@@ -90,12 +122,20 @@ export default function CustomerDevelopmentView() {
     fromCache: false,
     error: ""
   });
+  const [discoveryRun, setDiscoveryRun] = useState({
+    status: "idle",
+    message: "",
+    error: "",
+  });
+  const [discoveryProgress, setDiscoveryProgress] = useState(0);
   const [reportSuggestion, setReportSuggestion] = useState({
     status: "idle",
     title: "",
     text: "",
     error: ""
   });
+  const [reportProgress, setReportProgress] = useState(0);
+  const [cveProgress, setCveProgress] = useState(0);
   const [includeInactive, setIncludeInactive] = useState(false);
   const [viewMode, setViewMode] = useState("list");
   const [filters, setFilters] = useState({
@@ -103,7 +143,7 @@ export default function CustomerDevelopmentView() {
     revenueFalling: false,
     highCommunication: false,
     infraRisk: false,
-    recommendationNeedle: ""
+    searchNeedle: ""
   });
 
   const load = async (forceRefresh = false) => {
@@ -151,16 +191,20 @@ export default function CustomerDevelopmentView() {
   const loadDetail = (forceRefresh = false) => {
     if (!detailModal.open || !detailModal.customerId) return;
     setDetailStatus("loading");
+    setDetailProgress(8);
     fetch(`${API}/customers/${detailModal.customerId}/development?refresh=${forceRefresh ? "1" : "0"}`)
       .then((res) => {
         if (!res.ok) throw new Error("detail_failed");
+        setDetailProgress((prev) => Math.max(prev, 58));
         return res.json();
       })
       .then((data) => {
+        setDetailProgress(100);
         setDetailData(data || null);
         setDetailStatus("ready");
       })
       .catch(() => {
+        setDetailProgress(100);
         setDetailStatus("error");
       });
   };
@@ -171,20 +215,36 @@ export default function CustomerDevelopmentView() {
       if (filters.revenueFalling && Number(item.revenueTrendPct || 0) >= 0) return false;
       if (filters.highCommunication && Number(item.communicationLoad || 0) < 120) return false;
       if (filters.infraRisk && Number(item.infrastructureRisk || 0) < 25) return false;
-      const needle = String(filters.recommendationNeedle || "").trim().toLowerCase();
+      const needle = String(filters.searchNeedle || "").trim().toLowerCase();
       if (needle) {
-        const inTop = (item.topRecommendations || []).some((rec) =>
-          `${rec?.title || ""} ${rec?.type || ""}`.toLowerCase().includes(needle)
-        );
-        if (!inTop) return false;
+        const terms = needle.split(/\s+/).filter(Boolean);
+        const searchPool = [
+          item.customerName,
+          item.customerNumber,
+          item.developmentState,
+          item.status,
+          ...(item.signals || []),
+          ...(item.contractFlags || []),
+          ...(item.topRecommendations || []).flatMap((rec) => [rec?.title, rec?.type, rec?.why]),
+          String(item.priority || ""),
+          String(item.ticketLoad || ""),
+          String(item.communicationLoad || ""),
+          String(item.infrastructureRisk || ""),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const matchesAllTerms = terms.every((term) => searchPool.includes(term));
+        if (!matchesAllTerms) return false;
       }
       return true;
     });
   }, [contexts, filters]);
 
-  const createTask = async () => {
+  const createTask = async (prefillTitle) => {
     if (!detailModal.customerId) return;
     const suggestionTitle =
+      prefillTitle ||
       detailData?.topRecommendations?.[0]?.title ||
       detailData?.recommendations?.[0]?.title ||
       "Follow-up Kundenentwicklung";
@@ -204,6 +264,104 @@ export default function CustomerDevelopmentView() {
       })
     });
   };
+
+  const actionSuggestions = useMemo(() => {
+    const suggestions = [];
+    if (!detailData) return suggestions;
+
+    if (detailTab === "overview") {
+      const recs = (detailData.recommendations || detailData.topRecommendations || []).slice(0, 3);
+      recs.forEach((rec) => {
+        const title = String(rec?.title || "").trim();
+        if (!title) return;
+        suggestions.push({ label: title, title: `Empfehlung umsetzen: ${title}` });
+      });
+      if (!suggestions.length) {
+        suggestions.push({ label: "Allgemeines Follow-up", title: "Follow-up Kundenentwicklung" });
+      }
+      return suggestions;
+    }
+
+    if (detailTab === "infra") {
+      const unmanaged = Number(detailData?.infra?.unmanagedCount || 0);
+      const coveragePct = Math.round(ratioToPercent(detailData?.infra?.coverageRatio));
+      const discovered = Number((detailData?.discoveredInfrastructureDevices || []).length || 0);
+      if (unmanaged > 0) {
+        suggestions.push({
+          label: `Unmanaged Geräte prüfen (${unmanaged})`,
+          title: `Unmanaged Geräte inventarisieren (${unmanaged})`,
+        });
+      }
+      if (coveragePct < 70) {
+        suggestions.push({
+          label: `RMM-Abdeckung erhöhen (${coveragePct}%)`,
+          title: `RMM-Abdeckung erhöhen (aktuell ${coveragePct}%)`,
+        });
+      }
+      if (discovered > 0) {
+        suggestions.push({
+          label: `Discovery-Inventar prüfen (${discovered})`,
+          title: `Discovery-Inventar validieren (${discovered} Geräte)`,
+        });
+      }
+      if (!suggestions.length) {
+        suggestions.push({ label: "Infrastruktur prüfen", title: "Infrastruktur Review durchführen" });
+      }
+      return suggestions;
+    }
+
+    if (detailTab === "cve") {
+      const findingSuggestions = [];
+      (cveScan.agents || []).forEach((agent) => {
+        (agent?.findings || []).slice(0, 2).forEach((item) => {
+          findingSuggestions.push({
+            label: `${item?.name || "Software"} @ ${agent?.hostname || "Agent"}`,
+            title: `CVE prüfen: ${item?.name || "Software"} auf ${agent?.hostname || "Agent"}`,
+          });
+        });
+      });
+      if (findingSuggestions.length) {
+        return findingSuggestions.slice(0, 4);
+      }
+      const matchedAgents = Number(cveScan.matchedAgents || 0);
+      const scannedSoftware = Number(cveScan.scannedSoftware || 0);
+      if (matchedAgents > 0 && scannedSoftware === 0) {
+        suggestions.push({
+          label: "Software-Inventar auf Agenten prüfen",
+          title: "RMM-Softwareinventar prüfen (keine Pakete für CVE-Scan)",
+        });
+      } else if (matchedAgents === 0) {
+        suggestions.push({
+          label: "Agent-Zuordnung korrigieren",
+          title: "Kunden-Agent-Zuordnung für CVE-Analyse prüfen",
+        });
+      } else {
+        suggestions.push({
+          label: "CVE-Review dokumentieren",
+          title: "CVE-Analyse prüfen und dokumentieren",
+        });
+      }
+      return suggestions;
+    }
+
+    if (detailTab === "ki") {
+      if (String(detailAi.text || "").trim()) {
+        suggestions.push({
+          label: "KI-Vorschlag nachfassen",
+          title: "KI-Vorschlag mit Kunde abstimmen und nachverfolgen",
+        });
+      } else {
+        suggestions.push({
+          label: "KI-Entwurf erstellen",
+          title: "KI-Entwurf erzeugen und als Maßnahme planen",
+        });
+      }
+      return suggestions;
+    }
+
+    suggestions.push({ label: "Follow-up", title: "Follow-up Kundenentwicklung" });
+    return suggestions;
+  }, [detailData, detailTab, cveScan, detailAi.text]);
 
   const runAiAssist = async (mode) => {
     if (!detailModal.customerId && mode !== "newsletter") return;
@@ -269,6 +427,7 @@ export default function CustomerDevelopmentView() {
       fromCache: false,
       error: ""
     });
+    setDiscoveryRun({ status: "idle", message: "", error: "" });
     setReportSuggestion({ status: "idle", title: "", text: "", error: "" });
     setDetailAi({
       open: false,
@@ -298,6 +457,7 @@ export default function CustomerDevelopmentView() {
       fromCache: false,
       error: ""
     });
+    setDiscoveryRun({ status: "idle", message: "", error: "" });
     setReportSuggestion({ status: "idle", title: "", text: "", error: "" });
     setDetailAi({
       open: false,
@@ -312,6 +472,7 @@ export default function CustomerDevelopmentView() {
   const previewReportSuggestion = async (recommendationIndex) => {
     if (!detailModal.customerId) return;
     setReportSuggestion({ status: "loading", title: "", text: "", error: "" });
+    setReportProgress(10);
     try {
       const response = await fetch(`${API}/customer_development/report_suggestion_preview`, {
         method: "POST",
@@ -322,9 +483,11 @@ export default function CustomerDevelopmentView() {
         })
       });
       const data = await response.json().catch(() => ({}));
+      setReportProgress((prev) => Math.max(prev, 72));
       if (!response.ok) {
         throw new Error(data?.detail || "Vorschau konnte nicht geladen werden");
       }
+      setReportProgress(100);
       setReportSuggestion({
         status: "ready",
         title: data?.suggestion?.title || "Berichtsvorschlag",
@@ -332,6 +495,7 @@ export default function CustomerDevelopmentView() {
         error: ""
       });
     } catch (error) {
+      setReportProgress(100);
       setReportSuggestion({
         status: "error",
         title: "",
@@ -343,6 +507,7 @@ export default function CustomerDevelopmentView() {
 
   const runCveScan = async (forceRefresh = true) => {
     if (!detailModal.customerId) return;
+    setCveProgress(10);
     setCveScan({
       status: "loading",
       scannedSoftware: 0,
@@ -351,12 +516,17 @@ export default function CustomerDevelopmentView() {
       fromCache: false,
       error: ""
     });
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 90000);
     try {
       const response = await fetch(
-        `${API}/customers/${detailModal.customerId}/development/cve_scan?refresh=${forceRefresh ? "1" : "0"}`
+        `${API}/customers/${detailModal.customerId}/development/cve_scan?refresh=${forceRefresh ? "1" : "0"}`,
+        { signal: controller.signal }
       );
       const data = await response.json().catch(() => ({}));
+      setCveProgress((prev) => Math.max(prev, 72));
       if (!response.ok) throw new Error(data?.detail || "CVE Analyse fehlgeschlagen");
+      setCveProgress(100);
       setCveScan({
         status: "ready",
         scannedSoftware: Number(data?.scannedSoftware || 0),
@@ -366,16 +536,111 @@ export default function CustomerDevelopmentView() {
         error: ""
       });
     } catch (error) {
+      setCveProgress(100);
       setCveScan({
         status: "error",
         scannedSoftware: 0,
         matchedAgents: 0,
         agents: [],
         fromCache: false,
-        error: error?.message ? String(error.message) : "CVE Analyse fehlgeschlagen"
+        error:
+          error?.name === "AbortError"
+            ? "CVE Analyse Timeout (90s). Bitte erneut versuchen."
+            : error?.message
+              ? String(error.message)
+              : "CVE Analyse fehlgeschlagen"
+      });
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  };
+
+  const runInfrastructureDiscovery = async () => {
+    if (!detailModal.customerId) return;
+    setDiscoveryRun({ status: "loading", message: "", error: "" });
+    setDiscoveryProgress(10);
+    try {
+      const response = await fetch(`${API}/customers/${detailModal.customerId}/development/discovery_run`, {
+        method: "POST",
+      });
+      const data = await response.json().catch(() => ({}));
+      setDiscoveryProgress((prev) => Math.max(prev, 75));
+      if (!response.ok) {
+        throw new Error(data?.detail || "Discovery konnte nicht gestartet werden");
+      }
+      setDiscoveryProgress(100);
+      const agentLabel = data?.agentHostname ? ` auf ${String(data.agentHostname)}` : "";
+      setDiscoveryRun({
+        status: "ready",
+        message: `Discovery gestartet${agentLabel}.`,
+        error: "",
+      });
+      loadDetail(true);
+    } catch (error) {
+      setDiscoveryProgress(100);
+      setDiscoveryRun({
+        status: "error",
+        message: "",
+        error: error?.message ? String(error.message) : "Discovery konnte nicht gestartet werden",
       });
     }
   };
+
+  useEffect(() => {
+    if (detailStatus !== "loading") return;
+    const timer = window.setInterval(() => {
+      setDetailProgress((prev) => (prev >= 92 ? prev : Math.min(92, prev + (prev < 35 ? 7 : 3))));
+    }, 170);
+    return () => window.clearInterval(timer);
+  }, [detailStatus]);
+
+  useEffect(() => {
+    if (!aiBusy) return;
+    setAiProgress(10);
+    const timer = window.setInterval(() => {
+      setAiProgress((prev) => (prev >= 90 ? prev : Math.min(90, prev + (prev < 40 ? 8 : 4))));
+    }, 180);
+    return () => window.clearInterval(timer);
+  }, [aiBusy]);
+
+  useEffect(() => {
+    if (!aiBusy && aiProgress > 0) {
+      setAiProgress(100);
+      const timer = window.setTimeout(() => setAiProgress(0), 220);
+      return () => window.clearTimeout(timer);
+    }
+  }, [aiBusy, aiProgress]);
+
+  useEffect(() => {
+    if (reportSuggestion.status !== "loading") return;
+    const timer = window.setInterval(() => {
+      setReportProgress((prev) => (prev >= 92 ? prev : Math.min(92, prev + (prev < 40 ? 7 : 3))));
+    }, 180);
+    return () => window.clearInterval(timer);
+  }, [reportSuggestion.status]);
+
+  useEffect(() => {
+    if (cveScan.status !== "loading") return;
+    const timer = window.setInterval(() => {
+      setCveProgress((prev) => (prev >= 92 ? prev : Math.min(92, prev + (prev < 30 ? 6 : 2))));
+    }, 190);
+    return () => window.clearInterval(timer);
+  }, [cveScan.status]);
+
+  useEffect(() => {
+    if (discoveryRun.status !== "loading") return;
+    const timer = window.setInterval(() => {
+      setDiscoveryProgress((prev) => (prev >= 92 ? prev : Math.min(92, prev + (prev < 50 ? 5 : 2))));
+    }, 200);
+    return () => window.clearInterval(timer);
+  }, [discoveryRun.status]);
+
+  useEffect(() => {
+    if (!detailModal.open || !detailModal.customerId) return;
+    if (detailTab !== "cve") return;
+    if (cveScan.status !== "idle") return;
+    runCveScan(false);
+  }, [detailModal.open, detailModal.customerId, detailTab, cveScan.status]);
 
   const grouped = useMemo(() => {
     const groups = { STABLE: [], POTENTIAL: [], ATTENTION: [], RISK: [], INACTIVE: [] };
@@ -415,29 +680,33 @@ export default function CustomerDevelopmentView() {
             <div className="border-b border-sand-200 bg-white px-5 py-2">
               <div className="flex flex-wrap gap-2">
                 {[
-                  { id: "overview", label: "Übersicht" },
-                  { id: "ki", label: "KI Auswertung" },
-                  { id: "infra", label: "Infrastruktur" },
-                  { id: "cve", label: "CVE Analyse" }
-                ].map((tab) => (
+                  { id: "overview", label: "Übersicht", icon: Eye },
+                  { id: "ki", label: "KI Auswertung", icon: Plus },
+                  { id: "infra", label: "Infrastruktur", icon: Shield },
+                  { id: "cve", label: "CVE Analyse", icon: AlertTriangle }
+                ].map((tab) => {
+                  const Icon = tab.icon;
+                  return (
                   <button
                     key={tab.id}
                     type="button"
                     onClick={() => setDetailTab(tab.id)}
-                    className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                    className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
                       detailTab === tab.id
                         ? "border-sand-900 bg-sand-900 text-white"
                         : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
                     }`}
                   >
+                    <Icon size={11} />
                     {tab.label}
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
             <div className="max-h-[83vh] overflow-auto p-5 bg-sand-50">
               {detailStatus === "loading" ? (
-                <p className="text-sm text-sand-500">Lade Analytics…</p>
+                <LoadingProgress label="Lade Analytics" progress={detailProgress} />
               ) : detailStatus === "error" ? (
                 <p className="text-sm text-rose-600">Details konnten nicht geladen werden.</p>
               ) : detailData ? (
@@ -445,20 +714,23 @@ export default function CustomerDevelopmentView() {
                   <div className="rounded-2xl border border-sand-200 bg-white p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Aktionen</p>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={createTask}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
-                        >
-                          <Plus size={12} /> Aufgabe
-                        </button>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {(actionSuggestions || []).slice(0, 3).map((action, idx) => (
+                          <button
+                            key={`${action?.title || "task"}-${idx}`}
+                            type="button"
+                            onClick={() => createTask(action?.title)}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
+                          >
+                            <Plus size={12} /> {action?.label || "Aufgabe"}
+                          </button>
+                        ))}
                         <button
                           type="button"
                           onClick={() => setDetailTab("ki")}
                           className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
                         >
-                          KI Auswertung
+                          <Bot size={12} /> KI Auswertung
                         </button>
                       </div>
                     </div>
@@ -474,17 +746,18 @@ export default function CustomerDevelopmentView() {
                               key={item.value}
                               type="button"
                               onClick={() => runAiAssist(item.value)}
-                              className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
+                              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
                                 detailAi.mode === item.value
                                   ? "border-sand-900 bg-sand-900 text-white"
                                   : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
                               }`}
                             >
+                              <Sparkles size={11} />
                               {item.label}
                             </button>
                           ))}
                         </div>
-                        {aiBusy ? <p className="text-sm text-sand-500">KI generiert Vorschlag…</p> : null}
+                        {aiBusy ? <LoadingProgress label="KI generiert Vorschlag" progress={aiProgress} /> : null}
                         {detailAi.error ? <p className="text-sm text-rose-600">{detailAi.error}</p> : null}
                         <textarea
                           readOnly
@@ -502,7 +775,9 @@ export default function CustomerDevelopmentView() {
                         Berichtsvorschau (ohne Änderung am Kundenbericht)
                       </p>
                       {reportSuggestion.status === "loading" ? (
-                        <p className="mt-2 text-sm text-sand-500">Erzeuge Vorschau…</p>
+                        <div className="mt-2">
+                          <LoadingProgress label="Erzeuge Vorschau" progress={reportProgress} />
+                        </div>
                       ) : null}
                       {reportSuggestion.error ? (
                         <p className="mt-2 text-sm text-rose-600">{reportSuggestion.error}</p>
@@ -680,6 +955,7 @@ export default function CustomerDevelopmentView() {
                               onClick={() => previewReportSuggestion(idx)}
                               className="mt-2 inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
                             >
+                              <FileSearch size={11} />
                               In Bericht vorschlagen
                             </button>
                           </div>
@@ -691,54 +967,103 @@ export default function CustomerDevelopmentView() {
                   ) : null}
 
                   {detailTab === "infra" ? (
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3 space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Infrastruktur (RMM + Discovery)</p>
-                        <button
-                          type="button"
-                          onClick={() => loadDetail(true)}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
-                        >
-                          Aktualisieren
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => loadDetail(true)}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
+                          >
+                            <RefreshCw size={12} />
+                            Aktualisieren
+                          </button>
+                          <button
+                            type="button"
+                            onClick={runInfrastructureDiscovery}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
+                          >
+                            <ScanSearch size={12} />
+                            Discovery starten
+                          </button>
+                        </div>
                       </div>
                       <p className="mt-1 text-[11px] text-sand-500">
                         Quelle: Tactical RMM Agents + Discovery-Ingest aus RMM-Script (Ping/SNMP).
                       </p>
-                      <div className="mt-2 space-y-2">
-                        {(detailData.infrastructureDevices || []).length ? (
-                          (detailData.infrastructureDevices || []).map((device, idx) => (
+                      {discoveryRun.status === "loading" ? (
+                        <LoadingProgress label="Discovery läuft" progress={discoveryProgress} />
+                      ) : null}
+                      {discoveryRun.message ? <p className="text-sm text-emerald-700">{discoveryRun.message}</p> : null}
+                      {discoveryRun.error ? <p className="text-sm text-rose-600">{discoveryRun.error}</p> : null}
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agents</p>
+                          <p className="text-sm font-semibold text-sand-800">
+                            {(detailData.managedInfrastructureDevices || []).length}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Geräte</p>
+                          <p className="text-sm font-semibold text-sand-800">
+                            {(detailData.discoveredInfrastructureDevices || []).length}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Inventar</p>
+                        {(detailData.discoveredInfrastructureDevices || []).length ? (
+                          (detailData.discoveredInfrastructureDevices || []).map((device, idx) => (
                             <div key={`${device?.source || "d"}-${device?.hostname || idx}-${idx}`} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-700">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <p className="font-semibold text-sand-800">{device?.hostname || "Unbekanntes Gerät"}</p>
                                 <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide">
-                                  {device?.source === "tactical_rmm" ? "RMM" : device?.source || "Discovery"}
+                                  {device?.source || "Discovery"}
                                 </span>
                               </div>
                               <p className="mt-1 text-[11px] text-sand-600">
                                 {device?.ip ? `IP ${device.ip}` : "IP n/a"}
                                 {device?.mac ? ` · MAC ${device.mac}` : ""}
                                 {device?.protocol ? ` · ${String(device.protocol).toUpperCase()}` : ""}
-                                {typeof device?.online === "boolean" ? ` · ${device.online ? "Online" : "Offline"}` : ""}
                               </p>
-                              {device?.deviceType || device?.vendor ? (
-                                <p className="mt-1 text-[11px] text-sand-600">
-                                  {device?.deviceType ? `Typ: ${String(device.deviceType)}` : "Typ: n/a"}
-                                  {device?.vendor ? ` · Hersteller: ${String(device.vendor)}` : ""}
-                                  {typeof device?.confidence === "number" ? ` · Confidence: ${Math.max(0, Math.min(100, Number(device.confidence || 0)))}%` : ""}
-                                </p>
-                              ) : null}
+                              <p className="mt-1 text-[11px] text-sand-600">
+                                {device?.deviceType ? `Typ: ${String(device.deviceType)}` : "Typ: n/a"}
+                                {device?.vendor ? ` · Hersteller: ${String(device.vendor)}` : ""}
+                                {typeof device?.confidence === "number" ? ` · Confidence: ${Math.max(0, Math.min(100, Number(device.confidence || 0)))}%` : ""}
+                              </p>
                               {Array.isArray(device?.evidence) && device.evidence.length ? (
                                 <p className="mt-1 text-[10px] text-sand-500">
-                                  Hinweise: {device.evidence.slice(0, 3).join(", ")}
+                                  Hinweise: {device.evidence.slice(0, 4).join(", ")}
                                 </p>
                               ) : null}
                             </div>
                           ))
                         ) : (
                           <p className="text-sm text-sand-500">
-                            Keine Geräte gefunden. Prüfe RMM-Zuordnung und Discovery-Agent (Ping/SNMP).
+                            Noch keine Discovery-Geräte vorhanden. Starte den Scan über den Button oben.
                           </p>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agenten</p>
+                        {(detailData.managedInfrastructureDevices || []).length ? (
+                          (detailData.managedInfrastructureDevices || []).map((device, idx) => (
+                            <div key={`${device?.agentId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-700">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="font-semibold text-sand-800">{device?.hostname || "Unbekannter Agent"}</p>
+                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide">
+                                  RMM
+                                </span>
+                              </div>
+                              <p className="mt-1 text-[11px] text-sand-600">
+                                {device?.client || "Client n/a"} · {device?.site || "Site n/a"} ·{" "}
+                                {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
+                              </p>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-sm text-sand-500">Keine zugeordneten RMM-Agenten gefunden.</p>
                         )}
                       </div>
                     </div>
@@ -754,6 +1079,7 @@ export default function CustomerDevelopmentView() {
                             onClick={() => runCveScan(false)}
                             className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
                           >
+                            <Sparkles size={12} />
                             Cache laden
                           </button>
                           <button
@@ -761,11 +1087,19 @@ export default function CustomerDevelopmentView() {
                             onClick={() => runCveScan(true)}
                             className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
                           >
+                            <RefreshCw size={12} />
                             Neu scannen
                           </button>
                         </div>
                       </div>
-                      {cveScan.status === "loading" ? <p className="text-sm text-sand-500">Scanne Software gegen öffentliche CVE-Datenbanken…</p> : null}
+                      {cveScan.status === "loading" ? (
+                        <LoadingProgress label="Scanne Software gegen CVE-Datenbanken" progress={cveProgress} />
+                      ) : null}
+                      {cveScan.status === "idle" ? (
+                        <p className="text-sm text-sand-500">
+                          CVE Analyse startet automatisch beim Öffnen dieses Tabs.
+                        </p>
+                      ) : null}
                       {cveScan.error ? <p className="text-sm text-rose-600">{cveScan.error}</p> : null}
                       {cveScan.status === "ready" ? (
                         <div className="space-y-2">
@@ -773,6 +1107,16 @@ export default function CustomerDevelopmentView() {
                             Geprüfte Software: {cveScan.scannedSoftware} · RMM Agents: {cveScan.matchedAgents}
                             {cveScan.fromCache ? " · aus Cache" : " · live"}
                           </p>
+                          {Number(cveScan.matchedAgents || 0) === 0 ? (
+                            <p className="text-sm text-sand-500">
+                              Keine zugeordneten RMM-Agenten für diesen Kunden gefunden.
+                            </p>
+                          ) : null}
+                          {Number(cveScan.matchedAgents || 0) > 0 && Number(cveScan.scannedSoftware || 0) === 0 ? (
+                            <p className="text-sm text-sand-500">
+                              Agenten gefunden, aber keine auswertbare Softwareliste vom RMM geliefert.
+                            </p>
+                          ) : null}
                           {(cveScan.agents || []).length ? (
                             (cveScan.agents || []).map((agent, idx) => (
                               <div key={`${agent?.agentId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2 space-y-2">
@@ -939,13 +1283,13 @@ export default function CustomerDevelopmentView() {
               Infrastruktur-Risiko
             </label>
             <label className="block">
-              <span className="text-[10px] uppercase tracking-wide text-sand-500">Empfehlung enthält</span>
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Suche</span>
               <input
-                value={filters.recommendationNeedle}
+                value={filters.searchNeedle}
                 onChange={(event) =>
-                  setFilters((prev) => ({ ...prev, recommendationNeedle: event.target.value }))
+                  setFilters((prev) => ({ ...prev, searchNeedle: event.target.value }))
                 }
-                placeholder="z. B. Security"
+                placeholder="Kunde, Nr., Empfehlung, Signal ..."
                 className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-xs"
               />
             </label>
