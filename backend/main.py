@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List, Tuple, Set
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text,
-    Boolean, BigInteger, ForeignKey, inspect, text, func, or_
+    Boolean, BigInteger, ForeignKey, Float, inspect, text, func, or_
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
@@ -21,6 +21,7 @@ import unicodedata
 import hashlib
 import hmac
 import base64
+from html import escape
 from email import policy
 from email.parser import Parser
 import requests
@@ -477,6 +478,64 @@ class KnowledgeArticle(Base):
     pinned = Column(Boolean, default=False)
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
+class ContractTariff(Base):
+    __tablename__ = "contract_tariffs"
+
+    id = Column(Integer, primary_key=True)
+    family_key = Column(String, default=lambda: str(uuid.uuid4()))
+    name = Column(String, default="")
+    category = Column(String, default="wartung")
+    version = Column(Integer, default=1)
+    is_active = Column(Boolean, default=True)
+    currency = Column(String, default="EUR")
+    base_price_monthly = Column(Float, default=0.0)
+    price_server_monthly = Column(Float, default=0.0)
+    price_client_monthly = Column(Float, default=0.0)
+    price_network_monthly = Column(Float, default=0.0)
+    price_iot_monthly = Column(Float, default=0.0)
+    notes = Column(Text, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
+class CustomerContractCalculation(Base):
+    __tablename__ = "customer_contract_calculations"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    tariff_id = Column(Integer, ForeignKey("contract_tariffs.id"), nullable=True)
+    tariff_name = Column(String, default="")
+    tariff_category = Column(String, default="")
+    tariff_version = Column(Integer, default=1)
+    servers = Column(Integer, default=0)
+    clients = Column(Integer, default=0)
+    network_devices = Column(Integer, default=0)
+    iot_devices = Column(Integer, default=0)
+    monthly_total = Column(Float, default=0.0)
+    yearly_total = Column(Float, default=0.0)
+    note = Column(Text, default="")
+    snapshot_json = Column(Text, default="{}")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
+class CustomerContractDocument(Base):
+    __tablename__ = "customer_contract_documents"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    title = Column(String, default="")
+    doc_type = Column(String, default="vertrag")
+    status = Column(String, default="active")
+    file_name = Column(String, default="")
+    mime_type = Column(String, default="application/pdf")
+    content_base64 = Column(Text, default="")
+    html_content = Column(Text, default="")
+    template_key = Column(String, default="")
+    note = Column(Text, default="")
+    cancel_reason = Column(Text, default="")
+    cancelled_at = Column(BigInteger, default=0)
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 Base.metadata.create_all(bind=engine)
 
@@ -948,6 +1007,25 @@ def _ensure_infra_discovery_columns() -> None:
 
 _ensure_infra_discovery_columns()
 
+def _ensure_customer_contract_documents_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("customer_contract_documents"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("customer_contract_documents")}
+    statements = []
+    if "html_content" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN html_content TEXT DEFAULT ''")
+    if "template_key" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN template_key VARCHAR DEFAULT ''")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_customer_contract_documents_columns()
+
 # ================= SCHEMAS ==================
 class CustomerPhoneSchema(BaseModel):
     id: Optional[int] = None
@@ -1264,6 +1342,68 @@ class CustomerMetricsSettingsUpdate(BaseModel):
     hourly_rate_eur: Optional[str] = None
 
 
+class ContractTariffCreate(BaseModel):
+    name: str
+    category: str
+    base_price_monthly: float = 0.0
+    price_server_monthly: float = 0.0
+    price_client_monthly: float = 0.0
+    price_network_monthly: float = 0.0
+    price_iot_monthly: float = 0.0
+    notes: Optional[str] = ""
+
+
+class ContractTariffVersionCreate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    base_price_monthly: Optional[float] = None
+    price_server_monthly: Optional[float] = None
+    price_client_monthly: Optional[float] = None
+    price_network_monthly: Optional[float] = None
+    price_iot_monthly: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class CustomerContractCalculationCreate(BaseModel):
+    tariff_id: int
+    servers: int = 0
+    clients: int = 0
+    network_devices: int = 0
+    iot_devices: int = 0
+    note: Optional[str] = ""
+
+
+class CustomerContractDocumentCreate(BaseModel):
+    title: str
+    doc_type: Optional[str] = "vertrag"
+    file_name: Optional[str] = None
+    mime_type: Optional[str] = "application/pdf"
+    content_base64: str
+    html_content: Optional[str] = ""
+    template_key: Optional[str] = ""
+    note: Optional[str] = ""
+
+
+class CustomerContractStatusUpdate(BaseModel):
+    reason: Optional[str] = ""
+
+
+class CustomerContractPreviewRequest(BaseModel):
+    title: Optional[str] = ""
+    doc_type: Optional[str] = "vertrag"
+    note: Optional[str] = ""
+    tariff_id: Optional[int] = None
+    calculation_id: Optional[int] = None
+    servers: Optional[int] = 0
+    clients: Optional[int] = 0
+    network_devices: Optional[int] = 0
+    iot_devices: Optional[int] = 0
+    monthly_total: Optional[float] = None
+    yearly_total: Optional[float] = None
+    valid_from: Optional[str] = ""
+    runtime_months: Optional[int] = 12
+
+
 class InfraDiscoveryItem(BaseModel):
     customer_id: Optional[int] = None
     customer_number: Optional[str] = ""
@@ -1360,6 +1500,7 @@ class AiPromptsUpdate(BaseModel):
     action_prompt: Optional[str] = None
     offer_base_prompt: Optional[str] = None
     offer_mode_instructions: Optional[Dict[str, str]] = None
+    contract_templates: Optional[Dict[str, Dict[str, str]]] = None
 
 
 class OfferCustomerConfirm(BaseModel):
@@ -2987,6 +3128,72 @@ def _default_ai_prompts() -> Dict[str, Any]:
             ),
             "device_description": "Schreibe eine kurze Produktbeschreibung fuer Material (3-6 Saetze).",
         },
+        "contract_templates": {
+            "vertrag": {
+                "title": "IT-Servicevertrag",
+                "body_template": (
+                    "<p>Zwischen <strong>{provider_name}</strong> und <strong>{customer_name}</strong> "
+                    "wird folgender IT-Servicevertrag geschlossen.</p>"
+                    "<p>Leistungsumfang: {service_scope}</p>"
+                    "<p>Laufzeit: {runtime_months} Monate, gueltig ab {valid_from}.</p>"
+                    "<p>Monatliche Pauschale: {monthly_total} (jaehrlich {yearly_total}).</p>"
+                    "<p>{note_block}</p>"
+                ),
+            },
+            "wartung": {
+                "title": "Wartungsvertrag",
+                "body_template": (
+                    "<p>Dieser Wartungsvertrag regelt den laufenden technischen Support fuer "
+                    "<strong>{customer_name}</strong>.</p>"
+                    "<ul>"
+                    "<li>Server: {servers}</li>"
+                    "<li>Clients: {clients}</li>"
+                    "<li>Netzwerkgeraete: {network_devices}</li>"
+                    "<li>IoT/Peripherie: {iot_devices}</li>"
+                    "</ul>"
+                    "<p>Monatliche Betreuungspauschale: {monthly_total}</p>"
+                    "<p>Gueltig ab {valid_from}, Mindestlaufzeit {runtime_months} Monate.</p>"
+                    "<p>{note_block}</p>"
+                ),
+            },
+            "monitoring": {
+                "title": "Monitoringvertrag",
+                "body_template": (
+                    "<p>Der Monitoringvertrag umfasst proaktive Ueberwachung, Alarmierung und "
+                    "Betriebsdokumentation fuer die IT-Umgebung von <strong>{customer_name}</strong>.</p>"
+                    "<ul>"
+                    "<li>Server: {servers}</li>"
+                    "<li>Clients: {clients}</li>"
+                    "<li>Netzwerkgeraete: {network_devices}</li>"
+                    "<li>IoT/Peripherie: {iot_devices}</li>"
+                    "</ul>"
+                    "<p>Monatliche Monitoringpauschale: {monthly_total}</p>"
+                    "<p>Gueltig ab {valid_from}, Mindestlaufzeit {runtime_months} Monate.</p>"
+                    "<p>{note_block}</p>"
+                ),
+            },
+            "avv_dsgvo": {
+                "title": "Auftragsverarbeitungsvertrag (DSGVO)",
+                "body_template": (
+                    "<p>Dieser Vertrag zur Auftragsverarbeitung gemaess Art. 28 DSGVO wird zwischen "
+                    "<strong>{provider_name}</strong> und <strong>{customer_name}</strong> geschlossen.</p>"
+                    "<p>Verarbeitungszweck: IT-Betrieb, Support, Wartung, Monitoring und Fehleranalyse.</p>"
+                    "<p>Technische und organisatorische Massnahmen werden nach aktuellem Stand der Technik umgesetzt.</p>"
+                    "<p>Gueltig ab {valid_from}.</p>"
+                    "<p>{note_block}</p>"
+                ),
+            },
+            "sonstiges": {
+                "title": "Zusatzvereinbarung",
+                "body_template": (
+                    "<p>Diese Zusatzvereinbarung ergaenzt bestehende Leistungen fuer "
+                    "<strong>{customer_name}</strong>.</p>"
+                    "<p>Leistungsumfang: {service_scope}</p>"
+                    "<p>Gueltig ab {valid_from}.</p>"
+                    "<p>{note_block}</p>"
+                ),
+            },
+        },
     }
 
 
@@ -3016,10 +3223,24 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
         merged_modes = {**mode_defaults, **mode_data}
     else:
         merged_modes = mode_defaults
+    contract_defaults = defaults.get("contract_templates") or {}
+    contract_data = data.get("contract_templates")
+    merged_contract_templates: Dict[str, Dict[str, str]] = {}
+    for key, default_entry in contract_defaults.items():
+        current_entry = contract_data.get(key) if isinstance(contract_data, dict) else {}
+        if not isinstance(current_entry, dict):
+            current_entry = {}
+        merged_contract_templates[key] = {
+            "title": str(current_entry.get("title") or default_entry.get("title") or "").strip(),
+            "body_template": str(
+                current_entry.get("body_template") or default_entry.get("body_template") or ""
+            ),
+        }
     return {
         "action_prompt": data.get("action_prompt", defaults["action_prompt"]),
         "offer_base_prompt": data.get("offer_base_prompt", defaults["offer_base_prompt"]),
         "offer_mode_instructions": merged_modes,
+        "contract_templates": merged_contract_templates,
         "updated_at": _offer_iso_timestamp(store.updated_at),
     }
 
@@ -3029,6 +3250,62 @@ def _render_prompt(template: str, values: Dict[str, str]) -> str:
     for key, value in values.items():
         text = text.replace(f"{{{key}}}", value)
     return text
+
+
+def _format_contract_currency(value: float) -> str:
+    amount = float(value or 0.0)
+    total_cents = int(round(abs(amount) * 100))
+    whole = total_cents // 100
+    cents = total_cents % 100
+    whole_text = f"{whole:,}".replace(",", ".")
+    sign = "-" if amount < 0 else ""
+    return f"{sign}{whole_text},{cents:02d} EUR"
+
+
+def _render_contract_html(
+    *,
+    customer: Customer,
+    title: str,
+    template_key: str,
+    body_template: str,
+    placeholders: Dict[str, str],
+) -> str:
+    rendered_body = _render_prompt(body_template or "", placeholders)
+    customer_address = " ".join(
+        [
+            str(customer.street or "").strip(),
+            f"{str(customer.postal_code or '').strip()} {str(customer.city or '').strip()}".strip(),
+            str(customer.country or "").strip(),
+        ]
+    ).strip()
+    customer_address = re.sub(r"\s+", " ", customer_address)
+    customer_display = escape(str(customer.name or "").strip() or "Kunde")
+    return (
+        "<div style=\"font-family:Arial,sans-serif; color:#1f2937; line-height:1.55;\">"
+        "<div style=\"display:flex; justify-content:space-between; align-items:flex-start; gap:14px; margin-bottom:18px;\">"
+        "<div>"
+        f"<div style=\"font-size:10px; letter-spacing:0.2em; text-transform:uppercase; color:#6b7280;\">{escape(template_key.upper())}</div>"
+        f"<h1 style=\"margin:6px 0 4px; font-size:24px; line-height:1.2;\">{escape(title)}</h1>"
+        f"<div style=\"font-size:12px; color:#6b7280;\">Vertragspartner: {customer_display}</div>"
+        "</div>"
+        "<div style=\"text-align:right; font-size:11px; color:#6b7280;\">"
+        f"<div>{escape(placeholders.get('generated_at', ''))}</div>"
+        f"<div>{escape(customer_address) if customer_address else ''}</div>"
+        "</div>"
+        "</div>"
+        "<div style=\"border:1px solid #e5e7eb; border-radius:14px; padding:18px; background:#ffffff;\">"
+        f"{rendered_body}"
+        "</div>"
+        "<div style=\"margin-top:24px; display:grid; grid-template-columns:1fr 1fr; gap:18px;\">"
+        "<div style=\"border-top:1px solid #d1d5db; padding-top:10px; font-size:11px; color:#6b7280;\">"
+        "Ort, Datum, Auftraggeber"
+        "</div>"
+        "<div style=\"border-top:1px solid #d1d5db; padding-top:10px; font-size:11px; color:#6b7280;\">"
+        "Ort, Datum, Auftragnehmer"
+        "</div>"
+        "</div>"
+        "</div>"
+    )
 
 def _get_offer_block_store(db) -> OfferBlockStore:
     store = db.query(OfferBlockStore).first()
@@ -3360,6 +3637,101 @@ def serialize_customer_metrics_settings(settings: CustomerMetricsSettings) -> Di
         "min_distance_km": settings.min_distance_km,
         "min_fee_eur": settings.min_fee_eur,
         "hourly_rate_eur": settings.hourly_rate_eur,
+    }
+
+
+def _safe_nonnegative_float(value: Any) -> float:
+    try:
+        return max(0.0, float(value or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _safe_nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def serialize_contract_tariff(tariff: ContractTariff) -> Dict[str, Any]:
+    return {
+        "id": tariff.id,
+        "family_key": tariff.family_key,
+        "name": tariff.name or "",
+        "category": tariff.category or "",
+        "version": int(tariff.version or 1),
+        "is_active": bool(tariff.is_active),
+        "currency": tariff.currency or "EUR",
+        "base_price_monthly": round(float(tariff.base_price_monthly or 0), 2),
+        "price_server_monthly": round(float(tariff.price_server_monthly or 0), 2),
+        "price_client_monthly": round(float(tariff.price_client_monthly or 0), 2),
+        "price_network_monthly": round(float(tariff.price_network_monthly or 0), 2),
+        "price_iot_monthly": round(float(tariff.price_iot_monthly or 0), 2),
+        "notes": tariff.notes or "",
+        "created_at": int(tariff.created_at or 0),
+    }
+
+
+def _calc_contract_total_monthly(
+    tariff: ContractTariff,
+    *,
+    servers: int,
+    clients: int,
+    network_devices: int,
+    iot_devices: int,
+) -> float:
+    return (
+        _safe_nonnegative_float(tariff.base_price_monthly)
+        + _safe_nonnegative_float(tariff.price_server_monthly) * _safe_nonnegative_int(servers)
+        + _safe_nonnegative_float(tariff.price_client_monthly) * _safe_nonnegative_int(clients)
+        + _safe_nonnegative_float(tariff.price_network_monthly) * _safe_nonnegative_int(network_devices)
+        + _safe_nonnegative_float(tariff.price_iot_monthly) * _safe_nonnegative_int(iot_devices)
+    )
+
+
+def serialize_customer_contract_calculation(item: CustomerContractCalculation) -> Dict[str, Any]:
+    snapshot_payload: Dict[str, Any] = {}
+    try:
+        loaded = json.loads(item.snapshot_json or "{}")
+        if isinstance(loaded, dict):
+            snapshot_payload = loaded
+    except Exception:
+        snapshot_payload = {}
+    return {
+        "id": item.id,
+        "customer_id": item.customer_id,
+        "tariff_id": item.tariff_id,
+        "tariff_name": item.tariff_name or "",
+        "tariff_category": item.tariff_category or "",
+        "tariff_version": int(item.tariff_version or 1),
+        "servers": int(item.servers or 0),
+        "clients": int(item.clients or 0),
+        "network_devices": int(item.network_devices or 0),
+        "iot_devices": int(item.iot_devices or 0),
+        "monthly_total": round(float(item.monthly_total or 0), 2),
+        "yearly_total": round(float(item.yearly_total or 0), 2),
+        "note": item.note or "",
+        "snapshot": snapshot_payload,
+        "created_at": int(item.created_at or 0),
+    }
+
+
+def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "customer_id": item.customer_id,
+        "title": item.title or "",
+        "doc_type": item.doc_type or "vertrag",
+        "status": item.status or "active",
+        "file_name": item.file_name or "",
+        "mime_type": item.mime_type or "application/pdf",
+        "template_key": item.template_key or "",
+        "has_html": bool(str(item.html_content or "").strip()),
+        "note": item.note or "",
+        "cancel_reason": item.cancel_reason or "",
+        "cancelled_at": int(item.cancelled_at or 0),
+        "created_at": int(item.created_at or 0),
     }
 
 
@@ -7656,6 +8028,7 @@ def update_ai_prompts(data: AiPromptsUpdate):
             "action_prompt": data.action_prompt or current["action_prompt"],
             "offer_base_prompt": data.offer_base_prompt or current["offer_base_prompt"],
             "offer_mode_instructions": data.offer_mode_instructions or current["offer_mode_instructions"],
+            "contract_templates": data.contract_templates or current["contract_templates"],
         }
         store.data_json = json.dumps(payload)
         store.updated_at = int(time.time() * 1000)
@@ -7747,6 +8120,423 @@ def update_customer_metrics_settings(data: CustomerMetricsSettingsUpdate):
         db.commit()
         db.refresh(settings)
         return serialize_customer_metrics_settings(settings)
+
+
+@app.get("/api/contract_tariffs")
+def get_contract_tariffs(active_only: bool = True):
+    with SessionLocal() as db:
+        query = db.query(ContractTariff)
+        if active_only:
+            query = query.filter(ContractTariff.is_active == True)
+        rows = (
+            query.order_by(
+                ContractTariff.category.asc(),
+                ContractTariff.name.asc(),
+                ContractTariff.version.desc(),
+            )
+            .all()
+        )
+        return [serialize_contract_tariff(row) for row in rows]
+
+
+@app.post("/api/contract_tariffs")
+def create_contract_tariff(data: ContractTariffCreate):
+    now_ms = int(time.time() * 1000)
+    category = str(data.category or "").strip().lower()
+    if category not in {"wartung", "monitoring"}:
+        raise HTTPException(400, "category must be 'wartung' or 'monitoring'")
+    name = str(data.name or "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    with SessionLocal() as db:
+        row = ContractTariff(
+            family_key=str(uuid.uuid4()),
+            name=name,
+            category=category,
+            version=1,
+            is_active=True,
+            currency="EUR",
+            base_price_monthly=_safe_nonnegative_float(data.base_price_monthly),
+            price_server_monthly=_safe_nonnegative_float(data.price_server_monthly),
+            price_client_monthly=_safe_nonnegative_float(data.price_client_monthly),
+            price_network_monthly=_safe_nonnegative_float(data.price_network_monthly),
+            price_iot_monthly=_safe_nonnegative_float(data.price_iot_monthly),
+            notes=str(data.notes or "").strip(),
+            created_at=now_ms,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_contract_tariff(row)
+
+
+@app.post("/api/contract_tariffs/{tariff_id}/new_version")
+def create_contract_tariff_version(tariff_id: int, data: ContractTariffVersionCreate):
+    with SessionLocal() as db:
+        source = db.query(ContractTariff).get(tariff_id)
+        if not source:
+            raise HTTPException(404, "Tariff not found")
+        max_version = (
+            db.query(func.max(ContractTariff.version))
+            .filter(ContractTariff.family_key == source.family_key)
+            .scalar()
+        ) or 1
+        new_row = ContractTariff(
+            family_key=source.family_key,
+            name=str(data.name if data.name is not None else source.name or "").strip(),
+            category=str(data.category if data.category is not None else source.category or "").strip().lower(),
+            version=int(max_version) + 1,
+            is_active=True,
+            currency=source.currency or "EUR",
+            base_price_monthly=_safe_nonnegative_float(
+                source.base_price_monthly if data.base_price_monthly is None else data.base_price_monthly
+            ),
+            price_server_monthly=_safe_nonnegative_float(
+                source.price_server_monthly if data.price_server_monthly is None else data.price_server_monthly
+            ),
+            price_client_monthly=_safe_nonnegative_float(
+                source.price_client_monthly if data.price_client_monthly is None else data.price_client_monthly
+            ),
+            price_network_monthly=_safe_nonnegative_float(
+                source.price_network_monthly if data.price_network_monthly is None else data.price_network_monthly
+            ),
+            price_iot_monthly=_safe_nonnegative_float(
+                source.price_iot_monthly if data.price_iot_monthly is None else data.price_iot_monthly
+            ),
+            notes=str(source.notes if data.notes is None else data.notes or "").strip(),
+            created_at=int(time.time() * 1000),
+        )
+        if new_row.category not in {"wartung", "monitoring"}:
+            raise HTTPException(400, "category must be 'wartung' or 'monitoring'")
+        if not new_row.name:
+            raise HTTPException(400, "name is required")
+        source.is_active = False
+        db.add(new_row)
+        db.commit()
+        db.refresh(new_row)
+        return serialize_contract_tariff(new_row)
+
+
+@app.post("/api/contract_tariffs/{tariff_id}/deactivate")
+def deactivate_contract_tariff(tariff_id: int):
+    with SessionLocal() as db:
+        row = db.query(ContractTariff).get(tariff_id)
+        if not row:
+            raise HTTPException(404, "Tariff not found")
+        row.is_active = False
+        db.commit()
+        db.refresh(row)
+        return serialize_contract_tariff(row)
+
+
+@app.get("/api/customers/{customer_id}/contract_calculations")
+def get_customer_contract_calculations(customer_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        rows = (
+            db.query(CustomerContractCalculation)
+            .filter(CustomerContractCalculation.customer_id == customer.id)
+            .order_by(CustomerContractCalculation.created_at.desc(), CustomerContractCalculation.id.desc())
+            .limit(50)
+            .all()
+        )
+        return [serialize_customer_contract_calculation(row) for row in rows]
+
+
+@app.post("/api/customers/{customer_id}/contract_calculations")
+def create_customer_contract_calculation(customer_id: int, data: CustomerContractCalculationCreate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        tariff = db.query(ContractTariff).get(int(data.tariff_id))
+        if not tariff:
+            raise HTTPException(404, "Tariff not found")
+        servers = _safe_nonnegative_int(data.servers)
+        clients = _safe_nonnegative_int(data.clients)
+        network_devices = _safe_nonnegative_int(data.network_devices)
+        iot_devices = _safe_nonnegative_int(data.iot_devices)
+        monthly_total = _calc_contract_total_monthly(
+            tariff,
+            servers=servers,
+            clients=clients,
+            network_devices=network_devices,
+            iot_devices=iot_devices,
+        )
+        yearly_total = monthly_total * 12.0
+        snapshot_payload = {
+            "tariff": serialize_contract_tariff(tariff),
+            "counts": {
+                "servers": servers,
+                "clients": clients,
+                "network_devices": network_devices,
+                "iot_devices": iot_devices,
+            },
+            "totals": {
+                "monthly_total": round(monthly_total, 2),
+                "yearly_total": round(yearly_total, 2),
+            },
+        }
+        row = CustomerContractCalculation(
+            customer_id=customer.id,
+            tariff_id=tariff.id,
+            tariff_name=tariff.name or "",
+            tariff_category=tariff.category or "",
+            tariff_version=int(tariff.version or 1),
+            servers=servers,
+            clients=clients,
+            network_devices=network_devices,
+            iot_devices=iot_devices,
+            monthly_total=monthly_total,
+            yearly_total=yearly_total,
+            note=str(data.note or "").strip(),
+            snapshot_json=json.dumps(snapshot_payload),
+            created_at=int(time.time() * 1000),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_contract_calculation(row)
+
+
+@app.get("/api/customers/{customer_id}/contracts")
+def get_customer_contract_documents(customer_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        rows = (
+            db.query(CustomerContractDocument)
+            .filter(CustomerContractDocument.customer_id == customer.id)
+            .order_by(CustomerContractDocument.created_at.desc(), CustomerContractDocument.id.desc())
+            .all()
+        )
+        return [serialize_customer_contract_document(row) for row in rows]
+
+
+@app.post("/api/customers/{customer_id}/contracts/preview")
+def preview_customer_contract_document(customer_id: int, data: CustomerContractPreviewRequest):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
+        templates = prompts.get("contract_templates") or {}
+        template_key = str(data.doc_type or "vertrag").strip().lower() or "vertrag"
+        template_entry = templates.get(template_key) or templates.get("vertrag") or {}
+        template_title = str(template_entry.get("title") or "Vertrag")
+        title = str(data.title or "").strip() or template_title
+        body_template = str(template_entry.get("body_template") or "").strip()
+        if not body_template:
+            raise HTTPException(400, "No contract template configured for selected type")
+
+        now = datetime.now()
+        generated_at = now.strftime("%d.%m.%Y")
+        valid_from = str(data.valid_from or "").strip() or generated_at
+        runtime_months = max(1, _safe_nonnegative_int(data.runtime_months or 12))
+
+        servers = _safe_nonnegative_int(data.servers or 0)
+        clients = _safe_nonnegative_int(data.clients or 0)
+        network_devices = _safe_nonnegative_int(data.network_devices or 0)
+        iot_devices = _safe_nonnegative_int(data.iot_devices or 0)
+        monthly_total = float(data.monthly_total or 0.0)
+        yearly_total = float(data.yearly_total or 0.0)
+        service_scope = "Standardleistungen laut vereinbartem Serviceumfang."
+
+        tariff = None
+        if data.calculation_id:
+            calc = db.query(CustomerContractCalculation).get(int(data.calculation_id))
+            if calc and calc.customer_id == customer.id:
+                servers = _safe_nonnegative_int(calc.servers)
+                clients = _safe_nonnegative_int(calc.clients)
+                network_devices = _safe_nonnegative_int(calc.network_devices)
+                iot_devices = _safe_nonnegative_int(calc.iot_devices)
+                monthly_total = float(calc.monthly_total or 0.0)
+                yearly_total = float(calc.yearly_total or 0.0)
+                if calc.tariff_name:
+                    service_scope = f"Tarif: {calc.tariff_name} (v{int(calc.tariff_version or 1)})."
+                if calc.tariff_id:
+                    tariff = db.query(ContractTariff).get(int(calc.tariff_id))
+        if data.tariff_id:
+            tariff_candidate = db.query(ContractTariff).get(int(data.tariff_id))
+            if tariff_candidate:
+                tariff = tariff_candidate
+                monthly_total = _calc_contract_total_monthly(
+                    tariff,
+                    servers=servers,
+                    clients=clients,
+                    network_devices=network_devices,
+                    iot_devices=iot_devices,
+                )
+                yearly_total = monthly_total * 12.0
+                service_scope = f"Tarif: {str(tariff.name or 'Service').strip()} (v{int(tariff.version or 1)})."
+
+        note_raw = str(data.note or "").strip()
+        note_block = (
+            f"Hinweis: {escape(note_raw).replace(chr(10), '<br/>')}" if note_raw else "Ohne Zusatzhinweise."
+        )
+        placeholder_values = {
+            "provider_name": "QT Workbench Services",
+            "customer_name": escape(str(customer.name or "").strip() or "Kunde"),
+            "generated_at": generated_at,
+            "valid_from": escape(valid_from),
+            "runtime_months": str(runtime_months),
+            "servers": str(servers),
+            "clients": str(clients),
+            "network_devices": str(network_devices),
+            "iot_devices": str(iot_devices),
+            "monthly_total": _format_contract_currency(monthly_total),
+            "yearly_total": _format_contract_currency(yearly_total),
+            "service_scope": escape(service_scope),
+            "note_block": note_block,
+        }
+        html = _render_contract_html(
+            customer=customer,
+            title=title,
+            template_key=template_key,
+            body_template=body_template,
+            placeholders=placeholder_values,
+        )
+        safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", title).strip("_") or "vertrag"
+        file_name = f"{safe_name}.pdf"
+        return {
+            "title": title,
+            "doc_type": template_key,
+            "template_key": template_key,
+            "file_name": file_name,
+            "html": html,
+            "meta": {
+                "generated_at": generated_at,
+                "valid_from": valid_from,
+                "runtime_months": runtime_months,
+                "servers": servers,
+                "clients": clients,
+                "network_devices": network_devices,
+                "iot_devices": iot_devices,
+                "monthly_total": round(float(monthly_total or 0.0), 2),
+                "yearly_total": round(float(yearly_total or 0.0), 2),
+                "tariff": serialize_contract_tariff(tariff) if tariff else None,
+            },
+        }
+
+
+@app.post("/api/customers/{customer_id}/contracts")
+def create_customer_contract_document(customer_id: int, data: CustomerContractDocumentCreate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        title = str(data.title or "").strip()
+        file_name = str(data.file_name or "").strip()
+        content_base64 = str(data.content_base64 or "").strip()
+        if not title:
+            raise HTTPException(400, "title is required")
+        if not file_name:
+            file_name = f"{re.sub(r'[^a-zA-Z0-9_-]+', '_', title).strip('_') or 'vertrag'}.pdf"
+        if not content_base64:
+            raise HTTPException(400, "content_base64 is required")
+        # Validate base64 payload.
+        try:
+            base64.b64decode(content_base64, validate=True)
+        except Exception:
+            raise HTTPException(400, "Invalid base64 content")
+        row = CustomerContractDocument(
+            customer_id=customer.id,
+            title=title,
+            doc_type=str(data.doc_type or "vertrag").strip().lower() or "vertrag",
+            status="active",
+            file_name=file_name,
+            mime_type=str(data.mime_type or "application/pdf").strip() or "application/pdf",
+            content_base64=content_base64,
+            html_content=str(data.html_content or ""),
+            template_key=str(data.template_key or "").strip().lower(),
+            note=str(data.note or "").strip(),
+            created_at=int(time.time() * 1000),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_contract_document(row)
+
+
+@app.post("/api/customers/{customer_id}/contracts/{contract_id}/cancel")
+def cancel_customer_contract_document(customer_id: int, contract_id: int, data: CustomerContractStatusUpdate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerContractDocument)
+            .filter(
+                CustomerContractDocument.id == contract_id,
+                CustomerContractDocument.customer_id == customer.id,
+            )
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Contract document not found")
+        row.status = "cancelled"
+        row.cancel_reason = str(data.reason or "").strip()
+        row.cancelled_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_contract_document(row)
+
+
+@app.post("/api/customers/{customer_id}/contracts/{contract_id}/reactivate")
+def reactivate_customer_contract_document(customer_id: int, contract_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerContractDocument)
+            .filter(
+                CustomerContractDocument.id == contract_id,
+                CustomerContractDocument.customer_id == customer.id,
+            )
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Contract document not found")
+        row.status = "active"
+        row.cancel_reason = ""
+        row.cancelled_at = 0
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_contract_document(row)
+
+
+@app.get("/api/customers/{customer_id}/contracts/{contract_id}/download")
+def download_customer_contract_document(customer_id: int, contract_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerContractDocument)
+            .filter(
+                CustomerContractDocument.id == contract_id,
+                CustomerContractDocument.customer_id == customer.id,
+            )
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Contract document not found")
+        if not str(row.content_base64 or "").strip():
+            raise HTTPException(404, "No document payload stored")
+        try:
+            content = base64.b64decode(str(row.content_base64 or "").strip())
+        except Exception:
+            raise HTTPException(500, "Stored document payload is invalid")
+        filename = str(row.file_name or f"vertrag_{row.id}.pdf").strip() or f"vertrag_{row.id}.pdf"
+        return Response(
+            content=content,
+            media_type=str(row.mime_type or "application/pdf"),
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
 
 @app.get("/api/company_stats")

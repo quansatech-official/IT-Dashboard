@@ -232,6 +232,7 @@ export default function SettingsView() {
   const [debugTablesOpen, setDebugTablesOpen] = useState(false);
   const [smtpOpen, setSmtpOpen] = useState(false);
   const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
+  const [contractTemplatesOpen, setContractTemplatesOpen] = useState(false);
   const [apiTestOpen, setApiTestOpen] = useState(false);
   const [apiTestPath, setApiTestPath] = useState("/api/telephony/calls");
   const [apiTestStatus, setApiTestStatus] = useState("idle");
@@ -253,9 +254,17 @@ export default function SettingsView() {
       calculation: "",
       position_text: "",
       device_description: ""
+    },
+    contract_templates: {
+      vertrag: { title: "", body_template: "" },
+      wartung: { title: "", body_template: "" },
+      monitoring: { title: "", body_template: "" },
+      avv_dsgvo: { title: "", body_template: "" },
+      sonstiges: { title: "", body_template: "" }
     }
   });
   const [aiPromptsStatus, setAiPromptsStatus] = useState("idle");
+  const [contractTemplatesStatus, setContractTemplatesStatus] = useState("idle");
   const [aiPromptsLoadStatus, setAiPromptsLoadStatus] = useState("loading");
   const [clearingTable, setClearingTable] = useState("");
   const hasCtiPasswordAuth = cti.hasPassword && cti.username?.trim();
@@ -480,6 +489,28 @@ export default function SettingsView() {
             calculation: data?.offer_mode_instructions?.calculation || "",
             position_text: data?.offer_mode_instructions?.position_text || "",
             device_description: data?.offer_mode_instructions?.device_description || ""
+          },
+          contract_templates: {
+            vertrag: {
+              title: data?.contract_templates?.vertrag?.title || "",
+              body_template: data?.contract_templates?.vertrag?.body_template || ""
+            },
+            wartung: {
+              title: data?.contract_templates?.wartung?.title || "",
+              body_template: data?.contract_templates?.wartung?.body_template || ""
+            },
+            monitoring: {
+              title: data?.contract_templates?.monitoring?.title || "",
+              body_template: data?.contract_templates?.monitoring?.body_template || ""
+            },
+            avv_dsgvo: {
+              title: data?.contract_templates?.avv_dsgvo?.title || "",
+              body_template: data?.contract_templates?.avv_dsgvo?.body_template || ""
+            },
+            sonstiges: {
+              title: data?.contract_templates?.sonstiges?.title || "",
+              body_template: data?.contract_templates?.sonstiges?.body_template || ""
+            }
           }
         });
         setAiPromptsLoadStatus("ready");
@@ -626,6 +657,28 @@ export default function SettingsView() {
           calculation: data?.offer_mode_instructions?.calculation || "",
           position_text: data?.offer_mode_instructions?.position_text || "",
           device_description: data?.offer_mode_instructions?.device_description || ""
+        },
+        contract_templates: {
+          vertrag: {
+            title: data?.contract_templates?.vertrag?.title || "",
+            body_template: data?.contract_templates?.vertrag?.body_template || ""
+          },
+          wartung: {
+            title: data?.contract_templates?.wartung?.title || "",
+            body_template: data?.contract_templates?.wartung?.body_template || ""
+          },
+          monitoring: {
+            title: data?.contract_templates?.monitoring?.title || "",
+            body_template: data?.contract_templates?.monitoring?.body_template || ""
+          },
+          avv_dsgvo: {
+            title: data?.contract_templates?.avv_dsgvo?.title || "",
+            body_template: data?.contract_templates?.avv_dsgvo?.body_template || ""
+          },
+          sonstiges: {
+            title: data?.contract_templates?.sonstiges?.title || "",
+            body_template: data?.contract_templates?.sonstiges?.body_template || ""
+          }
         }
       });
       setAiPromptsStatus("saved");
@@ -633,6 +686,50 @@ export default function SettingsView() {
       setAiPromptsStatus("error");
     }
     setTimeout(() => setAiPromptsStatus("idle"), 2000);
+  };
+
+  const saveContractTemplates = async () => {
+    setContractTemplatesStatus("saving");
+    try {
+      const res = await fetch(`${API}/ai_prompts`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contract_templates: aiPrompts.contract_templates
+        })
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      setAiPrompts((prev) => ({
+        ...prev,
+        contract_templates: {
+          vertrag: {
+            title: data?.contract_templates?.vertrag?.title || "",
+            body_template: data?.contract_templates?.vertrag?.body_template || ""
+          },
+          wartung: {
+            title: data?.contract_templates?.wartung?.title || "",
+            body_template: data?.contract_templates?.wartung?.body_template || ""
+          },
+          monitoring: {
+            title: data?.contract_templates?.monitoring?.title || "",
+            body_template: data?.contract_templates?.monitoring?.body_template || ""
+          },
+          avv_dsgvo: {
+            title: data?.contract_templates?.avv_dsgvo?.title || "",
+            body_template: data?.contract_templates?.avv_dsgvo?.body_template || ""
+          },
+          sonstiges: {
+            title: data?.contract_templates?.sonstiges?.title || "",
+            body_template: data?.contract_templates?.sonstiges?.body_template || ""
+          }
+        }
+      }));
+      setContractTemplatesStatus("saved");
+    } catch (error) {
+      setContractTemplatesStatus("error");
+    }
+    setTimeout(() => setContractTemplatesStatus("idle"), 2000);
   };
 
 
@@ -1451,6 +1548,97 @@ export default function SettingsView() {
                 {status === "saved" && <span className="text-sm text-emerald-600">Gespeichert</span>}
                 {status === "error" && (
                   <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
+                )}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setContractTemplatesOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Vertrags-Templates</p>
+            </div>
+            <span className="text-sm text-sand-500">{contractTemplatesOpen ? "–" : "+"}</span>
+          </button>
+          {contractTemplatesOpen ? (
+            <>
+              <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <p className="text-[11px] text-sand-500">
+                  Platzhalter z. B.: {"{customer_name}"}, {"{monthly_total}"}, {"{yearly_total}"}, {"{valid_from}"}, {"{runtime_months}"}
+                </p>
+                <div className="mt-3 grid grid-cols-1 gap-4">
+                  {[
+                    ["vertrag", "Standardvertrag"],
+                    ["wartung", "Wartungsvertrag"],
+                    ["monitoring", "Monitoringvertrag"],
+                    ["avv_dsgvo", "AVV DSGVO"],
+                    ["sonstiges", "Sonstiges"]
+                  ].map(([key, label]) => (
+                    <div key={key} className="rounded-xl border border-sand-200 bg-white p-3">
+                      <label className="block text-xs text-sand-500">
+                        {label} · Titel
+                        <input
+                          value={aiPrompts.contract_templates?.[key]?.title || ""}
+                          onChange={(event) =>
+                            setAiPrompts((prev) => ({
+                              ...prev,
+                              contract_templates: {
+                                ...prev.contract_templates,
+                                [key]: {
+                                  ...(prev.contract_templates?.[key] || {}),
+                                  title: event.target.value
+                                }
+                              }
+                            }))
+                          }
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                        />
+                      </label>
+                      <label className="mt-2 block text-xs text-sand-500">
+                        HTML-Body
+                        <textarea
+                          value={aiPrompts.contract_templates?.[key]?.body_template || ""}
+                          onChange={(event) =>
+                            setAiPrompts((prev) => ({
+                              ...prev,
+                              contract_templates: {
+                                ...prev.contract_templates,
+                                [key]: {
+                                  ...(prev.contract_templates?.[key] || {}),
+                                  body_template: event.target.value
+                                }
+                              }
+                            }))
+                          }
+                          rows={6}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                        />
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+                <button
+                  onClick={saveContractTemplates}
+                  className="rounded-full border border-sand-200 bg-sand-900 px-3 py-2 uppercase tracking-wide text-white hover:opacity-90"
+                >
+                  Templates speichern
+                </button>
+                {aiPromptsLoadStatus === "error" && (
+                  <span className="text-rose-600">Laden fehlgeschlagen</span>
+                )}
+                {contractTemplatesStatus === "saved" && (
+                  <span className="text-emerald-600">Gespeichert</span>
+                )}
+                {contractTemplatesStatus === "error" && (
+                  <span className="text-rose-600">Speichern fehlgeschlagen</span>
                 )}
               </div>
             </>

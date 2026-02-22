@@ -43,6 +43,88 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
+  listContractTariffs: (activeOnly = true) =>
+    fetch(`${API}/contract_tariffs?active_only=${activeOnly ? "1" : "0"}`).then((r) => r.json()),
+  createContractTariff: (payload) =>
+    fetch(`${API}/contract_tariffs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "tariff_create_failed");
+      return data;
+    }),
+  createContractTariffVersion: (tariffId, payload) =>
+    fetch(`${API}/contract_tariffs/${tariffId}/new_version`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "tariff_version_failed");
+      return data;
+    }),
+  deactivateContractTariff: (tariffId) =>
+    fetch(`${API}/contract_tariffs/${tariffId}/deactivate`, {
+      method: "POST"
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "tariff_deactivate_failed");
+      return data;
+    }),
+  listCustomerContractCalculations: (customerId) =>
+    fetch(`${API}/customers/${customerId}/contract_calculations`).then((r) => r.json()),
+  createCustomerContractCalculation: (customerId, payload) =>
+    fetch(`${API}/customers/${customerId}/contract_calculations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "contract_calc_failed");
+      return data;
+    }),
+  listCustomerContracts: (customerId) =>
+    fetch(`${API}/customers/${customerId}/contracts`).then((r) => r.json()),
+  previewCustomerContract: (customerId, payload) =>
+    fetch(`${API}/customers/${customerId}/contracts/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "contract_preview_failed");
+      return data;
+    }),
+  createCustomerContract: (customerId, payload) =>
+    fetch(`${API}/customers/${customerId}/contracts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "contract_create_failed");
+      return data;
+    }),
+  cancelCustomerContract: (customerId, contractId, reason = "") =>
+    fetch(`${API}/customers/${customerId}/contracts/${contractId}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason })
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "contract_cancel_failed");
+      return data;
+    }),
+  reactivateCustomerContract: (customerId, contractId) =>
+    fetch(`${API}/customers/${customerId}/contracts/${contractId}/reactivate`, {
+      method: "POST"
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "contract_reactivate_failed");
+      return data;
+    }),
   syncSevdesk: () =>
     fetch(`${API}/customers/sync_sevdesk`, {
       method: "POST"
@@ -147,6 +229,17 @@ const formatEur = (value) => {
   });
 };
 
+const formatEurPrecise = (value) => {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "€ 0,00";
+  return number.toLocaleString("de-DE", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+};
+
 export default function CustomerDirectoryView() {
   const [customers, setCustomers] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -186,6 +279,44 @@ export default function CustomerDirectoryView() {
     hourly_rate_eur: ""
   });
   const [metricsSettingsStatus, setMetricsSettingsStatus] = useState("idle");
+  const [contractTariffs, setContractTariffs] = useState([]);
+  const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
+  const [tariffDraft, setTariffDraft] = useState({
+    name: "",
+    category: "wartung",
+    base_price_monthly: "0",
+    price_server_monthly: "0",
+    price_client_monthly: "0",
+    price_network_monthly: "0",
+    price_iot_monthly: "0",
+    notes: ""
+  });
+  const [tariffDraftMode, setTariffDraftMode] = useState("create");
+  const [tariffSourceId, setTariffSourceId] = useState(null);
+  const [tariffSaveStatus, setTariffSaveStatus] = useState("idle");
+  const [calcInput, setCalcInput] = useState({
+    tariffId: null,
+    servers: "0",
+    clients: "0",
+    networkDevices: "0",
+    iotDevices: "0",
+    note: ""
+  });
+  const [calcHistory, setCalcHistory] = useState([]);
+  const [calcHistoryStatus, setCalcHistoryStatus] = useState("idle");
+  const [calcSaveStatus, setCalcSaveStatus] = useState("idle");
+  const [customerContracts, setCustomerContracts] = useState([]);
+  const [contractsStatus, setContractsStatus] = useState("idle");
+  const [contractPreviewStatus, setContractPreviewStatus] = useState("idle");
+  const [contractSaveStatus, setContractSaveStatus] = useState("idle");
+  const [generatedContract, setGeneratedContract] = useState(null);
+  const [contractDraft, setContractDraft] = useState({
+    title: "",
+    docType: "vertrag",
+    note: "",
+    validFrom: "",
+    runtimeMonths: "12"
+  });
   const saveTimers = useRef({});
   const importInputRef = useRef(null);
 
@@ -282,6 +413,407 @@ export default function CustomerDirectoryView() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setContractTariffsStatus("loading");
+    api
+      .listContractTariffs(false)
+      .then((rows) => {
+        if (!active) return;
+        const list = Array.isArray(rows) ? rows : [];
+        setContractTariffs(list);
+        setContractTariffsStatus("ready");
+        setCalcInput((prev) => {
+          if (prev.tariffId) return prev;
+          const firstActive = list.find((item) => Boolean(item?.is_active));
+          return { ...prev, tariffId: firstActive?.id ?? null };
+        });
+      })
+      .catch(() => {
+        if (!active) return;
+        setContractTariffsStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeId) {
+      setCalcHistory([]);
+      return;
+    }
+    let active = true;
+    setCalcHistoryStatus("loading");
+    api
+      .listCustomerContractCalculations(activeId)
+      .then((rows) => {
+        if (!active) return;
+        setCalcHistory(Array.isArray(rows) ? rows : []);
+        setCalcHistoryStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setCalcHistoryStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeId]);
+
+  useEffect(() => {
+    if (!activeId) {
+      setCustomerContracts([]);
+      return;
+    }
+    let active = true;
+    setContractsStatus("loading");
+    api
+      .listCustomerContracts(activeId)
+      .then((rows) => {
+        if (!active) return;
+        setCustomerContracts(Array.isArray(rows) ? rows : []);
+        setContractsStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setContractsStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeId]);
+
+  const parseCount = (value) => {
+    const parsed = Number.parseInt(String(value || "0"), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+    return parsed;
+  };
+
+  const selectedTariff = useMemo(
+    () => contractTariffs.find((item) => Number(item?.id) === Number(calcInput.tariffId)) || null,
+    [contractTariffs, calcInput.tariffId]
+  );
+
+  const contractPreview = useMemo(() => {
+    if (!selectedTariff) {
+      return { monthly: 0, yearly: 0, counts: { servers: 0, clients: 0, networkDevices: 0, iotDevices: 0 } };
+    }
+    const counts = {
+      servers: parseCount(calcInput.servers),
+      clients: parseCount(calcInput.clients),
+      networkDevices: parseCount(calcInput.networkDevices),
+      iotDevices: parseCount(calcInput.iotDevices)
+    };
+    const monthly =
+      Number(selectedTariff.base_price_monthly || 0) +
+      counts.servers * Number(selectedTariff.price_server_monthly || 0) +
+      counts.clients * Number(selectedTariff.price_client_monthly || 0) +
+      counts.networkDevices * Number(selectedTariff.price_network_monthly || 0) +
+      counts.iotDevices * Number(selectedTariff.price_iot_monthly || 0);
+    return { monthly, yearly: monthly * 12, counts };
+  }, [selectedTariff, calcInput]);
+
+  useEffect(() => {
+    setGeneratedContract(null);
+  }, [
+    activeId,
+    contractDraft.title,
+    contractDraft.docType,
+    contractDraft.note,
+    contractDraft.validFrom,
+    contractDraft.runtimeMonths,
+    selectedTariff?.id,
+    contractPreview.monthly,
+    contractPreview.yearly,
+    contractPreview.counts.servers,
+    contractPreview.counts.clients,
+    contractPreview.counts.networkDevices,
+    contractPreview.counts.iotDevices
+  ]);
+
+  const refreshTariffs = async () => {
+    const list = await api.listContractTariffs(false);
+    const rows = Array.isArray(list) ? list : [];
+    setContractTariffs(rows);
+    setCalcInput((prev) => {
+      const currentExists = rows.some((item) => Number(item.id) === Number(prev.tariffId));
+      if (currentExists) return prev;
+      const firstActive = rows.find((item) => Boolean(item?.is_active));
+      return { ...prev, tariffId: firstActive?.id ?? null };
+    });
+  };
+
+  const resetTariffDraft = () => {
+    setTariffDraft({
+      name: "",
+      category: "wartung",
+      base_price_monthly: "0",
+      price_server_monthly: "0",
+      price_client_monthly: "0",
+      price_network_monthly: "0",
+      price_iot_monthly: "0",
+      notes: ""
+    });
+    setTariffDraftMode("create");
+    setTariffSourceId(null);
+  };
+
+  const startTariffVersion = (tariff) => {
+    if (!tariff) return;
+    setTariffDraft({
+      name: String(tariff.name || ""),
+      category: String(tariff.category || "wartung"),
+      base_price_monthly: String(tariff.base_price_monthly ?? "0"),
+      price_server_monthly: String(tariff.price_server_monthly ?? "0"),
+      price_client_monthly: String(tariff.price_client_monthly ?? "0"),
+      price_network_monthly: String(tariff.price_network_monthly ?? "0"),
+      price_iot_monthly: String(tariff.price_iot_monthly ?? "0"),
+      notes: String(tariff.notes || "")
+    });
+    setTariffDraftMode("version");
+    setTariffSourceId(tariff.id);
+  };
+
+  const saveTariffDraft = async () => {
+    if (!String(tariffDraft.name || "").trim()) {
+      setTariffSaveStatus("error");
+      return;
+    }
+    setTariffSaveStatus("saving");
+    const payload = {
+      name: String(tariffDraft.name || "").trim(),
+      category: String(tariffDraft.category || "wartung").trim().toLowerCase(),
+      base_price_monthly: Number(tariffDraft.base_price_monthly || 0),
+      price_server_monthly: Number(tariffDraft.price_server_monthly || 0),
+      price_client_monthly: Number(tariffDraft.price_client_monthly || 0),
+      price_network_monthly: Number(tariffDraft.price_network_monthly || 0),
+      price_iot_monthly: Number(tariffDraft.price_iot_monthly || 0),
+      notes: String(tariffDraft.notes || "")
+    };
+    try {
+      if (tariffDraftMode === "version" && tariffSourceId) {
+        await api.createContractTariffVersion(tariffSourceId, payload);
+      } else {
+        await api.createContractTariff(payload);
+      }
+      await refreshTariffs();
+      resetTariffDraft();
+      setTariffSaveStatus("saved");
+      setTimeout(() => setTariffSaveStatus("idle"), 1800);
+    } catch {
+      setTariffSaveStatus("error");
+      setTimeout(() => setTariffSaveStatus("idle"), 2200);
+    }
+  };
+
+  const deactivateTariff = async (tariffId) => {
+    if (!tariffId) return;
+    try {
+      await api.deactivateContractTariff(tariffId);
+      await refreshTariffs();
+    } catch {
+      // keep UI stable; errors will be visible on next refresh
+    }
+  };
+
+  const saveContractSnapshot = async () => {
+    if (!activeId || !selectedTariff?.id) return;
+    setCalcSaveStatus("saving");
+    try {
+      const saved = await api.createCustomerContractCalculation(activeId, {
+        tariff_id: selectedTariff.id,
+        servers: contractPreview.counts.servers,
+        clients: contractPreview.counts.clients,
+        network_devices: contractPreview.counts.networkDevices,
+        iot_devices: contractPreview.counts.iotDevices,
+        note: String(calcInput.note || "")
+      });
+      setCalcHistory((prev) => [saved, ...prev].slice(0, 50));
+      setCalcSaveStatus("saved");
+      setTimeout(() => setCalcSaveStatus("idle"), 1800);
+    } catch {
+      setCalcSaveStatus("error");
+      setTimeout(() => setCalcSaveStatus("idle"), 2200);
+    }
+  };
+
+  const contractHtmlToPdfDataUri = async (html) => {
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    container.style.position = "fixed";
+    container.style.left = "-9999px";
+    container.style.top = "0";
+    container.style.width = "210mm";
+    container.style.background = "#ffffff";
+    container.style.padding = "12mm";
+    document.body.appendChild(container);
+    try {
+      const images = Array.from(container.querySelectorAll("img"));
+      await Promise.all(
+        images.map(
+          (img) =>
+            new Promise((resolve) => {
+              if (img.complete) {
+                resolve();
+                return;
+              }
+              img.onload = resolve;
+              img.onerror = resolve;
+            })
+        )
+      );
+      const canvas = await html2canvas(container, {
+        scale: 1,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        logging: false
+      });
+      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+      const imgData = canvas.toDataURL("image/jpeg", 0.92);
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const ratio = pageWidth / canvas.width;
+      const imgHeight = canvas.height * ratio;
+      let position = 0;
+      pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+      let heightLeft = imgHeight - pageHeight;
+      while (heightLeft > 0) {
+        position -= pageHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+      return pdf.output("datauristring");
+    } finally {
+      if (container.parentNode) container.parentNode.removeChild(container);
+    }
+  };
+
+  const generateContractPreview = async (openModal = true) => {
+    if (!activeId) return null;
+    setContractPreviewStatus("saving");
+    try {
+      const preview = await api.previewCustomerContract(activeId, {
+        title: String(contractDraft.title || "").trim(),
+        doc_type: String(contractDraft.docType || "vertrag"),
+        note: String(contractDraft.note || ""),
+        valid_from: String(contractDraft.validFrom || ""),
+        runtime_months: Number(contractDraft.runtimeMonths || 12),
+        tariff_id: selectedTariff?.id || null,
+        servers: contractPreview.counts.servers,
+        clients: contractPreview.counts.clients,
+        network_devices: contractPreview.counts.networkDevices,
+        iot_devices: contractPreview.counts.iotDevices,
+        monthly_total: contractPreview.monthly,
+        yearly_total: contractPreview.yearly
+      });
+      setGeneratedContract(preview);
+      setContractPreviewStatus("saved");
+      if (openModal) {
+        setPreviewModal({
+          open: true,
+          title: preview?.title || "Vertragsvorschau",
+          html: preview?.html || ""
+        });
+      }
+      setTimeout(() => setContractPreviewStatus("idle"), 1800);
+      return preview;
+    } catch {
+      setContractPreviewStatus("error");
+      setTimeout(() => setContractPreviewStatus("idle"), 2200);
+      return null;
+    }
+  };
+
+  const exportGeneratedContractPdf = async () => {
+    const source = generatedContract || (await generateContractPreview(false));
+    if (!source?.html) return;
+    try {
+      const dataUri = await contractHtmlToPdfDataUri(source.html);
+      const anchor = document.createElement("a");
+      anchor.href = dataUri;
+      anchor.download = source.file_name || "vertrag.pdf";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } catch {
+      setToast("PDF-Erzeugung fehlgeschlagen.");
+    }
+  };
+
+  const saveGeneratedContract = async () => {
+    if (!activeId) return;
+    setContractSaveStatus("saving");
+    try {
+      const source = generatedContract || (await generateContractPreview(false));
+      if (!source?.html) throw new Error("no_preview");
+      const dataUri = await contractHtmlToPdfDataUri(source.html);
+      const marker = "base64,";
+      const idx = String(dataUri).indexOf(marker);
+      if (idx === -1) throw new Error("pdf_base64_missing");
+      const contentBase64 = String(dataUri).slice(idx + marker.length);
+      const saved = await api.createCustomerContract(activeId, {
+        title: String(source.title || contractDraft.title || "Vertrag").trim(),
+        doc_type: String(source.doc_type || contractDraft.docType || "vertrag"),
+        file_name: String(source.file_name || "vertrag.pdf"),
+        mime_type: "application/pdf",
+        content_base64: contentBase64,
+        html_content: String(source.html || ""),
+        template_key: String(source.template_key || contractDraft.docType || "vertrag"),
+        note: String(contractDraft.note || "")
+      });
+      setCustomerContracts((prev) => [saved, ...prev]);
+      setContractDraft({ title: "", docType: "vertrag", note: "", validFrom: "", runtimeMonths: "12" });
+      setGeneratedContract(null);
+      setContractSaveStatus("saved");
+      setTimeout(() => setContractSaveStatus("idle"), 1800);
+    } catch {
+      setContractSaveStatus("error");
+      setTimeout(() => setContractSaveStatus("idle"), 2200);
+    }
+  };
+
+  const downloadContractDocument = async (contractId, fallbackName = "vertrag.pdf") => {
+    if (!activeId || !contractId) return;
+    try {
+      const res = await fetch(`${API}/customers/${activeId}/contracts/${contractId}/download`);
+      if (!res.ok) throw new Error("download_failed");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = fallbackName || "vertrag.pdf";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      setToast("Vertrag konnte nicht heruntergeladen werden.");
+    }
+  };
+
+  const cancelContractDocument = async (contractId) => {
+    if (!activeId || !contractId) return;
+    const reason = window.prompt("Stornogrund (optional):", "") || "";
+    try {
+      const updated = await api.cancelCustomerContract(activeId, contractId, reason);
+      setCustomerContracts((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    } catch {
+      setToast("Stornierung fehlgeschlagen.");
+    }
+  };
+
+  const reactivateContractDocument = async (contractId) => {
+    if (!activeId || !contractId) return;
+    try {
+      const updated = await api.reactivateCustomerContract(activeId, contractId);
+      setCustomerContracts((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    } catch {
+      setToast("Reaktivierung fehlgeschlagen.");
+    }
+  };
 
   useEffect(() => {
     if (!customers.length) {
@@ -1432,6 +1964,17 @@ export default function CustomerDirectoryView() {
               >
                 Kundenentwicklung
               </button>
+              <button
+                type="button"
+                onClick={() => setSettingsTab("contract")}
+                className={`rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
+                  settingsTab === "contract"
+                    ? "border-sand-900 bg-sand-900 text-white"
+                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                }`}
+              >
+                Vertragskalkulation
+              </button>
             </div>
             {settingsTab === "settings" ? (
               <div className="space-y-4">
@@ -1539,6 +2082,239 @@ export default function CustomerDirectoryView() {
                 ) : metricsSettingsStatus === "error" ? (
                   <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
                 ) : null}
+              </div>
+            ) : settingsTab === "contract" ? (
+              <div className="space-y-5">
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Tarifkatalog</p>
+                      <h3 className="text-lg font-display text-sand-900">Wartung / Monitoring</h3>
+                    </div>
+                    <span className="text-[11px] text-sand-500">
+                      Historie-sicher: Änderungen als neue Version.
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-4">
+                    <label className="block md:col-span-2">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Name</span>
+                      <input
+                        value={tariffDraft.name}
+                        onChange={(event) => setTariffDraft((prev) => ({ ...prev, name: event.target.value }))}
+                        placeholder="z. B. Wartung Pro"
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Kategorie</span>
+                      <select
+                        value={tariffDraft.category}
+                        onChange={(event) => setTariffDraft((prev) => ({ ...prev, category: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      >
+                        <option value="wartung">Wartung</option>
+                        <option value="monitoring">Monitoring</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Grundpreis/Monat</span>
+                      <input
+                        value={tariffDraft.base_price_monthly}
+                        onChange={(event) => setTariffDraft((prev) => ({ ...prev, base_price_monthly: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Server/Monat</span>
+                      <input
+                        value={tariffDraft.price_server_monthly}
+                        onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_server_monthly: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Client/Monat</span>
+                      <input
+                        value={tariffDraft.price_client_monthly}
+                        onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_client_monthly: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Netzwerkgerät/Monat</span>
+                      <input
+                        value={tariffDraft.price_network_monthly}
+                        onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_network_monthly: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">IoT/Monat</span>
+                      <input
+                        value={tariffDraft.price_iot_monthly}
+                        onChange={(event) => setTariffDraft((prev) => ({ ...prev, price_iot_monthly: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block md:col-span-4">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
+                      <input
+                        value={tariffDraft.notes}
+                        onChange={(event) => setTariffDraft((prev) => ({ ...prev, notes: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={saveTariffDraft}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                    >
+                      {tariffDraftMode === "version" ? "Neue Version speichern" : "Tarif anlegen"}
+                    </button>
+                    {tariffDraftMode === "version" ? (
+                      <button
+                        type="button"
+                        onClick={resetTariffDraft}
+                        className="rounded-full border border-sand-300 px-3 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        Abbrechen
+                      </button>
+                    ) : null}
+                    {tariffSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
+                    {tariffSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
+                    {contractTariffsStatus === "error" ? <span className="text-xs text-rose-600">Tarife konnten nicht geladen werden</span> : null}
+                  </div>
+                  <div className="mt-3 space-y-2 max-h-52 overflow-auto pr-1">
+                    {(contractTariffs || []).map((tariff) => (
+                      <div key={tariff.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold text-sand-800">
+                            {tariff.name} · {String(tariff.category || "").toUpperCase()} · v{tariff.version}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${tariff.is_active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-sand-200 bg-sand-100 text-sand-600"}`}>
+                              {tariff.is_active ? "Aktiv" : "Archiv"}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => startTariffVersion(tariff)}
+                              className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                            >
+                              Neue Version
+                            </button>
+                            {tariff.is_active ? (
+                              <button
+                                type="button"
+                                onClick={() => deactivateTariff(tariff.id)}
+                                className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                              >
+                                Deaktivieren
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                        <p className="mt-1 text-[11px] text-sand-600">
+                          Grundpreis {formatEurPrecise(tariff.base_price_monthly)} · Server {formatEurPrecise(tariff.price_server_monthly)} · Client {formatEurPrecise(tariff.price_client_monthly)} · Netzwerk {formatEurPrecise(tariff.price_network_monthly)} · IoT {formatEurPrecise(tariff.price_iot_monthly)}
+                        </p>
+                      </div>
+                    ))}
+                    {!contractTariffs.length ? <p className="text-xs text-sand-500">Noch keine Tarife vorhanden.</p> : null}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kundenspezifische Kalkulation</p>
+                  <div className="mt-3 grid gap-2 md:grid-cols-3">
+                    <label className="block md:col-span-3">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Tarif</span>
+                      <select
+                        value={calcInput.tariffId || ""}
+                        onChange={(event) => setCalcInput((prev) => ({ ...prev, tariffId: Number(event.target.value) || null }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      >
+                        <option value="">Tarif wählen</option>
+                        {(contractTariffs || [])
+                          .filter((item) => Boolean(item?.is_active))
+                          .map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.name} ({item.category}) · v{item.version}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Server</span>
+                      <input value={calcInput.servers} onChange={(event) => setCalcInput((prev) => ({ ...prev, servers: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Clients</span>
+                      <input value={calcInput.clients} onChange={(event) => setCalcInput((prev) => ({ ...prev, clients: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Netzwerkgeräte</span>
+                      <input value={calcInput.networkDevices} onChange={(event) => setCalcInput((prev) => ({ ...prev, networkDevices: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">IoT</span>
+                      <input value={calcInput.iotDevices} onChange={(event) => setCalcInput((prev) => ({ ...prev, iotDevices: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+                    </label>
+                    <label className="block md:col-span-2">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
+                      <input value={calcInput.note} onChange={(event) => setCalcInput((prev) => ({ ...prev, note: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm" />
+                    </label>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Monat</p>
+                      <p className="text-lg font-semibold text-sand-900">{formatEurPrecise(contractPreview.monthly)}</p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Jahr</p>
+                      <p className="text-lg font-semibold text-sand-900">{formatEurPrecise(contractPreview.yearly)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={saveContractSnapshot}
+                      disabled={!selectedTariff}
+                      className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
+                        selectedTariff ? "border-sand-200 bg-sand-900 text-white" : "border-sand-200 bg-sand-100 text-sand-400"
+                      }`}
+                    >
+                      Snapshot speichern
+                    </button>
+                    {calcSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
+                    {calcSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
+                  </div>
+                  <div className="mt-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Historie</p>
+                    <div className="mt-2 space-y-2 max-h-56 overflow-auto pr-1">
+                      {(calcHistory || []).map((row) => (
+                        <div key={row.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
+                          <p className="font-semibold text-sand-800">
+                            {row.tariff_name} ({row.tariff_category}) · v{row.tariff_version}
+                          </p>
+                          <p className="text-[11px] text-sand-600">
+                            Server {row.servers} · Clients {row.clients} · Netzwerk {row.network_devices} · IoT {row.iot_devices}
+                          </p>
+                          <p className="text-[11px] text-sand-700">
+                            {formatEurPrecise(row.monthly_total)} / Monat · {formatEurPrecise(row.yearly_total)} / Jahr
+                          </p>
+                          <p className="text-[10px] text-sand-500">
+                            {new Date(row.created_at || Date.now()).toLocaleString("de-DE")}
+                          </p>
+                        </div>
+                      ))}
+                      {calcHistoryStatus === "loading" ? <p className="text-xs text-sand-500">Lade Historie…</p> : null}
+                      {!calcHistory.length && calcHistoryStatus !== "loading" ? (
+                        <p className="text-xs text-sand-500">Noch keine gespeicherten Kalkulationen.</p>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : settingsTab === "development" ? (
               <CustomerDevelopmentCustomerTab
@@ -1722,6 +2498,159 @@ export default function CustomerDirectoryView() {
                         </label>
                       ))}
                     </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge</p>
+                    <span className="text-[11px] text-sand-500">
+                      Verträge pro Kunde (z. B. AVV DSGVO), downloadbar und stornierbar.
+                    </span>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-3">
+                    <label className="block md:col-span-2">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Titel</span>
+                      <input
+                        value={contractDraft.title}
+                        onChange={(event) => setContractDraft((prev) => ({ ...prev, title: event.target.value }))}
+                        placeholder="z. B. Auftragsdatenverarbeitung (DSGVO)"
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Typ</span>
+                      <select
+                        value={contractDraft.docType}
+                        onChange={(event) => setContractDraft((prev) => ({ ...prev, docType: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      >
+                        <option value="vertrag">Vertrag</option>
+                        <option value="avv_dsgvo">AVV DSGVO</option>
+                        <option value="monitoring">Monitoring</option>
+                        <option value="wartung">Wartung</option>
+                        <option value="sonstiges">Sonstiges</option>
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
+                      <input
+                        value={contractDraft.note}
+                        onChange={(event) => setContractDraft((prev) => ({ ...prev, note: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Gültig ab</span>
+                      <input
+                        type="date"
+                        value={contractDraft.validFrom}
+                        onChange={(event) => setContractDraft((prev) => ({ ...prev, validFrom: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">Laufzeit (Monate)</span>
+                      <input
+                        type="number"
+                        min={1}
+                        value={contractDraft.runtimeMonths}
+                        onChange={(event) =>
+                          setContractDraft((prev) => ({ ...prev, runtimeMonths: event.target.value }))
+                        }
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => generateContractPreview(true)}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      <Eye size={12} /> Vorschau
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportGeneratedContractPdf}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      <FileDown size={12} /> PDF downloaden
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveGeneratedContract}
+                      className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                    >
+                      <Plus size={12} /> Als Vertrag speichern
+                    </button>
+                    {contractPreviewStatus === "saved" ? (
+                      <span className="text-xs text-emerald-600">Vorschau aktualisiert</span>
+                    ) : null}
+                    {contractPreviewStatus === "error" ? (
+                      <span className="text-xs text-rose-600">Vorschau fehlgeschlagen</span>
+                    ) : null}
+                    {contractSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
+                    {contractSaveStatus === "error" ? (
+                      <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
+                    ) : null}
+                  </div>
+                  <div className="space-y-2 max-h-56 overflow-auto pr-1">
+                    {(customerContracts || []).map((item) => (
+                      <div key={item.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold text-sand-800">{item.title || "Vertrag"}</p>
+                          <span
+                            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                              String(item.status || "active") === "cancelled"
+                                ? "border-rose-200 bg-rose-50 text-rose-700"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            }`}
+                          >
+                            {String(item.status || "active") === "cancelled" ? "Storniert" : "Aktiv"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-sand-600">
+                          Typ: {String(item.doc_type || "vertrag")} · Datei: {item.file_name || "n/a"}
+                        </p>
+                        <p className="text-[10px] text-sand-500">
+                          {new Date(item.created_at || Date.now()).toLocaleString("de-DE")}
+                          {item.cancelled_at ? ` · storniert am ${new Date(item.cancelled_at).toLocaleString("de-DE")}` : ""}
+                        </p>
+                        {item.cancel_reason ? <p className="text-[10px] text-rose-600">Grund: {item.cancel_reason}</p> : null}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                          >
+                            <FileDown size={11} /> PDF
+                          </button>
+                          {String(item.status || "active") === "cancelled" ? (
+                            <button
+                              type="button"
+                              onClick={() => reactivateContractDocument(item.id)}
+                              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                            >
+                              Reaktivieren
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => cancelContractDocument(item.id)}
+                              className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                            >
+                              Stornieren
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
+                    {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
+                    {!customerContracts.length && contractsStatus !== "loading" ? (
+                      <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
+                    ) : null}
                   </div>
                 </div>
 
