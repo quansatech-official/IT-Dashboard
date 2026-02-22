@@ -722,13 +722,6 @@ export default function CustomerDevelopmentView() {
                         >
                           <Plus size={12} /> Aufgabe anlegen
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDetailTab("ki")}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
-                        >
-                          <Bot size={12} /> KI Auswertung
-                        </button>
                       </div>
                     </div>
                   </div>
