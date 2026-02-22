@@ -577,9 +577,10 @@ export default function CustomerDevelopmentView() {
       }
       setDiscoveryProgress(100);
       const agentLabel = data?.agentHostname ? ` auf ${String(data.agentHostname)}` : "";
+      const apiLabel = data?.apiUrl ? ` Ziel: ${String(data.apiUrl)}` : "";
       setDiscoveryRun({
         status: "ready",
-        message: `Discovery gestartet${agentLabel}.`,
+        message: `Discovery gestartet${agentLabel}.${apiLabel}`,
         error: "",
       });
       loadDetail(true);

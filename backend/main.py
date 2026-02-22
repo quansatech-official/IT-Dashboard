@@ -4031,6 +4031,19 @@ def _build_tactical_rmm_session(settings: Optional[IntegrationSettings]) -> Tupl
     return session, host
 
 
+def _tactical_url(host: str, path: str) -> str:
+    base = str(host or "").strip().rstrip("/")
+    suffix = str(path or "").strip()
+    if not base or not suffix:
+        return f"{base}{suffix}"
+    base_lower = base.lower()
+    if base_lower.endswith("/api/v3") and suffix.startswith("/api/v3/"):
+        suffix = suffix[len("/api/v3") :]
+    elif base_lower.endswith("/api") and suffix.startswith("/api/"):
+        suffix = suffix[len("/api") :]
+    return f"{base}{suffix}"
+
+
 def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, Any]:
     checked_at = datetime.now().isoformat()
     if not settings:
@@ -4095,7 +4108,7 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
     for path in list_candidates:
         agents_path = path
         try:
-            res = session.get(f"{host}{path}", timeout=8)
+            res = session.get(_tactical_url(host, path), timeout=8)
             agents_status_code = res.status_code
         except requests.RequestException as exc:
             agents_error = str(exc)
@@ -4239,7 +4252,7 @@ def _fetch_tactical_rmm_agent_detail_map(
             f"/api/v3/agents/{quote(clean_id)}",
         ):
             try:
-                res = session.get(f"{host}{path}", timeout=8)
+                res = session.get(_tactical_url(host, path), timeout=8)
             except requests.RequestException:
                 continue
             if not res.ok:
@@ -4289,11 +4302,24 @@ def _fetch_tactical_rmm_software(
             f"/software/{agent_id}",
             f"/api/v3/software/{agent_id}/",
             f"/api/v3/software/{agent_id}",
+            f"/agents/{agent_id}/software/",
+            f"/agents/{agent_id}/software",
+            f"/api/v3/agents/{agent_id}/software/",
+            f"/api/v3/agents/{agent_id}/software",
+            f"/software/?agent={quote(agent_id)}",
+            f"/software?agent={quote(agent_id)}",
+            f"/software/?agent_id={quote(agent_id)}",
+            f"/software?agent_id={quote(agent_id)}",
+            f"/api/v3/software/?agent={quote(agent_id)}",
+            f"/api/v3/software?agent={quote(agent_id)}",
+            f"/api/v3/software/?agent_id={quote(agent_id)}",
+            f"/api/v3/software?agent_id={quote(agent_id)}",
         ]
         payload = None
+        used_path = ""
         for path in candidates:
             try:
-                res = session.get(f"{host}{path}", timeout=8)
+                res = session.get(_tactical_url(host, path), timeout=8)
             except requests.RequestException:
                 continue
             if not res.ok:
@@ -4303,16 +4329,39 @@ def _fetch_tactical_rmm_software(
             except ValueError:
                 continue
             payload = data
+            used_path = path
             break
         if payload is None:
+            logger.info("RMM software inventory empty for agent %s: no endpoint matched", agent_id)
             continue
-        items = payload if isinstance(payload, list) else payload.get("results") if isinstance(payload, dict) else []
+        items: List[Any] = []
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict):
+            for key in ("results", "software", "items", "data"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    items = value
+                    break
         if not isinstance(items, list):
             continue
+        logger.info(
+            "RMM software inventory for agent %s via %s: %s items",
+            agent_id,
+            used_path or "unknown",
+            len(items),
+        )
         for item in items[:per_agent_limit]:
             if not isinstance(item, dict):
                 continue
-            name = str(item.get("name") or item.get("software") or item.get("product") or "").strip()
+            name = str(
+                item.get("name")
+                or item.get("software")
+                or item.get("product")
+                or item.get("display_name")
+                or item.get("app_name")
+                or ""
+            ).strip()
             version = str(item.get("version") or item.get("display_version") or "").strip()
             if not name:
                 continue
@@ -5208,7 +5257,7 @@ def run_customer_development_discovery(customer_id: int, request: Request):
     scripts_payload: Optional[List[Dict[str, Any]]] = None
     for path in ("/scripts/", "/scripts", "/api/v3/scripts/", "/api/v3/scripts"):
         try:
-            scripts_res = session.get(f"{host}{path}", timeout=25)
+            scripts_res = session.get(_tactical_url(host, path), timeout=25)
         except Exception:
             continue
         if not scripts_res.ok:
@@ -5250,8 +5299,12 @@ def run_customer_development_discovery(customer_id: int, request: Request):
     if not isinstance(script_id, int):
         raise HTTPException(502, "Invalid discovery script id from RMM")
 
-    api_base = str(request.base_url).rstrip("/")
-    api_url = f"{api_base}/api"
+    api_url_override = str(os.environ.get("INFRA_DISCOVERY_API_URL") or "").strip()
+    if api_url_override:
+        api_url = str(api_url_override).rstrip("/")
+    else:
+        api_base = str(request.base_url).rstrip("/")
+        api_url = f"{api_base}/api"
     discovery_token = str(os.environ.get("INFRA_DISCOVERY_TOKEN") or "").strip()
     args = [
         "--api-url", api_url,
@@ -5273,6 +5326,7 @@ def run_customer_development_discovery(customer_id: int, request: Request):
     # Do not block the API request on long-running discovery scripts.
     # Trigger in background to avoid reverse-proxy 504 timeouts.
     run_payload = {
+        "output": "wait",
         "emails": [],
         "emailMode": "default",
         "custom_field": None,
@@ -5297,7 +5351,7 @@ def run_customer_development_discovery(customer_id: int, request: Request):
             f"/api/v3/agents/{quote(target_agent_id)}/runscript",
         ):
             try:
-                run_res = bg_session.post(f"{bg_host}{path}", json=run_payload, timeout=1800)
+                run_res = bg_session.post(_tactical_url(bg_host, path), json=run_payload, timeout=1800)
             except Exception as exc:
                 run_error = str(exc)
                 continue
@@ -5314,6 +5368,12 @@ def run_customer_development_discovery(customer_id: int, request: Request):
         )
 
     threading.Thread(target=_trigger_discovery_background, daemon=True).start()
+    logger.info(
+        "Discovery queued for customer %s on agent %s using api_url=%s",
+        customer.id,
+        target_agent_id,
+        api_url,
+    )
 
     return {
         "status": "queued",
@@ -5323,6 +5383,7 @@ def run_customer_development_discovery(customer_id: int, request: Request):
         "agentHostname": str(target_agent.get("hostname") or target_agent.get("name") or "").strip(),
         "scriptId": script_id,
         "scriptName": str(target_script.get("name") or "").strip(),
+        "apiUrl": api_url,
         "rmmResponse": {},
     }
 
