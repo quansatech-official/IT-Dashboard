@@ -13,6 +13,7 @@ import math
 import time
 import uuid
 import json
+import json as jsonlib
 import re
 import difflib
 import hashlib
@@ -3861,12 +3862,16 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
     if api_key_header.lower() == "authorization" and not re.match(r"^(bearer|token)\s+", api_key, re.IGNORECASE):
         header_value = f"Bearer {api_key}"
     session.headers.update({api_key_header: header_value})
+    # TacticalRMM expects X-API-KEY. Keep it as compatibility fallback.
+    if api_key_header.lower() != "x-api-key":
+        session.headers.update({"X-API-KEY": api_key})
 
     # TacticalRMM docs use API base + /agents/ with X-API-KEY header.
     list_candidates = [
         "/agents/?detail=false",
         "/agents/",
         "/agents",
+        "/clients/",
         # Compatibility fallback for older/custom deployments.
         "/api/v3/agents/",
         "/api/v3/agents",
@@ -3885,11 +3890,36 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
         if not res.ok:
             agents_error = f"HTTP {res.status_code}"
             continue
+        body_text = (res.text or "").strip()
+        content_type = (res.headers.get("content-type") or "").lower()
+        if not body_text:
+            return {
+                "connected": True,
+                "checkedAt": checked_at,
+                "host": host,
+                "hasUser": False,
+                "hasPassword": False,
+                "hasApiKey": bool(api_key),
+                "apiKeyHeader": api_key_header,
+                "authPath": None,
+                "authStatusCode": None,
+                "agentsPath": agents_path,
+                "agentsStatusCode": agents_status_code,
+                "sampleCount": 0,
+                "agents": [],
+                "error": "",
+            }
+        if "text/html" in content_type or body_text.startswith("<!doctype") or body_text.startswith("<html"):
+            agents_error = "HTML response instead of JSON (check API host/header)"
+            continue
         try:
             payload = res.json()
         except ValueError:
-            agents_error = "Invalid JSON response"
-            continue
+            try:
+                payload = jsonlib.loads(body_text)
+            except Exception:
+                agents_error = "Invalid JSON response"
+                continue
         if isinstance(payload, list):
             return {
                 "connected": True,
@@ -3927,6 +3957,24 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
                         "agents": value,
                         "error": "",
                     }
+            count_value = payload.get("count")
+            if isinstance(count_value, int) and count_value >= 0:
+                return {
+                    "connected": True,
+                    "checkedAt": checked_at,
+                    "host": host,
+                    "hasUser": False,
+                    "hasPassword": False,
+                    "hasApiKey": bool(api_key),
+                    "apiKeyHeader": api_key_header,
+                    "authPath": None,
+                    "authStatusCode": None,
+                    "agentsPath": agents_path,
+                    "agentsStatusCode": agents_status_code,
+                    "sampleCount": int(count_value),
+                    "agents": [],
+                    "error": "",
+                }
             agents_error = "No agent list in response"
     error_parts = [part for part in [agents_error] if part]
     return {

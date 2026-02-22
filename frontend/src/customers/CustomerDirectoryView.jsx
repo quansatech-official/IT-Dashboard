@@ -1323,8 +1323,16 @@ export default function CustomerDirectoryView() {
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Übersicht</p>
                 <h2 className="text-base font-display text-sand-900">Kundendatei</h2>
               </div>
-              <span className="rounded-full border border-sand-200 px-3 py-1 text-xs text-sand-600">
-                Gesamt {totalCustomers} · Aktiv {activeCustomers} · Inaktiv {inactiveCustomers}
+            </div>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-700">
+                Gesamt {totalCustomers}
+              </span>
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
+                Aktiv {activeCustomers}
+              </span>
+              <span className="rounded-full border border-slate-300 bg-slate-100 px-3 py-1 text-xs text-slate-700">
+                Inaktiv {inactiveCustomers}
               </span>
             </div>
             <label className="relative block mb-3">
@@ -1654,16 +1662,34 @@ export default function CustomerDirectoryView() {
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
                     <label className="block">
                       <span className="text-xs uppercase tracking-wide text-sand-500">Kundenstatus</span>
-                      <select
-                        value={activeCustomer.status || "active"}
-                        onChange={(event) =>
-                          updateCustomer(activeCustomer.id, { status: event.target.value })
-                        }
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                      >
-                        <option value="active">Aktiv</option>
-                        <option value="inactive">Inaktiv</option>
-                      </select>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
+                          <input
+                            type="checkbox"
+                            checked={String(activeCustomer.status || "active") === "active"}
+                            onChange={(event) => {
+                              if (event.target.checked) {
+                                updateCustomer(activeCustomer.id, { status: "active" });
+                              }
+                            }}
+                            className="h-4 w-4"
+                          />
+                          <span>Aktiv</span>
+                        </label>
+                        <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-700">
+                          <input
+                            type="checkbox"
+                            checked={String(activeCustomer.status || "active") === "inactive"}
+                            onChange={(event) => {
+                              if (event.target.checked) {
+                                updateCustomer(activeCustomer.id, { status: "inactive" });
+                              }
+                            }}
+                            className="h-4 w-4"
+                          />
+                          <span>Inaktiv</span>
+                        </label>
+                      </div>
                     </label>
                     <div className="grid gap-2 sm:grid-cols-2">
                       {[

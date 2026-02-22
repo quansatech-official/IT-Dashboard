@@ -29,6 +29,30 @@ const clampPercent = (value) => {
   return Math.max(0, Math.min(100, n));
 };
 
+const ratioToPercent = (ratio) => {
+  const n = Number(ratio || 0);
+  if (!Number.isFinite(n)) return 0;
+  return clampPercent(n <= 1 ? n * 100 : n);
+};
+
+const revenueComparisonPercents = (lastYear, currentYear) => {
+  const last = Math.max(0, Number(lastYear || 0));
+  const current = Math.max(0, Number(currentYear || 0));
+  if (!Number.isFinite(last) || !Number.isFinite(current)) {
+    return { lastPct: 0, currentPct: 0 };
+  }
+  if (last <= 0 && current <= 0) {
+    return { lastPct: 0, currentPct: 0 };
+  }
+  if (last <= 0) {
+    return { lastPct: 0, currentPct: 100 };
+  }
+  return {
+    lastPct: 100,
+    currentPct: clampPercent((current / last) * 100),
+  };
+};
+
 export default function CustomerDevelopmentView() {
   const aiModes = [
     { value: "angebot", label: "Angebot" },
@@ -36,8 +60,7 @@ export default function CustomerDevelopmentView() {
     { value: "mail", label: "Mail" },
     { value: "leitfaden", label: "Leitfaden" },
     { value: "analyse", label: "Analyse" },
-    { value: "summary", label: "Summary" },
-    { value: "newsletter", label: "Newsletter" }
+    { value: "summary", label: "Summary" }
   ];
   const [contexts, setContexts] = useState([]);
   const [status, setStatus] = useState("idle");
@@ -258,6 +281,11 @@ export default function CustomerDevelopmentView() {
     return groups;
   }, [filteredContexts]);
 
+  const revenueBars = revenueComparisonPercents(
+    detailData?.revenueLastYearEur,
+    detailData?.revenueCurrentYearEur
+  );
+
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       {detailModal.open ? (
@@ -288,7 +316,7 @@ export default function CustomerDevelopmentView() {
                 <div className="space-y-4">
                   <div className="rounded-2xl border border-sand-200 bg-white p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Handlungen</p>
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Aktionen</p>
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
@@ -307,11 +335,15 @@ export default function CustomerDevelopmentView() {
                           }
                           className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
                         >
-                          KI
+                          KI Auswertung
                         </button>
                       </div>
                     </div>
-                    {detailAi.open ? (
+                  </div>
+
+                  {detailAi.open ? (
+                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">KI Auswertung</p>
                       <div className="mt-3 space-y-2">
                         <div className="flex flex-wrap gap-1">
                           {aiModes.map((item) => (
@@ -338,8 +370,8 @@ export default function CustomerDevelopmentView() {
                           className="w-full min-h-[160px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
                         />
                       </div>
-                    ) : null}
-                  </div>
+                    </div>
+                  ) : null}
 
                   <div className="grid gap-3 md:grid-cols-4">
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
@@ -377,15 +409,7 @@ export default function CustomerDevelopmentView() {
                             <div
                               className="h-2 rounded-full bg-sand-500"
                               style={{
-                                width: `${clampPercent(
-                                  (Number(detailData.revenueLastYearEur || 0) /
-                                    Math.max(
-                                      Number(detailData.revenueLastYearEur || 0),
-                                      Number(detailData.revenueCurrentYearEur || 0),
-                                      1
-                                    )) *
-                                    100
-                                )}%`
+                                width: `${revenueBars.lastPct}%`
                               }}
                             />
                           </div>
@@ -401,15 +425,7 @@ export default function CustomerDevelopmentView() {
                                 Number(detailData.revenueTrendPct || 0) < 0 ? "bg-rose-400" : "bg-emerald-500"
                               }`}
                               style={{
-                                width: `${clampPercent(
-                                  (Number(detailData.revenueCurrentYearEur || 0) /
-                                    Math.max(
-                                      Number(detailData.revenueLastYearEur || 0),
-                                      Number(detailData.revenueCurrentYearEur || 0),
-                                      1
-                                    )) *
-                                    100
-                                )}%`
+                                width: `${revenueBars.currentPct}%`
                               }}
                             />
                           </div>
@@ -457,8 +473,14 @@ export default function CustomerDevelopmentView() {
                       <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
                         <p className="text-sand-500">Coverage</p>
                         <p className="font-semibold text-sand-800">
-                          {Math.round((detailData.infra?.coverageRatio || 0) * 100)}%
+                          {Math.round(ratioToPercent(detailData.infra?.coverageRatio))}%
                         </p>
+                        <div className="mt-1 h-1.5 rounded-full bg-sand-200">
+                          <div
+                            className="h-1.5 rounded-full bg-emerald-500"
+                            style={{ width: `${ratioToPercent(detailData.infra?.coverageRatio)}%` }}
+                          />
+                        </div>
                       </div>
                       <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
                         <p className="text-sand-500">Unmanaged</p>
@@ -467,8 +489,14 @@ export default function CustomerDevelopmentView() {
                       <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
                         <p className="text-sand-500">Offline Rate</p>
                         <p className="font-semibold text-sand-800">
-                          {Math.round((detailData.infra?.offlineRate || 0) * 100)}%
+                          {Math.round(ratioToPercent(detailData.infra?.offlineRate))}%
                         </p>
+                        <div className="mt-1 h-1.5 rounded-full bg-sand-200">
+                          <div
+                            className="h-1.5 rounded-full bg-rose-500"
+                            style={{ width: `${ratioToPercent(detailData.infra?.offlineRate)}%` }}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -680,7 +708,7 @@ export default function CustomerDevelopmentView() {
                     <td className="py-2 pr-3">
                       <div className="flex items-center gap-2">
                         <Shield size={12} className="text-sand-400" />
-                        {Math.round((item.infra?.coverageRatio || 0) * 100)}% · {item.infra?.unmanagedCount || 0} unmg.
+                        {Math.round(ratioToPercent(item.infra?.coverageRatio))}% · {item.infra?.unmanagedCount || 0} unmg.
                       </div>
                     </td>
                     <td className="py-2 pr-3 text-sand-700">{item.topRecommendations?.[0]?.title || "-"}</td>
