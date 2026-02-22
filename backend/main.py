@@ -39,6 +39,10 @@ GEO_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 ROUTE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 SEVDESK_CONTACT_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 _sevdesk_contact_cache: Dict[str, Tuple[int, str]] = {}
+CUSTOMER_DEVELOPMENT_CACHE_TTL_MS = 5 * 60 * 1000
+CUSTOMER_CVE_CACHE_TTL_MS = 30 * 60 * 1000
+_customer_development_cache: Dict[str, Dict[str, Any]] = {}
+_customer_cve_cache: Dict[int, Dict[str, Any]] = {}
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -1253,6 +1257,18 @@ class CustomerDevelopmentAiRequest(BaseModel):
     tone: Optional[str] = "sachlich"
 
 
+class CustomerDevelopmentReportSuggestionPreviewRequest(BaseModel):
+    customer_id: int
+    recommendation_index: Optional[int] = 0
+
+
+class CustomerDevelopmentReportSuggestionImportRequest(BaseModel):
+    report_id: int
+    customer_id: int
+    recommendation_index: Optional[int] = 0
+    confirm: bool = False
+
+
 class OfferSettingsUpdate(BaseModel):
     offer_number_format: Optional[str] = None
 
@@ -1899,9 +1915,156 @@ def _invoice_paid_amount(invoice: Dict[str, Any]) -> float:
 
 
 def _invoice_date_for_paid(invoice: Dict[str, Any]) -> Optional[datetime]:
-    return _parse_sevdesk_date(invoice.get("paidDate")) or _parse_sevdesk_date(
-        invoice.get("invoiceDate")
-    )
+    direct_paid_date = _parse_sevdesk_date(invoice.get("paidDate"))
+    if direct_paid_date:
+        return direct_paid_date
+
+    def _history_marks_paid(entry: Dict[str, Any]) -> bool:
+        marker_fields = [
+            entry.get("field"),
+            entry.get("key"),
+            entry.get("name"),
+            entry.get("attribute"),
+            entry.get("event"),
+            entry.get("type"),
+            entry.get("action"),
+            entry.get("description"),
+            entry.get("message"),
+            entry.get("label"),
+        ]
+        marker_text = " ".join(str(value or "").strip().lower() for value in marker_fields if value is not None)
+        if marker_text and ("paid" in marker_text or "bezahlt" in marker_text):
+            return True
+        status_markers = {
+            _parse_int(entry.get("status")),
+            _parse_int(entry.get("newStatus")),
+            _parse_int(entry.get("toStatus")),
+            _parse_int(entry.get("statusAfter")),
+            _parse_int(entry.get("newValue")),
+            _parse_int(entry.get("to")),
+        }
+        return 1000 in status_markers
+
+    def _extract_history_date(entry: Dict[str, Any]) -> Optional[datetime]:
+        for key in (
+            "date",
+            "paidDate",
+            "created",
+            "createdAt",
+            "timestamp",
+            "time",
+            "when",
+            "changedAt",
+            "updatedAt",
+        ):
+            parsed = _parse_sevdesk_date(entry.get(key))
+            if parsed:
+                return parsed
+        return None
+
+    candidates: List[datetime] = []
+    for history_key in ("history", "statusHistory", "changeHistory", "invoiceHistory", "timeline", "logs"):
+        history = invoice.get(history_key)
+        if not isinstance(history, list):
+            continue
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            if not _history_marks_paid(entry):
+                continue
+            paid_date = _extract_history_date(entry)
+            if paid_date:
+                candidates.append(paid_date)
+    if candidates:
+        return max(candidates)
+
+    return _parse_sevdesk_date(invoice.get("invoiceDate"))
+
+
+def _summarize_customer_payment_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    revenue_total = 0.0
+    revenue_current_year = 0.0
+    revenue_last_year = 0.0
+    open_overdue_invoices = 0
+    open_overdue_amount = 0.0
+    open_age_weighted_total = 0.0
+    open_age_weighted_count = 0
+    payment_days_total = 0.0
+    payment_days_count = 0
+    late_paid_invoices = 0
+    reminders_total = 0
+    for row in rows:
+        revenue_total += _parse_float(row.get("totalAmountEur"), default=0.0)
+        revenue_current_year += _parse_float(row.get("revenueCurrentYearEur"), default=0.0)
+        revenue_last_year += _parse_float(row.get("revenueLastYearEur"), default=0.0)
+        open_count = _parse_int(row.get("openOverdueInvoices"))
+        if open_count is None:
+            open_count = _parse_int(row.get("openInvoices")) or 0
+        open_overdue_invoices += int(open_count or 0)
+        open_overdue_amount += _parse_float(
+            row.get("openOverdueAmountEur", row.get("openAmountEur")),
+            default=0.0,
+        )
+        avg_open_age = row.get("avgOpenAgeDays")
+        if avg_open_age is not None and open_count and open_count > 0:
+            open_age_weighted_total += _parse_float(avg_open_age, default=0.0) * float(open_count)
+            open_age_weighted_count += int(open_count)
+        paid_count = _parse_int(row.get("paidInvoices")) or 0
+        avg_payment_days = row.get("avgPaymentDays")
+        if avg_payment_days is not None and paid_count > 0:
+            payment_days_total += _parse_float(avg_payment_days, default=0.0) * float(paid_count)
+            payment_days_count += int(paid_count)
+        late_paid_invoices += int(_parse_int(row.get("latePaidInvoices")) or 0)
+        reminders_total += int(_parse_int(row.get("remindersTotal")) or 0)
+
+    return {
+        "customers": len(rows),
+        "revenueTotalEur": round(revenue_total, 2),
+        "revenueCurrentYearEur": round(revenue_current_year, 2),
+        "revenueLastYearEur": round(revenue_last_year, 2),
+        "openOverdueInvoices": int(open_overdue_invoices),
+        "openOverdueAmountEur": round(open_overdue_amount, 2),
+        "avgOpenAgeDays": (
+            round(open_age_weighted_total / open_age_weighted_count, 1)
+            if open_age_weighted_count
+            else None
+        ),
+        "avgPaymentDays": (
+            round(payment_days_total / payment_days_count, 1)
+            if payment_days_count
+            else None
+        ),
+        "latePaidRatePct": (
+            round((late_paid_invoices / payment_days_count) * 100, 1)
+            if payment_days_count
+            else None
+        ),
+        "remindersTotal": int(reminders_total),
+    }
+
+
+def _filter_inactive_customer_payment_rows(
+    rows: List[Dict[str, Any]],
+    inactive_name_keys: Set[str],
+    active_name_keys: Set[str],
+    inactive_number_keys: Set[str],
+    active_number_keys: Set[str],
+) -> List[Dict[str, Any]]:
+    if not rows:
+        return []
+    filtered: List[Dict[str, Any]] = []
+    for row in rows:
+        row_name_key = _dev_normalize_text(row.get("name"))
+        row_number_key = _normalize_customer_number(row.get("customerNumber") or row.get("customer_number"))
+        matched_inactive = False
+        if row_number_key and row_number_key in inactive_number_keys and row_number_key not in active_number_keys:
+            matched_inactive = True
+        if row_name_key and row_name_key in inactive_name_keys and row_name_key not in active_name_keys:
+            matched_inactive = True
+        if matched_inactive:
+            continue
+        filtered.append(row)
+    return filtered
 
 
 def _invoice_reminder_count(invoice: Dict[str, Any]) -> int:
@@ -2168,18 +2331,7 @@ def _build_customer_payment_stats(
         if overall_paid_invoices
         else None
     )
-    summary = {
-        "customers": len(rows),
-        "revenueTotalEur": round(overall_revenue_total, 2),
-        "revenueCurrentYearEur": round(overall_revenue_current_year, 2),
-        "revenueLastYearEur": round(overall_revenue_last_year, 2),
-        "openOverdueInvoices": int(overall_outstanding_invoices),
-        "openOverdueAmountEur": round(overall_outstanding_amount, 2),
-        "avgOpenAgeDays": avg_open_age_all,
-        "avgPaymentDays": avg_payment_days_all,
-        "latePaidRatePct": late_paid_rate_all,
-        "remindersTotal": int(overall_reminders_total),
-    }
+    summary = _summarize_customer_payment_rows(rows)
     return {"rows": rows, "summary": summary}
 
 
@@ -3819,6 +3971,25 @@ def _fetch_tactical_rmm_agents(settings: Optional[IntegrationSettings]) -> Tuple
     return agents if isinstance(agents, list) else [], True
 
 
+def _build_tactical_rmm_session(settings: Optional[IntegrationSettings]) -> Tuple[Optional[requests.Session], str]:
+    if not settings:
+        return None, ""
+    host = str(settings.rmm_host or "").strip().rstrip("/")
+    api_key = str(settings.rmm_api_key or "").strip()
+    api_key_header = str(settings.rmm_api_key_header or "X-API-KEY").strip() or "X-API-KEY"
+    if not host or not api_key:
+        return None, host
+    session = requests.Session()
+    session.headers.update({"User-Agent": "QT-Workbench"})
+    header_value = api_key
+    if api_key_header.lower() == "authorization" and not re.match(r"^(bearer|token)\s+", api_key, re.IGNORECASE):
+        header_value = f"Bearer {api_key}"
+    session.headers.update({api_key_header: header_value})
+    if api_key_header.lower() != "x-api-key":
+        session.headers.update({"X-API-KEY": api_key})
+    return session, host
+
+
 def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, Any]:
     checked_at = datetime.now().isoformat()
     if not settings:
@@ -3993,6 +4164,149 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
         "agents": [],
         "error": " | ".join(error_parts) if error_parts else "RMM API connection failed",
     }
+
+
+def _extract_agent_id(agent: Dict[str, Any]) -> str:
+    return str(agent.get("agent_id") or agent.get("agentId") or agent.get("id") or "").strip()
+
+
+def _safe_version_key(value: str) -> Tuple[int, str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return (0, "")
+    parts = re.findall(r"\d+", raw)
+    if not parts:
+        return (1, raw.lower())
+    padded = ".".join(part.zfill(6) for part in parts[:6])
+    return (2, padded)
+
+
+def _fetch_tactical_rmm_software(
+    settings: Optional[IntegrationSettings],
+    agent_ids: List[str],
+    per_agent_limit: int = 80,
+) -> List[Dict[str, Any]]:
+    session, host = _build_tactical_rmm_session(settings)
+    if not session or not host:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for agent_id in agent_ids[:25]:
+        if not agent_id:
+            continue
+        candidates = [
+            f"/software/{agent_id}/",
+            f"/software/{agent_id}",
+        ]
+        payload = None
+        for path in candidates:
+            try:
+                res = session.get(f"{host}{path}", timeout=8)
+            except requests.RequestException:
+                continue
+            if not res.ok:
+                continue
+            try:
+                data = res.json()
+            except ValueError:
+                continue
+            payload = data
+            break
+        if payload is None:
+            continue
+        items = payload if isinstance(payload, list) else payload.get("results") if isinstance(payload, dict) else []
+        if not isinstance(items, list):
+            continue
+        for item in items[:per_agent_limit]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("software") or item.get("product") or "").strip()
+            version = str(item.get("version") or item.get("display_version") or "").strip()
+            if not name:
+                continue
+            rows.append(
+                {
+                    "agent_id": agent_id,
+                    "name": name,
+                    "version": version,
+                }
+            )
+    return rows
+
+
+def _nvd_lookup(name: str, version: str) -> List[Dict[str, Any]]:
+    term = f"{name} {version}".strip()
+    if not term:
+        return []
+    url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    try:
+        res = requests.get(
+            url,
+            params={"keywordSearch": term, "resultsPerPage": 5},
+            timeout=8,
+        )
+        if not res.ok:
+            return []
+        data = res.json()
+    except Exception:
+        return []
+    vulns = data.get("vulnerabilities")
+    if not isinstance(vulns, list):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for row in vulns[:5]:
+        cve = row.get("cve") if isinstance(row, dict) else {}
+        if not isinstance(cve, dict):
+            continue
+        cve_id = str(cve.get("id") or "").strip()
+        metrics = cve.get("metrics") if isinstance(cve.get("metrics"), dict) else {}
+        score = None
+        if metrics:
+            for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+                values = metrics.get(key)
+                if isinstance(values, list) and values:
+                    cvss_data = values[0].get("cvssData") if isinstance(values[0], dict) else {}
+                    if isinstance(cvss_data, dict):
+                        score = cvss_data.get("baseScore")
+                    break
+        if cve_id:
+            rows.append({"id": cve_id, "score": score})
+    return rows
+
+
+def _osv_fixed_versions(name: str, version: str) -> List[str]:
+    payload = {
+        "version": str(version or ""),
+        "package": {"name": str(name or "")},
+    }
+    try:
+        res = requests.post("https://api.osv.dev/v1/query", json=payload, timeout=8)
+        if not res.ok:
+            return []
+        data = res.json()
+    except Exception:
+        return []
+    vulns = data.get("vulns")
+    if not isinstance(vulns, list):
+        return []
+    fixed: List[str] = []
+    for vuln in vulns:
+        affected = vuln.get("affected") if isinstance(vuln, dict) else []
+        if not isinstance(affected, list):
+            continue
+        for item in affected:
+            ranges = item.get("ranges") if isinstance(item, dict) else []
+            if not isinstance(ranges, list):
+                continue
+            for rng in ranges:
+                events = rng.get("events") if isinstance(rng, dict) else []
+                if not isinstance(events, list):
+                    continue
+                for event in events:
+                    fixed_version = str(event.get("fixed") or "").strip() if isinstance(event, dict) else ""
+                    if fixed_version:
+                        fixed.append(fixed_version)
+    unique = sorted(set(fixed), key=_safe_version_key)
+    return unique[-3:]
 
 
 def _extract_customer_number_from_contact(contact: Dict[str, Any]) -> str:
@@ -4230,36 +4544,49 @@ def _build_customer_development_context(
         recommendations.append(
             {"type": "betreuung", "title": "Vertragslage prüfen", "why": "Kein Wartungs- oder Monitoringvertrag im Kundenstamm."}
         )
-    # Umsatztrend nur kontextabhängig bewerten:
-    # Einmalige Investitionsspitzen (z. B. Serverkauf) im Vorjahr sollen
-    # keinen automatischen Risiko-Status erzeugen.
+    # Engagement-Signale: viele kleine Anfragen und regelmäßige Kommunikation
+    # sind typischerweise positiv und sollen nicht als Risiko gewertet werden.
+    interaction_load = open_day_tasks + open_time_tasks
+    is_engaged_customer = (
+        comm_load >= 90
+        or telephony["calls"] >= 8
+        or interaction_load >= 4
+    )
+    if is_engaged_customer:
+        business_risk = max(0, business_risk - 12)
+        signals.append("Aktive Kundeninteraktion (regelmäßige Anfragen)")
+        if not has_contract:
+            recommendations.append(
+                {
+                    "type": "betreuung",
+                    "title": "Aktive Betreuung vertraglich absichern",
+                    "why": "Der Kunde nutzt Leistungen regelmäßig, aber ohne Wartungs-/Monitoringvertrag.",
+                }
+            )
+
+    # Umsatztrend nur dann als Risiko nutzen, wenn zusätzlich wenig Bindungsaktivität vorliegt.
     trend_drop_is_strong = revenue_trend_pct <= -35
     is_high_value_customer = revenue_last_year >= 8000 or revenue_current_year >= 8000
     low_current_revenue = revenue_current_year <= 2500
     weak_binding_signals = (
-        not has_contract
-        or (open_day_tasks + open_time_tasks) >= 8
-        or telephony["missed"] >= 5
+        not is_engaged_customer
+        and interaction_load < 3
+        and telephony["calls"] < 4
+        and telephony["missed"] < 3
     )
-    if trend_drop_is_strong and low_current_revenue and weak_binding_signals:
-        business_risk += 15
+    if trend_drop_is_strong and low_current_revenue and not has_contract and weak_binding_signals:
+        business_risk += 12
         signals.append(f"Umsatzprofil rückläufig ({revenue_trend_pct}%)")
         recommendations.append(
             {
                 "type": "betreuung",
-                "title": "Kundenentwicklung aktiv prüfen",
-                "why": "Deutlicher Rückgang bei gleichzeitig schwachen Bindungssignalen.",
+                "title": "Reaktivierungs-Check einplanen",
+                "why": "Deutlicher Rückgang bei gleichzeitig geringer Interaktion.",
             }
         )
     elif trend_drop_is_strong and is_high_value_customer:
         signals.append("Umsatzprofil volatil (möglicher Einmaleffekt)")
-    if comm_load >= 120 or telephony["missed"] >= 5:
-        business_risk += 15
-        signals.append("Hohe Kommunikationslast")
-        recommendations.append(
-            {"type": "betreuung", "title": "Betreuungsrhythmus erhöhen", "why": "Viele Minuten/Anrufe in den letzten 30 Tagen."}
-        )
-    if (open_day_tasks + open_time_tasks) >= 8:
+    if interaction_load >= 8:
         business_risk += 10
         signals.append("Viele offene Aufgaben")
         recommendations.append(
@@ -4322,9 +4649,35 @@ def _build_customer_development_context(
     }
     if not full:
         return light
+    managed_devices = []
+    for agent in managed_agents:
+        managed_devices.append(
+            {
+                "source": "tactical_rmm",
+                "hostname": str(agent.get("hostname") or agent.get("name") or "").strip(),
+                "agentId": _extract_agent_id(agent),
+                "site": str(agent.get("site") or agent.get("site_name") or "").strip(),
+                "client": str(agent.get("client") or agent.get("client_name") or "").strip(),
+                "online": bool(_agent_is_online(agent)),
+            }
+        )
+    discovered_devices = []
+    for row in customer_discovery_rows:
+        discovered_devices.append(
+            {
+                "source": str(row.source or "discovery").strip() or "discovery",
+                "hostname": str(row.hostname or "").strip(),
+                "ip": str(row.ip or "").strip(),
+                "mac": str(row.mac or "").strip(),
+                "protocol": str(row.protocol or "").strip(),
+                "managed": bool(row.managed),
+                "lastSeenAt": int(row.last_seen_at or 0),
+            }
+        )
     light["recommendations"] = recommendations
     light["telephony"] = telephony
     light["reasons"] = signals
+    light["infrastructureDevices"] = managed_devices + discovered_devices
     light["source"] = {
         "sevdesk": bool(sevdesk_rows),
         "tacticalRmm": bool(tactical_agents),
@@ -4337,8 +4690,23 @@ def _build_customer_development_payload(
     include_inactive: bool = False,
     customer_id: Optional[int] = None,
     full: bool = False,
+    refresh: bool = False,
 ) -> Dict[str, Any]:
+    cache_key = json.dumps(
+        {
+            "include_inactive": bool(include_inactive),
+            "customer_id": int(customer_id) if customer_id is not None else None,
+            "full": bool(full),
+        },
+        sort_keys=True,
+    )
     now_ms = int(time.time() * 1000)
+    cached = _customer_development_cache.get(cache_key)
+    if not refresh and cached and now_ms - int(cached.get("cachedAt") or 0) < CUSTOMER_DEVELOPMENT_CACHE_TTL_MS:
+        payload = cached.get("payload")
+        if isinstance(payload, dict):
+            payload["fromCache"] = True
+            return payload
     now_dt = datetime.now()
     with SessionLocal() as db:
         customers_query = db.query(Customer)
@@ -4358,7 +4726,7 @@ def _build_customer_development_payload(
             for customer in customers
         ]
         contexts.sort(key=lambda item: (-(item.get("priority") or 0), -(item.get("riskScore") or 0)))
-        return {
+        payload = {
             "generatedAt": now_ms,
             "count": len(contexts),
             "contexts": contexts,
@@ -4366,7 +4734,10 @@ def _build_customer_development_payload(
                 "sevdesk": bool(sevdesk_rows),
                 "tacticalRmm": bool(tactical_connected),
             },
+            "fromCache": False,
         }
+        _customer_development_cache[cache_key] = {"cachedAt": now_ms, "payload": payload}
+        return payload
 
 
 def _customer_development_ai_prompt(context: Dict[str, Any], mode: str, tone: str) -> str:
@@ -4478,6 +4849,62 @@ def _customer_development_ai_fallback(context: Dict[str, Any], mode: str) -> str
     )
 
 
+def _build_report_item_from_recommendation(
+    context: Dict[str, Any],
+    recommendation_index: int = 0,
+) -> Dict[str, Any]:
+    recommendations = context.get("recommendations") or context.get("topRecommendations") or []
+    if not recommendations:
+        raise HTTPException(404, "No recommendations available for this customer")
+    idx = max(0, min(int(recommendation_index or 0), len(recommendations) - 1))
+    rec = recommendations[idx] or {}
+    title = str(rec.get("title") or "Empfehlung").strip() or "Empfehlung"
+    why = str(rec.get("why") or "").strip()
+    rec_type = str(rec.get("type") or "betreuung").strip().lower()
+    customer_name = str(context.get("customerName") or "Kunde")
+
+    impact_map = {
+        "security": "Reduziert Ausfall- und Sicherheitsrisiken, erhöht Nachvollziehbarkeit.",
+        "lifecycle": "Verbessert Stabilität und Planbarkeit der IT-Infrastruktur.",
+        "betreuung": "Senkt Reibungsverluste im Alltag und schafft klare Verantwortlichkeiten.",
+    }
+    duration_map = {
+        "security": "ca. 2-4 Stunden",
+        "lifecycle": "ca. 2-6 Stunden",
+        "betreuung": "ca. 1-3 Stunden",
+    }
+    cost_map = {
+        "security": "nach Aufwand / Angebotsposition",
+        "lifecycle": "nach Aufwand / Angebotsposition",
+        "betreuung": "monatlich oder nach Aufwand",
+    }
+    priority = "Hoch" if float(context.get("riskScore") or 0) >= 50 else "Planbar"
+    preview_text = (
+        f"Vorschlag für {customer_name}: {title}. "
+        f"Begründung: {why or 'Aus den aktuellen Kundensignalen abgeleitet.'} "
+        f"Empfohlener nächster Schritt: mit dem Kunden terminieren und als Maßnahme priorisieren."
+    )
+    return {
+        "priority": priority,
+        "title": title,
+        "system": "Kundenentwicklung",
+        "why_text": why or "Aus Kundenentwicklungssignalen abgeleitet.",
+        "impact": impact_map.get(rec_type, impact_map["betreuung"]),
+        "duration": duration_map.get(rec_type, "ca. 1-3 Stunden"),
+        "cost": cost_map.get(rec_type, "nach Aufwand"),
+        "action_type": "standard",
+        "custom_html": "",
+        "custom_text": "",
+        "custom_data": {
+            "source": "customer_development",
+            "recommendation_type": rec_type,
+            "customer_id": context.get("customerId"),
+            "customer_name": customer_name,
+        },
+        "preview_text": preview_text,
+    }
+
+
 # ================= CUSTOMERS =================
 @app.get("/api/customers")
 def get_customers():
@@ -4487,21 +4914,122 @@ def get_customers():
 
 
 @app.get("/api/customer_development")
-def get_customer_development(include_inactive: bool = False, full: bool = False):
-    return _build_customer_development_payload(include_inactive=include_inactive, full=full)
+def get_customer_development(include_inactive: bool = False, full: bool = False, refresh: bool = False):
+    return _build_customer_development_payload(
+        include_inactive=include_inactive,
+        full=full,
+        refresh=refresh,
+    )
 
 
 @app.get("/api/customers/{customer_id}/development")
-def get_customer_development_for_customer(customer_id: int):
+def get_customer_development_for_customer(customer_id: int, refresh: bool = False):
     payload = _build_customer_development_payload(
         include_inactive=True,
         customer_id=customer_id,
         full=True,
+        refresh=refresh,
     )
     contexts = payload.get("contexts") or []
     if not contexts:
         raise HTTPException(404, "Customer not found")
     return contexts[0]
+
+
+@app.get("/api/customers/{customer_id}/development/cve_scan")
+def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
+    now_ms = int(time.time() * 1000)
+    cached = _customer_cve_cache.get(int(customer_id))
+    if not refresh and cached and now_ms - int(cached.get("cachedAt") or 0) < CUSTOMER_CVE_CACHE_TTL_MS:
+        payload = cached.get("payload")
+        if isinstance(payload, dict):
+            payload["fromCache"] = True
+            return payload
+
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        integration = db.query(IntegrationSettings).first()
+        tactical_agents, tactical_connected = _fetch_tactical_rmm_agents(integration)
+        matched_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
+        agent_ids = [_extract_agent_id(agent) for agent in matched_agents if _extract_agent_id(agent)]
+        software_rows = _fetch_tactical_rmm_software(integration, agent_ids, per_agent_limit=80)
+
+    agent_meta: Dict[str, Dict[str, Any]] = {}
+    for agent in matched_agents:
+        agent_id = _extract_agent_id(agent)
+        if not agent_id:
+            continue
+        agent_meta[agent_id] = {
+            "agentId": agent_id,
+            "hostname": str(agent.get("hostname") or agent.get("name") or "").strip(),
+            "site": str(agent.get("site") or agent.get("site_name") or "").strip(),
+            "client": str(agent.get("client") or agent.get("client_name") or "").strip(),
+            "online": bool(_agent_is_online(agent)),
+        }
+
+    per_agent_software: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for row in software_rows:
+        agent_id = str(row.get("agent_id") or "").strip()
+        name = str(row.get("name") or "").strip()
+        version = str(row.get("version") or "").strip()
+        if not agent_id or not name:
+            continue
+        software_by_name = per_agent_software.setdefault(agent_id, {})
+        key = name.lower()
+        existing = software_by_name.get(key)
+        if not existing or _safe_version_key(version) > _safe_version_key(str(existing.get("version") or "")):
+            software_by_name[key] = {"name": name, "version": version}
+
+    agents_payload: List[Dict[str, Any]] = []
+    scanned = 0
+    for agent_id, software_map in per_agent_software.items():
+        software_list = list(software_map.values())[:20]
+        agent_findings: List[Dict[str, Any]] = []
+        for item in software_list[:12]:
+            scanned += 1
+            name = str(item.get("name") or "").strip()
+            version = str(item.get("version") or "").strip()
+            cves = _nvd_lookup(name, version)
+            fixed_versions = _osv_fixed_versions(name, version)
+            if not cves and not fixed_versions:
+                continue
+            agent_findings.append(
+                {
+                    "name": name,
+                    "version": version,
+                    "cves": cves[:5],
+                    "fixedVersions": fixed_versions,
+                }
+            )
+        agent_findings.sort(
+            key=lambda item: max(
+                [float(entry.get("score") or 0) for entry in (item.get("cves") or [])] or [0]
+            ),
+            reverse=True,
+        )
+        meta = agent_meta.get(agent_id, {"agentId": agent_id, "hostname": "", "site": "", "client": "", "online": None})
+        agents_payload.append(
+            {
+                **meta,
+                "softwareCount": len(software_list),
+                "findingCount": len(agent_findings),
+                "findings": agent_findings,
+            }
+        )
+    agents_payload.sort(key=lambda row: (-(row.get("findingCount") or 0), str(row.get("hostname") or "")))
+    payload = {
+        "customerId": customer_id,
+        "scannedSoftware": scanned,
+        "matchedAgents": len(agent_ids),
+        "rmmConnected": bool(tactical_connected),
+        "agents": agents_payload,
+        "generatedAt": now_ms,
+        "fromCache": False,
+    }
+    _customer_cve_cache[int(customer_id)] = {"cachedAt": now_ms, "payload": payload}
+    return payload
 
 
 @app.post("/api/customer_development/ai_assist")
@@ -4572,6 +5100,83 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
         "text": text_result,
         "generated_at": int(time.time() * 1000),
     }
+
+
+@app.post("/api/customer_development/report_suggestion_preview")
+def customer_development_report_suggestion_preview(
+    data: CustomerDevelopmentReportSuggestionPreviewRequest,
+):
+    payload = _build_customer_development_payload(
+        include_inactive=True,
+        customer_id=int(data.customer_id),
+        full=True,
+    )
+    contexts = payload.get("contexts") or []
+    if not contexts:
+        raise HTTPException(404, "Customer not found")
+    context = contexts[0]
+    suggestion = _build_report_item_from_recommendation(
+        context,
+        recommendation_index=int(data.recommendation_index or 0),
+    )
+    return {
+        "reportUnchanged": True,
+        "customer_id": int(data.customer_id),
+        "customer_name": context.get("customerName") or "",
+        "suggestion": suggestion,
+        "generated_at": int(time.time() * 1000),
+    }
+
+
+@app.post("/api/customer_development/report_suggestion_import")
+def customer_development_report_suggestion_import(
+    data: CustomerDevelopmentReportSuggestionImportRequest,
+):
+    if not bool(data.confirm):
+        raise HTTPException(400, "confirm=true required for report import")
+    payload = _build_customer_development_payload(
+        include_inactive=True,
+        customer_id=int(data.customer_id),
+        full=True,
+    )
+    contexts = payload.get("contexts") or []
+    if not contexts:
+        raise HTTPException(404, "Customer not found")
+    context = contexts[0]
+    suggestion = _build_report_item_from_recommendation(
+        context,
+        recommendation_index=int(data.recommendation_index or 0),
+    )
+    with SessionLocal() as db:
+        report = db.query(Report).get(int(data.report_id))
+        if not report:
+            raise HTTPException(404, "Report not found")
+        custom_data = ""
+        raw_custom_data = suggestion.get("custom_data")
+        if isinstance(raw_custom_data, dict) and raw_custom_data:
+            custom_data = json.dumps(raw_custom_data)
+        report_item = ReportItem(
+            report_id=report.id,
+            priority=str(suggestion.get("priority") or "Planbar"),
+            title=str(suggestion.get("title") or ""),
+            system=str(suggestion.get("system") or ""),
+            why_text=str(suggestion.get("why_text") or ""),
+            impact=str(suggestion.get("impact") or ""),
+            duration=str(suggestion.get("duration") or ""),
+            cost=str(suggestion.get("cost") or ""),
+            action_type=str(suggestion.get("action_type") or "standard"),
+            custom_html=str(suggestion.get("custom_html") or ""),
+            custom_text=str(suggestion.get("custom_text") or ""),
+            custom_data=custom_data,
+        )
+        db.add(report_item)
+        db.commit()
+        db.refresh(report_item)
+        return {
+            "status": "imported",
+            "report_id": report.id,
+            "report_item": serialize_report_item(report_item),
+        }
 
 
 def _sevdesk_contact_display_name(contact: Dict[str, Any]) -> str:
@@ -6514,7 +7119,12 @@ def get_report(report_id: int):
 
 
 @app.post("/api/reports")
-def create_report(data: ReportCreate):
+def create_report(
+    data: ReportCreate,
+    x_write_source: Optional[str] = Header(default=None, alias="X-Write-Source"),
+):
+    if str(x_write_source or "").strip().lower() == "customer-development":
+        raise HTTPException(403, "Direct report writes from customer development are blocked")
     with SessionLocal() as db:
         customer_id = data.customer_id
         if not customer_id and data.customer:
@@ -6785,6 +7395,10 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
     month_stats: Dict[str, Dict[str, Any]] = {}
     hourly_rate = 0.0
     sevdesk_config: Optional[SevdeskConfig] = None
+    inactive_customer_name_keys: Set[str] = set()
+    active_customer_name_keys: Set[str] = set()
+    inactive_customer_number_keys: Set[str] = set()
+    active_customer_number_keys: Set[str] = set()
 
     with SessionLocal() as db:
         settings = None
@@ -6794,6 +7408,23 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                 hourly_rate = float(settings.hourly_rate_eur or 0)
             except ValueError:
                 hourly_rate = 0.0
+
+        if load_customers:
+            all_customers = db.query(Customer).all()
+            for customer in all_customers:
+                name_key = _dev_normalize_text(customer.name)
+                number_key = _normalize_customer_number(customer.creditor_number)
+                is_inactive = (customer.status or "active").strip().lower() == "inactive"
+                if is_inactive:
+                    if name_key:
+                        inactive_customer_name_keys.add(name_key)
+                    if number_key:
+                        inactive_customer_number_keys.add(number_key)
+                else:
+                    if name_key:
+                        active_customer_name_keys.add(name_key)
+                    if number_key:
+                        active_customer_number_keys.add(number_key)
 
         if load_general:
             day_tasks_total = db.query(DayTask).count()
@@ -6962,6 +7593,18 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                 )
         except SevdeskError as exc:
             sevdesk_stats = {"connected": False, "error": str(exc)}
+    if load_customers and isinstance(sevdesk_stats, dict):
+        customer_rows = sevdesk_stats.get("customerPaymentStats")
+        if isinstance(customer_rows, list):
+            filtered_rows = _filter_inactive_customer_payment_rows(
+                customer_rows,
+                inactive_customer_name_keys,
+                active_customer_name_keys,
+                inactive_customer_number_keys,
+                active_customer_number_keys,
+            )
+            sevdesk_stats["customerPaymentStats"] = filtered_rows
+            sevdesk_stats["customerPaymentSummary"] = _summarize_customer_payment_rows(filtered_rows)
 
     response: Dict[str, Any] = {}
     if load_general:
@@ -7248,7 +7891,13 @@ def offer_confirm_submit(
 
 
 @app.patch("/api/reports/{report_id}")
-def update_report(report_id: int, data: ReportUpdate):
+def update_report(
+    report_id: int,
+    data: ReportUpdate,
+    x_write_source: Optional[str] = Header(default=None, alias="X-Write-Source"),
+):
+    if str(x_write_source or "").strip().lower() == "customer-development":
+        raise HTTPException(403, "Direct report writes from customer development are blocked")
     with SessionLocal() as db:
         report = db.query(Report).get(report_id)
         if not report:
@@ -7268,7 +7917,13 @@ def update_report(report_id: int, data: ReportUpdate):
 
 
 @app.put("/api/reports/{report_id}")
-def edit_report(report_id: int, data: ReportEdit):
+def edit_report(
+    report_id: int,
+    data: ReportEdit,
+    x_write_source: Optional[str] = Header(default=None, alias="X-Write-Source"),
+):
+    if str(x_write_source or "").strip().lower() == "customer-development":
+        raise HTTPException(403, "Direct report writes from customer development are blocked")
     with SessionLocal() as db:
         report = db.query(Report).get(report_id)
         if not report:

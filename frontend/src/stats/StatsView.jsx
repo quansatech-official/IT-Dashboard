@@ -597,7 +597,7 @@ export default function StatsView() {
                                     Spät: {formatPercent(item.latePaidRatePct)} ({formatNumber(item.latePaidInvoices || 0)} / {formatNumber(item.paidInvoices || 0)})
                                   </div>
                                   <div className="text-[10px] text-sand-400">
-                                    Sehr spät {'>'}30T: {formatNumber(item.veryLatePaidInvoices || 0)} · Zeitraum: {item.historyFrom || "-"} bis {item.historyTo || "-"}
+                                    Sehr spät {'>'}30T: {formatNumber(item.veryLatePaidInvoices || 0)}
                                   </div>
                                 </td>
                                 <td className="px-3 py-2 text-sand-700">
