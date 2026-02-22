@@ -3,8 +3,9 @@ import {
   AlertTriangle,
   ArrowDownUp,
   Bot,
+  ChevronDown,
+  ChevronUp,
   Eye,
-  FileSearch,
   Plus,
   RefreshCw,
   ScanSearch,
@@ -128,13 +129,7 @@ export default function CustomerDevelopmentView() {
     error: "",
   });
   const [discoveryProgress, setDiscoveryProgress] = useState(0);
-  const [reportSuggestion, setReportSuggestion] = useState({
-    status: "idle",
-    title: "",
-    text: "",
-    error: ""
-  });
-  const [reportProgress, setReportProgress] = useState(0);
+  const [expandedInfraAgents, setExpandedInfraAgents] = useState({});
   const [cveProgress, setCveProgress] = useState(0);
   const [includeInactive, setIncludeInactive] = useState(false);
   const [viewMode, setViewMode] = useState("list");
@@ -428,7 +423,6 @@ export default function CustomerDevelopmentView() {
       error: ""
     });
     setDiscoveryRun({ status: "idle", message: "", error: "" });
-    setReportSuggestion({ status: "idle", title: "", text: "", error: "" });
     setDetailAi({
       open: false,
       customerId: context.customerId,
@@ -458,7 +452,6 @@ export default function CustomerDevelopmentView() {
       error: ""
     });
     setDiscoveryRun({ status: "idle", message: "", error: "" });
-    setReportSuggestion({ status: "idle", title: "", text: "", error: "" });
     setDetailAi({
       open: false,
       customerId: null,
@@ -467,42 +460,6 @@ export default function CustomerDevelopmentView() {
       text: "",
       error: ""
     });
-  };
-
-  const previewReportSuggestion = async (recommendationIndex) => {
-    if (!detailModal.customerId) return;
-    setReportSuggestion({ status: "loading", title: "", text: "", error: "" });
-    setReportProgress(10);
-    try {
-      const response = await fetch(`${API}/customer_development/report_suggestion_preview`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customer_id: detailModal.customerId,
-          recommendation_index: recommendationIndex
-        })
-      });
-      const data = await response.json().catch(() => ({}));
-      setReportProgress((prev) => Math.max(prev, 72));
-      if (!response.ok) {
-        throw new Error(data?.detail || "Vorschau konnte nicht geladen werden");
-      }
-      setReportProgress(100);
-      setReportSuggestion({
-        status: "ready",
-        title: data?.suggestion?.title || "Berichtsvorschlag",
-        text: data?.suggestion?.preview_text || "",
-        error: ""
-      });
-    } catch (error) {
-      setReportProgress(100);
-      setReportSuggestion({
-        status: "error",
-        title: "",
-        text: "",
-        error: error?.message ? String(error.message) : "Vorschau konnte nicht geladen werden"
-      });
-    }
   };
 
   const runCveScan = async (forceRefresh = true) => {
@@ -563,10 +520,20 @@ export default function CustomerDevelopmentView() {
       const response = await fetch(`${API}/customers/${detailModal.customerId}/development/discovery_run`, {
         method: "POST",
       });
-      const data = await response.json().catch(() => ({}));
+      const textPayload = await response.text().catch(() => "");
+      let data = {};
+      try {
+        data = textPayload ? JSON.parse(textPayload) : {};
+      } catch {
+        data = {};
+      }
       setDiscoveryProgress((prev) => Math.max(prev, 75));
       if (!response.ok) {
-        throw new Error(data?.detail || "Discovery konnte nicht gestartet werden");
+        if (data?.detail) {
+          throw new Error(String(data.detail));
+        }
+        const plain = textPayload?.trim();
+        throw new Error(plain || "Discovery konnte nicht gestartet werden");
       }
       setDiscoveryProgress(100);
       const agentLabel = data?.agentHostname ? ` auf ${String(data.agentHostname)}` : "";
@@ -610,14 +577,6 @@ export default function CustomerDevelopmentView() {
       return () => window.clearTimeout(timer);
     }
   }, [aiBusy, aiProgress]);
-
-  useEffect(() => {
-    if (reportSuggestion.status !== "loading") return;
-    const timer = window.setInterval(() => {
-      setReportProgress((prev) => (prev >= 92 ? prev : Math.min(92, prev + (prev < 40 ? 7 : 3))));
-    }, 180);
-    return () => window.clearInterval(timer);
-  }, [reportSuggestion.status]);
 
   useEffect(() => {
     if (cveScan.status !== "loading") return;
@@ -715,16 +674,13 @@ export default function CustomerDevelopmentView() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Aktionen</p>
                       <div className="flex flex-wrap items-center gap-1">
-                        {(actionSuggestions || []).slice(0, 3).map((action, idx) => (
-                          <button
-                            key={`${action?.title || "task"}-${idx}`}
-                            type="button"
-                            onClick={() => createTask(action?.title)}
-                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
-                          >
-                            <Plus size={12} /> {action?.label || "Aufgabe"}
-                          </button>
-                        ))}
+                        <button
+                          type="button"
+                          onClick={() => createTask(actionSuggestions?.[0]?.title || "Follow-up Kundenentwicklung")}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
+                        >
+                          <Plus size={12} /> Aufgabe anlegen
+                        </button>
                         <button
                           type="button"
                           onClick={() => setDetailTab("ki")}
@@ -766,32 +722,6 @@ export default function CustomerDevelopmentView() {
                           className="w-full min-h-[160px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
                         />
                       </div>
-                    </div>
-                  ) : null}
-
-                  {detailTab === "overview" && reportSuggestion.status !== "idle" ? (
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">
-                        Berichtsvorschau (ohne Änderung am Kundenbericht)
-                      </p>
-                      {reportSuggestion.status === "loading" ? (
-                        <div className="mt-2">
-                          <LoadingProgress label="Erzeuge Vorschau" progress={reportProgress} />
-                        </div>
-                      ) : null}
-                      {reportSuggestion.error ? (
-                        <p className="mt-2 text-sm text-rose-600">{reportSuggestion.error}</p>
-                      ) : null}
-                      {reportSuggestion.status === "ready" && !reportSuggestion.error ? (
-                        <div className="mt-2 space-y-2">
-                          <p className="text-sm font-semibold text-sand-800">{reportSuggestion.title}</p>
-                          <textarea
-                            readOnly
-                            value={reportSuggestion.text}
-                            className="w-full min-h-[130px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
-                          />
-                        </div>
-                      ) : null}
                     </div>
                   ) : null}
 
@@ -950,14 +880,6 @@ export default function CustomerDevelopmentView() {
                           <div key={`${rec?.title || "r"}-${idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2">
                             <p className="text-xs font-semibold text-sand-800">{rec?.title || "Empfehlung"}</p>
                             <p className="text-[11px] text-sand-500">{rec?.why || ""}</p>
-                            <button
-                              type="button"
-                              onClick={() => previewReportSuggestion(idx)}
-                              className="mt-2 inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                            >
-                              <FileSearch size={11} />
-                              In Bericht vorschlagen
-                            </button>
                           </div>
                         ))}
                       </div>
@@ -1052,14 +974,37 @@ export default function CustomerDevelopmentView() {
                             <div key={`${device?.agentId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-700">
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <p className="font-semibold text-sand-800">{device?.hostname || "Unbekannter Agent"}</p>
-                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide">
-                                  RMM
-                                </span>
+                                <div className="inline-flex items-center gap-2">
+                                  <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide">
+                                    RMM
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedInfraAgents((prev) => ({
+                                        ...prev,
+                                        [device?.agentId || `idx-${idx}`]: !prev[device?.agentId || `idx-${idx}`]
+                                      }))
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                                  >
+                                    Details
+                                    {expandedInfraAgents[device?.agentId || `idx-${idx}`] ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                                  </button>
+                                </div>
                               </div>
                               <p className="mt-1 text-[11px] text-sand-600">
                                 {device?.client || "Client n/a"} · {device?.site || "Site n/a"} ·{" "}
                                 {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
                               </p>
+                              {expandedInfraAgents[device?.agentId || `idx-${idx}`] ? (
+                                <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-600 space-y-1">
+                                  <p>Agent ID: {device?.agentId || "n/a"}</p>
+                                  <p>OS: {device?.os || "n/a"}</p>
+                                  <p>Agent Version: {device?.version || "n/a"}</p>
+                                  <p>Last Seen: {device?.lastSeen || "n/a"}</p>
+                                </div>
+                              ) : null}
                             </div>
                           ))
                         ) : (
@@ -1132,6 +1077,9 @@ export default function CustomerDevelopmentView() {
                                   {agent?.client || "Client n/a"} · {agent?.site || "Site n/a"} ·{" "}
                                   {typeof agent?.online === "boolean" ? (agent.online ? "Online" : "Offline") : "Status n/a"}
                                 </p>
+                                <p className="text-[11px] text-sand-600">
+                                  OS: {agent?.os || "n/a"} · Agent Version: {agent?.version || "n/a"} · Last Seen: {agent?.lastSeen || "n/a"}
+                                </p>
                                 {(agent?.findings || []).length ? (
                                   <div className="space-y-1">
                                     {(agent.findings || []).map((item, itemIdx) => (
@@ -1153,6 +1101,8 @@ export default function CustomerDevelopmentView() {
                                 )}
                               </div>
                             ))
+                          ) : Number(cveScan.matchedAgents || 0) > 0 ? (
+                            <p className="text-sm text-sand-500">Agenten vorhanden, aber keine Softwaredaten vom RMM geliefert.</p>
                           ) : (
                             <p className="text-sm text-sand-500">Keine CVE-Treffer in den geprüften Einträgen gefunden.</p>
                           )}

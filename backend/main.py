@@ -16,6 +16,7 @@ import json
 import json as jsonlib
 import re
 import difflib
+import unicodedata
 import hashlib
 import hmac
 import base64
@@ -53,11 +54,11 @@ if not logging.getLogger().handlers:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 logger = logging.getLogger("it_dashboard")
-MODEL_PREF_CUSTOMER_RANKING = "llama3.2:3b llama3.2:1b"
-MODEL_PREF_TASK_DRAFT = "llama3.2:3b llama3.2:1b"
-MODEL_PREF_ACTION = "llama3.2:3b llama3.2:1b"
-MODEL_PREF_OFFER_TEXT = "llama3.2:3b llama3.2:1b"
-MODEL_PREF_INVOICE_SUMMARY = "llama3.2:3b llama3.2:1b"
+MODEL_PREF_CUSTOMER_RANKING = os.environ.get("OLLAMA_MODEL_PREF_CUSTOMER_RANKING") or OLLAMA_MODEL
+MODEL_PREF_TASK_DRAFT = os.environ.get("OLLAMA_MODEL_PREF_TASK_DRAFT") or OLLAMA_MODEL
+MODEL_PREF_ACTION = os.environ.get("OLLAMA_MODEL_PREF_ACTION") or OLLAMA_MODEL
+MODEL_PREF_OFFER_TEXT = os.environ.get("OLLAMA_MODEL_PREF_OFFER_TEXT") or OLLAMA_MODEL
+MODEL_PREF_INVOICE_SUMMARY = os.environ.get("OLLAMA_MODEL_PREF_INVOICE_SUMMARY") or OLLAMA_MODEL
 FREE_EMAIL_DOMAINS = {
     "gmail.com",
     "googlemail.com",
@@ -3972,6 +3973,13 @@ def _generate_task_draft_from_email(
 
 def _dev_normalize_text(value: Any) -> str:
     text_value = str(value or "").strip().lower()
+    text_value = (
+        text_value.replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+    )
+    text_value = unicodedata.normalize("NFKD", text_value).encode("ascii", "ignore").decode("ascii")
     text_value = re.sub(r"[^a-z0-9]+", " ", text_value)
     return re.sub(r"\s+", " ", text_value).strip()
 
@@ -4228,6 +4236,8 @@ def _fetch_tactical_rmm_software(
         candidates = [
             f"/software/{agent_id}/",
             f"/software/{agent_id}",
+            f"/api/v3/software/{agent_id}/",
+            f"/api/v3/software/{agent_id}",
         ]
         payload = None
         for path in candidates:
@@ -4468,18 +4478,34 @@ def _agent_is_online(agent: Dict[str, Any]) -> bool:
     return value in {"online", "up", "true", "1", "healthy"}
 
 
+def _agent_field_text(agent: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = agent.get(key)
+        if isinstance(value, dict):
+            for nested_key in ("name", "display_name", "displayName", "hostname", "title"):
+                nested = value.get(nested_key)
+                if nested is not None:
+                    text = str(nested).strip()
+                    if text:
+                        return text
+            continue
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
 def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
     terms = _dev_customer_match_terms(customer)
     if not terms:
         return False
     searchable = " ".join(
         [
-            str(agent.get("site") or ""),
-            str(agent.get("site_name") or ""),
-            str(agent.get("client") or ""),
-            str(agent.get("client_name") or ""),
-            str(agent.get("customer") or ""),
-            str(agent.get("hostname") or ""),
+            _agent_field_text(agent, "site", "site_name"),
+            _agent_field_text(agent, "client", "client_name", "customer"),
+            _agent_field_text(agent, "hostname", "name"),
         ]
     )
     haystack = _dev_normalize_text(searchable)
@@ -4692,11 +4718,14 @@ def _build_customer_development_context(
         managed_devices.append(
             {
                 "source": "tactical_rmm",
-                "hostname": str(agent.get("hostname") or agent.get("name") or "").strip(),
+                "hostname": _agent_field_text(agent, "hostname", "name"),
                 "agentId": _extract_agent_id(agent),
-                "site": str(agent.get("site") or agent.get("site_name") or "").strip(),
-                "client": str(agent.get("client") or agent.get("client_name") or "").strip(),
+                "site": _agent_field_text(agent, "site", "site_name"),
+                "client": _agent_field_text(agent, "client", "client_name", "customer"),
                 "online": bool(_agent_is_online(agent)),
+                "os": _agent_field_text(agent, "operating_system", "plat", "platform", "os"),
+                "version": _agent_field_text(agent, "version", "agent_version"),
+                "lastSeen": _agent_field_text(agent, "last_seen", "lastseen", "last_checkin"),
             }
         )
     discovered_devices = []
@@ -5014,10 +5043,13 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
             continue
         agent_meta[agent_id] = {
             "agentId": agent_id,
-            "hostname": str(agent.get("hostname") or agent.get("name") or "").strip(),
-            "site": str(agent.get("site") or agent.get("site_name") or "").strip(),
-            "client": str(agent.get("client") or agent.get("client_name") or "").strip(),
+            "hostname": _agent_field_text(agent, "hostname", "name"),
+            "site": _agent_field_text(agent, "site", "site_name"),
+            "client": _agent_field_text(agent, "client", "client_name", "customer"),
             "online": bool(_agent_is_online(agent)),
+            "os": _agent_field_text(agent, "operating_system", "plat", "platform", "os"),
+            "version": _agent_field_text(agent, "version", "agent_version"),
+            "lastSeen": _agent_field_text(agent, "last_seen", "lastseen", "last_checkin"),
         }
 
     per_agent_software: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -5034,8 +5066,14 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
             software_by_name[key] = {"name": name, "version": version}
 
     agents_payload: List[Dict[str, Any]] = []
+    ordered_agent_ids: List[str] = []
+    for agent in matched_agents:
+        agent_id = _extract_agent_id(agent)
+        if agent_id and agent_id not in ordered_agent_ids:
+            ordered_agent_ids.append(agent_id)
     scanned = 0
-    for agent_id, software_map in per_agent_software.items():
+    for agent_id in ordered_agent_ids:
+        software_map = per_agent_software.get(agent_id, {})
         software_list = list(software_map.values())[:20]
         agent_findings: List[Dict[str, Any]] = []
         for item in software_list[:12]:
@@ -5107,13 +5145,30 @@ def run_customer_development_discovery(customer_id: int, request: Request):
     if not target_agent_id:
         raise HTTPException(404, "Matched RMM agent has no agent id")
 
-    try:
-        scripts_res = session.get(f"{host}/scripts/", timeout=25)
-        scripts_res.raise_for_status()
-        scripts_payload = scripts_res.json()
-    except Exception as exc:
-        raise HTTPException(502, f"Failed to list RMM scripts: {exc}") from exc
-    if not isinstance(scripts_payload, list):
+    scripts_payload: Optional[List[Dict[str, Any]]] = None
+    for path in ("/scripts/", "/scripts", "/api/v3/scripts/", "/api/v3/scripts"):
+        try:
+            scripts_res = session.get(f"{host}{path}", timeout=25)
+        except Exception:
+            continue
+        if not scripts_res.ok:
+            continue
+        try:
+            raw_payload = scripts_res.json()
+        except Exception:
+            continue
+        if isinstance(raw_payload, list):
+            scripts_payload = [item for item in raw_payload if isinstance(item, dict)]
+            break
+        if isinstance(raw_payload, dict):
+            for key in ("results", "scripts", "data"):
+                maybe_list = raw_payload.get(key)
+                if isinstance(maybe_list, list):
+                    scripts_payload = [item for item in maybe_list if isinstance(item, dict)]
+                    break
+            if scripts_payload is not None:
+                break
+    if scripts_payload is None:
         raise HTTPException(502, "Unexpected script list response from RMM")
 
     target_script = None
@@ -5167,12 +5222,32 @@ def run_customer_development_discovery(customer_id: int, request: Request):
         "run_as_user": False,
         "timeout": 1500,
     }
-    try:
-        run_res = session.post(f"{host}/agents/{quote(target_agent_id)}/runscript/", json=run_payload, timeout=1800)
-        run_res.raise_for_status()
-        run_data = run_res.json()
-    except Exception as exc:
-        raise HTTPException(502, f"Failed to trigger discovery run: {exc}") from exc
+    run_data: Dict[str, Any] = {}
+    run_triggered = False
+    run_error = ""
+    for path in (
+        f"/agents/{quote(target_agent_id)}/runscript/",
+        f"/agents/{quote(target_agent_id)}/runscript",
+        f"/api/v3/agents/{quote(target_agent_id)}/runscript/",
+        f"/api/v3/agents/{quote(target_agent_id)}/runscript",
+    ):
+        try:
+            run_res = session.post(f"{host}{path}", json=run_payload, timeout=1800)
+        except Exception as exc:
+            run_error = str(exc)
+            continue
+        if not run_res.ok:
+            run_error = f"HTTP {run_res.status_code} on {path}"
+            continue
+        try:
+            parsed = run_res.json()
+            run_data = parsed if isinstance(parsed, dict) else {"raw": parsed}
+        except Exception:
+            run_data = {"raw": run_res.text[:1000]}
+        run_triggered = True
+        break
+    if not run_triggered:
+        raise HTTPException(502, f"Failed to trigger discovery run: {run_error or 'unknown API error'}")
 
     return {
         "status": "ok",

@@ -1259,14 +1259,17 @@ export default function CustomerDirectoryView() {
         </div>
       ) : null}
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
-              <Users size={18} />
+        <div className="max-w-6xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3 rounded-2xl border border-sand-200 bg-gradient-to-r from-white via-sand-50 to-sand-100 px-3 py-2.5 shadow-soft">
+            <div className="h-12 w-12 rounded-xl border border-sand-200 bg-white text-sand-800 flex items-center justify-center">
+              <BookPlus size={20} />
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-              <h1 className="text-xl font-display text-sand-900">Kundenstamm</h1>
+              <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
+              <h1 className="text-xl font-display text-sand-900 leading-tight">Kundenkartei</h1>
+            </div>
+            <div className="hidden sm:flex h-8 w-8 rounded-lg bg-sand-900 text-white items-center justify-center">
+              <Users size={15} />
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1354,7 +1357,7 @@ export default function CustomerDirectoryView() {
               />
               Inaktive Kunden einblenden
             </label>
-            <div className="mt-3 space-y-1.5 max-h-[520px] overflow-auto pr-1">
+            <div className="mt-3 space-y-1.5 max-h-[calc(100dvh-260px)] overflow-auto pr-1">
               {filteredCustomers.length ? (
                 sortedCustomers.map((customer) => {
                   return (
