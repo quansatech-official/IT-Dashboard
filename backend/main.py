@@ -12,6 +12,7 @@ import os
 import math
 import time
 import uuid
+import threading
 import json
 import json as jsonlib
 import re
@@ -4079,6 +4080,7 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
 
     # TacticalRMM docs use API base + /agents/ with X-API-KEY header.
     list_candidates = [
+        "/agents/?detail=true",
         "/agents/?detail=false",
         "/agents/",
         "/agents",
@@ -4207,7 +4209,56 @@ def _probe_tactical_rmm(settings: Optional[IntegrationSettings]) -> Dict[str, An
 
 
 def _extract_agent_id(agent: Dict[str, Any]) -> str:
-    return str(agent.get("agent_id") or agent.get("agentId") or agent.get("id") or "").strip()
+    return str(
+        agent.get("agent_id")
+        or agent.get("agentId")
+        or agent.get("agentid")
+        or agent.get("agentID")
+        or agent.get("id")
+        or ""
+    ).strip()
+
+
+def _fetch_tactical_rmm_agent_detail_map(
+    settings: Optional[IntegrationSettings],
+    agent_ids: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    session, host = _build_tactical_rmm_session(settings)
+    if not session or not host:
+        return {}
+    result: Dict[str, Dict[str, Any]] = {}
+    for agent_id in agent_ids[:30]:
+        clean_id = str(agent_id or "").strip()
+        if not clean_id:
+            continue
+        payload: Optional[Dict[str, Any]] = None
+        for path in (
+            f"/agents/{quote(clean_id)}/",
+            f"/agents/{quote(clean_id)}",
+            f"/api/v3/agents/{quote(clean_id)}/",
+            f"/api/v3/agents/{quote(clean_id)}",
+        ):
+            try:
+                res = session.get(f"{host}{path}", timeout=8)
+            except requests.RequestException:
+                continue
+            if not res.ok:
+                continue
+            try:
+                raw = res.json()
+            except ValueError:
+                continue
+            if isinstance(raw, dict):
+                payload = raw
+                break
+            if isinstance(raw, list) and raw and isinstance(raw[0], dict):
+                payload = raw[0]
+                break
+        if not isinstance(payload, dict):
+            continue
+        resolved_id = _extract_agent_id(payload) or clean_id
+        result[resolved_id] = payload
+    return result
 
 
 def _safe_version_key(value: str) -> Tuple[int, str]:
@@ -4590,6 +4641,12 @@ def _build_customer_development_context(
     discovered_unmanaged = sum(1 for row in customer_discovery_rows if not bool(row.managed))
 
     managed_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
+    if full and managed_agents:
+        managed_agent_ids = [_extract_agent_id(agent) for agent in managed_agents if _extract_agent_id(agent)]
+        if managed_agent_ids:
+            integration = db.query(IntegrationSettings).first()
+            managed_agent_details = _fetch_tactical_rmm_agent_detail_map(integration, managed_agent_ids)
+            managed_agents = [{**agent, **(managed_agent_details.get(_extract_agent_id(agent), {}))} for agent in managed_agents]
     managed_count = len(managed_agents)
     offline_count = sum(1 for agent in managed_agents if not _agent_is_online(agent))
     offline_rate = round((offline_count / managed_count), 2) if managed_count else 0.0
@@ -4723,9 +4780,9 @@ def _build_customer_development_context(
                 "site": _agent_field_text(agent, "site", "site_name"),
                 "client": _agent_field_text(agent, "client", "client_name", "customer"),
                 "online": bool(_agent_is_online(agent)),
-                "os": _agent_field_text(agent, "operating_system", "plat", "platform", "os"),
-                "version": _agent_field_text(agent, "version", "agent_version"),
-                "lastSeen": _agent_field_text(agent, "last_seen", "lastseen", "last_checkin"),
+                "os": _agent_field_text(agent, "operating_system", "operatingSystem", "plat_name", "plat", "platform", "os"),
+                "version": _agent_field_text(agent, "version", "agent_version", "agentVersion"),
+                "lastSeen": _agent_field_text(agent, "last_seen", "last_seen_time", "lastseen", "last_checkin", "last_ping"),
             }
         )
     discovered_devices = []
@@ -5034,6 +5091,9 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
         tactical_agents, tactical_connected = _fetch_tactical_rmm_agents(integration)
         matched_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
         agent_ids = [_extract_agent_id(agent) for agent in matched_agents if _extract_agent_id(agent)]
+        if agent_ids:
+            detail_map = _fetch_tactical_rmm_agent_detail_map(integration, agent_ids)
+            matched_agents = [{**agent, **(detail_map.get(_extract_agent_id(agent), {}))} for agent in matched_agents]
         software_rows = _fetch_tactical_rmm_software(integration, agent_ids, per_agent_limit=80)
 
     agent_meta: Dict[str, Dict[str, Any]] = {}
@@ -5047,9 +5107,9 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
             "site": _agent_field_text(agent, "site", "site_name"),
             "client": _agent_field_text(agent, "client", "client_name", "customer"),
             "online": bool(_agent_is_online(agent)),
-            "os": _agent_field_text(agent, "operating_system", "plat", "platform", "os"),
-            "version": _agent_field_text(agent, "version", "agent_version"),
-            "lastSeen": _agent_field_text(agent, "last_seen", "lastseen", "last_checkin"),
+            "os": _agent_field_text(agent, "operating_system", "operatingSystem", "plat_name", "plat", "platform", "os"),
+            "version": _agent_field_text(agent, "version", "agent_version", "agentVersion"),
+            "lastSeen": _agent_field_text(agent, "last_seen", "last_seen_time", "lastseen", "last_checkin", "last_ping"),
         }
 
     per_agent_software: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -5210,8 +5270,9 @@ def run_customer_development_discovery(customer_id: int, request: Request):
     if discovery_token:
         args.extend(["--discovery-token", discovery_token])
 
+    # Do not block the API request on long-running discovery scripts.
+    # Trigger in background to avoid reverse-proxy 504 timeouts.
     run_payload = {
-        "output": "wait",
         "emails": [],
         "emailMode": "default",
         "custom_field": None,
@@ -5222,42 +5283,47 @@ def run_customer_development_discovery(customer_id: int, request: Request):
         "run_as_user": False,
         "timeout": 1500,
     }
-    run_data: Dict[str, Any] = {}
-    run_triggered = False
-    run_error = ""
-    for path in (
-        f"/agents/{quote(target_agent_id)}/runscript/",
-        f"/agents/{quote(target_agent_id)}/runscript",
-        f"/api/v3/agents/{quote(target_agent_id)}/runscript/",
-        f"/api/v3/agents/{quote(target_agent_id)}/runscript",
-    ):
-        try:
-            run_res = session.post(f"{host}{path}", json=run_payload, timeout=1800)
-        except Exception as exc:
-            run_error = str(exc)
-            continue
-        if not run_res.ok:
-            run_error = f"HTTP {run_res.status_code} on {path}"
-            continue
-        try:
-            parsed = run_res.json()
-            run_data = parsed if isinstance(parsed, dict) else {"raw": parsed}
-        except Exception:
-            run_data = {"raw": run_res.text[:1000]}
-        run_triggered = True
-        break
-    if not run_triggered:
-        raise HTTPException(502, f"Failed to trigger discovery run: {run_error or 'unknown API error'}")
+
+    def _trigger_discovery_background() -> None:
+        bg_session, bg_host = _build_tactical_rmm_session(integration)
+        if not bg_session or not bg_host:
+            logger.warning("Discovery background trigger failed: missing RMM session/host")
+            return
+        run_error = ""
+        for path in (
+            f"/agents/{quote(target_agent_id)}/runscript/",
+            f"/agents/{quote(target_agent_id)}/runscript",
+            f"/api/v3/agents/{quote(target_agent_id)}/runscript/",
+            f"/api/v3/agents/{quote(target_agent_id)}/runscript",
+        ):
+            try:
+                run_res = bg_session.post(f"{bg_host}{path}", json=run_payload, timeout=1800)
+            except Exception as exc:
+                run_error = str(exc)
+                continue
+            if not run_res.ok:
+                run_error = f"HTTP {run_res.status_code} on {path}"
+                continue
+            logger.info("Discovery run triggered for customer %s via %s", customer.id, path)
+            return
+        logger.warning(
+            "Discovery background trigger failed for customer %s agent %s: %s",
+            customer.id,
+            target_agent_id,
+            run_error or "unknown API error",
+        )
+
+    threading.Thread(target=_trigger_discovery_background, daemon=True).start()
 
     return {
-        "status": "ok",
+        "status": "queued",
         "customerId": customer.id,
         "customerName": customer.name or "",
         "agentId": target_agent_id,
         "agentHostname": str(target_agent.get("hostname") or target_agent.get("name") or "").strip(),
         "scriptId": script_id,
         "scriptName": str(target_script.get("name") or "").strip(),
-        "rmmResponse": run_data if isinstance(run_data, dict) else {},
+        "rmmResponse": {},
     }
 
 

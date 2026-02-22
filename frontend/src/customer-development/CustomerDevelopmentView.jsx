@@ -3,12 +3,18 @@ import {
   AlertTriangle,
   ArrowDownUp,
   Bot,
+  Clock3,
   ChevronDown,
   ChevronUp,
+  Cpu,
   Eye,
+  Monitor,
   Plus,
+  Printer,
   RefreshCw,
+  Router,
   ScanSearch,
+  Server,
   Shield,
   Sparkles,
   TrendingDown,
@@ -66,6 +72,40 @@ const revenueComparisonPercents = (lastYear, currentYear) => {
     lastPct: 100,
     currentPct: clampPercent((current / last) * 100),
   };
+};
+
+const formatDateTime = (value) => {
+  if (!value && value !== 0) return "n/a";
+  const numeric = Number(value);
+  const date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric) : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
+};
+
+const getAgentIcon = (device) => {
+  const hostname = String(device?.hostname || "").toLowerCase();
+  const os = String(device?.os || "").toLowerCase();
+  if (hostname.includes("dc") || hostname.includes("srv") || hostname.includes("fs") || hostname.includes("rds")) {
+    return Server;
+  }
+  if (os.includes("server")) return Server;
+  return Monitor;
+};
+
+const getDiscoveryIcon = (device) => {
+  const deviceType = String(device?.deviceType || "").toLowerCase();
+  const protocol = String(device?.protocol || "").toLowerCase();
+  if (deviceType.includes("printer")) return Printer;
+  if (
+    deviceType.includes("firewall") ||
+    deviceType.includes("router") ||
+    deviceType.includes("switch") ||
+    deviceType.includes("gateway") ||
+    protocol.includes("snmp")
+  ) {
+    return Router;
+  }
+  return Cpu;
 };
 
 const LoadingProgress = ({ label, progress }) => (
@@ -934,49 +974,34 @@ export default function CustomerDevelopmentView() {
                         </div>
                       </div>
                       <div className="space-y-2">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Inventar</p>
-                        {(detailData.discoveredInfrastructureDevices || []).length ? (
-                          (detailData.discoveredInfrastructureDevices || []).map((device, idx) => (
-                            <div key={`${device?.source || "d"}-${device?.hostname || idx}-${idx}`} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-700">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="font-semibold text-sand-800">{device?.hostname || "Unbekanntes Gerät"}</p>
-                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide">
-                                  {device?.source || "Discovery"}
-                                </span>
-                              </div>
-                              <p className="mt-1 text-[11px] text-sand-600">
-                                {device?.ip ? `IP ${device.ip}` : "IP n/a"}
-                                {device?.mac ? ` · MAC ${device.mac}` : ""}
-                                {device?.protocol ? ` · ${String(device.protocol).toUpperCase()}` : ""}
-                              </p>
-                              <p className="mt-1 text-[11px] text-sand-600">
-                                {device?.deviceType ? `Typ: ${String(device.deviceType)}` : "Typ: n/a"}
-                                {device?.vendor ? ` · Hersteller: ${String(device.vendor)}` : ""}
-                                {typeof device?.confidence === "number" ? ` · Confidence: ${Math.max(0, Math.min(100, Number(device.confidence || 0)))}%` : ""}
-                              </p>
-                              {Array.isArray(device?.evidence) && device.evidence.length ? (
-                                <p className="mt-1 text-[10px] text-sand-500">
-                                  Hinweise: {device.evidence.slice(0, 4).join(", ")}
-                                </p>
-                              ) : null}
-                            </div>
-                          ))
-                        ) : (
-                          <p className="text-sm text-sand-500">
-                            Noch keine Discovery-Geräte vorhanden. Starte den Scan über den Button oben.
-                          </p>
-                        )}
-                      </div>
-                      <div className="space-y-2">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agenten</p>
                         {(detailData.managedInfrastructureDevices || []).length ? (
                           (detailData.managedInfrastructureDevices || []).map((device, idx) => (
-                            <div key={`${device?.agentId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-700">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="font-semibold text-sand-800">{device?.hostname || "Unbekannter Agent"}</p>
+                            <div key={`${device?.agentId || idx}`} className="rounded-2xl border border-sand-200 bg-gradient-to-r from-white to-sand-50 p-3 text-xs text-sand-700">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className="h-8 w-8 rounded-lg border border-sand-200 bg-white text-sand-700 flex items-center justify-center shrink-0">
+                                    {(() => {
+                                      const AgentIcon = getAgentIcon(device);
+                                      return <AgentIcon size={15} />;
+                                    })()}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="font-semibold text-sand-800 truncate">{device?.hostname || "Unbekannter Agent"}</p>
+                                    <p className="text-[11px] text-sand-500 truncate">{device?.client || "Client n/a"} · {device?.site || "Site n/a"}</p>
+                                  </div>
+                                </div>
                                 <div className="inline-flex items-center gap-2">
-                                  <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide">
-                                    RMM
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                      typeof device?.online === "boolean"
+                                        ? device.online
+                                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                          : "border-rose-200 bg-rose-50 text-rose-700"
+                                        : "border-sand-200 bg-white text-sand-600"
+                                    }`}
+                                  >
+                                    {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
                                   </span>
                                   <button
                                     type="button"
@@ -993,22 +1018,72 @@ export default function CustomerDevelopmentView() {
                                   </button>
                                 </div>
                               </div>
-                              <p className="mt-1 text-[11px] text-sand-600">
-                                {device?.client || "Client n/a"} · {device?.site || "Site n/a"} ·{" "}
-                                {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
-                              </p>
+                              <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-sand-600">
+                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5">RMM</span>
+                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5">OS: {device?.os || "n/a"}</span>
+                                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5">Version: {device?.version || "n/a"}</span>
+                              </div>
                               {expandedInfraAgents[device?.agentId || `idx-${idx}`] ? (
                                 <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-600 space-y-1">
                                   <p>Agent ID: {device?.agentId || "n/a"}</p>
                                   <p>OS: {device?.os || "n/a"}</p>
                                   <p>Agent Version: {device?.version || "n/a"}</p>
-                                  <p>Last Seen: {device?.lastSeen || "n/a"}</p>
+                                  <p className="inline-flex items-center gap-1"><Clock3 size={12} /> Last Seen: {formatDateTime(device?.lastSeen)}</p>
                                 </div>
                               ) : null}
                             </div>
                           ))
                         ) : (
                           <p className="text-sm text-sand-500">Keine zugeordneten RMM-Agenten gefunden.</p>
+                        )}
+                      </div>
+                      <div className="space-y-2 pt-1">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Geräte</p>
+                        {(detailData.discoveredInfrastructureDevices || []).length ? (
+                          (detailData.discoveredInfrastructureDevices || []).map((device, idx) => (
+                            <div key={`${device?.source || "d"}-${device?.hostname || idx}-${idx}`} className="rounded-2xl border border-sand-200 bg-white p-3 text-xs text-sand-700">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className="h-8 w-8 rounded-lg border border-sand-200 bg-sand-50 text-sand-700 flex items-center justify-center shrink-0">
+                                    {(() => {
+                                      const DiscoveryIcon = getDiscoveryIcon(device);
+                                      return <DiscoveryIcon size={15} />;
+                                    })()}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="font-semibold text-sand-800 truncate">{device?.hostname || "Unbekanntes Gerät"}</p>
+                                    <p className="text-[11px] text-sand-500 truncate">
+                                      {device?.deviceType ? `Typ: ${String(device.deviceType)}` : "Typ: n/a"}
+                                      {device?.vendor ? ` · ${String(device.vendor)}` : ""}
+                                    </p>
+                                  </div>
+                                </div>
+                                <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] uppercase tracking-wide">
+                                  {device?.source || "Discovery"}
+                                </span>
+                              </div>
+                              <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-sand-600">
+                                <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">{device?.ip ? `IP ${device.ip}` : "IP n/a"}</span>
+                                {device?.mac ? <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">MAC {device.mac}</span> : null}
+                                {device?.protocol ? <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">{String(device.protocol).toUpperCase()}</span> : null}
+                                {typeof device?.confidence === "number" ? (
+                                  <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">
+                                    Confidence {Math.max(0, Math.min(100, Number(device.confidence || 0)))}%
+                                  </span>
+                                ) : null}
+                              </div>
+                              {Array.isArray(device?.evidence) && device.evidence.length ? (
+                                <p className="mt-1 text-[10px] text-sand-500">Hinweise: {device.evidence.slice(0, 4).join(", ")}</p>
+                              ) : null}
+                              <p className="mt-1 text-[10px] text-sand-500 inline-flex items-center gap-1">
+                                <Clock3 size={11} /> Last Seen: {formatDateTime(device?.lastSeenAt)}
+                              </p>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-sm text-sand-500">
+                            Noch keine Discovery-Geräte vorhanden. Starte den Scan über den Button oben.
+                          </p>
                         )}
                       </div>
                     </div>
