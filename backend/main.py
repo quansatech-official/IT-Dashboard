@@ -380,6 +380,10 @@ class InfraDiscoveryDevice(Base):
     ip = Column(String, default="")
     mac = Column(String, default="")
     protocol = Column(String, default="")
+    device_type = Column(String, default="")
+    vendor = Column(String, default="")
+    confidence = Column(Integer, default=0)
+    evidence = Column(Text, default="[]")
     managed = Column(Boolean, default=False)
     last_seen_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
@@ -918,6 +922,30 @@ def _ensure_day_task_groups_columns() -> None:
 
 _ensure_day_task_groups_columns()
 
+
+def _ensure_infra_discovery_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("infra_discovery_devices"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("infra_discovery_devices")}
+    statements = []
+    if "device_type" not in columns:
+        statements.append("ALTER TABLE infra_discovery_devices ADD COLUMN device_type VARCHAR DEFAULT ''")
+    if "vendor" not in columns:
+        statements.append("ALTER TABLE infra_discovery_devices ADD COLUMN vendor VARCHAR DEFAULT ''")
+    if "confidence" not in columns:
+        statements.append("ALTER TABLE infra_discovery_devices ADD COLUMN confidence INTEGER DEFAULT 0")
+    if "evidence" not in columns:
+        statements.append("ALTER TABLE infra_discovery_devices ADD COLUMN evidence TEXT DEFAULT '[]'")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_ensure_infra_discovery_columns()
+
 # ================= SCHEMAS ==================
 class CustomerPhoneSchema(BaseModel):
     id: Optional[int] = None
@@ -1243,6 +1271,10 @@ class InfraDiscoveryItem(BaseModel):
     ip: Optional[str] = ""
     mac: Optional[str] = ""
     protocol: Optional[str] = ""
+    device_type: Optional[str] = ""
+    vendor: Optional[str] = ""
+    confidence: Optional[int] = 0
+    evidence: Optional[List[str]] = None
     managed: Optional[bool] = False
     seen_at: Optional[int] = None
 
@@ -4663,6 +4695,13 @@ def _build_customer_development_context(
         )
     discovered_devices = []
     for row in customer_discovery_rows:
+        evidence_payload: List[str] = []
+        try:
+            parsed_evidence = json.loads(row.evidence or "[]")
+            if isinstance(parsed_evidence, list):
+                evidence_payload = [str(item).strip() for item in parsed_evidence if str(item).strip()]
+        except Exception:
+            evidence_payload = []
         discovered_devices.append(
             {
                 "source": str(row.source or "discovery").strip() or "discovery",
@@ -4670,6 +4709,10 @@ def _build_customer_development_context(
                 "ip": str(row.ip or "").strip(),
                 "mac": str(row.mac or "").strip(),
                 "protocol": str(row.protocol or "").strip(),
+                "deviceType": str(row.device_type or "").strip(),
+                "vendor": str(row.vendor or "").strip(),
+                "confidence": int(row.confidence or 0),
+                "evidence": evidence_payload,
                 "managed": bool(row.managed),
                 "lastSeenAt": int(row.last_seen_at or 0),
             }
@@ -5317,6 +5360,10 @@ def ingest_infrastructure_discovery(
                 existing.customer_name = item.customer_name or existing.customer_name
                 existing.hostname = item.hostname or existing.hostname
                 existing.protocol = item.protocol or existing.protocol
+                existing.device_type = item.device_type or existing.device_type
+                existing.vendor = item.vendor or existing.vendor
+                existing.confidence = max(0, min(100, int(item.confidence or 0)))
+                existing.evidence = json.dumps(item.evidence or [])
                 existing.managed = bool(item.managed)
                 existing.last_seen_at = seen_at
                 updated += 1
@@ -5331,6 +5378,10 @@ def ingest_infrastructure_discovery(
                     ip=item.ip or "",
                     mac=item.mac or "",
                     protocol=item.protocol or "",
+                    device_type=item.device_type or "",
+                    vendor=item.vendor or "",
+                    confidence=max(0, min(100, int(item.confidence or 0))),
+                    evidence=json.dumps(item.evidence or []),
                     managed=bool(item.managed),
                     last_seen_at=seen_at,
                 )

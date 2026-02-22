@@ -721,6 +721,18 @@ export default function CustomerDevelopmentView() {
                                 {device?.protocol ? ` · ${String(device.protocol).toUpperCase()}` : ""}
                                 {typeof device?.online === "boolean" ? ` · ${device.online ? "Online" : "Offline"}` : ""}
                               </p>
+                              {device?.deviceType || device?.vendor ? (
+                                <p className="mt-1 text-[11px] text-sand-600">
+                                  {device?.deviceType ? `Typ: ${String(device.deviceType)}` : "Typ: n/a"}
+                                  {device?.vendor ? ` · Hersteller: ${String(device.vendor)}` : ""}
+                                  {typeof device?.confidence === "number" ? ` · Confidence: ${Math.max(0, Math.min(100, Number(device.confidence || 0)))}%` : ""}
+                                </p>
+                              ) : null}
+                              {Array.isArray(device?.evidence) && device.evidence.length ? (
+                                <p className="mt-1 text-[10px] text-sand-500">
+                                  Hinweise: {device.evidence.slice(0, 3).join(", ")}
+                                </p>
+                              ) : null}
                             </div>
                           ))
                         ) : (
