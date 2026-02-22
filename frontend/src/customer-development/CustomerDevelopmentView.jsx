@@ -967,6 +967,21 @@ export default function CustomerDevelopmentView() {
                           </p>
                         </div>
                       </div>
+                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Handlungsempfehlungen</p>
+                        <div className="mt-2 space-y-2">
+                          {(detailData.infraActionHints || []).length ? (
+                            (detailData.infraActionHints || []).map((rec, idx) => (
+                              <div key={`${rec?.title || "infra-rec"}-${idx}`} className="rounded-lg border border-sand-200 bg-white px-2 py-1.5">
+                                <p className="text-xs font-semibold text-sand-800">{rec?.title || "Empfehlung"}</p>
+                                <p className="text-[11px] text-sand-600">{rec?.why || ""}</p>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-xs text-sand-500">Keine akuten Infrastruktur-Maßnahmen erkannt.</p>
+                          )}
+                        </div>
+                      </div>
                       <div className="space-y-2">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agenten</p>
                         {(detailData.managedInfrastructureDevices || []).length ? (
@@ -997,6 +1012,16 @@ export default function CustomerDevelopmentView() {
                                   >
                                     {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
                                   </span>
+                                  {Number(device?.errorCount || 0) > 0 ? (
+                                    <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
+                                      Fehler {Number(device?.errorCount || 0)}
+                                    </span>
+                                  ) : null}
+                                  {Number(device?.warningCount || 0) > 0 ? (
+                                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+                                      Warnungen {Number(device?.warningCount || 0)}
+                                    </span>
+                                  ) : null}
                                   <button
                                     type="button"
                                     onClick={() =>
@@ -1016,12 +1041,28 @@ export default function CustomerDevelopmentView() {
                                 <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5">RMM</span>
                                 <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5">OS: {device?.os || "n/a"}</span>
                                 <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5">Version: {device?.version || "n/a"}</span>
+                                {Number(device?.openUpdates || 0) > 0 ? (
+                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5">
+                                    Updates offen: {Number(device?.openUpdates || 0)}
+                                  </span>
+                                ) : null}
                               </div>
                               {expandedInfraAgents[device?.agentId || `idx-${idx}`] ? (
                                 <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2 py-1.5 text-[11px] text-sand-600 space-y-1">
                                   <p>Agent ID: {device?.agentId || "n/a"}</p>
                                   <p>OS: {device?.os || "n/a"}</p>
                                   <p>Agent Version: {device?.version || "n/a"}</p>
+                                  <p>Fehler: {Number(device?.errorCount || 0)} · Warnungen: {Number(device?.warningCount || 0)}</p>
+                                  <p>
+                                    Updates offen: {Number(device?.openUpdates || 0)} (Windows {Number(device?.windowsUpdates || 0)} · 3rd-Party {Number(device?.thirdPartyUpdates || 0)} · CVE {Number(device?.openCves || 0)})
+                                  </p>
+                                  {device?.lifecycle?.status === "expired" ? (
+                                    <p className="text-rose-700">OS Lifecycle: Support abgelaufen (EOL {device?.lifecycle?.eol_date || "n/a"})</p>
+                                  ) : device?.lifecycle?.status === "soon" ? (
+                                    <p className="text-amber-700">
+                                      OS Lifecycle: Support endet bald (EOL {device?.lifecycle?.eol_date || "n/a"})
+                                    </p>
+                                  ) : null}
                                   <p className="inline-flex items-center gap-1"><Clock3 size={12} /> Last Seen: {formatDateTime(device?.lastSeen)}</p>
                                 </div>
                               ) : null}
@@ -1168,6 +1209,24 @@ export default function CustomerDevelopmentView() {
                                 ) : (
                                   <p className="text-[11px] text-sand-500">Keine Treffer auf diesem Agent.</p>
                                 )}
+                                {(agent?.software || []).length ? (
+                                  <div className="rounded-lg border border-sand-200 bg-white px-2 py-1.5">
+                                    <p className="text-[11px] font-semibold text-sand-700">Geprüfte Programme</p>
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {(agent.software || []).map((pkg, pkgIdx) => (
+                                        <span
+                                          key={`${pkg?.name || "pkg"}-${pkgIdx}`}
+                                          className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] text-sand-700"
+                                        >
+                                          {pkg?.name || "Unbekannt"}
+                                          {pkg?.version ? ` ${pkg.version}` : ""}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : Number(agent?.softwareCount || 0) > 0 ? (
+                                  <p className="text-[11px] text-sand-500">Programm-Liste im Cache noch nicht enthalten. Bitte „Neu scannen“.</p>
+                                ) : null}
                               </div>
                             ))
                           ) : Number(cveScan.matchedAgents || 0) > 0 ? (

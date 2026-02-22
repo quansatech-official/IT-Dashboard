@@ -4984,6 +4984,140 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
     return any(term and term in haystack for term in terms)
 
 
+def _collect_int_values_by_key_fragments(
+    node: Any,
+    *,
+    include_fragments: List[str],
+    require_all: Optional[List[str]] = None,
+    exclude_fragments: Optional[List[str]] = None,
+    out: Optional[List[int]] = None,
+) -> List[int]:
+    if out is None:
+        out = []
+    req = [frag.lower() for frag in (require_all or [])]
+    exc = [frag.lower() for frag in (exclude_fragments or [])]
+    inc = [frag.lower() for frag in (include_fragments or [])]
+    if isinstance(node, dict):
+        for key, value in node.items():
+            key_text = str(key or "").strip().lower()
+            if key_text:
+                include_ok = any(fragment in key_text for fragment in inc)
+                require_ok = all(fragment in key_text for fragment in req) if req else True
+                exclude_hit = any(fragment in key_text for fragment in exc) if exc else False
+                if include_ok and require_ok and not exclude_hit:
+                    if isinstance(value, bool):
+                        out.append(1 if value else 0)
+                    elif isinstance(value, (int, float)):
+                        out.append(max(0, int(value)))
+                    elif isinstance(value, str):
+                        value_text = value.strip()
+                        if value_text.isdigit():
+                            out.append(max(0, int(value_text)))
+            _collect_int_values_by_key_fragments(
+                value,
+                include_fragments=inc,
+                require_all=req,
+                exclude_fragments=exc,
+                out=out,
+            )
+        return out
+    if isinstance(node, list):
+        for item in node:
+            _collect_int_values_by_key_fragments(
+                item,
+                include_fragments=inc,
+                require_all=req,
+                exclude_fragments=exc,
+                out=out,
+            )
+        return out
+    return out
+
+
+def _agent_windows_lifecycle(os_text: str, now_dt: datetime) -> Dict[str, Any]:
+    text = str(os_text or "").lower()
+    entries = [
+        ("windows server 2012 r2", datetime(2023, 10, 10)),
+        ("windows server 2012", datetime(2023, 10, 10)),
+        ("windows server 2016", datetime(2027, 1, 12)),
+        ("windows server 2019", datetime(2029, 1, 9)),
+        ("windows server 2022", datetime(2031, 10, 14)),
+    ]
+    for marker, eol_date in entries:
+        if marker in text:
+            days_to_eol = (eol_date.date() - now_dt.date()).days
+            if days_to_eol < 0:
+                status = "expired"
+            elif days_to_eol <= 365:
+                status = "soon"
+            else:
+                status = "supported"
+            return {
+                "family": marker,
+                "eol_date": eol_date.strftime("%Y-%m-%d"),
+                "days_to_eol": days_to_eol,
+                "status": status,
+            }
+    return {"family": "", "eol_date": "", "days_to_eol": None, "status": "unknown"}
+
+
+def _build_agent_health_summary(agent: Dict[str, Any], now_dt: datetime) -> Dict[str, Any]:
+    warning_candidates = _collect_int_values_by_key_fragments(
+        agent,
+        include_fragments=["warning", "warn", "attention"],
+    )
+    error_candidates = _collect_int_values_by_key_fragments(
+        agent,
+        include_fragments=["error", "failed", "critical", "alert"],
+        exclude_fragments=["warning", "warn"],
+    )
+    windows_update_candidates = _collect_int_values_by_key_fragments(
+        agent,
+        include_fragments=["update"],
+        require_all=["windows"],
+    )
+    thirdparty_update_candidates = _collect_int_values_by_key_fragments(
+        agent,
+        include_fragments=["update", "patch"],
+        require_all=["third"],
+    )
+    cve_update_candidates = _collect_int_values_by_key_fragments(
+        agent,
+        include_fragments=["cve", "vuln"],
+    )
+    generic_update_candidates = _collect_int_values_by_key_fragments(
+        agent,
+        include_fragments=["update", "patch"],
+        exclude_fragments=["last", "updated_at", "timestamp", "time"],
+    )
+    warning_count = max(warning_candidates) if warning_candidates else 0
+    error_count = max(error_candidates) if error_candidates else 0
+    windows_updates = max(windows_update_candidates) if windows_update_candidates else 0
+    thirdparty_updates = max(thirdparty_update_candidates) if thirdparty_update_candidates else 0
+    cve_open = max(cve_update_candidates) if cve_update_candidates else 0
+    generic_updates = max(generic_update_candidates) if generic_update_candidates else 0
+    open_updates = max(generic_updates, windows_updates + thirdparty_updates, cve_open)
+    os_text = _agent_field_text(
+        agent,
+        "operating_system",
+        "operatingSystem",
+        "plat_name",
+        "plat",
+        "platform",
+        "os",
+    )
+    lifecycle = _agent_windows_lifecycle(os_text, now_dt)
+    return {
+        "warningCount": warning_count,
+        "errorCount": error_count,
+        "openUpdates": open_updates,
+        "windowsUpdates": windows_updates,
+        "thirdPartyUpdates": thirdparty_updates,
+        "openCves": cve_open,
+        "lifecycle": lifecycle,
+    }
+
+
 def _build_customer_development_context(
     db,
     customer: Customer,
@@ -4992,6 +5126,7 @@ def _build_customer_development_context(
     tactical_agents: List[Dict[str, Any]],
     full: bool,
 ) -> Dict[str, Any]:
+    now_dt = datetime.fromtimestamp(now_ms / 1000)
     contract_flags = _parse_contract_flags(customer.contract_flags)
     has_contract = bool(customer.maintenance_contract) or bool(
         set(contract_flags) & {"wartung", "monitoring"}
@@ -5070,6 +5205,15 @@ def _build_customer_development_context(
             managed_agents = [{**agent, **(managed_agent_details.get(_extract_agent_id(agent), {}))} for agent in managed_agents]
     managed_count = len(managed_agents)
     offline_count = sum(1 for agent in managed_agents if not _agent_is_online(agent))
+    managed_health = [_build_agent_health_summary(agent, now_dt) for agent in managed_agents]
+    total_agent_warnings = sum(int(item.get("warningCount") or 0) for item in managed_health)
+    total_agent_errors = sum(int(item.get("errorCount") or 0) for item in managed_health)
+    total_open_updates = sum(int(item.get("openUpdates") or 0) for item in managed_health)
+    total_windows_updates = sum(int(item.get("windowsUpdates") or 0) for item in managed_health)
+    total_thirdparty_updates = sum(int(item.get("thirdPartyUpdates") or 0) for item in managed_health)
+    total_open_cves = sum(int(item.get("openCves") or 0) for item in managed_health)
+    lifecycle_expired = sum(1 for item in managed_health if str((item.get("lifecycle") or {}).get("status")) == "expired")
+    lifecycle_soon = sum(1 for item in managed_health if str((item.get("lifecycle") or {}).get("status")) == "soon")
     offline_rate = round((offline_count / managed_count), 2) if managed_count else 0.0
     discovered_base = discovered_total if discovered_total > 0 else managed_count
     coverage_ratio = round((managed_count / discovered_base), 2) if discovered_base > 0 else 0.0
@@ -5153,6 +5297,59 @@ def _build_customer_development_context(
         recommendations.append(
             {"type": "security", "title": "Offline-Agents prüfen", "why": "Ein signifikanter Teil meldet sich nicht."}
         )
+    if total_agent_errors > 0:
+        infra_risk += 20
+        signals.append(f"RMM meldet Fehler auf Agents ({total_agent_errors})")
+        recommendations.append(
+            {
+                "type": "security",
+                "title": "Agent-Fehler priorisiert beheben",
+                "why": f"Es liegen {total_agent_errors} Fehlerhinweise auf den zugeordneten RMM-Agents vor.",
+            }
+        )
+    if total_agent_warnings > 0:
+        infra_risk += 10
+        signals.append(f"RMM meldet Warnungen ({total_agent_warnings})")
+        recommendations.append(
+            {
+                "type": "lifecycle",
+                "title": "Agent-Warnungen prüfen",
+                "why": f"Es liegen {total_agent_warnings} Warnhinweise auf den zugeordneten RMM-Agents vor.",
+            }
+        )
+    if total_open_updates > 0:
+        infra_risk += 20
+        signals.append(f"Offene Updates erkannt ({total_open_updates})")
+        recommendations.append(
+            {
+                "type": "security",
+                "title": "Patch-Backlog abbauen",
+                "why": (
+                    f"Offene Updates: Windows {total_windows_updates}, "
+                    f"3rd-Party {total_thirdparty_updates}, CVE-bezogen {total_open_cves}."
+                ),
+            }
+        )
+    if lifecycle_expired > 0:
+        infra_risk += 25
+        signals.append(f"Veraltete Betriebssysteme erkannt ({lifecycle_expired})")
+        recommendations.append(
+            {
+                "type": "lifecycle",
+                "title": "OS-Migration sofort planen",
+                "why": f"{lifecycle_expired} Systeme sind außerhalb des Supports (EOL überschritten).",
+            }
+        )
+    elif lifecycle_soon > 0:
+        infra_risk += 12
+        signals.append(f"Betriebssysteme kurz vor EOL ({lifecycle_soon})")
+        recommendations.append(
+            {
+                "type": "lifecycle",
+                "title": "OS-Upgrade-Roadmap festlegen",
+                "why": f"{lifecycle_soon} Systeme erreichen innerhalb von 12 Monaten das Supportende.",
+            }
+        )
 
     total_risk = min(100, business_risk + infra_risk)
     development_state = "INACTIVE" if (customer.status or "active").lower() == "inactive" else _dev_score_to_state(total_risk)
@@ -5180,6 +5377,14 @@ def _build_customer_development_context(
             "coverageRatio": coverage_ratio,
             "offlineRate": offline_rate,
             "unmanagedCount": unmanaged_count,
+            "warningCount": total_agent_warnings,
+            "errorCount": total_agent_errors,
+            "openUpdates": total_open_updates,
+            "windowsUpdates": total_windows_updates,
+            "thirdPartyUpdates": total_thirdparty_updates,
+            "openCves": total_open_cves,
+            "osExpiredCount": lifecycle_expired,
+            "osEolSoonCount": lifecycle_soon,
         },
         "businessRisk": business_risk,
         "infrastructureRisk": infra_risk,
@@ -5193,6 +5398,7 @@ def _build_customer_development_context(
         return light
     managed_devices = []
     for agent in managed_agents:
+        health = _build_agent_health_summary(agent, now_dt)
         managed_devices.append(
             {
                 "source": "tactical_rmm",
@@ -5204,6 +5410,13 @@ def _build_customer_development_context(
                 "os": _agent_field_text(agent, "operating_system", "operatingSystem", "plat_name", "plat", "platform", "os"),
                 "version": _agent_field_text(agent, "version", "agent_version", "agentVersion"),
                 "lastSeen": _agent_field_text(agent, "last_seen", "last_seen_time", "lastseen", "last_checkin", "last_ping"),
+                "warningCount": int(health.get("warningCount") or 0),
+                "errorCount": int(health.get("errorCount") or 0),
+                "openUpdates": int(health.get("openUpdates") or 0),
+                "windowsUpdates": int(health.get("windowsUpdates") or 0),
+                "thirdPartyUpdates": int(health.get("thirdPartyUpdates") or 0),
+                "openCves": int(health.get("openCves") or 0),
+                "lifecycle": health.get("lifecycle") or {},
             }
         )
     discovered_devices = []
@@ -5233,6 +5446,11 @@ def _build_customer_development_context(
     light["recommendations"] = recommendations
     light["telephony"] = telephony
     light["reasons"] = signals
+    light["infraActionHints"] = [
+        rec
+        for rec in recommendations
+        if str((rec or {}).get("type") or "").strip().lower() in {"security", "lifecycle"}
+    ][:6]
     light["managedInfrastructureDevices"] = managed_devices
     light["discoveredInfrastructureDevices"] = discovered_devices
     light["infrastructureDevices"] = managed_devices + discovered_devices
@@ -5584,6 +5802,7 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
             {
                 **meta,
                 "softwareCount": len(software_list),
+                "software": software_list,
                 "findingCount": len(agent_findings),
                 "findings": agent_findings,
             }
