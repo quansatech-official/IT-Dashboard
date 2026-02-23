@@ -298,6 +298,41 @@ const getAgentIcon = (device) => {
   return Monitor;
 };
 
+const inferWindowsLifecycleFromOs = (osValue) => {
+  const os = String(osValue || "").toLowerCase();
+  const entries = [
+    { marker: "windows server 2012 r2", eol: "2023-10-10" },
+    { marker: "windows server 2012", eol: "2023-10-10" },
+    { marker: "windows server 2016", eol: "2027-01-12" },
+    { marker: "windows server 2019", eol: "2029-01-09" },
+    { marker: "windows server 2022", eol: "2031-10-14" },
+  ];
+  for (const entry of entries) {
+    if (!os.includes(entry.marker)) continue;
+    const eolDate = new Date(`${entry.eol}T00:00:00Z`);
+    const now = new Date();
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const daysToEol = Math.floor((eolDate.getTime() - now.getTime()) / msPerDay);
+    const status = daysToEol < 0 ? "expired" : daysToEol <= 365 ? "soon" : "supported";
+    return {
+      family: entry.marker,
+      eol_date: entry.eol,
+      days_to_eol: daysToEol,
+      status,
+      inferred: true,
+    };
+  }
+  return { family: "", eol_date: "", days_to_eol: null, status: "unknown", inferred: true };
+};
+
+const resolveAgentLifecycle = (device) => {
+  const existing = device?.lifecycle && typeof device.lifecycle === "object" ? device.lifecycle : {};
+  const existingStatus = String(existing?.status || "").toLowerCase();
+  const hasUsefulExisting = Boolean(existing?.eol_date) || ["expired", "soon", "supported"].includes(existingStatus);
+  if (hasUsefulExisting) return existing;
+  return inferWindowsLifecycleFromOs(device?.os);
+};
+
 const getDiscoveryIcon = (device) => {
   const deviceType = String(device?.deviceType || "").toLowerCase();
   const protocol = String(device?.protocol || "").toLowerCase();
@@ -368,11 +403,6 @@ export default function CustomerDevelopmentView() {
   const [detailStatus, setDetailStatus] = useState("idle");
   const [detailProgress, setDetailProgress] = useState(0);
   const [detailData, setDetailData] = useState(null);
-  const [workSummaryAi, setWorkSummaryAi] = useState({
-    status: "idle",
-    text: "",
-    error: "",
-  });
   const [aiProgress, setAiProgress] = useState(0);
   const [cveScan, setCveScan] = useState({
     status: "idle",
@@ -405,8 +435,6 @@ export default function CustomerDevelopmentView() {
   const loadAbortRef = useRef(null);
   const detailRequestRef = useRef(0);
   const detailAbortRef = useRef(null);
-  const workSummaryRequestRef = useRef(0);
-  const workSummaryAbortRef = useRef(null);
 
   const load = async (forceRefresh = false) => {
     loadRequestRef.current += 1;
@@ -479,18 +507,6 @@ export default function CustomerDevelopmentView() {
   }, []);
 
   useEffect(() => {
-    return () => {
-      if (workSummaryAbortRef.current) {
-        try {
-          workSummaryAbortRef.current.abort();
-        } catch {
-          // ignore teardown abort errors
-        }
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (status !== "loading") return;
     const timer = window.setInterval(() => {
       setLoadingProgress((prev) => {
@@ -551,7 +567,6 @@ export default function CustomerDevelopmentView() {
             return { status: "idle", message: "", error: "" };
           });
         }
-        setWorkSummaryAi({ status: "idle", text: "", error: "" });
         setDetailStatus("ready");
       })
       .catch(() => {
@@ -566,55 +581,6 @@ export default function CustomerDevelopmentView() {
         }
       });
   };
-
-  useEffect(() => {
-    if (!detailModal.open || !detailData?.customerId) return;
-    if (!detailData?.workSummary?.available) {
-      setWorkSummaryAi({ status: "idle", text: "", error: "" });
-      return;
-    }
-    workSummaryRequestRef.current += 1;
-    const requestId = workSummaryRequestRef.current;
-    if (workSummaryAbortRef.current) {
-      try {
-        workSummaryAbortRef.current.abort();
-      } catch {
-        // ignore stale abort errors
-      }
-    }
-    const controller = new AbortController();
-    workSummaryAbortRef.current = controller;
-    const timeoutId = window.setTimeout(() => controller.abort("timeout"), 70000);
-    setWorkSummaryAi({ status: "loading", text: "", error: "" });
-    fetch(`${API}/customers/${detailData.customerId}/development/work_summary_ai`, {
-      signal: controller.signal,
-    })
-      .then((res) => {
-        if (requestId !== workSummaryRequestRef.current) return null;
-        if (!res.ok) throw new Error("ai_summary_failed");
-        return res.json();
-      })
-      .then((data) => {
-        if (requestId !== workSummaryRequestRef.current) return;
-        if (data === null) return;
-        const text = String(data?.aiSummary || data?.summary || "").trim();
-        if (!text) {
-          setWorkSummaryAi({ status: "error", text: "", error: "Keine KI-Zusammenfassung verfügbar." });
-          return;
-        }
-        setWorkSummaryAi({ status: "ready", text, error: "" });
-      })
-      .catch(() => {
-        if (requestId !== workSummaryRequestRef.current) return;
-        setWorkSummaryAi({ status: "error", text: "", error: "KI-Zusammenfassung konnte nicht geladen werden." });
-      })
-      .finally(() => {
-        window.clearTimeout(timeoutId);
-        if (requestId === workSummaryRequestRef.current) {
-          workSummaryAbortRef.current = null;
-        }
-      });
-  }, [detailModal.open, detailData?.customerId, detailData?.workSummary?.available]);
 
   const filteredContexts = useMemo(() => {
     return contexts.filter((item) => {
@@ -989,9 +955,11 @@ export default function CustomerDevelopmentView() {
       setDiscoveryProgress(100);
       const agentLabel = data?.agentHostname ? ` auf ${String(data.agentHostname)}` : "";
       const apiLabel = data?.apiUrl ? ` Ziel: ${String(data.apiUrl)}` : "";
+      const serverMessage = String(data?.message || "").trim();
+      const serverHint = String(data?.hint || "").trim();
       setDiscoveryRun({
         status: "ready",
-        message: `Discovery gestartet${agentLabel}.${apiLabel}`,
+        message: serverMessage || `Discovery gestartet${agentLabel}.${apiLabel}${serverHint ? ` ${serverHint}` : ""}`,
         error: "",
       });
       loadDetail(true);
@@ -1118,10 +1086,9 @@ export default function CustomerDevelopmentView() {
               </button>
             </div>
             <div className="border-b border-sand-200 bg-white px-5 py-2">
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {[
                   { id: "overview", label: "Übersicht", icon: Eye },
-                  { id: "ki", label: "KI Unterstützung", icon: Sparkles },
                   { id: "infra", label: "Infrastruktur", icon: Shield },
                   { id: "cve", label: "CVE Analyse", icon: AlertTriangle }
                 ].map((tab) => {
@@ -1142,6 +1109,18 @@ export default function CustomerDevelopmentView() {
                   </button>
                   );
                 })}
+                <button
+                  type="button"
+                  onClick={() => setDetailTab("ki")}
+                  className={`ml-auto inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                    detailTab === "ki"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                  }`}
+                >
+                  <Sparkles size={11} />
+                  KI Unterstützung
+                </button>
               </div>
             </div>
             <div className="max-h-[83vh] overflow-auto p-5 bg-sand-50">
@@ -1364,43 +1343,21 @@ export default function CustomerDevelopmentView() {
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                  <div className="rounded-2xl border border-sand-200 bg-white p-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Letzte Arbeiten (Rechnungen)</p>
                       <span className="text-[11px] text-sand-500">Top 5</span>
                     </div>
-                    <div className="mt-2 grid gap-2 md:grid-cols-2">
-                      <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">System-Zusammenfassung</p>
-                        <p className="mt-1.5 text-sm leading-6 text-sand-700 break-words">
-                          {compactWorkSnippet(
-                            String(detailData.workSummary?.summary || "").trim() || "Noch keine Zusammenfassung vorhanden.",
-                            640
-                          )}
-                        </p>
-                      </div>
-                      <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">KI-Zusammenfassung</p>
-                        {workSummaryAi.status === "loading" ? (
-                          <div className="mt-1 flex items-center gap-2 text-xs text-sand-600">
-                            <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-sand-300 border-t-sand-700 animate-spin" />
-                            Wird nachgeladen...
-                          </div>
-                        ) : null}
-                        {workSummaryAi.status === "ready" ? (
-                          <p className="mt-1.5 text-sm leading-6 text-sand-700 break-words">
-                            {compactWorkSnippet(workSummaryAi.text, 640)}
-                          </p>
-                        ) : null}
-                        {workSummaryAi.status === "error" ? (
-                          <p className="mt-1 text-xs text-amber-700">{workSummaryAi.error}</p>
-                        ) : null}
-                        {workSummaryAi.status === "idle" ? (
-                          <p className="mt-1 text-xs text-sand-500">Wird bei geöffnetem Detail automatisch geladen.</p>
-                        ) : null}
-                      </div>
+                    <div className="mt-2 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">System-Zusammenfassung</p>
+                      <p className="mt-1 text-xs leading-5 text-sand-700 break-words">
+                        {compactWorkSnippet(
+                          String(detailData.workSummary?.summary || "").trim() || "Noch keine Zusammenfassung vorhanden.",
+                          640
+                        )}
+                      </p>
                     </div>
-                    <div className="mt-3 space-y-2">
+                    <div className="mt-2 space-y-1.5">
                       {(detailData.workSummary?.items || []).slice(0, 5).map((row, idx) => {
                         const invoiceLabel = row.invoiceNumber || `Rechnung #${row.invoiceId || "n/a"}`;
                         const snippets = (row.positionSnippets || [])
@@ -1409,7 +1366,7 @@ export default function CustomerDevelopmentView() {
                         return (
                         <div
                           key={`work-row-${row.invoiceId || idx}`}
-                          className="rounded-xl border border-sand-200 bg-sand-50 p-2.5"
+                          className="rounded-lg border border-sand-200 bg-sand-50 p-2"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex flex-wrap items-center gap-1.5">
@@ -1424,17 +1381,17 @@ export default function CustomerDevelopmentView() {
                             </div>
                           </div>
                           {snippets.length ? (
-                            <div className="mt-2 space-y-1.5">
+                            <div className="mt-1.5 space-y-1">
                               {snippets.slice(0, 3).map((snippet, sIdx) => (
                                 <div
                                   key={`snippet-${sIdx}`}
-                                  className="rounded-lg border border-sand-200 bg-white px-2 py-1.5"
+                                  className="rounded-md border border-sand-200 bg-white px-2 py-1"
                                 >
                                   <div className="inline-flex rounded-full border border-sand-200 bg-sand-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
                                     {classifyWorkSnippet(snippet)}
                                   </div>
-                                  <p className="mt-1 text-[11px] leading-5 text-sand-700 break-words">
-                                    {compactWorkSnippet(snippet, 260)}
+                                  <p className="mt-0.5 text-[11px] leading-4 text-sand-700 break-words">
+                                    {compactWorkSnippet(snippet, 190)}
                                   </p>
                                 </div>
                               ))}
@@ -1623,13 +1580,14 @@ export default function CustomerDevelopmentView() {
                             const errorCount = Number(device?.errorCount || 0);
                             const warningCount = Number(device?.warningCount || 0);
                             const updatesCount = Number(device?.openUpdates || 0);
-                            const lifecycleStatus = String(device?.lifecycle?.status || "").toLowerCase();
+                            const lifecycle = resolveAgentLifecycle(device);
+                            const lifecycleStatus = String(lifecycle?.status || "").toLowerCase();
                             const lifecycleLabel =
                               lifecycleStatus === "expired"
                                 ? "EOL erreicht"
                                 : lifecycleStatus === "soon"
                                   ? "EOL bald"
-                                  : "Im Support";
+                                  : "";
                             const lifecycleClass =
                               lifecycleStatus === "expired"
                                 ? "border-rose-200 bg-rose-50 text-rose-700"
@@ -1653,7 +1611,7 @@ export default function CustomerDevelopmentView() {
                                       </p>
                                     </div>
                                   </div>
-                                  <div className="flex flex-wrap items-center gap-1.5">
+                                  <div className="flex items-start gap-1.5">
                                     <span
                                       className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${
                                         typeof device?.online === "boolean"
@@ -1665,18 +1623,22 @@ export default function CustomerDevelopmentView() {
                                     >
                                       {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
                                     </span>
-                                    <span className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${lifecycleClass}`}>
-                                      {lifecycleLabel}
-                                    </span>
-                                    <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-rose-700">
-                                      E {errorCount}
-                                    </span>
-                                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-amber-700">
-                                      W {warningCount}
-                                    </span>
-                                    <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-sky-700">
-                                      U {updatesCount}
-                                    </span>
+                                    {lifecycleLabel ? (
+                                      <span className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${lifecycleClass}`}>
+                                        {lifecycleLabel}
+                                      </span>
+                                    ) : null}
+                                    <div className="flex flex-col items-stretch gap-1">
+                                      <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-rose-700">
+                                        E {errorCount}
+                                      </span>
+                                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-amber-700">
+                                        W {warningCount}
+                                      </span>
+                                      <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-sky-700">
+                                        U {updatesCount}
+                                      </span>
+                                    </div>
                                     <button
                                       type="button"
                                       onClick={() =>
@@ -1694,12 +1656,11 @@ export default function CustomerDevelopmentView() {
                                 </div>
 
                                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-sand-600">
-                                  <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">RMM</span>
                                   <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">
                                     OS: {device?.os || "n/a"}
                                   </span>
                                   <span className={`rounded-full border px-2 py-0.5 ${lifecycleClass}`}>
-                                    EOL: {device?.lifecycle?.eol_date || "n/a"}
+                                    EOL: {lifecycle?.eol_date || "n/a"}
                                   </span>
                                 </div>
 
@@ -1711,11 +1672,11 @@ export default function CustomerDevelopmentView() {
                                     </p>
                                     {lifecycleStatus === "expired" ? (
                                       <p className="text-rose-700">
-                                        <span className="font-semibold">OS Lifecycle:</span> Support abgelaufen (EOL {device?.lifecycle?.eol_date || "n/a"})
+                                        <span className="font-semibold">OS Lifecycle:</span> Support abgelaufen (EOL {lifecycle?.eol_date || "n/a"})
                                       </p>
                                     ) : lifecycleStatus === "soon" ? (
                                       <p className="text-amber-700">
-                                        <span className="font-semibold">OS Lifecycle:</span> Support endet bald (EOL {device?.lifecycle?.eol_date || "n/a"})
+                                        <span className="font-semibold">OS Lifecycle:</span> Support endet bald (EOL {lifecycle?.eol_date || "n/a"})
                                       </p>
                                     ) : (
                                       <p className="text-emerald-700">
@@ -1967,187 +1928,154 @@ export default function CustomerDevelopmentView() {
           </section>
         ) : null}
 
-        <section className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft">
-          <div className="flex flex-wrap items-center justify-between gap-1.5">
-            <div className="flex items-center gap-2 text-sand-700">
-              <ScanSearch size={13} />
-              <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Filterleiste</p>
-              <span className="relative inline-flex items-center group">
-                <button
-                  type="button"
-                  className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-sand-200 bg-white text-sand-500 hover:bg-sand-100 hover:text-sand-700"
-                  aria-label="Prioritätslogik anzeigen"
-                >
-                  <Info size={11} />
-                </button>
-                <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 w-60 -translate-x-1/2 rounded-xl border border-sand-200 bg-white px-2.5 py-2 text-[10px] leading-relaxed text-sand-600 opacity-0 shadow-soft transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                  Grün: stabiler Umsatz ohne akuten Handlungsbedarf. Orange: beobachten. Rot: Kunde
-                  aktivieren.
+        <div className="grid gap-3 xl:grid-cols-5 items-start">
+          <section className="xl:col-span-4 rounded-2xl border border-sand-200 bg-white p-2.5 shadow-soft">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <div className="flex items-center gap-2 text-sand-700">
+                <ScanSearch size={13} />
+                <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Filterleiste</p>
+                <span className="relative inline-flex items-center group">
+                  <button
+                    type="button"
+                    className="inline-flex h-4.5 w-4.5 items-center justify-center rounded-full border border-sand-200 bg-white text-sand-500 hover:bg-sand-100 hover:text-sand-700"
+                    aria-label="Prioritätslogik anzeigen"
+                  >
+                    <Info size={10} />
+                  </button>
+                  <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 w-60 -translate-x-1/2 rounded-xl border border-sand-200 bg-white px-2.5 py-2 text-[10px] leading-relaxed text-sand-600 opacity-0 shadow-soft transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                    Grün: stabiler Umsatz ohne akuten Handlungsbedarf. Orange: beobachten. Rot: Kunde
+                    aktivieren.
+                  </span>
                 </span>
-              </span>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setFilters({
+                    noContract: false,
+                    revenueFalling: false,
+                    highCommunication: false,
+                    infraRisk: false,
+                    searchNeedle: ""
+                  })
+                }
+                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+              >
+                <X size={11} /> Zurücksetzen
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() =>
-                setFilters({
-                  noContract: false,
-                  revenueFalling: false,
-                  highCommunication: false,
-                  infraRisk: false,
-                  searchNeedle: ""
-                })
-              }
-              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-            >
-              <X size={11} /> Zurücksetzen
-            </button>
-          </div>
-          <div className="mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-5 text-[11px]">
-            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
-              <Users size={12} className="text-sand-500" />
-              <input
-                type="checkbox"
-                checked={includeInactive}
-                onChange={(event) => setIncludeInactive(event.target.checked)}
-                className="h-3.5 w-3.5"
-              />
-              Inaktive anzeigen
-            </label>
-            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
-              <Shield size={12} className="text-sand-500" />
-              <input
-                type="checkbox"
-                checked={filters.noContract}
-                onChange={(event) => setFilters((prev) => ({ ...prev, noContract: event.target.checked }))}
-                className="h-3.5 w-3.5"
-              />
-              Ohne Vertrag
-            </label>
-            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
-              <TrendingDown size={12} className="text-sand-500" />
-              <input
-                type="checkbox"
-                checked={filters.revenueFalling}
-                onChange={(event) =>
-                  setFilters((prev) => ({ ...prev, revenueFalling: event.target.checked }))
-                }
-                className="h-3.5 w-3.5"
-              />
-              Umsatz sinkt
-            </label>
-            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
-              <Clock3 size={12} className="text-sand-500" />
-              <input
-                type="checkbox"
-                checked={filters.highCommunication}
-                onChange={(event) =>
-                  setFilters((prev) => ({ ...prev, highCommunication: event.target.checked }))
-                }
-                className="h-3.5 w-3.5"
-              />
-              Hohe Kommunikationslast
-            </label>
-            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
-              <AlertTriangle size={12} className="text-sand-500" />
-              <input
-                type="checkbox"
-                checked={filters.infraRisk}
-                onChange={(event) => setFilters((prev) => ({ ...prev, infraRisk: event.target.checked }))}
-                className="h-3.5 w-3.5"
-              />
-              Infrastruktur-Risiko
-            </label>
-          </div>
-          <label className="mt-2 block">
-            <span className="sr-only">Suche</span>
-            <div className="mt-1 relative">
-              <Search size={12} className="absolute left-2.5 top-2 text-sand-400" />
-              <input
-                value={filters.searchNeedle}
-                onChange={(event) =>
-                  setFilters((prev) => ({ ...prev, searchNeedle: event.target.value }))
-                }
-                placeholder="Kunde, Nr., Empfehlung, Signal ..."
-                className="w-full rounded-xl border border-sand-200 bg-white pl-7 pr-2.5 py-1.5 text-[11px]"
-              />
+            <div className="mt-1.5 grid gap-1 sm:grid-cols-2 xl:grid-cols-5 text-[10px]">
+              <label className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 flex items-center gap-1.5 leading-none">
+                <Users size={12} className="text-sand-500" />
+                <input
+                  type="checkbox"
+                  checked={includeInactive}
+                  onChange={(event) => setIncludeInactive(event.target.checked)}
+                  className="h-3 w-3"
+                />
+                Inaktive anzeigen
+              </label>
+              <label className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 flex items-center gap-1.5 leading-none">
+                <Shield size={12} className="text-sand-500" />
+                <input
+                  type="checkbox"
+                  checked={filters.noContract}
+                  onChange={(event) => setFilters((prev) => ({ ...prev, noContract: event.target.checked }))}
+                  className="h-3 w-3"
+                />
+                Ohne Vertrag
+              </label>
+              <label className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 flex items-center gap-1.5 leading-none">
+                <TrendingDown size={12} className="text-sand-500" />
+                <input
+                  type="checkbox"
+                  checked={filters.revenueFalling}
+                  onChange={(event) =>
+                    setFilters((prev) => ({ ...prev, revenueFalling: event.target.checked }))
+                  }
+                  className="h-3 w-3"
+                />
+                Umsatz sinkt
+              </label>
+              <label className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 flex items-center gap-1.5 leading-none">
+                <Clock3 size={12} className="text-sand-500" />
+                <input
+                  type="checkbox"
+                  checked={filters.highCommunication}
+                  onChange={(event) =>
+                    setFilters((prev) => ({ ...prev, highCommunication: event.target.checked }))
+                  }
+                  className="h-3 w-3"
+                />
+                Hohe Kommunikationslast
+              </label>
+              <label className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 flex items-center gap-1.5 leading-none">
+                <AlertTriangle size={12} className="text-sand-500" />
+                <input
+                  type="checkbox"
+                  checked={filters.infraRisk}
+                  onChange={(event) => setFilters((prev) => ({ ...prev, infraRisk: event.target.checked }))}
+                  className="h-3 w-3"
+                />
+                Infrastruktur-Risiko
+              </label>
             </div>
-          </label>
-        </section>
+            <label className="mt-1.5 block">
+              <span className="sr-only">Suche</span>
+              <div className="mt-1 relative">
+                <Search size={11} className="absolute left-2 top-1.5 text-sand-400" />
+                <input
+                  value={filters.searchNeedle}
+                  onChange={(event) =>
+                    setFilters((prev) => ({ ...prev, searchNeedle: event.target.value }))
+                  }
+                  placeholder="Kunde, Nr., Empfehlung, Signal ..."
+                  className="w-full rounded-lg border border-sand-200 bg-white pl-6 pr-2 py-1 text-[11px]"
+                />
+              </div>
+            </label>
+          </section>
 
-        <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-sand-700">
-              <Users size={14} />
-              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Aktivierungsradar</p>
+          <section className="xl:col-span-1 rounded-2xl border border-sand-200 bg-white p-2.5 shadow-soft">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-sand-700">
+                <Users size={12} />
+                <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Radar</p>
+              </div>
+              <span className="text-[10px] text-sand-500">{neglectedCustomers.length}</span>
             </div>
-            <span className="text-[11px] text-sand-500">
-              Vernachlässigt: {neglectedCustomers.length} Kunden
-            </span>
-          </div>
-          <div className="mt-3 grid gap-2 md:grid-cols-3 text-xs">
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2">
-              <p className="text-amber-700">Kontakt überfällig</p>
-              <p className="text-sm font-semibold text-amber-900">{neglectedStats.overdueByContact}</p>
+            <div className="mt-1.5 grid gap-1 text-[10px]">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1">
+                <p className="text-amber-700">Kontakt</p>
+                <p className="font-semibold text-amber-900">{neglectedStats.overdueByContact}</p>
+              </div>
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1">
+                <p className="text-rose-700">Umsetzung</p>
+                <p className="font-semibold text-rose-900">{neglectedStats.overdueByInvoice}</p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1">
+                <p className="text-sand-600">Druck</p>
+                <p className="font-semibold text-sand-800">{neglectedStats.highPriority}</p>
+              </div>
             </div>
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2">
-              <p className="text-rose-700">Lange ohne Umsetzung</p>
-              <p className="text-sm font-semibold text-rose-900">{neglectedStats.overdueByInvoice}</p>
-            </div>
-            <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-              <p className="text-sand-600">Hoher Aktivierungsdruck</p>
-              <p className="text-sm font-semibold text-sand-800">{neglectedStats.highPriority}</p>
-            </div>
-          </div>
-          <div className="mt-3 space-y-2">
-            {neglectedCustomers.slice(0, 6).map((entry) => {
-              const customer = entry.item;
-              const urgencyClass =
-                entry.score >= 60
-                  ? "border-rose-200 bg-rose-50 text-rose-700"
-                  : entry.score >= 45
-                    ? "border-amber-200 bg-amber-50 text-amber-700"
-                    : "border-sky-200 bg-sky-50 text-sky-700";
-              return (
-                <div
-                  key={`neglect-${customer.customerId}`}
-                  className="rounded-2xl border border-sand-200 bg-sand-50 p-2.5"
+            <div className="mt-1.5 space-y-1">
+              {neglectedCustomers.slice(0, 3).map((entry) => (
+                <button
+                  key={`neglect-compact-${entry.item?.customerId}`}
+                  type="button"
+                  onClick={() => openDetail(entry.item)}
+                  className="w-full rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 text-left text-[10px] hover:bg-sand-100"
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-sand-800">
-                        {customer.customerName || "Unbekannt"}
-                        <span className="ml-2 text-[11px] font-normal text-sand-500">
-                          {customer.customerNumber || "ohne Nr."}
-                        </span>
-                      </p>
-                      <p className="mt-0.5 text-[11px] text-sand-600">
-                        {callFocusPoints(customer).slice(0, 1)[0] || "Kein besonderer Hinweis."}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${urgencyClass}`}>
-                        Aktivierungs-Score {entry.score}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => openDetail(customer)}
-                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                      >
-                        <Eye size={11} />
-                        Details
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            {!neglectedCustomers.length ? (
-              <p className="text-xs text-sand-500">
-                Keine vernachlässigten Kunden in der aktuellen Filterung erkannt.
-              </p>
-            ) : null}
-          </div>
-        </section>
+                  <p className="truncate font-semibold text-sand-800">{entry.item?.customerName || "Unbekannt"}</p>
+                  <p className="text-sand-500">Score {entry.score}</p>
+                </button>
+              ))}
+              {!neglectedCustomers.length ? (
+                <p className="text-[10px] text-sand-500">Keine auffälligen Kunden.</p>
+              ) : null}
+            </div>
+          </section>
+        </div>
 
         {status === "error" ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">

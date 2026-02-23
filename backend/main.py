@@ -7040,14 +7040,18 @@ def _fetch_customer_development_payload_from_meta_hub(
         raise HTTPException(503, "Customer Meta-Hub URL is not configured")
     try:
         if refresh:
-            refresh_timeout = max(CUSTOMER_META_HUB_TIMEOUT_SECONDS, 20)
-            refresh_res = requests.post(
-                f"{CUSTOMER_META_HUB_URL}/refresh",
-                json={"force": True, "background": False},
-                timeout=refresh_timeout,
-            )
-            if not refresh_res.ok:
-                raise HTTPException(503, f"Meta-Hub refresh failed ({refresh_res.status_code})")
+            # Trigger refresh non-blocking: UI can continue with last snapshot while hub updates in background.
+            try:
+                refresh_timeout = max(3, min(CUSTOMER_META_HUB_TIMEOUT_SECONDS, 8))
+                refresh_res = requests.post(
+                    f"{CUSTOMER_META_HUB_URL}/refresh",
+                    json={"force": True, "background": True},
+                    timeout=refresh_timeout,
+                )
+                if not refresh_res.ok:
+                    logger.warning("Meta-hub refresh trigger failed (%s)", refresh_res.status_code)
+            except Exception as refresh_exc:
+                logger.warning("Meta-hub refresh trigger exception: %s", refresh_exc)
         params: Dict[str, Any] = {"include_inactive": "1" if include_inactive else "0"}
         if customer_id is not None:
             params["customer_id"] = int(customer_id)
@@ -7553,14 +7557,29 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
         tactical_agents, tactical_connected = _fetch_tactical_rmm_agents(integration)
         matched_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
         name_only_matches = [agent for agent in tactical_agents if _agent_matches_customer_name_only(agent, customer)]
-        agent_ids = [_extract_agent_id(agent) for agent in matched_agents if _extract_agent_id(agent)]
+        mapping_mode = "exact"
+        selected_agents = matched_agents
+        if not selected_agents and name_only_matches:
+            mapping_mode = "name_only"
+            selected_agents = name_only_matches
+
+        deduped_agents: List[Dict[str, Any]] = []
+        seen_agent_ids: Set[str] = set()
+        for agent in selected_agents:
+            agent_id = _extract_agent_id(agent)
+            if not agent_id or agent_id in seen_agent_ids:
+                continue
+            seen_agent_ids.add(agent_id)
+            deduped_agents.append(agent)
+
+        agent_ids = [_extract_agent_id(agent) for agent in deduped_agents if _extract_agent_id(agent)]
         if agent_ids:
             detail_map = _fetch_tactical_rmm_agent_detail_map(integration, agent_ids)
-            matched_agents = [{**agent, **(detail_map.get(_extract_agent_id(agent), {}))} for agent in matched_agents]
+            deduped_agents = [{**agent, **(detail_map.get(_extract_agent_id(agent), {}))} for agent in deduped_agents]
         software_rows = _fetch_tactical_rmm_software(integration, agent_ids, per_agent_limit=80)
 
     agent_meta: Dict[str, Dict[str, Any]] = {}
-    for agent in matched_agents:
+    for agent in deduped_agents:
         agent_id = _extract_agent_id(agent)
         if not agent_id:
             continue
@@ -7590,7 +7609,7 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
 
     agents_payload: List[Dict[str, Any]] = []
     ordered_agent_ids: List[str] = []
-    for agent in matched_agents:
+    for agent in deduped_agents:
         agent_id = _extract_agent_id(agent)
         if agent_id and agent_id not in ordered_agent_ids:
             ordered_agent_ids.append(agent_id)
@@ -7637,9 +7656,10 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
         "scannedSoftware": scanned,
         "matchedAgents": len(agent_ids),
         "nameOnlyCandidates": len(name_only_matches),
+        "mappingMode": mapping_mode,
         "mappingHint": (
             "RMM-Agenten via Name gefunden, aber ohne Kundennummer-Zuordnung im RMM."
-            if len(agent_ids) == 0 and _normalize_customer_number(customer.creditor_number) and len(name_only_matches) > 0
+            if mapping_mode == "name_only"
             else ""
         ),
         "rmmConnected": bool(tactical_connected),
@@ -7668,7 +7688,19 @@ def run_customer_development_discovery(customer_id: int, request: Request):
         raise HTTPException(502, "RMM agent list unavailable")
     matched_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
     name_only_matches = [agent for agent in tactical_agents if _agent_matches_customer_name_only(agent, customer)]
-    if not matched_agents:
+    mapping_mode = "exact"
+    selection_hint = ""
+    candidate_agents = matched_agents
+    if not candidate_agents and name_only_matches:
+        # Fallback: still allow discovery on exactly one best name-match agent.
+        # The hint keeps the missing customer-number mapping transparent.
+        mapping_mode = "name_only"
+        candidate_agents = name_only_matches
+        selection_hint = (
+            "Hinweis: Discovery wurde auf einem Namens-Treffer gestartet, "
+            "weil im RMM keine eindeutige Kundennummer-Zuordnung gefunden wurde."
+        )
+    if not candidate_agents:
         hint = "Keine zugeordneten RMM-Agenten für diesen Kunden gefunden."
         if _normalize_customer_number(customer.creditor_number) and name_only_matches:
             hint = (
@@ -7681,9 +7713,21 @@ def run_customer_development_discovery(customer_id: int, request: Request):
             "hint": hint,
             "matchedAgents": 0,
             "nameOnlyCandidates": len(name_only_matches),
+            "mappingMode": "none",
+            "singleAgentPerCustomer": True,
         }
-    matched_agents.sort(key=lambda agent: (not _agent_is_online(agent), str(agent.get("hostname") or "")))
-    target_agent = matched_agents[0]
+    deduped_agents: List[Dict[str, Any]] = []
+    seen_agent_ids: Set[str] = set()
+    for agent in candidate_agents:
+        agent_id = _extract_agent_id(agent)
+        if not agent_id or agent_id in seen_agent_ids:
+            continue
+        seen_agent_ids.add(agent_id)
+        deduped_agents.append(agent)
+    if not deduped_agents:
+        raise HTTPException(404, "Matched RMM agent has no agent id")
+    deduped_agents.sort(key=lambda agent: (not _agent_is_online(agent), str(agent.get("hostname") or "")))
+    target_agent = deduped_agents[0]
     target_agent_id = _extract_agent_id(target_agent)
     if not target_agent_id:
         raise HTTPException(404, "Matched RMM agent has no agent id")
@@ -7846,18 +7890,33 @@ def run_customer_development_discovery(customer_id: int, request: Request):
 
     threading.Thread(target=_trigger_discovery_background, daemon=True).start()
     logger.info(
-        "Discovery queued for customer %s on agent %s using api_url=%s",
+        "Discovery queued for customer %s on agent %s using api_url=%s (mode=%s, exact=%s, name_only=%s)",
         customer.id,
         target_agent_id,
         api_url,
+        mapping_mode,
+        len(matched_agents),
+        len(name_only_matches),
     )
 
+    response_message = (
+        f"Discovery gestartet auf {str(target_agent.get('hostname') or target_agent.get('name') or '').strip() or target_agent_id}."
+    )
+    if selection_hint:
+        response_message = f"{response_message} {selection_hint}"
     return {
         "status": "queued",
+        "started": True,
         "customerId": customer.id,
         "customerName": customer.name or "",
         "agentId": target_agent_id,
         "agentHostname": str(target_agent.get("hostname") or target_agent.get("name") or "").strip(),
+        "matchedAgents": len(matched_agents),
+        "nameOnlyCandidates": len(name_only_matches),
+        "mappingMode": mapping_mode,
+        "singleAgentPerCustomer": True,
+        "hint": selection_hint,
+        "message": response_message,
         "scriptId": script_id,
         "scriptName": str(target_script.get("name") or "").strip(),
         "apiUrl": api_url,

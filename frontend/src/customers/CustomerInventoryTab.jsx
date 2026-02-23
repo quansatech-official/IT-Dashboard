@@ -116,12 +116,22 @@ export default function CustomerInventoryTab({ customerId }) {
         const message = typeof data?.detail === "string" && data.detail.trim() ? data.detail.trim() : "Discovery konnte nicht gestartet werden";
         throw new Error(message);
       }
+      if (data && data.started === false) {
+        setDiscoveryRun({
+          status: "ready",
+          message:
+            typeof data?.hint === "string" && data.hint.trim()
+              ? data.hint.trim()
+              : "Discovery nicht gestartet.",
+          error: ""
+        });
+        return;
+      }
+      const serverMessage = typeof data?.message === "string" ? data.message.trim() : "";
+      const serverHint = typeof data?.hint === "string" ? data.hint.trim() : "";
       setDiscoveryRun({
         status: "done",
-        message:
-          typeof data?.message === "string" && data.message.trim()
-            ? data.message.trim()
-            : "Discovery gestartet. Ergebnisse werden nach Abschluss in Inventar sichtbar.",
+        message: serverMessage || `Discovery gestartet.${serverHint ? ` ${serverHint}` : ""}`.trim(),
         error: ""
       });
       await load(true);
