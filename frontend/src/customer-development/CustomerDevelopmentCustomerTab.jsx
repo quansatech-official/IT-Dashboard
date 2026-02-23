@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Shield, TrendingDown } from "lucide-react";
+import { Plus, Shield, Sparkles, TrendingDown } from "lucide-react";
 
 const API = "/api";
 
@@ -11,13 +11,27 @@ const stateBadgeClass = (state) => {
   return "border-emerald-200 bg-emerald-50 text-emerald-700";
 };
 
+const InlineSpinner = () => (
+  <span className="inline-block h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
+);
+
 export default function CustomerDevelopmentCustomerTab({ customerId, customerName, customerNumber }) {
   const [context, setContext] = useState(null);
   const [status, setStatus] = useState("idle");
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiActionKey, setAiActionKey] = useState("");
   const [aiMode, setAiMode] = useState("summary");
   const [aiText, setAiText] = useState("");
   const [aiError, setAiError] = useState("");
+  const aiActions = [
+    { mode: "summary", label: "Summary" },
+    { mode: "mail", label: "Mail" },
+    { mode: "leitfaden", label: "Leitfaden" },
+    { mode: "analyse", label: "Analyse" },
+    { mode: "angebot", label: "Angebot" },
+    { mode: "kundenbericht", label: "Bericht" },
+    { mode: "newsletter", label: "Newsletter" },
+  ];
 
   const load = async () => {
     if (!customerId) return;
@@ -57,6 +71,8 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
 
   const runAiAssist = async (mode = "summary") => {
     if (!customerId) return;
+    const actionKey = `${Number(customerId || 0)}:${String(mode || "summary").toLowerCase()}`;
+    setAiActionKey(actionKey);
     setAiMode(mode);
     setAiBusy(true);
     setAiError("");
@@ -77,8 +93,13 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
       setAiError(error?.message ? String(error.message) : "KI Vorschlag fehlgeschlagen");
     } finally {
       setAiBusy(false);
+      setAiActionKey("");
     }
   };
+
+  const isAiActionRunning = (mode) =>
+    Boolean(aiBusy) &&
+    aiActionKey === `${Number(customerId || 0)}:${String(mode || "summary").toLowerCase()}`;
 
   if (!customerId) {
     return <p className="text-sm text-sand-500">Kein Kunde ausgewählt.</p>;
@@ -192,55 +213,21 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm uppercase tracking-[0.2em] text-sand-500">KI Assist</p>
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => runAiAssist("summary")}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              Summary
-            </button>
-            <button
-              type="button"
-              onClick={() => runAiAssist("mail")}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              Mail
-            </button>
-            <button
-              type="button"
-              onClick={() => runAiAssist("leitfaden")}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              Leitfaden
-            </button>
-            <button
-              type="button"
-              onClick={() => runAiAssist("analyse")}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              Analyse
-            </button>
-            <button
-              type="button"
-              onClick={() => runAiAssist("angebot")}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              Angebot
-            </button>
-            <button
-              type="button"
-              onClick={() => runAiAssist("kundenbericht")}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              Bericht
-            </button>
-            <button
-              type="button"
-              onClick={() => runAiAssist("newsletter")}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-            >
-              Newsletter
-            </button>
+            {aiActions.map((entry) => {
+              const running = isAiActionRunning(entry.mode);
+              return (
+                <button
+                  key={entry.mode}
+                  type="button"
+                  onClick={() => runAiAssist(entry.mode)}
+                  disabled={aiBusy}
+                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
+                >
+                  {running ? <InlineSpinner /> : <Sparkles size={12} />}
+                  {running ? "Lädt..." : entry.label}
+                </button>
+              );
+            })}
           </div>
         </div>
         {aiBusy ? <p className="mt-2 text-sm text-sand-500">KI generiert Vorschlag…</p> : null}

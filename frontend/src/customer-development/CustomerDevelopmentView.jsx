@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowDownUp,
-  Bot,
   Clock3,
   ChevronDown,
   ChevronUp,
   Cpu,
   Eye,
+  Info,
   Monitor,
   Plus,
   Printer,
@@ -58,6 +58,8 @@ const ratioToPercent = (ratio) => {
 };
 
 const getPriorityTier = (item) => {
+  const flags = normalizeContractFlags(item);
+  const isRegieCustomer = flags.includes("regie") && !Boolean(item?.hasMaintenanceContract);
   const risk = Number(item?.riskScore || 0);
   const trend = Number(item?.revenueTrendPct || 0);
   const revenueCurrent = Number(item?.revenueCurrentYearEur || 0);
@@ -65,6 +67,23 @@ const getPriorityTier = (item) => {
   const contactDue = Boolean(item?.contactDue);
   const daysSinceLastInvoice = Number(item?.daysSinceLastInvoice || 0);
   const invoiceActivityDue = Boolean(item?.invoiceActivityDue);
+
+  if (isRegieCustomer) {
+    if (contactDue && (daysSince >= 120 || daysSinceLastInvoice >= 120 || invoiceActivityDue || risk >= 70)) {
+      return {
+        key: "amber",
+        index: 1,
+        label: "Regie",
+        badgeClass: "border-amber-200 bg-amber-50 text-amber-700",
+      };
+    }
+    return {
+      key: "green",
+      index: 0,
+      label: "Regie",
+      badgeClass: "border-slate-300 bg-slate-100 text-slate-700",
+    };
+  }
 
   if (
     contactDue &&
@@ -107,8 +126,10 @@ const normalizeContractFlags = (item) => {
 
 const contractSummary = (item) => {
   const flags = normalizeContractFlags(item);
+  const isRegieCustomer = flags.includes("regie") && !Boolean(item?.hasMaintenanceContract);
   const hasMonitoring = flags.includes("monitoring");
   const hasMaintenance = Boolean(item?.hasMaintenanceContract) || flags.includes("wartung");
+  if (isRegieCustomer) return "Regie (nach Aufwand)";
   if (hasMonitoring && hasMaintenance) return "Wartung + Monitoring";
   if (hasMonitoring) return "Monitoring";
   if (hasMaintenance) return "Wartung";
@@ -137,12 +158,15 @@ const neglectScore = (item) => {
   const infraRisk = Number(item?.infrastructureRisk || 0);
   const risk = Number(item?.riskScore || 0);
   const hasContract = Boolean(item?.hasMaintenanceContract);
+  const flags = normalizeContractFlags(item);
+  const isRegieCustomer = flags.includes("regie") && !hasContract;
   let score = 0;
   if (Boolean(item?.contactDue)) score += 30;
   score += Math.min(28, Math.max(0, daysSinceInteraction) * 0.4);
   score += Math.min(22, Math.max(0, daysSinceInvoice - 30) * 0.35);
   if (Boolean(item?.invoiceActivityDue)) score += 18;
-  if (!hasContract) score += 10;
+  if (!hasContract && !isRegieCustomer) score += 10;
+  if (isRegieCustomer) score -= 18;
   if (trend < 0) score += Math.min(14, Math.abs(trend) * 0.25);
   score += Math.min(14, infraRisk * 0.2);
   score += Math.min(10, risk * 0.1);
@@ -153,6 +177,8 @@ const callFocusPoints = (item) => {
   const points = [];
   const daysSinceInteraction = Number(item?.daysSinceInteraction || 0);
   const daysSinceInvoice = Number(item?.daysSinceLastInvoice || 0);
+  const flags = normalizeContractFlags(item);
+  const isRegieCustomer = flags.includes("regie") && !Boolean(item?.hasMaintenanceContract);
   const infra = item?.infra || {};
   if (Boolean(item?.contactDue)) {
     points.push(
@@ -164,7 +190,9 @@ const callFocusPoints = (item) => {
       `Seit ${daysSinceInvoice > 0 ? `${daysSinceInvoice} Tagen` : "länger"} keine neue umgesetzte Leistung fakturiert.`
     );
   }
-  if (!Boolean(item?.hasMaintenanceContract)) {
+  if (isRegieCustomer) {
+    points.push("Regie-Kunde: Betreuung erfolgt nach Aufwand, kein Wartungsvertrag gewünscht.");
+  } else if (!Boolean(item?.hasMaintenanceContract)) {
     points.push("Kein Wartungs-/Monitoringvertrag hinterlegt.");
   }
   if (Number(infra?.openUpdates || 0) > 0) {
@@ -235,6 +263,31 @@ const formatDateTime = (value) => {
   return date.toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" });
 };
 
+const normalizeWorkSnippet = (value) => {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.replace(/-\s*-\s*/g, " - ");
+};
+
+const compactWorkSnippet = (value, maxLength = 220) => {
+  const text = normalizeWorkSnippet(value);
+  if (!text) return "";
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+};
+
+const classifyWorkSnippet = (value) => {
+  const text = String(value || "").toLowerCase();
+  if (text.includes("sicherung") || text.includes("backup")) return "Backup";
+  if (text.includes("server")) return "Server";
+  if (text.includes("update") || text.includes("patch")) return "Update";
+  if (text.includes("lizenz") || text.includes("windows")) return "Lizenz";
+  if (text.includes("drucker")) return "Drucker";
+  if (text.includes("firewall") || text.includes("switch") || text.includes("router") || text.includes("netz")) return "Netzwerk";
+  if (text.includes("arbeitszeit") || text.includes("support")) return "Service";
+  return "Leistung";
+};
+
 const getAgentIcon = (device) => {
   const hostname = String(device?.hostname || "").toLowerCase();
   const os = String(device?.os || "").toLowerCase();
@@ -277,6 +330,42 @@ const LoadingProgress = ({ label, progress }) => (
   </div>
 );
 
+const InlineSpinner = () => (
+  <span className="inline-block h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
+);
+
+const AI_SOURCE_LABELS = {
+  sevdesk: "sevdesk",
+  rmm: "RMM",
+  discovery: "Discovery",
+  telephony: "Telefonie",
+  tasks: "Aufgaben",
+  email_imap: "E-Mail/IMAP",
+};
+
+const aiSourceBadgeClass = (status) => {
+  const key = String(status || "").toLowerCase();
+  if (key === "available") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (key === "partial") return "border-amber-200 bg-amber-50 text-amber-700";
+  if (key === "planned") return "border-sky-200 bg-sky-50 text-sky-700";
+  return "border-sand-200 bg-sand-100 text-sand-600";
+};
+
+const normalizeAiSources = (rawSources) => {
+  if (!rawSources || typeof rawSources !== "object") return [];
+  return Object.entries(rawSources)
+    .map(([key, value]) => {
+      const payload = value && typeof value === "object" ? value : {};
+      return {
+        key,
+        label: AI_SOURCE_LABELS[key] || String(key),
+        status: String(payload.status || "missing"),
+        detail: String(payload.detail || "").trim(),
+      };
+    })
+    .filter((entry) => entry.label);
+};
+
 export default function CustomerDevelopmentView() {
   const aiModes = [
     { value: "aktivierung_mail", label: "Aktivierungs-Mail" },
@@ -292,13 +381,15 @@ export default function CustomerDevelopmentView() {
   const [status, setStatus] = useState("idle");
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiActionKey, setAiActionKey] = useState("");
   const [detailAi, setDetailAi] = useState({
     open: false,
     customerId: null,
     customerName: "",
     mode: "angebot",
     text: "",
-    error: ""
+    error: "",
+    sources: {},
   });
   const [detailModal, setDetailModal] = useState({
     open: false,
@@ -707,6 +798,8 @@ export default function CustomerDevelopmentView() {
         ? String(targetCustomer.customerName || "")
         : String(detailModal.customerName || "");
     if (!targetCustomerId && mode !== "newsletter") return;
+    const actionKey = `${targetCustomerId || 0}:${String(mode || "summary").toLowerCase()}`;
+    setAiActionKey(actionKey);
     setAiBusy(true);
     setDetailAi((prev) => ({
       open: true,
@@ -714,7 +807,8 @@ export default function CustomerDevelopmentView() {
       customerName: targetCustomerName,
       mode,
       text: "",
-      error: ""
+      error: "",
+      sources: {},
     }));
     try {
       const response = await fetch(`${API}/customer_development/ai_assist`, {
@@ -740,7 +834,8 @@ export default function CustomerDevelopmentView() {
         customerName: targetCustomerName,
         mode: data?.mode || mode,
         text: data?.text || "",
-        error: ""
+        error: "",
+        sources: data?.sources && typeof data.sources === "object" ? data.sources : {},
       }));
     } catch (error) {
       setDetailAi((prev) => ({
@@ -750,12 +845,18 @@ export default function CustomerDevelopmentView() {
         customerName: targetCustomerName,
         mode,
         text: "",
-        error: error?.message ? String(error.message) : "KI Vorschlag fehlgeschlagen"
+        error: error?.message ? String(error.message) : "KI Vorschlag fehlgeschlagen",
+        sources: {},
       }));
     } finally {
       setAiBusy(false);
+      setAiActionKey("");
     }
   };
+
+  const isAiActionRunning = (customerId, mode) =>
+    Boolean(aiBusy) &&
+    aiActionKey === `${Number(customerId || 0)}:${String(mode || "summary").toLowerCase()}`;
 
   const openDetail = (context) => {
     setDetailData(null);
@@ -778,7 +879,8 @@ export default function CustomerDevelopmentView() {
       customerName: context.customerName || "",
       mode: "angebot",
       text: "",
-      error: ""
+      error: "",
+      sources: {},
     });
     setDetailModal({
       open: true,
@@ -809,20 +911,15 @@ export default function CustomerDevelopmentView() {
       customerName: "",
       mode: "angebot",
       text: "",
-      error: ""
+      error: "",
+      sources: {},
     });
   };
 
-  const openDetailAndRunAi = (context, mode) => {
-    if (!context?.customerId) return;
+  const openDetailAiPanel = (context) => {
+    if (!context) return;
     openDetail(context);
     setDetailTab("ki");
-    window.setTimeout(() => {
-      runAiAssist(mode, {
-        customerId: context.customerId,
-        customerName: context.customerName || "",
-      });
-    }, 120);
   };
 
   const runCveScan = async (forceRefresh = true) => {
@@ -1023,6 +1120,7 @@ export default function CustomerDevelopmentView() {
     detailData?.revenueLastYearEur,
     detailData?.revenueCurrentYearEur
   );
+  const aiSourceEntries = normalizeAiSources(detailAi.sources);
 
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
@@ -1049,7 +1147,7 @@ export default function CustomerDevelopmentView() {
               <div className="flex flex-wrap gap-2">
                 {[
                   { id: "overview", label: "Übersicht", icon: Eye },
-                  { id: "ki", label: "KI Auswertung", icon: Plus },
+                  { id: "ki", label: "KI Unterstützung", icon: Sparkles },
                   { id: "infra", label: "Infrastruktur", icon: Shield },
                   { id: "cve", label: "CVE Analyse", icon: AlertTriangle }
                 ].map((tab) => {
@@ -1096,40 +1194,81 @@ export default function CustomerDevelopmentView() {
 
                   {detailTab === "ki" ? (
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">KI Auswertung</p>
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">KI Unterstützung</p>
                       <div className="mt-2 flex flex-wrap gap-2">
+                        {(() => {
+                          const running = isAiActionRunning(detailModal.customerId, "aktivierung_call");
+                          return (
                         <button
                           type="button"
                           onClick={() => runAiAssist("aktivierung_call")}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-sand-900 px-2.5 py-1 text-[10px] uppercase tracking-wide text-white hover:opacity-90"
+                          disabled={aiBusy}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-sand-900 px-2.5 py-1 text-[10px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-70"
                         >
-                          Telefonleitfaden jetzt
+                          {running ? <InlineSpinner /> : <Sparkles size={11} />}
+                          {running ? "Lädt..." : "Telefonleitfaden jetzt"}
                         </button>
+                          );
+                        })()}
+                        {(() => {
+                          const running = isAiActionRunning(detailModal.customerId, "aktivierung_mail");
+                          return (
                         <button
                           type="button"
                           onClick={() => runAiAssist("aktivierung_mail")}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                          disabled={aiBusy}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
                         >
-                          Aktivierungs-Mail jetzt
+                          {running ? <InlineSpinner /> : <Sparkles size={11} />}
+                          {running ? "Lädt..." : "Aktivierungs-Mail jetzt"}
                         </button>
+                          );
+                        })()}
+                      </div>
+                      <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Quellenabgleich</p>
+                        <p className="mt-1 text-[11px] text-sand-600">
+                          KI bleibt ein Side-Element und nutzt bei jeder Anfrage alle verfügbaren Quellen.
+                        </p>
+                        {aiSourceEntries.length ? (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {aiSourceEntries.map((entry) => (
+                              <span
+                                key={`ai-source-${entry.key}`}
+                                title={entry.detail || ""}
+                                className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${aiSourceBadgeClass(entry.status)}`}
+                              >
+                                {entry.label}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-1 text-[11px] text-sand-500">
+                            Quellenstatus wird nach dem ersten KI-Lauf angezeigt.
+                          </p>
+                        )}
                       </div>
                       <div className="mt-3 space-y-2">
                         <div className="flex flex-wrap gap-1">
-                          {aiModes.map((item) => (
-                            <button
-                              key={item.value}
-                              type="button"
-                              onClick={() => runAiAssist(item.value)}
-                              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
-                                detailAi.mode === item.value
-                                  ? "border-sand-900 bg-sand-900 text-white"
-                                  : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
-                              }`}
-                            >
-                              <Sparkles size={11} />
-                              {item.label}
-                            </button>
-                          ))}
+                          {aiModes.map((item) => {
+                            const running = isAiActionRunning(detailModal.customerId, item.value);
+                            return (
+                              <button
+                                key={item.value}
+                                type="button"
+                                onClick={() => runAiAssist(item.value)}
+                                disabled={aiBusy}
+                                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide disabled:cursor-wait disabled:opacity-70 ${
+                                  detailAi.mode === item.value
+                                    ? "border-sand-900 bg-sand-900 text-white"
+                                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                                }`}
+                              >
+                                {running ? <InlineSpinner /> : <Sparkles size={11} />}
+                                {running ? "Lädt..." : item.label}
+                              </button>
+                            );
+                          })}
                         </div>
                         {aiBusy ? <LoadingProgress label="KI generiert Vorschlag" progress={aiProgress} /> : null}
                         {detailAi.error ? <p className="text-sm text-rose-600">{detailAi.error}</p> : null}
@@ -1293,47 +1432,87 @@ export default function CustomerDevelopmentView() {
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Letzte Arbeiten (Rechnungen)</p>
                       <span className="text-[11px] text-sand-500">Top 5</span>
                     </div>
-                    <p className="mt-2 text-sm text-sand-700">
-                      {String(detailData.workSummary?.summary || "").trim() || "Noch keine Zusammenfassung vorhanden."}
-                    </p>
-                    <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">KI-Zusammenfassung</p>
-                      {workSummaryAi.status === "loading" ? (
-                        <div className="mt-1 flex items-center gap-2 text-xs text-sand-600">
-                          <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-sand-300 border-t-sand-700 animate-spin" />
-                          Wird nachgeladen...
-                        </div>
-                      ) : null}
-                      {workSummaryAi.status === "ready" ? (
-                        <p className="mt-1 text-sm text-sand-700">{workSummaryAi.text}</p>
-                      ) : null}
-                      {workSummaryAi.status === "error" ? (
-                        <p className="mt-1 text-xs text-amber-700">{workSummaryAi.error}</p>
-                      ) : null}
-                      {workSummaryAi.status === "idle" ? (
-                        <p className="mt-1 text-xs text-sand-500">Wird bei geöffnetem Detail automatisch geladen.</p>
-                      ) : null}
+                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+                      <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">System-Zusammenfassung</p>
+                        <p className="mt-1.5 text-sm leading-6 text-sand-700 break-words">
+                          {compactWorkSnippet(
+                            String(detailData.workSummary?.summary || "").trim() || "Noch keine Zusammenfassung vorhanden.",
+                            640
+                          )}
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">KI-Zusammenfassung</p>
+                        {workSummaryAi.status === "loading" ? (
+                          <div className="mt-1 flex items-center gap-2 text-xs text-sand-600">
+                            <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-sand-300 border-t-sand-700 animate-spin" />
+                            Wird nachgeladen...
+                          </div>
+                        ) : null}
+                        {workSummaryAi.status === "ready" ? (
+                          <p className="mt-1.5 text-sm leading-6 text-sand-700 break-words">
+                            {compactWorkSnippet(workSummaryAi.text, 640)}
+                          </p>
+                        ) : null}
+                        {workSummaryAi.status === "error" ? (
+                          <p className="mt-1 text-xs text-amber-700">{workSummaryAi.error}</p>
+                        ) : null}
+                        {workSummaryAi.status === "idle" ? (
+                          <p className="mt-1 text-xs text-sand-500">Wird bei geöffnetem Detail automatisch geladen.</p>
+                        ) : null}
+                      </div>
                     </div>
                     <div className="mt-3 space-y-2">
-                      {(detailData.workSummary?.items || []).slice(0, 5).map((row, idx) => (
-                        <div key={`work-row-${row.invoiceId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
-                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-sand-600">
-                            <span className="font-semibold text-sand-800">{row.invoiceNumber || `Rechnung #${row.invoiceId || "n/a"}`}</span>
-                            <span>{row.date || "n/a"} · {formatEur(row.amountEur)}</span>
+                      {(detailData.workSummary?.items || []).slice(0, 5).map((row, idx) => {
+                        const invoiceLabel = row.invoiceNumber || `Rechnung #${row.invoiceId || "n/a"}`;
+                        const snippets = (row.positionSnippets || [])
+                          .map((snippet) => normalizeWorkSnippet(snippet))
+                          .filter(Boolean);
+                        return (
+                        <div
+                          key={`work-row-${row.invoiceId || idx}`}
+                          className="rounded-xl border border-sand-200 bg-sand-50 p-2.5"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="rounded-full border border-sand-300 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
+                                Rechnung
+                              </span>
+                              <span className="text-xs font-semibold text-sand-900">{invoiceLabel}</span>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-[11px] text-sand-600">{row.date || "n/a"}</p>
+                              <p className="text-xs font-semibold text-sand-900">{formatEur(row.amountEur)}</p>
+                            </div>
                           </div>
-                          {(row.positionSnippets || []).length ? (
-                            <ul className="mt-1.5 space-y-1">
-                              {(row.positionSnippets || []).slice(0, 3).map((snippet, sIdx) => (
-                                <li key={`snippet-${sIdx}`} className="text-[11px] text-sand-700">
-                                  - {snippet}
-                                </li>
+                          {snippets.length ? (
+                            <div className="mt-2 space-y-1.5">
+                              {snippets.slice(0, 3).map((snippet, sIdx) => (
+                                <div
+                                  key={`snippet-${sIdx}`}
+                                  className="rounded-lg border border-sand-200 bg-white px-2 py-1.5"
+                                >
+                                  <div className="inline-flex rounded-full border border-sand-200 bg-sand-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
+                                    {classifyWorkSnippet(snippet)}
+                                  </div>
+                                  <p className="mt-1 text-[11px] leading-5 text-sand-700 break-words">
+                                    {compactWorkSnippet(snippet, 260)}
+                                  </p>
+                                </div>
                               ))}
-                            </ul>
+                              {snippets.length > 3 ? (
+                                <p className="text-[11px] text-sand-500">
+                                  +{snippets.length - 3} weitere Positionen
+                                </p>
+                              ) : null}
+                            </div>
                           ) : (
                             <p className="mt-1.5 text-[11px] text-sand-500">Keine Positionsdetails vorhanden.</p>
                           )}
                         </div>
-                      ))}
+                      );
+                      })}
                       {!(detailData.workSummary?.items || []).length ? (
                         <p className="text-xs text-sand-500">Keine Rechnungspositionen für die letzten Arbeiten gefunden.</p>
                       ) : null}
@@ -1373,14 +1552,9 @@ export default function CustomerDevelopmentView() {
                   <div className="rounded-2xl border border-sand-200 bg-white p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Telefonbriefing</p>
-                      <button
-                        type="button"
-                        onClick={() => runAiAssist("aktivierung_call")}
-                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                      >
-                        <Sparkles size={11} />
-                        KI Leitfaden erzeugen
-                      </button>
+                      <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
+                        Optional: KI im Tab "KI Unterstützung"
+                      </span>
                     </div>
                     <ul className="mt-2 space-y-1">
                       {callFocusPoints(detailData || {}).map((line, idx) => (
@@ -1856,11 +2030,24 @@ export default function CustomerDevelopmentView() {
           </section>
         ) : null}
 
-        <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+        <section className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft">
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
             <div className="flex items-center gap-2 text-sand-700">
-              <ScanSearch size={14} />
-              <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Filterleiste</p>
+              <ScanSearch size={13} />
+              <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Filterleiste</p>
+              <span className="relative inline-flex items-center group">
+                <button
+                  type="button"
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-sand-200 bg-white text-sand-500 hover:bg-sand-100 hover:text-sand-700"
+                  aria-label="Prioritätslogik anzeigen"
+                >
+                  <Info size={11} />
+                </button>
+                <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 w-60 -translate-x-1/2 rounded-xl border border-sand-200 bg-white px-2.5 py-2 text-[10px] leading-relaxed text-sand-600 opacity-0 shadow-soft transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                  Grün: stabiler Umsatz ohne akuten Handlungsbedarf. Orange: beobachten. Rot: Kunde
+                  aktivieren.
+                </span>
+              </span>
             </div>
             <button
               type="button"
@@ -1873,85 +2060,81 @@ export default function CustomerDevelopmentView() {
                   searchNeedle: ""
                 })
               }
-              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
             >
-              <X size={12} /> Zurücksetzen
+              <X size={11} /> Zurücksetzen
             </button>
           </div>
-          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5 text-xs">
-            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
-              <Users size={13} className="text-sand-500" />
+          <div className="mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-5 text-[11px]">
+            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
+              <Users size={12} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={includeInactive}
                 onChange={(event) => setIncludeInactive(event.target.checked)}
-                className="h-4 w-4"
+                className="h-3.5 w-3.5"
               />
               Inaktive anzeigen
             </label>
-            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
-              <Shield size={13} className="text-sand-500" />
+            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
+              <Shield size={12} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={filters.noContract}
                 onChange={(event) => setFilters((prev) => ({ ...prev, noContract: event.target.checked }))}
-                className="h-4 w-4"
+                className="h-3.5 w-3.5"
               />
               Ohne Vertrag
             </label>
-            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
-              <TrendingDown size={13} className="text-sand-500" />
+            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
+              <TrendingDown size={12} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={filters.revenueFalling}
                 onChange={(event) =>
                   setFilters((prev) => ({ ...prev, revenueFalling: event.target.checked }))
                 }
-                className="h-4 w-4"
+                className="h-3.5 w-3.5"
               />
               Umsatz sinkt
             </label>
-            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
-              <Clock3 size={13} className="text-sand-500" />
+            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
+              <Clock3 size={12} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={filters.highCommunication}
                 onChange={(event) =>
                   setFilters((prev) => ({ ...prev, highCommunication: event.target.checked }))
                 }
-                className="h-4 w-4"
+                className="h-3.5 w-3.5"
               />
               Hohe Kommunikationslast
             </label>
-            <label className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 flex items-center gap-2">
-              <AlertTriangle size={13} className="text-sand-500" />
+            <label className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 flex items-center gap-1.5 leading-none">
+              <AlertTriangle size={12} className="text-sand-500" />
               <input
                 type="checkbox"
                 checked={filters.infraRisk}
                 onChange={(event) => setFilters((prev) => ({ ...prev, infraRisk: event.target.checked }))}
-                className="h-4 w-4"
+                className="h-3.5 w-3.5"
               />
               Infrastruktur-Risiko
             </label>
           </div>
-          <label className="mt-3 block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Suche</span>
+          <label className="mt-2 block">
+            <span className="sr-only">Suche</span>
             <div className="mt-1 relative">
-              <Search size={13} className="absolute left-3 top-2.5 text-sand-400" />
+              <Search size={12} className="absolute left-2.5 top-2 text-sand-400" />
               <input
                 value={filters.searchNeedle}
                 onChange={(event) =>
                   setFilters((prev) => ({ ...prev, searchNeedle: event.target.value }))
                 }
                 placeholder="Kunde, Nr., Empfehlung, Signal ..."
-                className="w-full rounded-xl border border-sand-200 bg-white pl-8 pr-3 py-2 text-xs"
+                className="w-full rounded-xl border border-sand-200 bg-white pl-7 pr-2.5 py-1.5 text-[11px]"
               />
             </div>
           </label>
-          <div className="mt-3 rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Prioritätslogik</p>
-            <p className="mt-1 text-[11px] text-sand-600">Grün: stabiler Umsatz und kein akuter Handlungsbedarf. Orange: beobachten. Rot: Kunde aktivieren.</p>
-          </div>
         </section>
 
         <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
@@ -2010,19 +2193,11 @@ export default function CustomerDevelopmentView() {
                       </span>
                       <button
                         type="button"
-                        onClick={() => openDetailAndRunAi(customer, "aktivierung_call")}
+                        onClick={() => openDetailAiPanel(customer)}
                         className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
                       >
                         <Sparkles size={11} />
-                        Telefonleitfaden
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openDetailAndRunAi(customer, "aktivierung_mail")}
-                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                      >
-                        <Bot size={11} />
-                        Mailvorschlag
+                        KI Unterstützung
                       </button>
                       <button
                         type="button"
@@ -2140,20 +2315,6 @@ export default function CustomerDevelopmentView() {
                         >
                           <Eye size={12} /> Details
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => openDetailAndRunAi(item, "aktivierung_call")}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
-                        >
-                          <Sparkles size={12} /> Leitfaden
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openDetailAndRunAi(item, "aktivierung_mail")}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
-                        >
-                          <Bot size={12} /> Mail
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -2195,13 +2356,6 @@ export default function CustomerDevelopmentView() {
                           className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
                         >
                           <Eye size={11} /> Details
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openDetailAndRunAi(item, "aktivierung_call")}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                        >
-                          <Sparkles size={11} /> Leitfaden
                         </button>
                       </div>
                     </div>

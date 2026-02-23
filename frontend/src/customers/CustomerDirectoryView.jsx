@@ -8,6 +8,7 @@ import {
   Eye,
   FileDown,
   Mail,
+  Pencil,
   Phone,
   PhoneOutgoing,
   Plus,
@@ -127,6 +128,14 @@ const api = {
       if (!r.ok) throw new Error(data?.detail || "contract_reactivate_failed");
       return data;
     }),
+  markCustomerContractProposal: (customerId, contractId) =>
+    fetch(`${API}/customers/${customerId}/contracts/${contractId}/mark_proposal`, {
+      method: "POST"
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "contract_mark_proposal_failed");
+      return data;
+    }),
   deleteCustomerContract: (customerId, contractId) =>
     fetch(`${API}/customers/${customerId}/contracts/${contractId}`, {
       method: "DELETE"
@@ -160,11 +169,15 @@ const normalizeContractFlags = (flags) => {
   flags.forEach((entry) => {
     let key = String(entry || "").trim().toLowerCase();
     if (key === "sla" || key === "servicelevelagreement") key = "wartung";
-    if (key !== "monitoring" && key !== "wartung") return;
+    if (key === "regiekunde" || key === "nachaufwand" || key === "timeandmaterial" || key === "payg") key = "regie";
+    if (key !== "monitoring" && key !== "wartung" && key !== "regie") return;
     if (seen.has(key)) return;
     seen.add(key);
     values.push(key);
   });
+  if (seen.has("regie") && (seen.has("wartung") || seen.has("monitoring"))) {
+    return values.filter((entry) => entry !== "regie");
+  }
   return values;
 };
 
@@ -227,6 +240,26 @@ const customerPayload = (customer) => ({
       number: phone.number || ""
     }))
 });
+
+const CONTRACT_FLAG_ORDER = ["wartung", "monitoring", "regie"];
+
+const applyContractFlagChange = (flags, contractId, checked) => {
+  const current = new Set(normalizeContractFlags(flags));
+  const key = String(contractId || "").trim().toLowerCase();
+  if (!key) return CONTRACT_FLAG_ORDER.filter((item) => current.has(item));
+  if (checked) {
+    current.add(key);
+    if (key === "regie") {
+      current.delete("wartung");
+      current.delete("monitoring");
+    } else if (key === "wartung" || key === "monitoring") {
+      current.delete("regie");
+    }
+  } else {
+    current.delete(key);
+  }
+  return CONTRACT_FLAG_ORDER.filter((item) => current.has(item));
+};
 
 const formatEur = (value) => {
   if (value === null || typeof value === "undefined") return "n/a";
@@ -315,7 +348,8 @@ export default function CustomerDirectoryView() {
     docType: "vertrag",
     note: "",
     validFrom: "",
-    runtimeMonths: "12"
+    runtimeMonths: "12",
+    markAsProposal: true
   });
   const saveTimers = useRef({});
   const importInputRef = useRef(null);
@@ -746,6 +780,10 @@ export default function CustomerDirectoryView() {
 
   const saveGeneratedContract = async () => {
     if (!activeId) return;
+    if (!selectedTariff) {
+      setToast("Bitte zuerst einen Tarif für die Kalkulation wählen.");
+      return;
+    }
     setContractSaveStatus("saving");
     try {
       const source = generatedContract || (await generateContractPreview(false));
@@ -763,10 +801,18 @@ export default function CustomerDirectoryView() {
         content_base64: contentBase64,
         html_content: String(source.html || ""),
         template_key: String(source.template_key || contractDraft.docType || "vertrag"),
-        note: String(contractDraft.note || "")
+        note: String(contractDraft.note || ""),
+        status: contractDraft.markAsProposal ? "proposal" : "active"
       });
       setCustomerContracts((prev) => [saved, ...prev]);
-      setContractDraft({ title: "", docType: "vertrag", note: "", validFrom: "", runtimeMonths: "12" });
+      setContractDraft({
+        title: "",
+        docType: "vertrag",
+        note: "",
+        validFrom: "",
+        runtimeMonths: "12",
+        markAsProposal: true
+      });
       setGeneratedContract(null);
       setContractSaveStatus("saved");
       setTimeout(() => setContractSaveStatus("idle"), 1800);
@@ -814,6 +860,31 @@ export default function CustomerDirectoryView() {
     } catch {
       setToast("Reaktivierung fehlgeschlagen.");
     }
+  };
+
+  const markContractDocumentAsProposal = async (contractId) => {
+    if (!activeId || !contractId) return;
+    try {
+      const updated = await api.markCustomerContractProposal(activeId, contractId);
+      setCustomerContracts((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    } catch {
+      setToast("Markierung als Vorschlag fehlgeschlagen.");
+    }
+  };
+
+  const openContractCreator = () => {
+    if (!activeCustomer) return;
+    const customerLabel = String(activeCustomer.name || "").trim();
+    setContractDraft({
+      title: customerLabel ? `Wartungsvertrag ${customerLabel}` : "",
+      docType: "wartung",
+      note: "",
+      validFrom: "",
+      runtimeMonths: "12",
+      markAsProposal: true
+    });
+    setGeneratedContract(null);
+    setContractCalcModalOpen(true);
   };
 
   const deleteContractDocument = async (contractId) => {
@@ -1824,6 +1895,123 @@ export default function CustomerDirectoryView() {
           </div>
         </div>
       </div>
+      <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Neuen Vertrag anlegen</p>
+          <span className="text-[11px] text-sand-500">
+            Grundlage: {selectedTariff ? `${selectedTariff.name} (v${selectedTariff.version || 1})` : "Bitte Tarif wählen"}
+          </span>
+        </div>
+        <div className="mt-2.5 grid gap-2 md:grid-cols-2">
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Titel</span>
+            <input
+              value={contractDraft.title}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, title: event.target.value }))}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+              placeholder="z.B. Wartungsvertrag Kunde"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Vertragstyp</span>
+            <select
+              value={contractDraft.docType}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, docType: event.target.value }))}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            >
+              <option value="vertrag">IT-Servicevertrag</option>
+              <option value="wartung">Wartungsvertrag</option>
+              <option value="monitoring">Monitoringvertrag</option>
+              <option value="avv_dsgvo">AVV / DSGVO</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Gültig ab</span>
+            <input
+              type="date"
+              value={contractDraft.validFrom}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, validFrom: event.target.value }))}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Laufzeit (Monate)</span>
+            <input
+              type="number"
+              min="1"
+              value={contractDraft.runtimeMonths}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, runtimeMonths: event.target.value }))}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            />
+          </label>
+          <label className="block md:col-span-2">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Hinweis im Vertrag</span>
+            <input
+              value={contractDraft.note}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, note: event.target.value }))}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            />
+          </label>
+        </div>
+        <label className="mt-2 inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
+          <input
+            type="checkbox"
+            checked={Boolean(contractDraft.markAsProposal)}
+            onChange={(event) => setContractDraft((prev) => ({ ...prev, markAsProposal: event.target.checked }))}
+            className="h-4 w-4"
+          />
+          Als Vorschlag markieren, solange der Kunde noch nicht eingewilligt hat
+        </label>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => generateContractPreview(true)}
+            disabled={!selectedTariff}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-wide ${
+              selectedTariff
+                ? "border-sand-200 bg-white hover:bg-sand-100"
+                : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
+            }`}
+          >
+            <Eye size={12} />
+            Vorschau öffnen
+          </button>
+          <button
+            type="button"
+            onClick={exportGeneratedContractPdf}
+            disabled={!selectedTariff}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-wide ${
+              selectedTariff
+                ? "border-sand-200 bg-white hover:bg-sand-100"
+                : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
+            }`}
+          >
+            <FileDown size={12} />
+            PDF laden
+          </button>
+          <button
+            type="button"
+            onClick={saveGeneratedContract}
+            disabled={!selectedTariff}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-wide ${
+              selectedTariff
+                ? "border-sand-200 bg-sand-900 text-white hover:opacity-90"
+                : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
+            }`}
+          >
+            <BadgeCheck size={12} />
+            {contractDraft.markAsProposal ? "Als Vorschlag speichern" : "Als aktiv speichern"}
+          </button>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {contractPreviewStatus === "saving" ? <span className="text-xs text-sand-500">Erzeuge Vorschau…</span> : null}
+          {contractPreviewStatus === "saved" ? <span className="text-xs text-emerald-600">Vorschau aktualisiert</span> : null}
+          {contractPreviewStatus === "error" ? <span className="text-xs text-rose-600">Vorschau fehlgeschlagen</span> : null}
+          {contractSaveStatus === "saving" ? <span className="text-xs text-sand-500">Speichere Vertrag…</span> : null}
+          {contractSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Vertrag gespeichert</span> : null}
+          {contractSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
+        </div>
+      </div>
     </div>
   );
 
@@ -2057,17 +2245,19 @@ export default function CustomerDirectoryView() {
                 <div className="flex flex-wrap items-center gap-3 text-sm text-sand-700">
                   {[
                     { id: "wartung", label: "Wartung" },
-                    { id: "monitoring", label: "Monitoring" }
+                    { id: "monitoring", label: "Monitoring" },
+                    { id: "regie", label: "Regie (kein Vertrag)" }
                   ].map((contract) => (
                     <label key={contract.id} className="inline-flex items-center gap-2">
                       <input
                         type="checkbox"
                         checked={Boolean((editCustomer.contractFlags || []).includes(contract.id))}
                         onChange={(event) => {
-                          const current = new Set(editCustomer.contractFlags || []);
-                          if (event.target.checked) current.add(contract.id);
-                          else current.delete(contract.id);
-                          const nextFlags = Array.from(current);
+                          const nextFlags = applyContractFlagChange(
+                            editCustomer.contractFlags || [],
+                            contract.id,
+                            event.target.checked
+                          );
                           updateCustomer(editCustomer.id, {
                             contractFlags: nextFlags,
                             maintenanceContract: nextFlags.includes("wartung")
@@ -2207,10 +2397,10 @@ export default function CustomerDirectoryView() {
                     <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge</p>
                     <button
                       type="button"
-                      onClick={() => setContractCalcModalOpen(true)}
+                      onClick={openContractCreator}
                       className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
                     >
-                      Vertragskalkulation öffnen
+                      Neuer Vertrag anlegen
                     </button>
                   </div>
                   <div className="space-y-2 max-h-64 overflow-auto pr-1">
@@ -2218,16 +2408,27 @@ export default function CustomerDirectoryView() {
                       <div key={item.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
                         <div className="flex items-center justify-between gap-2">
                           <p className="font-semibold text-sand-800">{item.title || "Vertrag"}</p>
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                              String(item.status || "active") === "cancelled"
+                          {(() => {
+                            const status = String(item.status || "active").toLowerCase();
+                            const badgeClass =
+                              status === "cancelled"
                                 ? "border-rose-200 bg-rose-50 text-rose-700"
-                                : "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            }`}
-                          >
-                            {String(item.status || "active") === "cancelled" ? "Storniert" : "Aktiv"}
-                          </span>
+                                : status === "proposal"
+                                ? "border-amber-200 bg-amber-50 text-amber-700"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-700";
+                            const label = status === "cancelled" ? "Storniert" : status === "proposal" ? "Vorschlag" : "Aktiv";
+                            return (
+                              <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${badgeClass}`}>
+                                {label}
+                              </span>
+                            );
+                          })()}
                         </div>
+                        {String(item.status || "active").toLowerCase() === "proposal" ? (
+                          <p className="mt-1 text-[11px] text-amber-700">
+                            Kunde hat noch nicht eingewilligt. Als Vorschlag geführt.
+                          </p>
+                        ) : null}
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <button
                             type="button"
@@ -2249,7 +2450,7 @@ export default function CustomerDirectoryView() {
                           >
                             <FileDown size={11} /> PDF
                           </button>
-                          {String(item.status || "active") === "cancelled" ? (
+                          {String(item.status || "active").toLowerCase() === "cancelled" ? (
                             <button
                               type="button"
                               onClick={() => reactivateContractDocument(item.id)}
@@ -2257,7 +2458,33 @@ export default function CustomerDirectoryView() {
                             >
                               Reaktivieren
                             </button>
+                          ) : String(item.status || "active").toLowerCase() === "proposal" ? (
+                            <button
+                              type="button"
+                              onClick={() => reactivateContractDocument(item.id)}
+                              className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
+                            >
+                              Als aktiv markieren
+                            </button>
                           ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => markContractDocumentAsProposal(item.id)}
+                                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
+                              >
+                                Als Vorschlag
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => cancelContractDocument(item.id)}
+                                className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                              >
+                                Stornieren
+                              </button>
+                            </>
+                          )}
+                          {String(item.status || "active").toLowerCase() === "proposal" ? (
                             <button
                               type="button"
                               onClick={() => cancelContractDocument(item.id)}
@@ -2265,7 +2492,7 @@ export default function CustomerDirectoryView() {
                             >
                               Stornieren
                             </button>
-                          )}
+                          ) : null}
                           <button
                             type="button"
                             onClick={() => deleteContractDocument(item.id)}
@@ -2518,17 +2745,19 @@ export default function CustomerDirectoryView() {
                         <div className="flex flex-wrap items-center gap-2">
                           {[
                             { id: "wartung", label: "Wartung" },
-                            { id: "monitoring", label: "Monitoring" }
+                            { id: "monitoring", label: "Monitoring" },
+                            { id: "regie", label: "Regie" }
                           ].map((contract) => (
                             <label key={contract.id} className="inline-flex items-center gap-1">
                               <input
                                 type="checkbox"
                                 checked={Boolean((customer.contractFlags || []).includes(contract.id))}
                                 onChange={(event) => {
-                                  const current = new Set(customer.contractFlags || []);
-                                  if (event.target.checked) current.add(contract.id);
-                                  else current.delete(contract.id);
-                                  const nextFlags = Array.from(current);
+                                  const nextFlags = applyContractFlagChange(
+                                    customer.contractFlags || [],
+                                    contract.id,
+                                    event.target.checked
+                                  );
                                   updateCustomer(customer.id, {
                                     contractFlags: nextFlags,
                                     maintenanceContract: nextFlags.includes("wartung")
@@ -2554,7 +2783,7 @@ export default function CustomerDirectoryView() {
                           title="Bearbeiten"
                           aria-label="Bearbeiten"
                         >
-                          <Eye size={13} />
+                          <Pencil size={13} />
                         </button>
                       </td>
                     </tr>

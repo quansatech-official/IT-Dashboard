@@ -1386,6 +1386,7 @@ class CustomerContractDocumentCreate(BaseModel):
     html_content: Optional[str] = ""
     template_key: Optional[str] = ""
     note: Optional[str] = ""
+    status: Optional[str] = "active"
 
 
 class CustomerContractStatusUpdate(BaseModel):
@@ -2678,7 +2679,7 @@ def serialize_day_task_group(g: DayTaskGroup) -> Dict[str, Any]:
 def _normalize_contract_flags(flags: Optional[List[Any]]) -> List[str]:
     if not isinstance(flags, list):
         return []
-    allowed = {"monitoring", "wartung"}
+    allowed = {"monitoring", "wartung", "regie"}
     normalized: List[str] = []
     seen = set()
     for value in flags:
@@ -2687,12 +2688,17 @@ def _normalize_contract_flags(flags: Optional[List[Any]]) -> List[str]:
             key = "wartung"
         if key in {"monitoringvertrag", "rmm"}:
             key = "monitoring"
+        if key in {"regiekunde", "regiekundestatus", "nachaufwand", "timeandmaterial", "payg"}:
+            key = "regie"
         if key in {"servicelevelagreement", "sla"}:
             key = "wartung"
         if key not in allowed or key in seen:
             continue
         seen.add(key)
         normalized.append(key)
+    # "Regie" is an alternative service model without Wartung/Monitoring contract.
+    if "regie" in seen and ("wartung" in seen or "monitoring" in seen):
+        normalized = [entry for entry in normalized if entry != "regie"]
     return normalized
 
 
@@ -5652,6 +5658,7 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
     customer_number_key = _normalize_customer_number(customer.creditor_number)
     if customer_number_key:
         number_candidates: Set[str] = set()
+        explicit_number_candidates: Set[str] = set()
         customer_number_int: Optional[int] = None
         if customer_number_key.isdigit():
             try:
@@ -5692,6 +5699,7 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                     for raw_value in value_candidates:
                         normalized = _normalize_customer_number(raw_value)
                         if normalized:
+                            explicit_number_candidates.add(normalized)
                             number_candidates.add(normalized)
                 for key, value in node.items():
                     key_text = str(key or "").strip().lower()
@@ -5705,6 +5713,7 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                     if looks_like_customer_number and value is not None:
                         normalized = _normalize_customer_number(value)
                         if normalized:
+                            explicit_number_candidates.add(normalized)
                             number_candidates.add(normalized)
                     # TacticalRMM often uses ids in generic keys (client/site/customer),
                     # not always explicit "*number" field names.
@@ -5752,7 +5761,7 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
 
         _collect_numberish_fields(agent)
         if not number_candidates:
-            return False
+            return _agent_matches_customer_name_only(agent, customer)
         if customer_number_key in number_candidates:
             return True
         # Also allow numeric equivalence for mappings like "0012" vs "12".
@@ -5764,7 +5773,12 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                             return True
                     except Exception:
                         continue
-        return False
+        # If we found an explicit customer-number-like field and it does not match,
+        # do not fall back to name matching to avoid cross-customer false positives.
+        if explicit_number_candidates:
+            return False
+        # Fallback: some Tactical payloads only expose site/client ids in agent lists.
+        return _agent_matches_customer_name_only(agent, customer)
 
     customer_name_term = _dev_normalize_text(customer.name)
     if not customer_name_term:
@@ -5975,6 +5989,7 @@ def _build_customer_development_context(
     has_contract = bool(customer.maintenance_contract) or bool(
         set(contract_flags) & {"wartung", "monitoring"}
     )
+    is_regie_customer = bool("regie" in contract_flags and not has_contract)
     task_filters = _customer_task_filter(customer)
     open_day_tasks = 0
     open_time_tasks = 0
@@ -6091,12 +6106,14 @@ def _build_customer_development_context(
     signals: List[str] = []
     recommendations: List[Dict[str, str]] = []
 
-    if not has_contract:
+    if not has_contract and not is_regie_customer:
         business_risk += 20
         signals.append("Kein Wartungs-/Monitoringvertrag hinterlegt")
         recommendations.append(
             {"type": "betreuung", "title": "Vertragslage prüfen", "why": "Kein Wartungs- oder Monitoringvertrag im Kundenstamm."}
         )
+    elif is_regie_customer:
+        signals.append("Regie-Kunde hinterlegt (kein Wartungsvertrag, intern niedriger Aktivierungsfokus)")
     # Engagement-Signale: viele kleine Anfragen und regelmäßige Kommunikation
     # sind typischerweise positiv und sollen nicht als Risiko gewertet werden.
     interaction_load = open_day_tasks + open_time_tasks
@@ -6108,7 +6125,7 @@ def _build_customer_development_context(
     if is_engaged_customer:
         business_risk = max(0, business_risk - 12)
         signals.append("Aktive Kundeninteraktion (regelmäßige Anfragen)")
-        if not has_contract:
+        if not has_contract and not is_regie_customer:
             recommendations.append(
                 {
                     "type": "betreuung",
@@ -6127,7 +6144,7 @@ def _build_customer_development_context(
         and telephony["calls"] < 4
         and telephony["missed"] < 3
     )
-    if trend_drop_is_strong and low_current_revenue and not has_contract and weak_binding_signals:
+    if trend_drop_is_strong and low_current_revenue and not has_contract and not is_regie_customer and weak_binding_signals:
         business_risk += 12
         signals.append(f"Umsatzprofil rückläufig ({revenue_trend_pct}%)")
         recommendations.append(
@@ -6172,6 +6189,9 @@ def _build_customer_development_context(
     elif days_since_last_invoice is not None and days_since_last_invoice >= 45:
         business_risk += 7
         signals.append(f"Umsetzungsrhythmus nimmt ab ({days_since_last_invoice} Tage seit letzter Rechnung)")
+    if is_regie_customer:
+        # Regie-Kunden sollen sichtbar bleiben, aber intern niedriger priorisiert werden.
+        business_risk = max(0, business_risk - 18)
 
     if unmanaged_count > 0:
         infra_risk += 35
@@ -6263,8 +6283,11 @@ def _build_customer_development_context(
         "customerId": customer.id,
         "customerName": customer.name or "",
         "customerNumber": customer.creditor_number or "",
+        "customerEmail": customer.email or "",
         "status": (customer.status or "active").lower(),
         "hasMaintenanceContract": has_contract,
+        "isRegieCustomer": is_regie_customer,
+        "serviceModel": "regie" if is_regie_customer else ("vertrag" if has_contract else "kein_vertrag"),
         "contractFlags": contract_flags,
         "revenueCurrentYearEur": round(revenue_current_year, 2),
         "revenueLastYearEur": round(revenue_last_year, 2),
@@ -6444,6 +6467,138 @@ def _build_customer_development_payload(
         return payload
 
 
+def _customer_development_ai_sources(context: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    source = context.get("source") if isinstance(context, dict) else {}
+    source = source if isinstance(source, dict) else {}
+    infra = context.get("infra") if isinstance(context, dict) else {}
+    infra = infra if isinstance(infra, dict) else {}
+    work_summary = context.get("workSummary") if isinstance(context, dict) else {}
+    work_summary = work_summary if isinstance(work_summary, dict) else {}
+
+    managed_assets = int(infra.get("managedAssets") or 0)
+    discovered_assets = int(infra.get("discoveredAssets") or 0)
+    uncovered_assets = int(infra.get("unmanagedCount") or 0)
+    coverage_pct = int(float(infra.get("coverageRatio") or 0) * 100)
+    phone_calls = int(context.get("communicationFrequency") or 0)
+    open_tasks = int(context.get("ticketLoad") or 0)
+    customer_email = str(context.get("customerEmail") or "").strip()
+
+    has_invoice_data = (
+        context.get("daysSinceLastInvoice") is not None
+        or bool(context.get("lastInvoiceAt"))
+        or bool(source.get("sevdesk"))
+        or bool(work_summary.get("available"))
+    )
+    sevdesk_status = "available" if has_invoice_data else "missing"
+    sevdesk_detail = (
+        f"Rechnungs-/Leistungsdaten vorhanden (letzte Rechnung: {context.get('daysSinceLastInvoice')} Tage)."
+        if has_invoice_data and isinstance(context.get("daysSinceLastInvoice"), int)
+        else ("Rechnungs-/Leistungsdaten vorhanden." if has_invoice_data else "Keine verwertbaren Faktura-Daten.")
+    )
+
+    rmm_connected = bool(source.get("tacticalRmm")) or managed_assets > 0 or int(infra.get("nameOnlyCandidateCount") or 0) > 0
+    if managed_assets > 0:
+        rmm_status = "available"
+    elif rmm_connected:
+        rmm_status = "partial"
+    else:
+        rmm_status = "missing"
+    rmm_detail = (
+        f"{managed_assets} gemanagte Agents, {coverage_pct}% Coverage."
+        if managed_assets > 0
+        else ("RMM erreichbar, aber keine eindeutige Agent-Zuordnung." if rmm_connected else "Keine RMM-Daten.")
+    )
+
+    if discovered_assets > 0:
+        discovery_status = "available"
+    elif bool(source.get("discovery")):
+        discovery_status = "partial"
+    else:
+        discovery_status = "missing"
+    discovery_detail = (
+        f"{discovered_assets} Discovery-Assets, davon {uncovered_assets} unmanaged."
+        if discovered_assets > 0
+        else "Keine Discovery-Assets vorhanden."
+    )
+
+    telephony_status = "available" if phone_calls > 0 else "partial"
+    telephony_detail = (
+        f"{phone_calls} Calls in der Auswertung."
+        if phone_calls > 0
+        else "Keine aktuellen Call-Events fuer den Zeitraum."
+    )
+
+    task_status = "available"
+    task_detail = f"{open_tasks} offene Aufgaben in der Auswertung."
+
+    email_status = "planned"
+    if customer_email:
+        email_detail = (
+            f"Kundenadresse vorhanden ({customer_email}), IMAP-Sync geplant."
+        )
+    else:
+        email_detail = "Keine Kundenadresse hinterlegt, IMAP-Sync geplant."
+
+    return {
+        "sevdesk": {"status": sevdesk_status, "detail": sevdesk_detail},
+        "rmm": {"status": rmm_status, "detail": rmm_detail},
+        "discovery": {"status": discovery_status, "detail": discovery_detail},
+        "telephony": {"status": telephony_status, "detail": telephony_detail},
+        "tasks": {"status": task_status, "detail": task_detail},
+        "email_imap": {"status": email_status, "detail": email_detail},
+    }
+
+
+def _customer_development_ai_source_lines(sources: Dict[str, Dict[str, str]]) -> List[str]:
+    labels = {
+        "sevdesk": "sevdesk",
+        "rmm": "RMM",
+        "discovery": "Discovery",
+        "telephony": "Telefonie",
+        "tasks": "Aufgaben",
+        "email_imap": "E-Mail/IMAP",
+    }
+    ordered_keys = ["sevdesk", "rmm", "discovery", "telephony", "tasks", "email_imap"]
+    lines: List[str] = []
+    for key in ordered_keys:
+        entry = sources.get(key) if isinstance(sources, dict) else None
+        entry = entry if isinstance(entry, dict) else {}
+        status = str(entry.get("status") or "missing").strip().lower() or "missing"
+        detail = str(entry.get("detail") or "").strip()
+        label = labels.get(key, key)
+        if detail:
+            lines.append(f"- {label}: {status} - {detail}")
+        else:
+            lines.append(f"- {label}: {status}")
+    return lines
+
+
+def _aggregate_customer_development_ai_sources(contexts: List[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
+    if not contexts:
+        return _customer_development_ai_sources({})
+    snapshots = [_customer_development_ai_sources(item) for item in contexts if isinstance(item, dict)]
+    if not snapshots:
+        return _customer_development_ai_sources({})
+    ordered_keys = ["sevdesk", "rmm", "discovery", "telephony", "tasks", "email_imap"]
+    rank = {"missing": 0, "planned": 1, "partial": 2, "available": 3}
+    total = len(snapshots)
+    aggregated: Dict[str, Dict[str, str]] = {}
+    for key in ordered_keys:
+        statuses: List[str] = []
+        for snap in snapshots:
+            entry = snap.get(key) if isinstance(snap, dict) else {}
+            status = str((entry or {}).get("status") or "missing").strip().lower() or "missing"
+            statuses.append(status)
+        best_status = max(statuses, key=lambda value: rank.get(value, 0)) if statuses else "missing"
+        available_count = sum(1 for status in statuses if status in {"available", "partial"})
+        if key == "email_imap":
+            detail = "IMAP-Integration vorbereitet, in dieser Version noch nicht aktiv."
+        else:
+            detail = f"{available_count}/{total} Kunden mit verwertbaren Daten."
+        aggregated[key] = {"status": best_status, "detail": detail}
+    return aggregated
+
+
 def _customer_development_ai_prompt(
     context: Dict[str, Any],
     mode: str,
@@ -6454,6 +6609,9 @@ def _customer_development_ai_prompt(
     risk = int(context.get("riskScore") or 0)
     trend = float(context.get("revenueTrendPct") or 0)
     has_contract = bool(context.get("hasMaintenanceContract"))
+    contract_flags = [str(item or "").strip().lower() for item in (context.get("contractFlags") or []) if str(item or "").strip()]
+    is_regie_customer = bool(context.get("isRegieCustomer")) or (("regie" in contract_flags) and not has_contract)
+    service_model_label = "Regie (nach Aufwand)" if is_regie_customer else ("Wartung/Monitoring" if has_contract else "Kein Vertrag")
     infra = context.get("infra") or {}
     work_summary = context.get("workSummary") or {}
     days_since_invoice = context.get("daysSinceLastInvoice")
@@ -6483,6 +6641,8 @@ def _customer_development_ai_prompt(
         work_topics.append("- Keine konkreten Rechnungspositionen vorhanden.")
     mode_key = str(mode or "summary").strip().lower()
     tone_key = str(tone or "sachlich").strip()
+    ai_sources = _customer_development_ai_sources(context)
+    source_lines = _customer_development_ai_source_lines(ai_sources)
 
     if mode_key == "mail":
         task_text = (
@@ -6533,17 +6693,21 @@ def _customer_development_ai_prompt(
 
     return (
         f"{task_text}\n"
+        "Nutze ALLE verfuegbaren Quellen aus der Quellenlage gemeinsam. "
+        "Wenn eine Quelle fehlt oder nur teilweise vorhanden ist, benenne diese Luecke explizit.\n"
         f"Ton: {tone_key}\n\n"
         f"Kunde: {customer_name}\n"
         f"Status: {state}\n"
         f"Risiko: {risk}/100\n"
         f"Umsatztrend: {trend:+.1f}%\n"
         f"Wartungs-/Monitoringvertrag vorhanden: {'ja' if has_contract else 'nein'}\n"
+        f"Betreuungsmodell: {service_model_label}\n"
         f"Tage seit letzter Rechnung: {days_since_invoice if isinstance(days_since_invoice, int) else 'n/a'}\n"
         f"Reaktivierung aus Rechnungsaktivitaet noetig: {'ja' if invoice_due else 'nein'}\n"
         f"Infrastruktur: Coverage {int(float(infra.get('coverageRatio') or 0) * 100)}%, "
         f"Unmanaged {int(infra.get('unmanagedCount') or 0)}, "
         f"Offline-Rate {int(float(infra.get('offlineRate') or 0) * 100)}%\n\n"
+        f"Quellenlage:\n{chr(10).join(source_lines)}\n\n"
         f"Aktuelle Themen:\n{chr(10).join(work_topics)}\n\n"
         f"Signale:\n{chr(10).join(signal_lines)}\n\n"
         f"Empfehlungen:\n{chr(10).join(recommendation_lines)}\n\n"
@@ -6554,6 +6718,9 @@ def _customer_development_ai_prompt(
 def _customer_development_ai_fallback(context: Dict[str, Any], mode: str) -> str:
     mode_key = str(mode or "summary").strip().lower()
     customer_name = str(context.get("customerName") or "Kunde")
+    has_contract = bool(context.get("hasMaintenanceContract"))
+    contract_flags = [str(item or "").strip().lower() for item in (context.get("contractFlags") or []) if str(item or "").strip()]
+    is_regie_customer = bool(context.get("isRegieCustomer")) or (("regie" in contract_flags) and not has_contract)
     infra = context.get("infra") or {}
     unmanaged = int(infra.get("unmanagedCount") or 0)
     coverage = int(float(infra.get("coverageRatio") or 0) * 100)
@@ -6576,6 +6743,12 @@ def _customer_development_ai_fallback(context: Dict[str, Any], mode: str) -> str
             "Thema 3: Kommunikationsklarheit im IT-Service – feste Touchpoints statt Ad-hoc-Reaktionen."
         )
     if mode_key == "angebot":
+        if is_regie_customer:
+            return (
+                f"Angebot 1: Regie-Service-Review fuer {customer_name} mit priorisierter Maßnahmenliste.\n"
+                f"Angebot 2: Infrastruktur-Basispaket – Asset-Abgleich, Coverage-Plan (aktuell {coverage}%), Übergabebericht.\n"
+                "Angebot 3: Sicherheits-Quickwins nach Aufwand – klarer Maßnahmenkatalog mit optionalen Folgeterminen."
+            )
         return (
             f"Angebot 1: {top[0]} – kompaktes Maßnahmenpaket mit klarer Priorisierung.\n"
             f"Angebot 2: Infrastruktur-Basispaket – Asset-Abgleich, Coverage-Plan (aktuell {coverage}%), Übergabebericht.\n"
@@ -7061,6 +7234,8 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
         if not contexts:
             raise HTTPException(404, "No customer contexts available")
         top = contexts[:10]
+        aggregated_sources = _aggregate_customer_development_ai_sources(top)
+        source_lines = _customer_development_ai_source_lines(aggregated_sources)
         avg_risk = round(
             sum(float(item.get("riskScore") or 0) for item in top) / max(1, len(top)),
             1,
@@ -7077,8 +7252,12 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
             "Erstelle 3 allgemein nutzbare Newsletter-Themen fuer IT-Kunden.\n"
             "Die Themen sollen auf den haeufigsten Kundensignalen basieren.\n"
             "Pro Thema: Ueberschrift + 2-3 Saetze Nutzen/Problembezug.\n"
+            "Nutze die verfuegbare Quellenlage und benenne fehlende Quellen transparent.\n"
             f"Ton: {str(data.tone or 'sachlich')}\n"
             f"Durchschnittliches Risiko (Top-Kunden): {avg_risk}\n"
+            "Quellenlage:\n"
+            + "\n".join(source_lines)
+            + "\n"
             "Haeufige Signale:\n"
             + "\n".join([f"- {name} ({count}x)" for name, count in signal_lines])
             + "\nAntwort als reiner Text, kein JSON, kein Markdown."
@@ -7091,6 +7270,7 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
             "mode": mode,
             "tone": str(data.tone or "sachlich"),
             "text": text_result,
+            "sources": aggregated_sources,
             "generated_at": int(time.time() * 1000),
         }
 
@@ -7105,6 +7285,7 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
     if not contexts:
         raise HTTPException(404, "Customer not found")
     context = contexts[0]
+    ai_sources = _customer_development_ai_sources(context)
     mode = str(data.mode or "summary").strip().lower()
     prompt = _customer_development_ai_prompt(context, mode=mode, tone=str(data.tone or "sachlich"))
     text_result = _ollama_generate_text(prompt).strip()
@@ -7115,6 +7296,7 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
         "mode": mode,
         "tone": str(data.tone or "sachlich"),
         "text": text_result,
+        "sources": ai_sources,
         "generated_at": int(time.time() * 1000),
     }
 
@@ -9741,6 +9923,9 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             file_name = f"{re.sub(r'[^a-zA-Z0-9_-]+', '_', title).strip('_') or 'vertrag'}.pdf"
         if not content_base64:
             raise HTTPException(400, "content_base64 is required")
+        status_value = str(data.status or "active").strip().lower()
+        if status_value not in {"active", "proposal"}:
+            status_value = "active"
         # Validate base64 payload.
         try:
             base64.b64decode(content_base64, validate=True)
@@ -9750,7 +9935,7 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             customer_id=customer.id,
             title=title,
             doc_type=str(data.doc_type or "vertrag").strip().lower() or "vertrag",
-            status="active",
+            status=status_value,
             file_name=file_name,
             mime_type=str(data.mime_type or "application/pdf").strip() or "application/pdf",
             content_base64=content_base64,
@@ -9806,6 +9991,30 @@ def reactivate_customer_contract_document(customer_id: int, contract_id: int):
         if not row:
             raise HTTPException(404, "Contract document not found")
         row.status = "active"
+        row.cancel_reason = ""
+        row.cancelled_at = 0
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_contract_document(row)
+
+
+@app.post("/api/customers/{customer_id}/contracts/{contract_id}/mark_proposal")
+def mark_customer_contract_document_proposal(customer_id: int, contract_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerContractDocument)
+            .filter(
+                CustomerContractDocument.id == contract_id,
+                CustomerContractDocument.customer_id == customer.id,
+            )
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Contract document not found")
+        row.status = "proposal"
         row.cancel_reason = ""
         row.cancelled_at = 0
         db.commit()
