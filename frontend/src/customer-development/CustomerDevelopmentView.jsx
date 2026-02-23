@@ -334,38 +334,6 @@ const InlineSpinner = () => (
   <span className="inline-block h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
 );
 
-const AI_SOURCE_LABELS = {
-  sevdesk: "sevdesk",
-  rmm: "RMM",
-  discovery: "Discovery",
-  telephony: "Telefonie",
-  tasks: "Aufgaben",
-  email_imap: "E-Mail/IMAP",
-};
-
-const aiSourceBadgeClass = (status) => {
-  const key = String(status || "").toLowerCase();
-  if (key === "available") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (key === "partial") return "border-amber-200 bg-amber-50 text-amber-700";
-  if (key === "planned") return "border-sky-200 bg-sky-50 text-sky-700";
-  return "border-sand-200 bg-sand-100 text-sand-600";
-};
-
-const normalizeAiSources = (rawSources) => {
-  if (!rawSources || typeof rawSources !== "object") return [];
-  return Object.entries(rawSources)
-    .map(([key, value]) => {
-      const payload = value && typeof value === "object" ? value : {};
-      return {
-        key,
-        label: AI_SOURCE_LABELS[key] || String(key),
-        status: String(payload.status || "missing"),
-        detail: String(payload.detail || "").trim(),
-      };
-    })
-    .filter((entry) => entry.label);
-};
-
 export default function CustomerDevelopmentView() {
   const aiModes = [
     { value: "aktivierung_mail", label: "Aktivierungs-Mail" },
@@ -916,12 +884,6 @@ export default function CustomerDevelopmentView() {
     });
   };
 
-  const openDetailAiPanel = (context) => {
-    if (!context) return;
-    openDetail(context);
-    setDetailTab("ki");
-  };
-
   const runCveScan = async (forceRefresh = true) => {
     if (!detailModal.customerId) return;
     setCveProgress(10);
@@ -1120,8 +1082,6 @@ export default function CustomerDevelopmentView() {
     detailData?.revenueLastYearEur,
     detailData?.revenueCurrentYearEur
   );
-  const aiSourceEntries = normalizeAiSources(detailAi.sources);
-
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       {detailModal.open ? (
@@ -1210,43 +1170,6 @@ export default function CustomerDevelopmentView() {
                         </button>
                           );
                         })()}
-                        {(() => {
-                          const running = isAiActionRunning(detailModal.customerId, "aktivierung_mail");
-                          return (
-                        <button
-                          type="button"
-                          onClick={() => runAiAssist("aktivierung_mail")}
-                          disabled={aiBusy}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
-                        >
-                          {running ? <InlineSpinner /> : <Sparkles size={11} />}
-                          {running ? "Lädt..." : "Aktivierungs-Mail jetzt"}
-                        </button>
-                          );
-                        })()}
-                      </div>
-                      <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Quellenabgleich</p>
-                        <p className="mt-1 text-[11px] text-sand-600">
-                          KI bleibt ein Side-Element und nutzt bei jeder Anfrage alle verfügbaren Quellen.
-                        </p>
-                        {aiSourceEntries.length ? (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {aiSourceEntries.map((entry) => (
-                              <span
-                                key={`ai-source-${entry.key}`}
-                                title={entry.detail || ""}
-                                className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${aiSourceBadgeClass(entry.status)}`}
-                              >
-                                {entry.label}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="mt-1 text-[11px] text-sand-500">
-                            Quellenstatus wird nach dem ersten KI-Lauf angezeigt.
-                          </p>
-                        )}
                       </div>
                       <div className="mt-3 space-y-2">
                         <div className="flex flex-wrap gap-1">
@@ -1552,9 +1475,15 @@ export default function CustomerDevelopmentView() {
                   <div className="rounded-2xl border border-sand-200 bg-white p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Telefonbriefing</p>
-                      <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
-                        Optional: KI im Tab "KI Unterstützung"
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDetailTab("ki")}
+                        className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-sand-50 p-1.5 text-sand-600 hover:bg-sand-100"
+                        title="KI Unterstützung"
+                        aria-label="KI Unterstützung"
+                      >
+                        <Sparkles size={12} />
+                      </button>
                     </div>
                     <ul className="mt-2 space-y-1">
                       {callFocusPoints(detailData || {}).map((line, idx) => (
@@ -2191,14 +2120,6 @@ export default function CustomerDevelopmentView() {
                       <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${urgencyClass}`}>
                         Aktivierungs-Score {entry.score}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => openDetailAiPanel(customer)}
-                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                      >
-                        <Sparkles size={11} />
-                        KI Unterstützung
-                      </button>
                       <button
                         type="button"
                         onClick={() => openDetail(customer)}

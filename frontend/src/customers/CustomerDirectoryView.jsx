@@ -2152,15 +2152,6 @@ export default function CustomerDirectoryView() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setContractCalcModalOpen(true);
-                  }}
-                  className="rounded-full border border-sand-200 bg-sand-900 text-white px-3 py-1 text-[11px] uppercase tracking-wide hover:opacity-90"
-                >
-                  Vertragskalkulation
-                </button>
-                <button
-                  type="button"
                   onClick={() => handleRemove(editCustomer.id)}
                   className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
                 >
@@ -2400,7 +2391,7 @@ export default function CustomerDirectoryView() {
                       onClick={openContractCreator}
                       className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
                     >
-                      Neuer Vertrag anlegen
+                      Neuer Vertrag anlegen (inkl. Kalkulation)
                     </button>
                   </div>
                   <div className="space-y-2 max-h-64 overflow-auto pr-1">

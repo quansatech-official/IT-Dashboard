@@ -5657,14 +5657,55 @@ def _agent_field_text(agent: Dict[str, Any], *keys: str) -> str:
 def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
     customer_number_key = _normalize_customer_number(customer.creditor_number)
     if customer_number_key:
-        number_candidates: Set[str] = set()
-        explicit_number_candidates: Set[str] = set()
         customer_number_int: Optional[int] = None
         if customer_number_key.isdigit():
             try:
                 customer_number_int = int(customer_number_key)
             except Exception:
                 customer_number_int = None
+
+        def _is_customer_number_label(raw_label: Any) -> bool:
+            label_text = str(raw_label or "").strip().lower()
+            if not label_text:
+                return False
+            compact = re.sub(r"[^a-z0-9]+", "", label_text)
+            spaced = re.sub(r"[^a-z0-9]+", " ", label_text).strip()
+            if any(
+                token in compact
+                for token in (
+                    "kundennummer",
+                    "kundennr",
+                    "kundenummer",
+                    "customernumber",
+                    "customernr",
+                    "clientnumber",
+                    "clientnr",
+                )
+            ):
+                return True
+            for phrase in (
+                "customer number",
+                "customer nr",
+                "client number",
+                "client nr",
+                "kunden nummer",
+                "kunden nr",
+                "kunde nummer",
+                "kunde nr",
+            ):
+                if phrase in spaced:
+                    return True
+            return False
+
+        def _normalize_candidate_number(raw_value: Any) -> str:
+            normalized = _normalize_customer_number(raw_value)
+            if not normalized:
+                return ""
+            if normalized in {"NA", "NONE", "NULL", "UNKNOWN", "UNBEKANNT", "KEINE"}:
+                return ""
+            return normalized
+
+        number_candidates: Set[str] = set()
 
         def _collect_numberish_fields(node: Any) -> None:
             if isinstance(node, dict):
@@ -5684,63 +5725,25 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                     node.get("content"),
                 ]
                 for raw_label in label_candidates:
-                    label_text = str(raw_label or "").strip().lower()
-                    if not label_text:
-                        continue
-                    label_is_customer_number = (
-                        ("customer" in label_text and ("number" in label_text or "nr" in label_text or "no" in label_text))
-                        or ("client" in label_text and ("number" in label_text or "nr" in label_text or "no" in label_text))
-                        or ("kunden" in label_text and ("nummer" in label_text or "nr" in label_text or "no" in label_text))
-                        or ("kunde" in label_text and ("nummer" in label_text or "nr" in label_text or "no" in label_text))
-                        or "kundennummer" in label_text
-                    )
-                    if not label_is_customer_number:
+                    if not _is_customer_number_label(raw_label):
                         continue
                     for raw_value in value_candidates:
-                        normalized = _normalize_customer_number(raw_value)
+                        normalized = _normalize_candidate_number(raw_value)
                         if normalized:
-                            explicit_number_candidates.add(normalized)
                             number_candidates.add(normalized)
                 for key, value in node.items():
                     key_text = str(key or "").strip().lower()
-                    looks_like_customer_number = (
-                        ("customer" in key_text and ("number" in key_text or "nr" in key_text or "no" in key_text))
-                        or ("client" in key_text and ("number" in key_text or "nr" in key_text or "no" in key_text))
-                        or ("kunden" in key_text and ("nummer" in key_text or "nr" in key_text or "no" in key_text))
-                        or ("kunde" in key_text and ("nummer" in key_text or "nr" in key_text or "no" in key_text))
-                        or "kundennummer" in key_text
-                    )
-                    if looks_like_customer_number and value is not None:
-                        normalized = _normalize_customer_number(value)
-                        if normalized:
-                            explicit_number_candidates.add(normalized)
-                            number_candidates.add(normalized)
-                    # TacticalRMM often uses ids in generic keys (client/site/customer),
-                    # not always explicit "*number" field names.
-                    if key_text in {
-                        "client",
-                        "client_id",
-                        "clientid",
-                        "site",
-                        "site_id",
-                        "siteid",
-                        "customer",
-                        "customer_id",
-                        "customerid",
-                    }:
+                    if _is_customer_number_label(key_text) and value is not None:
                         if isinstance(value, (str, int, float)):
-                            normalized = _normalize_customer_number(value)
+                            normalized = _normalize_candidate_number(value)
                             if normalized:
                                 number_candidates.add(normalized)
                         elif isinstance(value, dict):
                             for nested_key in (
-                                "id",
-                                "client_id",
-                                "clientid",
-                                "site_id",
-                                "siteid",
-                                "customer_id",
-                                "customerid",
+                                "value",
+                                "val",
+                                "data",
+                                "content",
                                 "number",
                                 "customer_number",
                                 "customernumber",
@@ -5749,8 +5752,7 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                                 "kunden_nr",
                                 "kundennr",
                             ):
-                                nested_value = value.get(nested_key)
-                                normalized = _normalize_customer_number(nested_value)
+                                normalized = _normalize_candidate_number(value.get(nested_key))
                                 if normalized:
                                     number_candidates.add(normalized)
                     _collect_numberish_fields(value)
@@ -5760,8 +5762,10 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                     _collect_numberish_fields(item)
 
         _collect_numberish_fields(agent)
+        # Mapping rule: customer assignment must come from explicit customer-number fields
+        # (e.g. custom field "Kundennummer"), not from generic site/client ids.
         if not number_candidates:
-            return _agent_matches_customer_name_only(agent, customer)
+            return False
         if customer_number_key in number_candidates:
             return True
         # Also allow numeric equivalence for mappings like "0012" vs "12".
@@ -5773,12 +5777,18 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                             return True
                     except Exception:
                         continue
-        # If we found an explicit customer-number-like field and it does not match,
-        # do not fall back to name matching to avoid cross-customer false positives.
-        if explicit_number_candidates:
-            return False
-        # Fallback: some Tactical payloads only expose site/client ids in agent lists.
-        return _agent_matches_customer_name_only(agent, customer)
+        # Accept values where the customer number is embedded in a richer string,
+        # e.g. "Kunde 1018" from custom fields.
+        customer_digits = re.sub(r"[^0-9]+", "", customer_number_key)
+        for candidate in number_candidates:
+            if customer_number_key and customer_number_key in candidate:
+                return True
+            if customer_digits:
+                candidate_digits = re.sub(r"[^0-9]+", "", candidate)
+                if candidate_digits and candidate_digits == customer_digits:
+                    return True
+
+        return False
 
     customer_name_term = _dev_normalize_text(customer.name)
     if not customer_name_term:
