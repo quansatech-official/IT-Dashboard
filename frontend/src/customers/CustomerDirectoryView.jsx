@@ -230,6 +230,19 @@ const customerPayload = (customer) => ({
 });
 
 const CONTRACT_FLAG_ORDER = ["wartung", "monitoring", "regie"];
+const CONTRACT_PRICING_MODE_ORDER = ["tarif", "tarif_plus_h", "entgeltlos"];
+
+const CONTRACT_PRICING_MODE_LABELS = {
+  tarif: "Tarif",
+  tarif_plus_h: "Tarif + H",
+  entgeltlos: "Entgeltlos (ohne Preis)"
+};
+
+const normalizePricingMode = (value) => {
+  const key = String(value || "").trim().toLowerCase();
+  if (CONTRACT_PRICING_MODE_ORDER.includes(key)) return key;
+  return "tarif_plus_h";
+};
 
 const applyContractFlagChange = (flags, contractId, checked) => {
   const current = new Set(normalizeContractFlags(flags));
@@ -271,6 +284,15 @@ const formatEurPrecise = (value) => {
 };
 
 const parseHoursInput = (value) => {
+  const normalized = String(value || "")
+    .trim()
+    .replace(",", ".");
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return parsed;
+};
+
+const parseMoneyInput = (value) => {
   const normalized = String(value || "")
     .trim()
     .replace(",", ".");
@@ -377,7 +399,8 @@ export default function CustomerDirectoryView() {
   const [generatedContract, setGeneratedContract] = useState(null);
   const [contractDraft, setContractDraft] = useState({
     title: "",
-    docType: "vertrag",
+    docType: "wartung",
+    pricingMode: "tarif_plus_h",
     validFrom: "",
     runtimeMonths: "12",
     monthlyHoursIncluded: "0",
@@ -567,7 +590,7 @@ export default function CustomerDirectoryView() {
   );
 
   const tariffCategoryForContractType = useMemo(() => {
-    const type = String(contractDraft.docType || "vertrag").trim().toLowerCase();
+    const type = String(contractDraft.docType || "wartung").trim().toLowerCase();
     if (type === "wartung") return "wartung";
     if (type === "monitoring") return "monitoring";
     return "";
@@ -589,32 +612,63 @@ export default function CustomerDirectoryView() {
     });
   }, [filteredActiveTariffs]);
 
+  const supportsHoursBudget = useMemo(
+    () => ["wartung", "monitoring"].includes(String(contractDraft.docType || "").trim().toLowerCase()),
+    [contractDraft.docType]
+  );
+
+  const monthlyHoursIncluded = useMemo(
+    () => (supportsHoursBudget ? parseHoursInput(contractDraft.monthlyHoursIncluded) : 0),
+    [contractDraft.monthlyHoursIncluded, supportsHoursBudget]
+  );
+
   const contractPreview = useMemo(() => {
-    if (!selectedTariff) {
-      return { monthly: 0, yearly: 0, counts: { servers: 0, clients: 0, networkDevices: 0, iotDevices: 0 } };
-    }
     const counts = {
       servers: parseCount(calcInput.servers),
       clients: parseCount(calcInput.clients),
       networkDevices: parseCount(calcInput.networkDevices),
       iotDevices: parseCount(calcInput.iotDevices)
     };
-    const monthly =
+    if (!selectedTariff) {
+      return { tariffMonthly: 0, counts };
+    }
+    const tariffMonthly =
       Number(selectedTariff.base_price_monthly || 0) +
       counts.servers * Number(selectedTariff.price_server_monthly || 0) +
       counts.clients * Number(selectedTariff.price_client_monthly || 0) +
       counts.networkDevices * Number(selectedTariff.price_network_monthly || 0) +
       counts.iotDevices * Number(selectedTariff.price_iot_monthly || 0);
-    return { monthly, yearly: monthly * 12, counts };
+    return { tariffMonthly, counts };
   }, [selectedTariff, calcInput]);
 
-  const contractTotals = useMemo(
-    () => ({
-      monthly: Number(contractPreview.monthly || 0),
-      yearly: Number(contractPreview.yearly || 0)
-    }),
-    [contractPreview.monthly, contractPreview.yearly]
+  const hourlyRateForContracts = useMemo(
+    () => parseMoneyInput(metricsSettings.hourly_rate_eur),
+    [metricsSettings.hourly_rate_eur]
   );
+
+  const contractTotals = useMemo(() => {
+    const pricingMode = normalizePricingMode(contractDraft.pricingMode);
+    const tariffMonthly = Number(contractPreview.tariffMonthly || 0);
+    const hourlyMonthly = monthlyHoursIncluded * hourlyRateForContracts;
+    let monthly = tariffMonthly;
+    if (pricingMode === "tarif_plus_h") monthly = tariffMonthly + hourlyMonthly;
+    if (pricingMode === "entgeltlos") monthly = 0;
+    const monthlyRounded = Number(monthly.toFixed(2));
+    const yearlyRounded = Number((monthlyRounded * 12).toFixed(2));
+    return {
+      monthly: monthlyRounded,
+      yearly: yearlyRounded,
+      tariffMonthly: Number(tariffMonthly.toFixed(2)),
+      hourlyMonthly: Number(hourlyMonthly.toFixed(2)),
+      pricingMode,
+      hourlyRate: hourlyRateForContracts
+    };
+  }, [
+    contractDraft.pricingMode,
+    contractPreview.tariffMonthly,
+    monthlyHoursIncluded,
+    hourlyRateForContracts
+  ]);
 
   useEffect(() => {
     setGeneratedContract(null);
@@ -622,12 +676,13 @@ export default function CustomerDirectoryView() {
     activeId,
     contractDraft.title,
     contractDraft.docType,
+    contractDraft.pricingMode,
     contractDraft.validFrom,
     contractDraft.runtimeMonths,
     contractDraft.monthlyHoursIncluded,
     selectedTariff?.id,
-    contractPreview.monthly,
-    contractPreview.yearly,
+    contractTotals.monthly,
+    contractTotals.yearly,
     contractPreview.counts.servers,
     contractPreview.counts.clients,
     contractPreview.counts.networkDevices,
@@ -725,21 +780,15 @@ export default function CustomerDirectoryView() {
 
   const generateContractPreview = async (openModal = true) => {
     if (!activeId) return null;
-    const supportsHoursBudget = ["wartung", "monitoring"].includes(
-      String(contractDraft.docType || "").trim().toLowerCase()
-    );
-    const monthlyHoursIncluded = supportsHoursBudget
-      ? parseHoursInput(contractDraft.monthlyHoursIncluded)
-      : 0;
     setContractPreviewStatus("saving");
     try {
       const preview = await api.previewCustomerContract(activeId, {
         title: String(contractDraft.title || "").trim(),
-        doc_type: String(contractDraft.docType || "vertrag"),
+        doc_type: String(contractDraft.docType || "wartung"),
         note: "",
         valid_from: String(contractDraft.validFrom || ""),
         runtime_months: Number(contractDraft.runtimeMonths || 12),
-        tariff_id: selectedTariff?.id || null,
+        tariff_id: contractTotals.pricingMode === "entgeltlos" ? null : selectedTariff?.id || null,
         servers: contractPreview.counts.servers,
         clients: contractPreview.counts.clients,
         network_devices: contractPreview.counts.networkDevices,
@@ -796,13 +845,13 @@ export default function CustomerDirectoryView() {
       const contentBase64 = String(dataUri).slice(idx + marker.length);
       const saved = await api.createCustomerContract(activeId, {
         title: String(source.title || contractDraft.title || "Vertrag").trim(),
-        doc_type: String(source.doc_type || contractDraft.docType || "vertrag"),
+        doc_type: String(source.doc_type || contractDraft.docType || "wartung"),
         file_name: String(source.file_name || "vertrag.pdf"),
         mime_type: "application/pdf",
         content_base64: contentBase64,
         html_content: String(source.html || ""),
-        template_key: String(source.template_key || contractDraft.docType || "vertrag"),
-        monthly_hours_included: Number(source?.meta?.monthly_hours_included ?? parseHoursInput(contractDraft.monthlyHoursIncluded)),
+        template_key: String(source.template_key || contractDraft.docType || "wartung"),
+        monthly_hours_included: Number(source?.meta?.monthly_hours_included ?? monthlyHoursIncluded),
         note: "",
         status: contractDraft.markAsProposal ? "proposal" : "active"
       });
@@ -889,6 +938,7 @@ export default function CustomerDirectoryView() {
     setContractDraft({
       title: customerLabel ? `Wartungsvertrag ${customerLabel}` : "",
       docType: "wartung",
+      pricingMode: "tarif_plus_h",
       validFrom: "",
       runtimeMonths: "12",
       monthlyHoursIncluded: "0",
@@ -1933,21 +1983,37 @@ export default function CustomerDirectoryView() {
               onChange={(event) => setContractDraft((prev) => ({ ...prev, docType: event.target.value }))}
               className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             >
-              <option value="vertrag">IT-Servicevertrag</option>
               <option value="wartung">Wartungsvertrag</option>
               <option value="monitoring">Monitoringvertrag</option>
               <option value="avv_dsgvo">AVV / DSGVO</option>
             </select>
           </label>
           <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Tarif</span>
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Abrechnungsart</span>
+            <select
+              value={normalizePricingMode(contractDraft.pricingMode)}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, pricingMode: normalizePricingMode(event.target.value) }))}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            >
+              {CONTRACT_PRICING_MODE_ORDER.map((mode) => (
+                <option key={mode} value={mode}>
+                  {CONTRACT_PRICING_MODE_LABELS[mode]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">3) Tarif</span>
             <select
               value={calcInput.tariffId || ""}
               onChange={(event) => setCalcInput((prev) => ({ ...prev, tariffId: Number(event.target.value) || null }))}
+              disabled={contractTotals.pricingMode === "entgeltlos"}
               className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             >
               <option value="">
-                {tariffCategoryForContractType
+                {contractTotals.pricingMode === "entgeltlos"
+                  ? "Entgeltlos: kein Tarif nötig"
+                  : tariffCategoryForContractType
                   ? `Tarif für ${tariffCategoryForContractType} wählen`
                   : "Tarif wählen (optional)"}
               </option>
@@ -1962,7 +2028,7 @@ export default function CustomerDirectoryView() {
           {contractTariffsStatus === "error" ? <p className="text-xs text-rose-600">Tarife konnten nicht geladen werden.</p> : null}
           <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">3) Mengenblock</p>
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">4) Mengenblock</p>
               <button
                 type="button"
                 onClick={importCalcValuesFromRmm}
@@ -2010,11 +2076,20 @@ export default function CustomerDirectoryView() {
         <div className="mt-2.5 grid gap-2 md:grid-cols-2">
           <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
             <p className="text-[10px] uppercase tracking-wide text-sand-500">Monatspreis</p>
-            <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractPreview.monthly)}</p>
+            <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractTotals.monthly)}</p>
+            {contractTotals.pricingMode === "tarif_plus_h" ? (
+              <p className="mt-1 text-[11px] text-sand-500">
+                Tarif {formatEurPrecise(contractTotals.tariffMonthly)} + Stundenanteil {formatEurPrecise(contractTotals.hourlyMonthly)}
+              </p>
+            ) : contractTotals.pricingMode === "entgeltlos" ? (
+              <p className="mt-1 text-[11px] text-sand-500">Entgeltlos ohne Preisansatz.</p>
+            ) : (
+              <p className="mt-1 text-[11px] text-sand-500">Preis entspricht dem Tarif.</p>
+            )}
           </div>
           <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
             <p className="text-[10px] uppercase tracking-wide text-sand-500">Jahrespreis</p>
-            <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractPreview.yearly)}</p>
+            <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractTotals.yearly)}</p>
           </div>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -2028,7 +2103,12 @@ export default function CustomerDirectoryView() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Vertragsdetail</p>
           <span className="text-[11px] text-sand-500">
-            Grundlage: {selectedTariff ? `${selectedTariff.name}` : "Ohne Tarif (z.B. AVV)"}
+            Grundlage:{" "}
+            {contractTotals.pricingMode === "entgeltlos"
+              ? CONTRACT_PRICING_MODE_LABELS.entgeltlos
+              : selectedTariff
+              ? `${selectedTariff.name}`
+              : "Ohne Tarif (z.B. AVV)"}
           </span>
         </div>
         <div className="mt-2.5 grid gap-2 md:grid-cols-2">
@@ -2044,11 +2124,10 @@ export default function CustomerDirectoryView() {
           <div className="block">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">Vertragstyp</span>
             <p className="mt-1 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm text-sand-800">
-              {String(contractDraft.docType || "vertrag")
+              {String(contractDraft.docType || "wartung")
                 .replace("avv_dsgvo", "AVV / DSGVO")
                 .replace("wartung", "Wartung")
-                .replace("monitoring", "Monitoring")
-                .replace("vertrag", "IT-Servicevertrag")}
+                .replace("monitoring", "Monitoring")}
             </p>
           </div>
           <label className="block">
@@ -2070,7 +2149,7 @@ export default function CustomerDirectoryView() {
               className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             />
           </label>
-          {["wartung", "monitoring"].includes(String(contractDraft.docType || "").trim().toLowerCase()) ? (
+          {supportsHoursBudget ? (
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Inklusivstunden pro Monat</span>
               <input
@@ -2086,9 +2165,7 @@ export default function CustomerDirectoryView() {
         </div>
         <div
           className={`mt-2.5 grid gap-2 ${
-            ["wartung", "monitoring"].includes(String(contractDraft.docType || "").trim().toLowerCase())
-              ? "md:grid-cols-3"
-              : "md:grid-cols-2"
+            supportsHoursBudget ? "md:grid-cols-3" : "md:grid-cols-2"
           }`}
         >
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5">
@@ -2099,14 +2176,20 @@ export default function CustomerDirectoryView() {
             <p className="text-[10px] uppercase tracking-wide text-emerald-700">Jahrespreis übernommen</p>
             <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.yearly)}</p>
           </div>
-          {["wartung", "monitoring"].includes(String(contractDraft.docType || "").trim().toLowerCase()) ? (
+          {supportsHoursBudget ? (
             <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-1.5">
               <p className="text-[10px] uppercase tracking-wide text-sky-700">Stundenbudget / Monat</p>
-              <p className="text-base font-semibold text-sky-900">{formatHours(parseHoursInput(contractDraft.monthlyHoursIncluded))}</p>
+              <p className="text-base font-semibold text-sky-900">{formatHours(monthlyHoursIncluded)}</p>
             </div>
           ) : null}
         </div>
-        <p className="mt-2 text-[11px] text-sand-500">Preis wird direkt aus der Kalkulation übernommen.</p>
+        <p className="mt-2 text-[11px] text-sand-500">
+          {contractTotals.pricingMode === "tarif_plus_h"
+            ? `Gesamtpreis = Tarif + Stundenbudget (${formatHours(monthlyHoursIncluded)}) x Stundensatz (${formatEurPrecise(contractTotals.hourlyRate)}).`
+            : contractTotals.pricingMode === "entgeltlos"
+            ? "Entgeltloser Vertrag: Gesamtpreis wird auf 0 gesetzt."
+            : "Gesamtpreis entspricht dem ausgewählten Tarif."}
+        </p>
         <label className="mt-2 inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
           <input
             type="checkbox"

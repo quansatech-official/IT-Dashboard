@@ -30,6 +30,23 @@ import KnowledgeBaseView from "./knowledge/KnowledgeBaseView";
 import IncomingCallQuickTaskPopup from "./telephony/IncomingCallQuickTaskPopup";
 import CustomerDevelopmentView from "./customer-development/CustomerDevelopmentView";
 
+const detectDeviceClass = () => {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return "desktop";
+  const ua = String(navigator.userAgent || "").toLowerCase();
+  const width = Number(window.innerWidth || window.screen?.width || 0);
+  const maxTouchPoints = Number(navigator.maxTouchPoints || 0);
+  const isIpadOs = ua.includes("macintosh") && maxTouchPoints > 1;
+  const isTabletUa = /(ipad|tablet|playbook|silk)|(android(?!.*mobile))/i.test(ua);
+  const isMobileUa = /(iphone|ipod|android.*mobile|windows phone|blackberry|bb10|mobile)/i.test(ua);
+  if (isTabletUa || isIpadOs || (maxTouchPoints > 1 && width >= 768 && width <= 1366)) {
+    return "tablet";
+  }
+  if (isMobileUa || (width > 0 && width < 768)) {
+    return "mobile";
+  }
+  return "desktop";
+};
+
 export default function App() {
   const [activeView, setActiveView] = useState("dayplan");
   const sidebarWidth = 207;
@@ -45,6 +62,19 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("qt_theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    const params = new URLSearchParams(window.location.search || "");
+    if (params.get("client") === "desktop") return;
+    const deviceClass = detectDeviceClass();
+    document.documentElement.dataset.deviceClass = deviceClass;
+    if (deviceClass === "mobile" || deviceClass === "tablet") {
+      if (!window.location.pathname.startsWith("/mobil")) {
+        window.location.replace("/mobil/");
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (typeof document === "undefined") return;

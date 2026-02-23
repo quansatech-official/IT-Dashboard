@@ -571,9 +571,9 @@ export default function DayPlanView() {
         : value === (currentValue ?? "");
     if (isSameValue) return;
     const patch = {};
-    if (field === "kulant") {
+    if (field === "kulant" || field === "wartungsvertrag") {
       const boolValue = Boolean(value);
-      patch.kulant = boolValue;
+      patch[field] = boolValue;
       if (boolValue && task.aberechnet) {
         patch.aberechnet = false;
       }
@@ -611,6 +611,7 @@ export default function DayPlanView() {
         deadline: task.deadline || "",
         randzeit: Boolean(task.randzeit),
         kulant: Boolean(task.kulant),
+        wartungsvertrag: Boolean(task.wartungsvertrag),
         details: task.details || ""
       }
     }));
@@ -881,7 +882,7 @@ export default function DayPlanView() {
     () =>
       grouped.done
         .filter((task) => !task.aberechnet)
-        .filter((task) => showKulantDone || !task.kulant)
+        .filter((task) => showKulantDone || (!task.kulant && !task.wartungsvertrag))
         .sort((a, b) => (b.created_at || 0) - (a.created_at || 0)),
     [grouped.done, showKulantDone]
   );
@@ -1416,7 +1417,8 @@ export default function DayPlanView() {
     const isDone = task.status === "done";
     const customerNumber = getCustomerNumberForTask(task);
     const isKulant = Boolean(task.kulant);
-    const canInvoice = Boolean(customerNumber) && !isKulant;
+    const isWartungsvertrag = Boolean(task.wartungsvertrag);
+    const canInvoice = Boolean(customerNumber) && !isKulant && !isWartungsvertrag;
     const isBilled = Boolean(task.aberechnet);
     const knownCustomer = isKnownCustomer(task.customer);
     const assignedEmployee = employees.find((employee) => employee.id === task.employee_id);
@@ -1505,6 +1507,11 @@ export default function DayPlanView() {
                 {isKulant ? (
                   <p className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-amber-600">
                     Kulant
+                  </p>
+                ) : null}
+                {isWartungsvertrag ? (
+                  <p className="mt-0.5 text-[10px] uppercase tracking-[0.2em] text-sky-700">
+                    Wartungsvertrag
                   </p>
                 ) : null}
                 {isDone && task.completed_at ? (
@@ -1621,6 +1628,8 @@ export default function DayPlanView() {
                       ? "Kunde zuweisen"
                       : isKulant
                       ? "Kulante Aufgaben werden nicht fakturiert"
+                      : isWartungsvertrag
+                      ? "Wartungsvertrag-Aufgaben werden archiviert und nicht fakturiert"
                       : !customerNumber
                       ? "Kundennummer im Kundenstamm fehlt"
                       : sevdeskTokenAvailable
@@ -1866,14 +1875,27 @@ export default function DayPlanView() {
                     <input
                       type="checkbox"
                       checked={Boolean(getDetailValue(task, "kulant"))}
-                  onChange={(event) => {
-                    const nextValue = event.target.checked;
-                    setDetailValue(task.id, "kulant", nextValue);
-                    commitDetail(task, "kulant", nextValue);
-                  }}
+                      onChange={(event) => {
+                        const nextValue = event.target.checked;
+                        setDetailValue(task.id, "kulant", nextValue);
+                        commitDetail(task, "kulant", nextValue);
+                      }}
                       className="h-4 w-4 rounded border border-amber-200 text-amber-600 focus:ring-2 focus:ring-amber-200"
                     />
                     Kulant
+                  </label>
+                  <label className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-sand-500">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(getDetailValue(task, "wartungsvertrag"))}
+                      onChange={(event) => {
+                        const nextValue = event.target.checked;
+                        setDetailValue(task.id, "wartungsvertrag", nextValue);
+                        commitDetail(task, "wartungsvertrag", nextValue);
+                      }}
+                      className="h-4 w-4 rounded border border-amber-200 text-amber-600 focus:ring-2 focus:ring-amber-200"
+                    />
+                    Wartungsvertrag
                   </label>
                 </div>
                 <div>
@@ -2289,7 +2311,7 @@ export default function DayPlanView() {
                     onChange={(event) => setShowKulantDone(event.target.checked)}
                     className="h-3 w-3 rounded border border-sand-300 text-amber-600 focus:ring-2 focus:ring-amber-200"
                   />
-                  Kulante anzeigen
+                  Kulant/Wartungsvertrag anzeigen
                 </label>
               </div>
             </div>

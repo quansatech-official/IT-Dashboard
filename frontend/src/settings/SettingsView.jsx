@@ -149,11 +149,9 @@ const loadCachedSmtp = () => {
 };
 
 const defaultContractTemplates = {
-  vertrag: { title: "IT-Servicevertrag", body_template: "" },
   wartung: { title: "Wartungsvertrag", body_template: "" },
   monitoring: { title: "Monitoringvertrag", body_template: "" },
-  avv_dsgvo: { title: "Auftragsverarbeitungsvertrag (DSGVO)", body_template: "" },
-  sonstiges: { title: "Zusatzvereinbarung", body_template: "" }
+  avv_dsgvo: { title: "Auftragsverarbeitungsvertrag (DSGVO)", body_template: "" }
 };
 
 const normalizeContractTemplates = (input) => {
@@ -339,7 +337,7 @@ export default function SettingsView() {
     contract_templates: normalizeContractTemplates(null)
   });
   const [contractTemplateDraft, setContractTemplateDraft] = useState({ key: "", title: "" });
-  const [selectedContractTemplateKey, setSelectedContractTemplateKey] = useState("vertrag");
+  const [selectedContractTemplateKey, setSelectedContractTemplateKey] = useState("wartung");
   const [contractTariffs, setContractTariffs] = useState([]);
   const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
   const [tariffDraft, setTariffDraft] = useState({
@@ -1863,31 +1861,6 @@ export default function SettingsView() {
                 <p className="text-[11px] text-sand-500">
                   Platzhalter z. B.: {"{customer_name}"}, {"{monthly_total}"}, {"{yearly_total}"}, {"{valid_from}"}, {"{runtime_months}"}
                 </p>
-                <div className="mt-3 grid grid-cols-1 gap-2 rounded-xl border border-sand-200 bg-white p-3 md:grid-cols-[1fr_1fr_auto]">
-                  <input
-                    value={contractTemplateDraft.key}
-                    onChange={(event) =>
-                      setContractTemplateDraft((prev) => ({ ...prev, key: event.target.value }))
-                    }
-                    placeholder="Template-Key (z. B. angebot_wartung)"
-                    className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                  />
-                  <input
-                    value={contractTemplateDraft.title}
-                    onChange={(event) =>
-                      setContractTemplateDraft((prev) => ({ ...prev, title: event.target.value }))
-                    }
-                    placeholder="Titel"
-                    className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                  />
-                  <button
-                    type="button"
-                    onClick={addContractTemplate}
-                    className="rounded-full border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                  >
-                    Erstellen
-                  </button>
-                </div>
                 <div className="mt-3 grid grid-cols-1 gap-4">
                   <div className="rounded-xl border border-sand-200 bg-white p-3">
                     <p className="text-[11px] uppercase tracking-wide text-sand-500">Globaler Header (für alle Verträge)</p>
@@ -1934,14 +1907,7 @@ export default function SettingsView() {
                         placeholder="Titel"
                         className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
                       />
-                      <button
-                        type="button"
-                        onClick={() => removeContractTemplate(activeContractTemplateKey)}
-                        disabled={!activeContractTemplateKey}
-                        className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        Löschen
-                      </button>
+                      <div />
                     </div>
                     <div className="mt-3">
                       <p className="text-[11px] uppercase tracking-wide text-sand-500">HTML Designer (Body)</p>

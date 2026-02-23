@@ -38,6 +38,33 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or (
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL") or "http://ollama:11434"
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "llama3.2:3b"
 OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS") or "180")
+OLLAMA_CONNECT_TIMEOUT_SECONDS = max(1, int(os.environ.get("OLLAMA_CONNECT_TIMEOUT_SECONDS") or "6"))
+OLLAMA_REQUEST_KEEP_ALIVE = (
+    str(
+        os.environ.get("OLLAMA_REQUEST_KEEP_ALIVE")
+        or os.environ.get("OLLAMA_KEEP_ALIVE")
+        or "30m"
+    )
+    .strip()
+)
+OLLAMA_STREAM_ENABLED = str(os.environ.get("OLLAMA_STREAM_ENABLED") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+OLLAMA_RESPONSE_CACHE_TTL_SECONDS = max(
+    0,
+    int(os.environ.get("OLLAMA_RESPONSE_CACHE_TTL_SECONDS") or "180"),
+)
+OLLAMA_RESPONSE_CACHE_MAX_ENTRIES = max(
+    32,
+    int(os.environ.get("OLLAMA_RESPONSE_CACHE_MAX_ENTRIES") or "400"),
+)
+OLLAMA_MISSING_MODEL_TTL_SECONDS = max(
+    0,
+    int(os.environ.get("OLLAMA_MISSING_MODEL_TTL_SECONDS") or "600"),
+)
 CUSTOMER_META_HUB_URL = str(os.environ.get("CUSTOMER_META_HUB_URL") or "").strip().rstrip("/")
 CUSTOMER_META_HUB_ENABLED = str(os.environ.get("CUSTOMER_META_HUB_ENABLED") or "").strip().lower() not in {
     "",
@@ -79,6 +106,19 @@ if not logging.getLogger().handlers:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 logger = logging.getLogger("it_dashboard")
+_ollama_http = requests.Session()
+_ollama_http.mount(
+    "http://",
+    requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=0),
+)
+_ollama_http.mount(
+    "https://",
+    requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=0),
+)
+_ollama_response_cache: Dict[str, Dict[str, Any]] = {}
+_ollama_response_cache_lock = threading.Lock()
+_ollama_missing_model_until_ms: Dict[str, int] = {}
+_ollama_missing_model_lock = threading.Lock()
 MODEL_PREF_CUSTOMER_RANKING = os.environ.get("OLLAMA_MODEL_PREF_CUSTOMER_RANKING") or OLLAMA_MODEL
 MODEL_PREF_TASK_DRAFT = os.environ.get("OLLAMA_MODEL_PREF_TASK_DRAFT") or OLLAMA_MODEL
 MODEL_PREF_ACTION = os.environ.get("OLLAMA_MODEL_PREF_ACTION") or OLLAMA_MODEL
@@ -166,6 +206,7 @@ class DayTask(Base):
     erledigt = Column(Boolean, default=False)
     aberechnet = Column(Boolean, default=False)
     kulant = Column(Boolean, default=False)
+    wartungsvertrag = Column(Boolean, default=False)
     randzeit = Column(Boolean, default=False)
     details = Column(String, default="")
     arrival_time = Column(String, default="")
@@ -584,7 +625,7 @@ class CustomerContractDocument(Base):
     id = Column(Integer, primary_key=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     title = Column(String, default="")
-    doc_type = Column(String, default="vertrag")
+    doc_type = Column(String, default="wartung")
     status = Column(String, default="active")
     file_name = Column(String, default="")
     mime_type = Column(String, default="application/pdf")
@@ -1008,6 +1049,8 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN aberechnet BOOLEAN DEFAULT FALSE")
     if "kulant" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN kulant BOOLEAN DEFAULT FALSE")
+    if "wartungsvertrag" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN wartungsvertrag BOOLEAN DEFAULT FALSE")
     if "randzeit" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN randzeit BOOLEAN DEFAULT FALSE")
     if "details" not in columns:
@@ -1155,6 +1198,7 @@ class DayTaskCreate(BaseModel):
     erledigt: Optional[bool] = False
     aberechnet: Optional[bool] = False
     kulant: Optional[bool] = False
+    wartungsvertrag: Optional[bool] = False
     randzeit: Optional[bool] = False
     details: Optional[str] = ""
     arrival_time: Optional[str] = ""
@@ -1180,6 +1224,7 @@ class DayTaskUpdate(BaseModel):
     erledigt: Optional[bool] = None
     aberechnet: Optional[bool] = None
     kulant: Optional[bool] = None
+    wartungsvertrag: Optional[bool] = None
     randzeit: Optional[bool] = None
     details: Optional[str] = None
     arrival_time: Optional[str] = None
@@ -1488,7 +1533,7 @@ class CustomerContractCalculationCreate(BaseModel):
 
 class CustomerContractDocumentCreate(BaseModel):
     title: str
-    doc_type: Optional[str] = "vertrag"
+    doc_type: Optional[str] = "wartung"
     file_name: Optional[str] = None
     mime_type: Optional[str] = "application/pdf"
     content_base64: str
@@ -1505,7 +1550,7 @@ class CustomerContractStatusUpdate(BaseModel):
 
 class CustomerContractPreviewRequest(BaseModel):
     title: Optional[str] = ""
-    doc_type: Optional[str] = "vertrag"
+    doc_type: Optional[str] = "wartung"
     note: Optional[str] = ""
     tariff_id: Optional[int] = None
     calculation_id: Optional[int] = None
@@ -1711,6 +1756,7 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "erledigt": t.erledigt,
         "aberechnet": t.aberechnet,
         "kulant": t.kulant,
+        "wartungsvertrag": t.wartungsvertrag,
         "randzeit": t.randzeit,
         "details": t.details,
         "arrival_time": t.arrival_time,
@@ -1843,6 +1889,91 @@ def _resolve_ollama_models(*specific_values: Any) -> List[str]:
     return ordered
 
 
+def _ollama_cache_key(
+    *,
+    prompt: str,
+    model_candidates: List[str],
+    response_format: str,
+    temperature: Optional[float],
+    max_tokens: Optional[int],
+) -> str:
+    payload = {
+        "prompt": prompt,
+        "model_candidates": model_candidates,
+        "response_format": response_format,
+        "temperature": temperature,
+        "max_tokens": int(max_tokens or 0),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _get_cached_ollama_response(cache_key: str) -> Optional[Tuple[Dict[str, Any], str]]:
+    if not cache_key or OLLAMA_RESPONSE_CACHE_TTL_SECONDS <= 0:
+        return None
+    now_ms = int(time.time() * 1000)
+    with _ollama_response_cache_lock:
+        entry = _ollama_response_cache.get(cache_key)
+        if not entry:
+            return None
+        cached_at = int(entry.get("cachedAt") or 0)
+        ttl_ms = OLLAMA_RESPONSE_CACHE_TTL_SECONDS * 1000
+        if cached_at <= 0 or now_ms - cached_at > ttl_ms:
+            _ollama_response_cache.pop(cache_key, None)
+            return None
+        payload = entry.get("payload")
+        model = str(entry.get("model") or "")
+    if not isinstance(payload, dict):
+        return None
+    return dict(payload), model
+
+
+def _store_cached_ollama_response(cache_key: str, payload: Dict[str, Any], model: str) -> None:
+    if not cache_key or OLLAMA_RESPONSE_CACHE_TTL_SECONDS <= 0:
+        return
+    now_ms = int(time.time() * 1000)
+    with _ollama_response_cache_lock:
+        if len(_ollama_response_cache) >= OLLAMA_RESPONSE_CACHE_MAX_ENTRIES:
+            oldest_key = min(
+                _ollama_response_cache.items(),
+                key=lambda item: int((item[1] or {}).get("cachedAt") or 0),
+            )[0]
+            _ollama_response_cache.pop(oldest_key, None)
+        _ollama_response_cache[cache_key] = {
+            "cachedAt": now_ms,
+            "model": model,
+            "payload": dict(payload),
+        }
+
+
+def _ollama_model_temporarily_missing(model: str) -> bool:
+    if OLLAMA_MISSING_MODEL_TTL_SECONDS <= 0:
+        return False
+    model_key = str(model or "").strip().lower()
+    if not model_key:
+        return False
+    now_ms = int(time.time() * 1000)
+    with _ollama_missing_model_lock:
+        until_ms = int(_ollama_missing_model_until_ms.get(model_key) or 0)
+        if until_ms <= 0:
+            return False
+        if now_ms >= until_ms:
+            _ollama_missing_model_until_ms.pop(model_key, None)
+            return False
+        return True
+
+
+def _mark_ollama_model_missing(model: str) -> None:
+    if OLLAMA_MISSING_MODEL_TTL_SECONDS <= 0:
+        return
+    model_key = str(model or "").strip().lower()
+    if not model_key:
+        return
+    ttl_ms = OLLAMA_MISSING_MODEL_TTL_SECONDS * 1000
+    with _ollama_missing_model_lock:
+        _ollama_missing_model_until_ms[model_key] = int(time.time() * 1000) + ttl_ms
+
+
 def _ollama_generate(
     prompt: str,
     *,
@@ -1850,43 +1981,92 @@ def _ollama_generate(
     timeout: Optional[int] = None,
     response_format: str = "",
     temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    use_cache: bool = True,
 ) -> Tuple[Dict[str, Any], str]:
     request_timeout = max(1, int(timeout or OLLAMA_TIMEOUT_SECONDS))
-    for model in model_candidates:
-        payload: Dict[str, Any] = {"model": model, "prompt": prompt, "stream": True}
+    connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
+    normalized_models = [str(item or "").strip() for item in model_candidates if str(item or "").strip()]
+    if not normalized_models:
+        normalized_models = _resolve_ollama_models(OLLAMA_MODEL)
+    cache_key = (
+        _ollama_cache_key(
+            prompt=prompt,
+            model_candidates=normalized_models,
+            response_format=response_format,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        if use_cache
+        else ""
+    )
+    cached_response = _get_cached_ollama_response(cache_key) if cache_key else None
+    if cached_response is not None:
+        return cached_response
+
+    for model in normalized_models:
+        if _ollama_model_temporarily_missing(model):
+            continue
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": bool(OLLAMA_STREAM_ENABLED),
+        }
         if response_format:
             payload["format"] = response_format
+        options: Dict[str, Any] = {}
         if temperature is not None:
-            payload["options"] = {"temperature": temperature}
+            options["temperature"] = float(temperature)
+        if max_tokens is not None and int(max_tokens) > 0:
+            options["num_predict"] = int(max_tokens)
+        if options:
+            payload["options"] = options
+        if OLLAMA_REQUEST_KEEP_ALIVE:
+            payload["keep_alive"] = OLLAMA_REQUEST_KEEP_ALIVE
+        started_at = time.time()
         try:
-            with requests.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
-                json=payload,
-                timeout=request_timeout,
-                stream=True,
-            ) as response:
-                response.raise_for_status()
-                data: Dict[str, Any] = {}
-                chunks: List[str] = []
-                for raw_line in response.iter_lines(decode_unicode=True):
-                    if not raw_line:
-                        continue
-                    line = raw_line.strip()
-                    if not line:
-                        continue
+            if OLLAMA_STREAM_ENABLED:
+                with _ollama_http.post(
+                    f"{OLLAMA_BASE_URL}/api/generate",
+                    json=payload,
+                    timeout=(connect_timeout, request_timeout),
+                    stream=True,
+                ) as response:
+                    response.raise_for_status()
+                    data: Dict[str, Any] = {}
+                    chunks: List[str] = []
+                    for raw_line in response.iter_lines(decode_unicode=True):
+                        if not raw_line:
+                            continue
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except ValueError as exc:
+                            logger.warning("Ollama invalid chunk JSON with model %s: %s", model, exc)
+                            continue
+                        if not isinstance(chunk, dict):
+                            continue
+                        chunk_text = chunk.get("response")
+                        if isinstance(chunk_text, str) and chunk_text:
+                            chunks.append(chunk_text)
+                        data.update({k: v for k, v in chunk.items() if k != "response"})
+                    if chunks:
+                        data["response"] = "".join(chunks)
+            else:
+                with _ollama_http.post(
+                    f"{OLLAMA_BASE_URL}/api/generate",
+                    json=payload,
+                    timeout=(connect_timeout, request_timeout),
+                ) as response:
+                    response.raise_for_status()
                     try:
-                        chunk = json.loads(line)
+                        loaded = response.json()
                     except ValueError as exc:
-                        logger.warning("Ollama invalid chunk JSON with model %s: %s", model, exc)
-                        continue
-                    if not isinstance(chunk, dict):
-                        continue
-                    chunk_text = chunk.get("response")
-                    if isinstance(chunk_text, str) and chunk_text:
-                        chunks.append(chunk_text)
-                    data.update({k: v for k, v in chunk.items() if k != "response"})
-                if chunks:
-                    data["response"] = "".join(chunks)
+                        logger.warning("Ollama invalid JSON response with model %s: %s", model, exc)
+                        loaded = {}
+                    data = loaded if isinstance(loaded, dict) else {}
         except requests.HTTPError as exc:
             response = exc.response
             if response is not None and response.status_code == 404:
@@ -1896,6 +2076,7 @@ def _ollama_generate(
                     model,
                     detail[:240],
                 )
+                _mark_ollama_model_missing(model)
             else:
                 logger.warning("Ollama request failed with model %s: %s", model, exc)
             continue
@@ -1903,14 +2084,38 @@ def _ollama_generate(
             logger.warning("Ollama request failed with model %s: %s", model, exc)
             continue
         if isinstance(data, dict):
+            duration_ms = int((time.time() - started_at) * 1000)
+            logger.debug("Ollama response model=%s duration_ms=%s", model, duration_ms)
+            response_value = data.get("response")
+            has_response = (
+                (isinstance(response_value, str) and bool(response_value.strip()))
+                or isinstance(response_value, dict)
+            )
+            if cache_key and has_response:
+                _store_cached_ollama_response(cache_key, data, model)
             return data, model
         logger.warning("Ollama response malformed with model %s", model)
     return {}, ""
 
 
-def _ollama_generate_text(prompt: str) -> str:
-    model_candidates = _resolve_ollama_models(MODEL_PREF_INVOICE_SUMMARY)
-    data, _ = _ollama_generate(prompt, model_candidates=model_candidates)
+def _ollama_generate_text(
+    prompt: str,
+    *,
+    model_candidates: Optional[List[str]] = None,
+    timeout: Optional[int] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    use_cache: bool = True,
+) -> str:
+    candidates = model_candidates or _resolve_ollama_models(MODEL_PREF_INVOICE_SUMMARY)
+    data, _ = _ollama_generate(
+        prompt,
+        model_candidates=candidates,
+        timeout=timeout,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        use_cache=use_cache,
+    )
     return (data.get("response") or "").strip()
 
 
@@ -2770,7 +2975,7 @@ def _summarize_tasks_for_invoice(tasks: List[DayTask]) -> str:
         "Kein Markdown, keine Aufzaehlungszeichen, maximal 3 Saetze.\n\n"
         f"{chr(10).join(lines)}"
     )
-    summary = _ollama_generate_text(prompt)
+    summary = _ollama_generate_text(prompt, max_tokens=180)
     if summary:
         return summary
     return " ".join(line.lstrip("- ").strip() for line in lines)
@@ -3397,38 +3602,66 @@ def _default_ai_prompts() -> Dict[str, Any]:
             ),
             "device_description": "Schreibe eine kurze Produktbeschreibung fuer Material (3-6 Saetze).",
         },
-        "contract_header_html": "",
-        "contract_footer_html": "",
+        "contract_header_html": (
+            "<div style=\"margin-bottom:10px; padding:10px 12px; border:1px solid #dbe4ef; border-radius:12px; "
+            "background:#f8fafc; color:#1e3a5f;\">"
+            "<div style=\"font-size:11px; letter-spacing:0.08em; text-transform:uppercase; font-weight:600;\">"
+            "Vertragliche Leistungsbeschreibung"
+            "</div>"
+            "<div style=\"margin-top:4px; font-size:12px; color:#334155;\">"
+            "Dieser Vertrag beschreibt klar, welche Leistungen enthalten sind und welche nicht. "
+            "Massgeblich sind ausschliesslich die schriftlich vereinbarten Regelungen in diesem Dokument."
+            "</div>"
+            "</div>"
+        ),
+        "contract_footer_html": (
+            "<div style=\"margin-top:12px; padding:10px 12px; border:1px solid #e2e8f0; border-radius:12px; "
+            "background:#f8fafc; color:#475569; font-size:11px;\">"
+            "<p style=\"margin:0 0 6px;\">"
+            "Hinweis: Die Leistungen werden als Dienstleistung nach bestem Wissen und Stand der Technik erbracht. "
+            "Ein bestimmter wirtschaftlicher oder technischer Erfolg ist nur geschuldet, wenn er ausdruecklich "
+            "und schriftlich zugesagt wurde."
+            "</p>"
+            "<p style=\"margin:0;\">"
+            "Aenderungen, Nebenabreden und Erweiterungen beduerfen der Textform. "
+            "Sollten einzelne Regelungen unwirksam sein, bleibt der Vertrag im Uebrigen wirksam "
+            "(salvatorische Klausel)."
+            "</p>"
+            "</div>"
+        ),
         "contract_templates": {
-            "vertrag": {
-                "title": "IT-Servicevertrag",
-                "header_html": "",
-                "footer_html": "",
-                "body_template": (
-                    "<p>Zwischen <strong>{provider_name}</strong> und <strong>{customer_name}</strong> "
-                    "wird folgender IT-Servicevertrag geschlossen.</p>"
-                    "<p>Leistungsumfang: {service_scope}</p>"
-                    "<p>Laufzeit: {runtime_months} Monate, gueltig ab {valid_from}.</p>"
-                    "<p>Monatliche Pauschale: {monthly_total} (jaehrlich {yearly_total}).</p>"
-                    "<p>{note_block}</p>"
-                ),
-            },
             "wartung": {
                 "title": "Wartungsvertrag",
                 "header_html": "",
                 "footer_html": "",
                 "body_template": (
-                    "<p>Dieser Wartungsvertrag regelt den laufenden technischen Support fuer "
-                    "<strong>{customer_name}</strong>.</p>"
+                    "<p>Dieser Wartungsvertrag zwischen <strong>{provider_name}</strong> und "
+                    "<strong>{customer_name}</strong> regelt die laufende technische Betreuung der "
+                    "vereinbarten IT-Umgebung.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">1) Enthaltene Leistungen</h3>"
                     "<ul>"
-                    "<li>Server: {servers}</li>"
-                    "<li>Clients: {clients}</li>"
-                    "<li>Netzwerkgeraete: {network_devices}</li>"
-                    "<li>IoT/Peripherie: {iot_devices}</li>"
+                    "<li>Regelmaessige Wartung und Funktionspruefung der betreuten Systeme.</li>"
+                    "<li>Fehleranalyse und Stoerungsbehebung im vertraglich vereinbarten Umfang.</li>"
+                    "<li>Remote-Support innerhalb der vereinbarten Servicezeiten.</li>"
+                    "<li>Dokumentation der durchgefuehrten Arbeiten und konkreter Handlungsempfehlungen.</li>"
                     "</ul>"
-                    "<p>Monatliche Betreuungspauschale: {monthly_total}</p>"
-                    "<p>Inklusivstunden pro Monat: {monthly_hours_included}</p>"
-                    "<p>Gueltig ab {valid_from}, Mindestlaufzeit {runtime_months} Monate.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Nicht enthaltene Leistungen</h3>"
+                    "<ul>"
+                    "<li>Projektleistungen, Migrationen, Neuinstallationen und grundlegende Umbauten.</li>"
+                    "<li>Hardware, Softwarelizenzen, Ersatzteile, Reisekosten und Fremdleistungen.</li>"
+                    "<li>Notfalleinsaetze ausserhalb der Servicezeiten ohne gesonderte Beauftragung.</li>"
+                    "</ul>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Verguetung und Zeitbudget</h3>"
+                    "<p>Monatliche Betreuungspauschale: <strong>{monthly_total}</strong> "
+                    "(jaehrlich <strong>{yearly_total}</strong>). "
+                    "Inklusivstunden pro Monat: <strong>{monthly_hours_included}</strong>. "
+                    "Nicht verbrauchte Inklusivstunden verfallen am Monatsende, sofern nichts anderes schriftlich "
+                    "vereinbart ist. Mehrleistungen werden nach vorheriger Freigabe gesondert berechnet.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Betreute Umgebung</h3>"
+                    "<p>Server: {servers} | Clients: {clients} | Netzwerkgeraete: {network_devices} | "
+                    "IoT/Peripherie: {iot_devices}</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Laufzeit</h3>"
+                    "<p>Gueltig ab <strong>{valid_from}</strong>, Mindestlaufzeit <strong>{runtime_months}</strong> Monate.</p>"
                     "<p>{note_block}</p>"
                 ),
             },
@@ -3437,17 +3670,33 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "header_html": "",
                 "footer_html": "",
                 "body_template": (
-                    "<p>Der Monitoringvertrag umfasst proaktive Ueberwachung, Alarmierung und "
-                    "Betriebsdokumentation fuer die IT-Umgebung von <strong>{customer_name}</strong>.</p>"
+                    "<p>Dieser Monitoringvertrag zwischen <strong>{provider_name}</strong> und "
+                    "<strong>{customer_name}</strong> regelt die technische Ueberwachung der vereinbarten "
+                    "Systeme sowie die strukturierte Alarmierung.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">1) Enthaltene Leistungen</h3>"
                     "<ul>"
-                    "<li>Server: {servers}</li>"
-                    "<li>Clients: {clients}</li>"
-                    "<li>Netzwerkgeraete: {network_devices}</li>"
-                    "<li>IoT/Peripherie: {iot_devices}</li>"
+                    "<li>Technisches Monitoring der vereinbarten Systeme und Dienste.</li>"
+                    "<li>Erkennung und Meldung von definierten Schwellwertverletzungen und Stoerungen.</li>"
+                    "<li>Regelmaessige Monitoring-Berichte und transparente Betriebsdokumentation.</li>"
+                    "<li>Erstbewertung von Alarmen inklusive Priorisierung fuer die weitere Bearbeitung.</li>"
                     "</ul>"
-                    "<p>Monatliche Monitoringpauschale: {monthly_total}</p>"
-                    "<p>Inklusivstunden pro Monat: {monthly_hours_included}</p>"
-                    "<p>Gueltig ab {valid_from}, Mindestlaufzeit {runtime_months} Monate.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Nicht enthaltene Leistungen</h3>"
+                    "<ul>"
+                    "<li>Automatische Entstoerung ohne gesonderte Beauftragung.</li>"
+                    "<li>Projektarbeiten, Migrationen, Hardwaretausch und Vor-Ort-Einsaetze.</li>"
+                    "<li>Hersteller-/Provider-Leistungen Dritter sowie Lizenz- und Hardwarekosten.</li>"
+                    "</ul>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Verguetung und Zeitbudget</h3>"
+                    "<p>Monatliche Monitoringpauschale: <strong>{monthly_total}</strong> "
+                    "(jaehrlich <strong>{yearly_total}</strong>). "
+                    "Inklusivstunden pro Monat: <strong>{monthly_hours_included}</strong>. "
+                    "Nicht verbrauchte Inklusivstunden verfallen am Monatsende, sofern nichts anderes schriftlich "
+                    "vereinbart ist. Weitergehende Umsetzungen werden nach Freigabe gesondert berechnet.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Ueberwachte Umgebung</h3>"
+                    "<p>Server: {servers} | Clients: {clients} | Netzwerkgeraete: {network_devices} | "
+                    "IoT/Peripherie: {iot_devices}</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Laufzeit</h3>"
+                    "<p>Gueltig ab <strong>{valid_from}</strong>, Mindestlaufzeit <strong>{runtime_months}</strong> Monate.</p>"
                     "<p>{note_block}</p>"
                 ),
             },
@@ -3457,22 +3706,29 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "footer_html": "",
                 "body_template": (
                     "<p>Dieser Vertrag zur Auftragsverarbeitung gemaess Art. 28 DSGVO wird zwischen "
-                    "<strong>{provider_name}</strong> und <strong>{customer_name}</strong> geschlossen.</p>"
-                    "<p>Verarbeitungszweck: IT-Betrieb, Support, Wartung, Monitoring und Fehleranalyse.</p>"
-                    "<p>Technische und organisatorische Massnahmen werden nach aktuellem Stand der Technik umgesetzt.</p>"
-                    "<p>Gueltig ab {valid_from}.</p>"
-                    "<p>{note_block}</p>"
-                ),
-            },
-            "sonstiges": {
-                "title": "Zusatzvereinbarung",
-                "header_html": "",
-                "footer_html": "",
-                "body_template": (
-                    "<p>Diese Zusatzvereinbarung ergaenzt bestehende Leistungen fuer "
-                    "<strong>{customer_name}</strong>.</p>"
-                    "<p>Leistungsumfang: {service_scope}</p>"
-                    "<p>Gueltig ab {valid_from}.</p>"
+                    "<strong>{provider_name}</strong> (Auftragsverarbeiter) und "
+                    "<strong>{customer_name}</strong> (Verantwortlicher) geschlossen.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">1) Gegenstand und Zweck</h3>"
+                    "<p>Der Auftragsverarbeiter verarbeitet personenbezogene Daten ausschliesslich zur "
+                    "Erbringung der vereinbarten IT-Leistungen (z. B. Betrieb, Support, Wartung, Monitoring, "
+                    "Fehleranalyse) und nur auf dokumentierte Weisung des Verantwortlichen.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Enthaltene Verpflichtungen des Auftragsverarbeiters</h3>"
+                    "<ul>"
+                    "<li>Vertraulichkeit und Zugriff nur fuer berechtigte Personen.</li>"
+                    "<li>Umsetzung angemessener technischer und organisatorischer Massnahmen (TOM).</li>"
+                    "<li>Unterstuetzung bei Betroffenenrechten, Sicherheitsvorfaellen und Nachweispflichten.</li>"
+                    "<li>Loeschung oder Rueckgabe personenbezogener Daten nach Vertragsende, soweit keine "
+                    "gesetzliche Aufbewahrungspflicht besteht.</li>"
+                    "</ul>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Nicht enthaltene Regelungen</h3>"
+                    "<ul>"
+                    "<li>Keine Uebernahme der Rolle des Verantwortlichen durch den Auftragsverarbeiter.</li>"
+                    "<li>Keine Datenverarbeitung ausserhalb der dokumentierten Weisungen.</li>"
+                    "<li>Keine eigenstaendige Rechtsberatung zur DSGVO-Compliance des Verantwortlichen.</li>"
+                    "</ul>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Laufzeit</h3>"
+                    "<p>Gueltig ab <strong>{valid_from}</strong>. Die Laufzeit richtet sich nach der Dauer "
+                    "des zugrunde liegenden Hauptvertrags beziehungsweise der Leistungserbringung.</p>"
                     "<p>{note_block}</p>"
                 ),
             },
@@ -3488,6 +3744,28 @@ def _get_ai_prompt_settings(db) -> AiPromptSettings:
         db.commit()
         db.refresh(store)
     return store
+
+
+ALLOWED_CONTRACT_DOC_TYPES = {"wartung", "monitoring", "avv_dsgvo"}
+CONTRACT_DOC_TYPE_ALIASES = {
+    "vertrag": "wartung",
+    "it_servicevertrag": "wartung",
+    "it-servicevertrag": "wartung",
+    "servicevertrag": "wartung",
+    "wartungsvertrag": "wartung",
+    "monitoringvertrag": "monitoring",
+    "avv": "avv_dsgvo",
+    "dsgvo": "avv_dsgvo",
+    "auftragsverarbeitungsvertrag": "avv_dsgvo",
+}
+
+
+def _normalize_contract_doc_type(value: Any, *, default: str = "wartung") -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return default
+    key = CONTRACT_DOC_TYPE_ALIASES.get(raw, raw)
+    return key if key in ALLOWED_CONTRACT_DOC_TYPES else default
 
 
 def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
@@ -3511,11 +3789,19 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
     merged_contract_templates: Dict[str, Dict[str, str]] = {}
     keys: Set[str] = set()
     keys.update([str(key).strip() for key in contract_defaults.keys() if str(key).strip()])
-    if isinstance(contract_data, dict):
-        keys.update([str(key).strip() for key in contract_data.keys() if str(key).strip()])
     for key in sorted(keys):
         default_entry = contract_defaults.get(key) if isinstance(contract_defaults.get(key), dict) else {}
         current_entry = contract_data.get(key) if isinstance(contract_data, dict) else {}
+        if not isinstance(current_entry, dict):
+            legacy_key = next(
+                (
+                    existing_key
+                    for existing_key in (contract_data.keys() if isinstance(contract_data, dict) else [])
+                    if _normalize_contract_doc_type(existing_key, default="") == key
+                ),
+                "",
+            )
+            current_entry = contract_data.get(legacy_key) if legacy_key and isinstance(contract_data, dict) else {}
         if not isinstance(current_entry, dict):
             current_entry = {}
         merged_contract_templates[key] = {
@@ -3543,6 +3829,46 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
         "contract_templates": merged_contract_templates,
         "updated_at": _offer_iso_timestamp(store.updated_at),
     }
+
+
+def _migrate_contract_templates_to_supported_types() -> None:
+    defaults = _default_ai_prompts()
+    default_templates = defaults.get("contract_templates") if isinstance(defaults.get("contract_templates"), dict) else {}
+    default_keys = set(default_templates.keys())
+    legacy_keys = {"vertrag", "sonstiges"}
+    if not default_keys:
+        return
+    with SessionLocal() as db:
+        store = _get_ai_prompt_settings(db)
+        payload = serialize_ai_prompts(store)
+        raw_data: Dict[str, Any] = {}
+        if store.data_json:
+            try:
+                parsed = json.loads(store.data_json)
+                if isinstance(parsed, dict):
+                    raw_data = parsed
+            except ValueError:
+                raw_data = {}
+        raw_templates = raw_data.get("contract_templates") if isinstance(raw_data.get("contract_templates"), dict) else {}
+        raw_keys = {str(key).strip() for key in raw_templates.keys() if str(key).strip()}
+        normalized_keys = {_normalize_contract_doc_type(key, default="") for key in raw_keys}
+        needs_migration = bool(raw_keys & legacy_keys) or not default_keys.issubset(normalized_keys)
+        if not needs_migration:
+            return
+        updated_payload = {
+            "action_prompt": payload.get("action_prompt") or defaults.get("action_prompt") or "",
+            "offer_base_prompt": payload.get("offer_base_prompt") or defaults.get("offer_base_prompt") or "",
+            "offer_mode_instructions": payload.get("offer_mode_instructions") or defaults.get("offer_mode_instructions") or {},
+            "contract_header_html": defaults.get("contract_header_html") or "",
+            "contract_footer_html": defaults.get("contract_footer_html") or "",
+            "contract_templates": default_templates,
+        }
+        store.data_json = json.dumps(updated_payload)
+        store.updated_at = int(time.time() * 1000)
+        db.commit()
+
+
+_migrate_contract_templates_to_supported_types()
 
 
 def _render_prompt(template: str, values: Dict[str, str]) -> str:
@@ -3595,7 +3921,7 @@ def _render_contract_html(
     ).strip()
     customer_address = re.sub(r"\s+", " ", customer_address)
     customer_display = escape(str(customer.name or "").strip() or "Kunde")
-    template_label = escape((template_key or "vertrag").replace("_", " ").upper())
+    template_label = escape((template_key or "wartung").replace("_", " ").upper())
     provider_name = escape(str(placeholders.get("provider_name", "")).strip() or "QT Workbench Services")
     generated_at = escape(str(placeholders.get("generated_at", "")).strip())
     valid_from = escape(str(placeholders.get("valid_from", "")).strip())
@@ -4066,7 +4392,7 @@ def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict
         "id": item.id,
         "customer_id": item.customer_id,
         "title": item.title or "",
-        "doc_type": item.doc_type or "vertrag",
+        "doc_type": item.doc_type or "wartung",
         "status": item.status or "active",
         "file_name": item.file_name or "",
         "mime_type": item.mime_type or "application/pdf",
@@ -4559,6 +4885,7 @@ def _ai_rank_customer_candidates(
             model_candidates=model_candidates,
             response_format="json",
             temperature=0.05,
+            max_tokens=160,
         )
         if not payload:
             return []
@@ -4753,6 +5080,7 @@ def _generate_task_draft_from_email(
             model_candidates=model_candidates,
             response_format="json",
             temperature=0.15,
+            max_tokens=260,
         )
         if not payload:
             raise RuntimeError("No Ollama response")
@@ -6050,7 +6378,12 @@ def _build_recent_work_summary_ai_text(customer_name: str, invoice_items: List[D
     )
     try:
         model_candidates = _resolve_ollama_models(MODEL_PREF_INVOICE_SUMMARY)
-        data, _ = _ollama_generate(prompt, model_candidates=model_candidates, timeout=10)
+        data, _ = _ollama_generate(
+            prompt,
+            model_candidates=model_candidates,
+            timeout=10,
+            max_tokens=180,
+        )
         return str(data.get("response") or "").strip()
     except Exception:
         return ""
@@ -7991,6 +8324,17 @@ def _customer_development_ai_prompt(
     )
 
 
+def _customer_development_ai_max_tokens(mode: str) -> int:
+    mode_key = str(mode or "summary").strip().lower()
+    if mode_key == "analyse":
+        return 520
+    if mode_key in {"angebot", "kundenbericht", "leitfaden", "newsletter"}:
+        return 420
+    if mode_key in {"aktivierung_mail", "aktivierung_call", "mail"}:
+        return 360
+    return 260
+
+
 def _customer_development_ai_fallback(context: Dict[str, Any], mode: str) -> str:
     mode_key = str(mode or "summary").strip().lower()
     customer_name = str(context.get("customerName") or "Kunde")
@@ -8660,7 +9004,11 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest, request: 
             + "\n".join([f"- {name} ({count}x)" for name, count in signal_lines])
             + "\nAntwort als reiner Text, kein JSON, kein Markdown."
         )
-        text_result = _ollama_generate_text(prompt).strip()
+        text_result = _ollama_generate_text(
+            prompt,
+            model_candidates=_resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT),
+            max_tokens=_customer_development_ai_max_tokens(mode),
+        ).strip()
         if not text_result:
             text_result = _customer_development_ai_fallback(top[0], mode)
         return {
@@ -8687,7 +9035,11 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest, request: 
     ai_sources = _customer_development_ai_sources(context)
     mode = str(data.mode or "summary").strip().lower()
     prompt = _customer_development_ai_prompt(context, mode=mode, tone=str(data.tone or "sachlich"))
-    text_result = _ollama_generate_text(prompt).strip()
+    text_result = _ollama_generate_text(
+        prompt,
+        model_candidates=_resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT),
+        max_tokens=_customer_development_ai_max_tokens(mode),
+    ).strip()
     if not text_result:
         text_result = _customer_development_ai_fallback(context, mode)
     return {
@@ -9797,6 +10149,8 @@ def create_day_task(data: DayTaskCreate):
         now_ms = int(time.time() * 1000)
         status = data.status or "todo"
         erledigt = bool(data.erledigt) or status == "done"
+        kulant = bool(data.kulant)
+        wartungsvertrag = bool(data.wartungsvertrag)
         task = DayTask(
             title=data.title,
             customer=data.customer or "",
@@ -9807,8 +10161,9 @@ def create_day_task(data: DayTaskCreate):
             signature_base64=data.signature_base64 or "",
             time_enabled=bool(data.time_enabled),
             erledigt=erledigt,
-            aberechnet=bool(data.aberechnet),
-            kulant=bool(data.kulant),
+            aberechnet=bool(data.aberechnet) and not kulant and not wartungsvertrag,
+            kulant=kulant,
+            wartungsvertrag=wartungsvertrag,
             details=data.details or "",
             arrival_time=data.arrival_time or "",
             departure_time=data.departure_time or "",
@@ -9854,6 +10209,8 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
             is_done = task.status == "done"
             task.erledigt = is_done
             task.completed_at = now_ms if is_done else 0
+        if bool(task.kulant) or bool(task.wartungsvertrag):
+            task.aberechnet = False
         db.commit()
         db.refresh(task)
         return serialize_day_task(task)
@@ -10431,6 +10788,8 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
         task = db.query(DayTask).get(task_id)
         if not task:
             raise HTTPException(404, "Task not found")
+        if bool(task.kulant) or bool(task.wartungsvertrag):
+            raise HTTPException(400, "Task is marked as Kulant/Wartungsvertrag and cannot be invoiced")
         settings = db.query(IntegrationSettings).first()
         if not settings:
             settings = IntegrationSettings()
@@ -10558,7 +10917,12 @@ def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
         config = _require_sevdesk_config(settings, metrics)
         _require_sevdesk_invoice_fields(config)
 
-        query = db.query(DayTask).filter(DayTask.erledigt.is_(True))
+        query = (
+            db.query(DayTask)
+            .filter(DayTask.erledigt.is_(True))
+            .filter(DayTask.kulant.is_(False))
+            .filter(DayTask.wartungsvertrag.is_(False))
+        )
         if payload.task_ids:
             query = query.filter(DayTask.id.in_(payload.task_ids))
         else:
@@ -11025,6 +11389,7 @@ def generate_action(data: ActionAiRequest):
         model_candidates=model_candidates,
         response_format="json",
         temperature=0.2,
+        max_tokens=180,
     )
     if not payload:
         raise HTTPException(502, "Ollama request failed")
@@ -11061,6 +11426,7 @@ def generate_offer_text(data: OfferAiRequest):
         prompt,
         model_candidates=model_candidates,
         temperature=0.2,
+        max_tokens=340,
     )
     if not payload:
         raise HTTPException(502, "Ollama request failed")
@@ -11649,8 +12015,8 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             raise HTTPException(404, "Customer not found")
         prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
         templates = prompts.get("contract_templates") or {}
-        template_key = str(data.doc_type or "vertrag").strip().lower() or "vertrag"
-        template_entry = templates.get(template_key) or templates.get("vertrag") or {}
+        template_key = _normalize_contract_doc_type(data.doc_type, default="wartung")
+        template_entry = templates.get(template_key) or templates.get("wartung") or {}
         template_title = str(template_entry.get("title") or "Vertrag")
         template_header_html = str(prompts.get("contract_header_html") or template_entry.get("header_html") or "")
         title = str(data.title or "").strip() or template_title
@@ -11798,7 +12164,7 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
         status_value = str(data.status or "active").strip().lower()
         if status_value not in {"active", "proposal"}:
             status_value = "active"
-        doc_type_value = str(data.doc_type or "vertrag").strip().lower() or "vertrag"
+        doc_type_value = _normalize_contract_doc_type(data.doc_type, default="wartung")
         monthly_hours_included = _safe_nonnegative_float(data.monthly_hours_included or 0.0)
         if doc_type_value not in {"wartung", "monitoring"}:
             monthly_hours_included = 0.0
@@ -11816,7 +12182,7 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             mime_type=str(data.mime_type or "application/pdf").strip() or "application/pdf",
             content_base64=content_base64,
             html_content=str(data.html_content or ""),
-            template_key=str(data.template_key or "").strip().lower(),
+            template_key=_normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value),
             monthly_hours_included=monthly_hours_included,
             note=str(data.note or "").strip(),
             created_at=int(time.time() * 1000),
