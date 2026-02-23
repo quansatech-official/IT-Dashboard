@@ -21,6 +21,7 @@ import unicodedata
 import hashlib
 import hmac
 import base64
+import gzip
 from html import escape
 from email import policy
 from email.parser import Parser
@@ -6494,6 +6495,7 @@ def _extract_discovery_payload_from_script_output(text: str) -> Optional[Dict[st
     raw_text = str(text or "")
     if not raw_text:
         return None
+    # Legacy clear-text payload markers.
     begin_marker = "QT_DISCOVERY_JSON_BEGIN"
     end_marker = "QT_DISCOVERY_JSON_END"
     begin = raw_text.find(begin_marker)
@@ -6507,7 +6509,26 @@ def _extract_discovery_payload_from_script_output(text: str) -> Optional[Dict[st
                     if isinstance(parsed, dict):
                         return parsed
                 except Exception:
-                    return None
+                    pass
+
+    # Compact payload markers (gzip + base64), keeps RMM script history readable.
+    compact_begin_marker = "QT_DISCOVERY_JSON_GZIP_BASE64_BEGIN"
+    compact_end_marker = "QT_DISCOVERY_JSON_GZIP_BASE64_END"
+    compact_begin = raw_text.find(compact_begin_marker)
+    if compact_begin >= 0:
+        compact_end = raw_text.find(compact_end_marker, compact_begin + len(compact_begin_marker))
+        if compact_end > compact_begin:
+            encoded_blob = raw_text[compact_begin + len(compact_begin_marker):compact_end]
+            encoded_text = "".join(encoded_blob.split())
+            if encoded_text:
+                try:
+                    compressed = base64.b64decode(encoded_text.encode("ascii"), validate=False)
+                    decoded = gzip.decompress(compressed).decode("utf-8", errors="replace")
+                    parsed = json.loads(decoded)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    pass
     return None
 
 

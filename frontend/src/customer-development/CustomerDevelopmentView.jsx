@@ -1166,10 +1166,10 @@ export default function CustomerDevelopmentView() {
       .slice(0, 3);
   }, [detailData]);
   return (
-    <div className="min-h-screen bg-sand-50 text-sand-900">
+      <div className="min-h-screen bg-sand-50 text-sand-900">
       {detailModal.open ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-sand-900/40 px-4 pt-5 pb-8">
-          <div className="w-full max-w-6xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 p-3 sm:p-4">
+          <div className="flex h-[calc(100dvh-1.5rem)] max-h-[calc(100vh-1.5rem)] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sand-200 px-5 py-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Details</p>
@@ -1280,7 +1280,7 @@ export default function CustomerDevelopmentView() {
                 </div>
               </div>
             ) : null}
-            <div className="max-h-[83vh] overflow-auto p-5 bg-sand-50">
+            <div className="min-h-0 flex-1 overflow-auto bg-sand-50 p-5">
               {detailStatus === "loading" ? (
                 <LoadingProgress label="Lade Analytics" progress={detailProgress} />
               ) : detailStatus === "error" ? (

@@ -12,7 +12,9 @@ Features:
 from __future__ import annotations
 
 import argparse
+import base64
 import http.client
+import gzip
 import ipaddress
 import json
 import os
@@ -81,6 +83,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--cache-ttl-seconds", type=int, default=1800, help="Skip scan if cache is fresh")
     parser.add_argument("--force", action="store_true", help="Ignore cache")
+    parser.add_argument(
+        "--history-mode",
+        choices=["compact", "plain", "none"],
+        default="compact",
+        help="How discovery payload is written to script history (default: compact)",
+    )
     return parser.parse_args()
 
 
@@ -151,13 +159,24 @@ def _resolve_mac(ip: str) -> str:
             return ""
         text = f"{proc.stdout}\n{proc.stderr}".lower()
         for token in text.replace("(", " ").replace(")", " ").split():
-            cleaned = token.strip()
-            if len(cleaned) in (17, 14) and ":" in cleaned:
-                return cleaned
-            if len(cleaned) == 17 and "-" in cleaned:
-                return cleaned.replace("-", ":")
+            normalized = _normalize_mac_token(token)
+            if normalized:
+                return normalized
     except Exception:
         return ""
+    return ""
+
+
+def _normalize_mac_token(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = text.strip("[](){}<>,;")
+    if re.fullmatch(r"[0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}", text):
+        return text.replace("-", ":")
+    if re.fullmatch(r"[0-9a-f]{4}(?:\\.[0-9a-f]{4}){2}", text):
+        compact = text.replace(".", "")
+        return ":".join(compact[i : i + 2] for i in range(0, 12, 2))
     return ""
 
 
@@ -669,6 +688,7 @@ def _emit_history_discovery_payload(
     source: str,
     subnets: List[str],
     hosts: List[DiscoveredHost],
+    mode: str = "compact",
 ) -> None:
     now_ms = _now_ms()
     payload_items = []
@@ -698,12 +718,28 @@ def _emit_history_discovery_payload(
         "count": len(payload_items),
         "items": payload_items,
     }
-    # Keep a machine-readable payload in Tactical RMM script history so
-    # downstream systems can pull complete discovery inventory even if API
-    # ingest is unavailable.
-    print("QT_DISCOVERY_JSON_BEGIN")
-    print(json.dumps(payload, ensure_ascii=False))
-    print("QT_DISCOVERY_JSON_END")
+    history_mode = str(mode or "compact").strip().lower() or "compact"
+    if history_mode == "none":
+        print("[INFO] Discovery payload omitted from script history (--history-mode=none)")
+        return
+
+    payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if history_mode == "plain":
+        # Legacy mode: plain JSON markers.
+        print("QT_DISCOVERY_JSON_BEGIN")
+        print(payload_json)
+        print("QT_DISCOVERY_JSON_END")
+        return
+
+    compressed = gzip.compress(payload_json.encode("utf-8"), compresslevel=6)
+    encoded = base64.b64encode(compressed).decode("ascii")
+    print("QT_DISCOVERY_JSON_GZIP_BASE64_BEGIN")
+    print(encoded)
+    print("QT_DISCOVERY_JSON_GZIP_BASE64_END")
+    print(
+        f"[INFO] Discovery payload stored in compact history format "
+        f"({len(payload_items)} items, {len(encoded)} b64 chars)"
+    )
 
 
 def main() -> int:
@@ -783,6 +819,7 @@ def main() -> int:
         source=str(args.source or "rmm_agent_scan").strip() or "rmm_agent_scan",
         subnets=subnets,
         hosts=discovered,
+        mode=str(args.history_mode or "compact").strip().lower() or "compact",
     )
 
     try:
