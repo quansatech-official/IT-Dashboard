@@ -440,6 +440,7 @@ class InfraDiscoveryDevice(Base):
     confidence = Column(Integer, default=0)
     evidence = Column(Text, default="[]")
     managed = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
     last_seen_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
@@ -584,6 +585,7 @@ class CustomerContractDocument(Base):
     content_base64 = Column(Text, default="")
     html_content = Column(Text, default="")
     template_key = Column(String, default="")
+    monthly_hours_included = Column(Float, default=0.0)
     note = Column(Text, default="")
     cancel_reason = Column(Text, default="")
     cancelled_at = Column(BigInteger, default=0)
@@ -1060,6 +1062,8 @@ def _ensure_infra_discovery_columns() -> None:
         statements.append("ALTER TABLE infra_discovery_devices ADD COLUMN confidence INTEGER DEFAULT 0")
     if "evidence" not in columns:
         statements.append("ALTER TABLE infra_discovery_devices ADD COLUMN evidence TEXT DEFAULT '[]'")
+    if "is_active" not in columns:
+        statements.append("ALTER TABLE infra_discovery_devices ADD COLUMN is_active BOOLEAN DEFAULT TRUE")
     if not statements:
         return
     with engine.begin() as connection:
@@ -1079,6 +1083,8 @@ def _ensure_customer_contract_documents_columns() -> None:
         statements.append("ALTER TABLE customer_contract_documents ADD COLUMN html_content TEXT DEFAULT ''")
     if "template_key" not in columns:
         statements.append("ALTER TABLE customer_contract_documents ADD COLUMN template_key VARCHAR DEFAULT ''")
+    if "monthly_hours_included" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN monthly_hours_included DOUBLE PRECISION DEFAULT 0")
     if not statements:
         return
     with engine.begin() as connection:
@@ -1482,6 +1488,7 @@ class CustomerContractDocumentCreate(BaseModel):
     content_base64: str
     html_content: Optional[str] = ""
     template_key: Optional[str] = ""
+    monthly_hours_included: Optional[float] = 0.0
     note: Optional[str] = ""
     status: Optional[str] = "active"
 
@@ -1502,6 +1509,7 @@ class CustomerContractPreviewRequest(BaseModel):
     iot_devices: Optional[int] = 0
     monthly_total: Optional[float] = None
     yearly_total: Optional[float] = None
+    monthly_hours_included: Optional[float] = 0.0
     valid_from: Optional[str] = ""
     runtime_months: Optional[int] = 12
 
@@ -2793,8 +2801,9 @@ def _normalize_contract_flags(flags: Optional[List[Any]]) -> List[str]:
             continue
         seen.add(key)
         normalized.append(key)
-    # "Regie" is an alternative service model without Wartung/Monitoring contract.
-    if "regie" in seen and ("wartung" in seen or "monitoring" in seen):
+    # "Regie" and "Wartung" are mutually exclusive.
+    # "Monitoring" may exist together with "Regie".
+    if "regie" in seen and "wartung" in seen:
         normalized = [entry for entry in normalized if entry != "regie"]
     return normalized
 
@@ -3412,6 +3421,7 @@ def _default_ai_prompts() -> Dict[str, Any]:
                     "<li>IoT/Peripherie: {iot_devices}</li>"
                     "</ul>"
                     "<p>Monatliche Betreuungspauschale: {monthly_total}</p>"
+                    "<p>Inklusivstunden pro Monat: {monthly_hours_included}</p>"
                     "<p>Gueltig ab {valid_from}, Mindestlaufzeit {runtime_months} Monate.</p>"
                     "<p>{note_block}</p>"
                 ),
@@ -3430,6 +3440,7 @@ def _default_ai_prompts() -> Dict[str, Any]:
                     "<li>IoT/Peripherie: {iot_devices}</li>"
                     "</ul>"
                     "<p>Monatliche Monitoringpauschale: {monthly_total}</p>"
+                    "<p>Inklusivstunden pro Monat: {monthly_hours_included}</p>"
                     "<p>Gueltig ab {valid_from}, Mindestlaufzeit {runtime_months} Monate.</p>"
                     "<p>{note_block}</p>"
                 ),
@@ -3543,6 +3554,17 @@ def _format_contract_currency(value: float) -> str:
     whole_text = f"{whole:,}".replace(",", ".")
     sign = "-" if amount < 0 else ""
     return f"{sign}{whole_text},{cents:02d} EUR"
+
+
+def _format_contract_hours(value: float) -> str:
+    hours = float(value or 0.0)
+    whole = int(abs(hours))
+    frac = int(round((abs(hours) - whole) * 100))
+    if frac >= 100:
+        whole += 1
+        frac = 0
+    sign = "-" if hours < 0 else ""
+    return f"{sign}{whole},{frac:02d} h"
 
 
 def _render_contract_html(
@@ -4043,6 +4065,7 @@ def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict
         "file_name": item.file_name or "",
         "mime_type": item.mime_type or "application/pdf",
         "template_key": item.template_key or "",
+        "monthly_hours_included": round(float(item.monthly_hours_included or 0.0), 2),
         "has_html": bool(str(item.html_content or "").strip()),
         "html_content": item.html_content or "",
         "note": item.note or "",
@@ -5443,6 +5466,156 @@ def _safe_version_key(value: str) -> Tuple[int, str]:
     return (2, padded)
 
 
+def _software_text_value(value: Any, depth: int = 0) -> str:
+    if depth > 4:
+        return ""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        return str(value).strip()
+    if isinstance(value, list):
+        for item in value:
+            text_value = _software_text_value(item, depth + 1)
+            if text_value:
+                return text_value
+        return ""
+    if isinstance(value, dict):
+        for key in (
+            "value",
+            "text",
+            "name",
+            "display_name",
+            "displayName",
+            "title",
+            "label",
+            "software",
+            "product",
+            "application",
+            "app",
+            "program",
+            "package",
+            "version",
+            "display_version",
+            "displayVersion",
+        ):
+            if key not in value:
+                continue
+            text_value = _software_text_value(value.get(key), depth + 1)
+            if text_value:
+                return text_value
+    return ""
+
+
+def _extract_software_name_version(node: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    if not isinstance(node, dict):
+        return None
+    name = ""
+    for key in (
+        "name",
+        "software",
+        "product",
+        "display_name",
+        "displayName",
+        "app_name",
+        "appName",
+        "application",
+        "application_name",
+        "program",
+        "program_name",
+        "package",
+        "package_name",
+        "title",
+    ):
+        if key not in node:
+            continue
+        name = _software_text_value(node.get(key))
+        if name:
+            break
+    if not name:
+        return None
+
+    version = ""
+    for key in (
+        "version",
+        "display_version",
+        "displayVersion",
+        "current_version",
+        "currentVersion",
+        "installed_version",
+        "installedVersion",
+        "product_version",
+        "productVersion",
+        "app_version",
+        "appVersion",
+        "ver",
+    ):
+        if key not in node:
+            continue
+        version = _software_text_value(node.get(key))
+        if version:
+            break
+    return {"name": name, "version": version}
+
+
+def _extract_software_entries(payload: Any) -> List[Dict[str, str]]:
+    queue: List[Any] = []
+    if isinstance(payload, list):
+        queue.extend(payload)
+    elif isinstance(payload, dict):
+        queue.append(payload)
+        for key in (
+            "results",
+            "software",
+            "items",
+            "data",
+            "installed_software",
+            "installedSoftware",
+            "applications",
+            "apps",
+            "programs",
+            "packages",
+        ):
+            value = payload.get(key)
+            if isinstance(value, list):
+                queue.extend(value)
+            elif isinstance(value, dict):
+                queue.append(value)
+        for value in payload.values():
+            if isinstance(value, list):
+                queue.extend(value)
+
+    out: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    visited = 0
+    while queue and visited < 6000:
+        visited += 1
+        node = queue.pop(0)
+        if isinstance(node, list):
+            queue.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        parsed = _extract_software_name_version(node)
+        if parsed:
+            dedupe_key = f"{parsed['name'].strip().lower()}|{parsed['version'].strip().lower()}"
+            if dedupe_key not in seen:
+                seen.add(dedupe_key)
+                out.append(parsed)
+        for key, value in node.items():
+            key_text = str(key or "").strip().lower()
+            if isinstance(value, list):
+                if any(token in key_text for token in ("software", "app", "program", "package", "result", "item", "data", "installed")):
+                    queue.extend(value)
+            elif isinstance(value, dict):
+                if any(token in key_text for token in ("software", "app", "program", "package", "product", "payload", "result", "data", "item")):
+                    queue.append(value)
+    return out
+
+
 def _fetch_tactical_rmm_software(
     settings: Optional[IntegrationSettings],
     agent_ids: List[str],
@@ -5458,8 +5631,12 @@ def _fetch_tactical_rmm_software(
         candidates = [
             f"/software/{agent_id}/",
             f"/software/{agent_id}",
+            f"/winsoftware/{agent_id}/",
+            f"/winsoftware/{agent_id}",
             f"/api/v3/software/{agent_id}/",
             f"/api/v3/software/{agent_id}",
+            f"/api/v3/winsoftware/{agent_id}/",
+            f"/api/v3/winsoftware/{agent_id}",
             f"/agents/{agent_id}/software/",
             f"/agents/{agent_id}/software",
             f"/api/v3/agents/{agent_id}/software/",
@@ -5477,7 +5654,7 @@ def _fetch_tactical_rmm_software(
             f"/api/v3/software/?agent_id={quote(agent_id)}",
             f"/api/v3/software?agent_id={quote(agent_id)}",
         ]
-        payload = None
+        software_items: List[Dict[str, str]] = []
         used_path = ""
         for path in candidates:
             res, _ = _tactical_request(session, host, "GET", path, timeout=8, retries=1)
@@ -5489,41 +5666,24 @@ def _fetch_tactical_rmm_software(
                 data = res.json()
             except ValueError:
                 continue
-            payload = data
+            extracted = _extract_software_entries(data)
+            if not extracted:
+                continue
+            software_items = extracted
             used_path = path
             break
-        if payload is None:
+        if not software_items:
             logger.info("RMM software inventory empty for agent %s: no endpoint matched", agent_id)
-            continue
-        items: List[Any] = []
-        if isinstance(payload, list):
-            items = payload
-        elif isinstance(payload, dict):
-            for key in ("results", "software", "items", "data"):
-                value = payload.get(key)
-                if isinstance(value, list):
-                    items = value
-                    break
-        if not isinstance(items, list):
             continue
         logger.info(
             "RMM software inventory for agent %s via %s: %s items",
             agent_id,
             used_path or "unknown",
-            len(items),
+            len(software_items),
         )
-        for item in items[:per_agent_limit]:
-            if not isinstance(item, dict):
-                continue
-            name = str(
-                item.get("name")
-                or item.get("software")
-                or item.get("product")
-                or item.get("display_name")
-                or item.get("app_name")
-                or ""
-            ).strip()
-            version = str(item.get("version") or item.get("display_version") or "").strip()
+        for item in software_items[:per_agent_limit]:
+            name = str(item.get("name") or "").strip()
+            version = str(item.get("version") or "").strip()
             if not name:
                 continue
             rows.append(
@@ -5545,7 +5705,7 @@ def _nvd_lookup(name: str, version: str) -> List[Dict[str, Any]]:
         res = requests.get(
             url,
             params={"keywordSearch": term, "resultsPerPage": 5},
-            timeout=8,
+            timeout=4,
         )
         if not res.ok:
             return []
@@ -5582,7 +5742,7 @@ def _osv_fixed_versions(name: str, version: str) -> List[str]:
         "package": {"name": str(name or "")},
     }
     try:
-        res = requests.post("https://api.osv.dev/v1/query", json=payload, timeout=8)
+        res = requests.post("https://api.osv.dev/v1/query", json=payload, timeout=4)
         if not res.ok:
             return []
         data = res.json()
@@ -5686,7 +5846,7 @@ def _extract_invoice_activity_from_row(row: Optional[Dict[str, Any]], now_dt: da
         return 0, None, False
     latest_ms = int(latest.timestamp() * 1000)
     days_since = max(0, (now_dt.date() - latest.date()).days)
-    return latest_ms, days_since, days_since >= 60
+    return latest_ms, days_since, days_since >= 75
 
 
 def _clean_invoice_position_text(value: Any) -> str:
@@ -5860,7 +6020,7 @@ def _build_customer_recent_work_summary(
     newest_date = selected[0]["date"]
     newest_ms = int(newest_date.timestamp() * 1000)
     days_since = max(0, (now_dt.date() - newest_date.date()).days)
-    inactivity_due = days_since >= 60
+    inactivity_due = days_since >= 75
     fallback_snippets: List[str] = []
     for item in items[:3]:
         snippets = item.get("positionSnippets") or []
@@ -5938,6 +6098,136 @@ def _customer_telephony_metrics(phone_numbers: List[str], start_ms: int) -> Dict
             }
     except Exception:
         return {"minutes": 0, "missed": 0, "calls": 0}
+
+
+def _contract_doc_type_for_budget(row: CustomerContractDocument) -> str:
+    candidates = [
+        str(row.doc_type or "").strip().lower(),
+        str(row.template_key or "").strip().lower(),
+    ]
+    aliases = {
+        "maintenance": "wartung",
+        "wartungsvertrag": "wartung",
+        "monitoringvertrag": "monitoring",
+    }
+    for raw in candidates:
+        key = aliases.get(raw, raw)
+        if key in {"wartung", "monitoring"}:
+            return key
+    return ""
+
+
+def _month_bounds_ms(now_dt: datetime) -> Tuple[int, int]:
+    month_start = datetime(now_dt.year, now_dt.month, 1)
+    if now_dt.month == 12:
+        next_month_start = datetime(now_dt.year + 1, 1, 1)
+    else:
+        next_month_start = datetime(now_dt.year, now_dt.month + 1, 1)
+    return int(month_start.timestamp() * 1000), int(next_month_start.timestamp() * 1000)
+
+
+def _customer_contract_time_budget(db, customer: Customer, now_ms: int) -> Dict[str, Any]:
+    now_dt = datetime.fromtimestamp(now_ms / 1000)
+    start_month_ms, next_month_ms = _month_bounds_ms(now_dt)
+    month_label = f"{now_dt.month:02d}/{now_dt.year:04d}"
+
+    contract_flags = _parse_contract_flags(customer.contract_flags)
+    has_service_contract = bool(customer.maintenance_contract) or bool(
+        set(contract_flags) & {"wartung", "monitoring"}
+    )
+
+    active_contract_docs = (
+        db.query(CustomerContractDocument)
+        .filter(CustomerContractDocument.customer_id == int(customer.id))
+        .filter(CustomerContractDocument.status == "active")
+        .order_by(CustomerContractDocument.created_at.desc(), CustomerContractDocument.id.desc())
+        .all()
+    )
+    budget_contracts: List[Dict[str, Any]] = []
+    included_hours_total = 0.0
+    for row in active_contract_docs:
+        category = _contract_doc_type_for_budget(row)
+        if category not in {"wartung", "monitoring"}:
+            continue
+        hours = _safe_nonnegative_float(row.monthly_hours_included or 0.0)
+        included_hours_total += hours
+        budget_contracts.append(
+            {
+                "id": int(row.id),
+                "title": str(row.title or "").strip() or "Vertrag",
+                "category": category,
+                "monthlyHoursIncluded": round(hours, 2),
+                "createdAt": int(row.created_at or 0),
+            }
+        )
+
+    task_filters = _customer_task_filter(customer)
+    task_ms = 0
+    task_count = 0
+    if task_filters:
+        timed_tasks = (
+            db.query(DayTask)
+            .filter(or_(*task_filters))
+            .filter(DayTask.time_enabled == True)
+            .all()
+        )
+        for task in timed_tasks:
+            status = str(task.status or "").strip().lower()
+            completed_at = int(task.completed_at or 0)
+            created_at = int(task.created_at or 0)
+            include_task = False
+            if status == "done":
+                if completed_at > 0:
+                    include_task = start_month_ms <= completed_at < next_month_ms
+                elif created_at > 0:
+                    include_task = start_month_ms <= created_at < next_month_ms
+            elif created_at > 0:
+                include_task = start_month_ms <= created_at < next_month_ms
+            if not include_task:
+                continue
+            elapsed = int(task.elapsed or 0)
+            if bool(task.running) and int(task.startTime or 0) > 0:
+                elapsed += max(0, now_ms - int(task.startTime or 0))
+            if elapsed <= 0:
+                continue
+            task_ms += elapsed
+            task_count += 1
+
+    phone_numbers = [phone.number for phone in customer.phones]
+    telephony = _customer_telephony_metrics(phone_numbers, start_month_ms)
+    phone_minutes = float(telephony.get("minutes") or 0.0)
+    phone_ms = int(round(phone_minutes * 60_000.0))
+    call_count = int(telephony.get("calls") or 0)
+
+    included_ms = int(round(included_hours_total * 3_600_000.0))
+    total_consumed_ms = max(0, int(task_ms + phone_ms))
+    balance_ms = int(included_ms - total_consumed_ms)
+    overrun_ms = max(0, -balance_ms)
+    remaining_ms = max(0, balance_ms)
+
+    return {
+        "monthLabel": month_label,
+        "monthStartMs": start_month_ms,
+        "monthEndMs": next_month_ms,
+        "hasServiceContract": bool(has_service_contract),
+        "activeBudgetContracts": budget_contracts,
+        "activeBudgetContractsCount": len(budget_contracts),
+        "includedHours": round(included_hours_total, 2),
+        "includedMinutes": round(included_hours_total * 60.0, 1),
+        "taskHours": round(task_ms / 3_600_000.0, 2) if task_ms else 0.0,
+        "taskMinutes": round(task_ms / 60_000.0, 1) if task_ms else 0.0,
+        "taskCount": int(task_count),
+        "telephonyHours": round(phone_minutes / 60.0, 2) if phone_minutes else 0.0,
+        "telephonyMinutes": round(phone_minutes, 1) if phone_minutes else 0.0,
+        "callCount": int(call_count),
+        "consumedHours": round(total_consumed_ms / 3_600_000.0, 2) if total_consumed_ms else 0.0,
+        "consumedMinutes": round(total_consumed_ms / 60_000.0, 1) if total_consumed_ms else 0.0,
+        "balanceHours": round(balance_ms / 3_600_000.0, 2) if balance_ms else 0.0,
+        "remainingHours": round(remaining_ms / 3_600_000.0, 2) if remaining_ms else 0.0,
+        "overrunHours": round(overrun_ms / 3_600_000.0, 2) if overrun_ms else 0.0,
+        "isOverrun": overrun_ms > 0,
+        "missingIncludedHours": bool(has_service_contract and included_hours_total <= 0.0),
+    }
 
 
 def _customer_last_interaction_ms(
@@ -6442,6 +6732,33 @@ def _discovery_row_value(row: Any, key: str) -> Any:
     return getattr(row, key, None)
 
 
+def _normalize_discovery_mac_text(value: Any) -> str:
+    text = str(value or "").strip().lower().replace("-", ":")
+    if not text:
+        return ""
+    hex_only = re.sub(r"[^0-9a-f]", "", text)
+    if len(hex_only) != 12:
+        return ""
+    return ":".join(hex_only[index:index + 2] for index in range(0, 12, 2))
+
+
+def _discovery_row_is_active(row: Any) -> bool:
+    raw = _discovery_row_value(row, "is_active")
+    if raw is None:
+        raw = _discovery_row_value(row, "active")
+    if raw is None:
+        status_text = str(_discovery_row_value(row, "status") or "").strip().lower()
+        if status_text:
+            return status_text != "inactive"
+        return True
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if not normalized:
+            return True
+        return normalized not in {"0", "false", "no", "off", "inactive"}
+    return bool(raw)
+
+
 def _discovery_row_to_dict(row: Any) -> Dict[str, Any]:
     evidence_value = _discovery_row_value(row, "evidence")
     evidence_payload: List[str] = []
@@ -6467,6 +6784,7 @@ def _discovery_row_to_dict(row: Any) -> Dict[str, Any]:
         "confidence": int(_safe_nonnegative_int(_discovery_row_value(row, "confidence") or 0)),
         "evidence": evidence_payload,
         "managed": bool(_discovery_row_value(row, "managed")),
+        "active": bool(_discovery_row_is_active(row)),
         "lastSeenAt": int(_safe_nonnegative_int(_discovery_row_value(row, "last_seen_at") or _discovery_row_value(row, "seen_at") or 0)),
     }
 
@@ -6690,7 +7008,6 @@ def _build_customer_development_context(
     telephony = _customer_telephony_metrics(phone_numbers, now_ms - 30 * 24 * 60 * 60 * 1000)
     last_interaction_ms = _customer_last_interaction_ms(db, customer, phone_numbers)
     days_since_interaction = int((now_ms - last_interaction_ms) / 86400000) if last_interaction_ms > 0 else None
-    contact_due = bool(days_since_interaction is None or days_since_interaction >= 45)
     comm_load = round(float(telephony["minutes"]) + float(telephony["missed"]) * 5.0, 1)
 
     matched_sevdesk = _match_sevdesk_row(customer, sevdesk_rows)
@@ -6702,6 +7019,11 @@ def _build_customer_development_context(
     elif revenue_current_year > 0:
         revenue_trend_pct = 100.0
     last_invoice_at, days_since_last_invoice, invoice_activity_due = _extract_invoice_activity_from_row(matched_sevdesk, now_dt)
+    interaction_due = bool(days_since_interaction is None or days_since_interaction >= 60)
+    invoice_due_for_contact = bool(days_since_last_invoice is None or days_since_last_invoice >= 60)
+    contact_due = bool(interaction_due and invoice_due_for_contact)
+    if isinstance(days_since_interaction, int) and days_since_interaction >= 120:
+        contact_due = True
 
     integration = db.query(IntegrationSettings).first()
 
@@ -6727,6 +7049,7 @@ def _build_customer_development_context(
                 for row in name_candidates
                 if _dev_normalize_text(str(row.customer_name or "")) == normalized_customer_name
             ]
+    active_discovery_rows = [row for row in customer_discovery_rows if _discovery_row_is_active(row)]
     managed_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
     name_only_matches = [agent for agent in tactical_agents if _agent_matches_customer_name_only(agent, customer)]
     if full and managed_agents:
@@ -6734,9 +7057,9 @@ def _build_customer_development_context(
         if managed_agent_ids:
             managed_agent_details = _fetch_tactical_rmm_agent_detail_map(integration, managed_agent_ids)
             managed_agents = [{**agent, **(managed_agent_details.get(_extract_agent_id(agent), {}))} for agent in managed_agents]
-    discovered_total = len(customer_discovery_rows)
+    discovered_total = len(active_discovery_rows)
     discovered_unmanaged = sum(
-        1 for row in customer_discovery_rows if not bool(_discovery_row_value(row, "managed"))
+        1 for row in active_discovery_rows if not bool(_discovery_row_value(row, "managed"))
     )
     managed_count = len(managed_agents)
     offline_count = sum(1 for agent in managed_agents if not _agent_is_online(agent))
@@ -6765,7 +7088,7 @@ def _build_customer_development_context(
     for agent in managed_agents:
         key = _normalize_inventory_category(_managed_agent_inventory_category(agent))
         inventory_mix[key] = int(inventory_mix.get(key) or 0) + 1
-    for row in customer_discovery_rows:
+    for row in active_discovery_rows:
         # Managed entries are likely duplicates of RMM agents.
         if bool(_discovery_row_value(row, "managed")):
             continue
@@ -6793,9 +7116,8 @@ def _build_customer_development_context(
         or telephony["calls"] >= 8
         or interaction_load >= 4
     )
-    if is_engaged_customer:
+    if is_engaged_customer and not contact_due and not invoice_activity_due:
         business_risk = max(0, business_risk - 12)
-        signals.append("Aktive Kundeninteraktion (regelmäßige Anfragen)")
         if not has_contract and not is_regie_customer:
             recommendations.append(
                 {
@@ -6834,7 +7156,12 @@ def _build_customer_development_context(
             {"type": "betreuung", "title": "Offene Aufgaben bündeln", "why": "Mehrere offene Punkte beim Kunden."}
         )
     if contact_due:
-        business_risk += 8
+        if days_since_interaction is None or int(days_since_interaction or 0) >= 90:
+            business_risk += 14
+        elif int(days_since_interaction or 0) >= 60:
+            business_risk += 10
+        else:
+            business_risk += 6
         if days_since_interaction is None:
             inactivity_label = "keine dokumentierte Aktivität"
         else:
@@ -6847,8 +7174,8 @@ def _build_customer_development_context(
                 "why": f"Es besteht seit Längerem geringe Aktivität ({inactivity_label}).",
             }
         )
-    if days_since_last_invoice is not None and days_since_last_invoice >= 75:
-        business_risk += 15
+    if days_since_last_invoice is not None and days_since_last_invoice >= 120:
+        business_risk += 20
         signals.append(f"Lange ohne umgesetzte Leistung ({days_since_last_invoice} Tage seit letzter Rechnung)")
         recommendations.append(
             {
@@ -6857,8 +7184,15 @@ def _build_customer_development_context(
                 "why": f"Seit {days_since_last_invoice} Tagen wurde keine neue Leistung fakturiert.",
             }
         )
-    elif days_since_last_invoice is not None and days_since_last_invoice >= 45:
-        business_risk += 7
+    elif days_since_last_invoice is not None and days_since_last_invoice >= 75:
+        business_risk += 12
+        signals.append(f"Längere Umsetzungspause ({days_since_last_invoice} Tage seit letzter Rechnung)")
+    elif (
+        days_since_last_invoice is not None
+        and days_since_last_invoice >= 45
+        and not is_engaged_customer
+    ):
+        business_risk += 6
         signals.append(f"Umsetzungsrhythmus nimmt ab ({days_since_last_invoice} Tage seit letzter Rechnung)")
     if is_regie_customer:
         # Regie-Kunden sollen sichtbar bleiben, aber intern niedriger priorisiert werden.
@@ -6947,7 +7281,18 @@ def _build_customer_development_context(
         else:
             mapping_hint = "Keine zugeordneten RMM-Agenten für diesen Kunden gefunden."
     development_state = "INACTIVE" if (customer.status or "active").lower() == "inactive" else _dev_score_to_state(total_risk)
-    priority_score = round(total_risk + min(20.0, revenue_current_year / 10000.0), 1)
+    priority_score_raw = float(total_risk)
+    if contact_due:
+        priority_score_raw += 12
+    if invoice_activity_due:
+        priority_score_raw += 16
+    if not has_contract and not is_regie_customer:
+        priority_score_raw += 6
+    if is_regie_customer:
+        priority_score_raw -= 16
+    if is_engaged_customer and not contact_due and not invoice_activity_due:
+        priority_score_raw -= 10
+    priority_score = round(max(0.0, min(100.0, priority_score_raw)), 1)
     top_recommendations = recommendations[:3]
 
     light = {
@@ -7040,6 +7385,7 @@ def _build_customer_development_context(
                 "confidence": int(normalized_row.get("confidence") or 0),
                 "evidence": list(normalized_row.get("evidence") or []),
                 "managed": bool(normalized_row.get("managed")),
+                "active": bool(normalized_row.get("active", True)),
                 "lastSeenAt": int(normalized_row.get("lastSeenAt") or 0),
             }
         )
@@ -7732,6 +8078,11 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
             software_by_name[key] = {"name": name, "version": version}
 
     agents_payload: List[Dict[str, Any]] = []
+    lookup_cache: Dict[Tuple[str, str], Tuple[List[Dict[str, Any]], List[str]]] = {}
+    lookup_started_at = time.time()
+    lookup_budget_seconds = 55.0
+    lookup_max_unique = 40
+    lookup_unique_count = 0
     scanned = 0
     for agent_key in ordered_agent_keys:
         meta = agent_meta.get(agent_key, {"agentId": "", "hostname": "", "site": "", "client": "", "online": None})
@@ -7743,8 +8094,21 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
             scanned += 1
             name = str(item.get("name") or "").strip()
             version = str(item.get("version") or "").strip()
-            cves = _nvd_lookup(name, version)
-            fixed_versions = _osv_fixed_versions(name, version)
+            lookup_key = (name.lower(), version.lower())
+            if lookup_key in lookup_cache:
+                cves, fixed_versions = lookup_cache[lookup_key]
+            else:
+                budget_exceeded = (
+                    (time.time() - lookup_started_at) >= lookup_budget_seconds
+                    or lookup_unique_count >= lookup_max_unique
+                )
+                if budget_exceeded:
+                    cves, fixed_versions = [], []
+                else:
+                    lookup_unique_count += 1
+                    cves = _nvd_lookup(name, version)
+                    fixed_versions = _osv_fixed_versions(name, version)
+                lookup_cache[lookup_key] = (cves[:5], fixed_versions)
             if not cves and not fixed_versions:
                 continue
             agent_findings.append(
@@ -8315,6 +8679,56 @@ def sync_customers_from_sevdesk():
         }
 
 
+def _find_existing_discovery_device(
+    db,
+    *,
+    customer_id: Optional[int],
+    source: str,
+    hostname: str,
+    ip: str,
+    mac: str,
+) -> Optional[InfraDiscoveryDevice]:
+    query = db.query(InfraDiscoveryDevice).filter(
+        InfraDiscoveryDevice.customer_id == customer_id,
+        func.lower(func.trim(InfraDiscoveryDevice.source)) == source.lower(),
+    )
+    mac_no_sep = mac.replace(":", "")
+    if mac_no_sep:
+        row = (
+            query.filter(
+                func.replace(func.replace(func.lower(func.trim(InfraDiscoveryDevice.mac)), "-", ""), ":", "") == mac_no_sep
+            )
+            .order_by(InfraDiscoveryDevice.last_seen_at.desc(), InfraDiscoveryDevice.id.desc())
+            .first()
+        )
+        if row:
+            return row
+    if ip:
+        row = (
+            query.filter(func.lower(func.trim(InfraDiscoveryDevice.ip)) == ip.lower())
+            .order_by(InfraDiscoveryDevice.last_seen_at.desc(), InfraDiscoveryDevice.id.desc())
+            .first()
+        )
+        if row:
+            return row
+    if hostname:
+        row = (
+            query.filter(func.lower(func.trim(InfraDiscoveryDevice.hostname)) == hostname.lower())
+            .order_by(InfraDiscoveryDevice.last_seen_at.desc(), InfraDiscoveryDevice.id.desc())
+            .first()
+        )
+        if row:
+            return row
+    return (
+        query.filter(
+            func.lower(func.trim(InfraDiscoveryDevice.ip)) == ip.lower(),
+            func.replace(func.replace(func.lower(func.trim(InfraDiscoveryDevice.mac)), "-", ""), ":", "") == mac_no_sep,
+        )
+        .order_by(InfraDiscoveryDevice.last_seen_at.desc(), InfraDiscoveryDevice.id.desc())
+        .first()
+    )
+
+
 @app.post("/api/infrastructure/discovery")
 def ingest_infrastructure_discovery(
     payload: InfraDiscoveryIngestRequest,
@@ -8326,6 +8740,10 @@ def ingest_infrastructure_discovery(
     now_ms = int(time.time() * 1000)
     created = 0
     updated = 0
+    inactivated = 0
+    reactivated = 0
+    skipped = 0
+    touched_ids_by_scope: Dict[Tuple[int, str], Set[int]] = {}
     with SessionLocal() as db:
         for item in payload.items:
             resolved_customer_id = item.customer_id
@@ -8356,55 +8774,118 @@ def ingest_infrastructure_discovery(
                 if customer_match:
                     resolved_customer_id = customer_match.id
 
-            seen_at = int(item.seen_at or now_ms)
-            existing = (
-                db.query(InfraDiscoveryDevice)
-                .filter(
-                    func.lower(func.trim(InfraDiscoveryDevice.source))
-                    == func.lower(func.trim(item.source or "agent")),
-                    func.lower(func.trim(InfraDiscoveryDevice.ip))
-                    == func.lower(func.trim(item.ip or "")),
-                    func.lower(func.trim(InfraDiscoveryDevice.mac))
-                    == func.lower(func.trim(item.mac or "")),
-                    InfraDiscoveryDevice.customer_id == resolved_customer_id,
-                )
-                .first()
+            source_value = str(item.source or "agent").strip() or "agent"
+            source_key = source_value.lower()
+            hostname_value = str(item.hostname or "").strip()
+            ip_value = str(item.ip or "").strip()
+            mac_value = _normalize_discovery_mac_text(item.mac)
+            protocol_value = str(item.protocol or "").strip()
+            device_type_value = str(item.device_type or "").strip()
+            vendor_value = str(item.vendor or "").strip()
+            evidence_payload = (
+                [str(entry).strip() for entry in item.evidence if str(entry).strip()]
+                if isinstance(item.evidence, list)
+                else None
             )
-            if existing:
-                existing.customer_id = resolved_customer_id
-                existing.customer_number = item.customer_number or existing.customer_number
-                existing.customer_name = item.customer_name or existing.customer_name
-                existing.hostname = item.hostname or existing.hostname
-                existing.protocol = item.protocol or existing.protocol
-                existing.device_type = item.device_type or existing.device_type
-                existing.vendor = item.vendor or existing.vendor
-                existing.confidence = max(0, min(100, int(item.confidence or 0)))
-                existing.evidence = json.dumps(item.evidence or [])
-                existing.managed = bool(item.managed)
-                existing.last_seen_at = seen_at
-                updated += 1
+            seen_at = int(item.seen_at or now_ms)
+            if not hostname_value and not ip_value and not mac_value:
+                skipped += 1
                 continue
-            db.add(
-                InfraDiscoveryDevice(
+
+            existing = _find_existing_discovery_device(
+                db,
+                customer_id=resolved_customer_id,
+                source=source_value,
+                hostname=hostname_value,
+                ip=ip_value,
+                mac=mac_value,
+            )
+
+            if existing:
+                was_active = bool(existing.is_active)
+                existing.customer_id = resolved_customer_id
+                if str(item.customer_number or "").strip():
+                    existing.customer_number = str(item.customer_number or "").strip()
+                if str(item.customer_name or "").strip():
+                    existing.customer_name = str(item.customer_name or "").strip()
+                if hostname_value:
+                    existing.hostname = hostname_value
+                if ip_value:
+                    existing.ip = ip_value
+                if mac_value:
+                    existing.mac = mac_value
+                if protocol_value:
+                    existing.protocol = protocol_value
+                if device_type_value:
+                    existing.device_type = device_type_value
+                if vendor_value:
+                    existing.vendor = vendor_value
+                if item.confidence is not None:
+                    existing.confidence = max(0, min(100, int(item.confidence or 0)))
+                if evidence_payload is not None:
+                    existing.evidence = json.dumps(evidence_payload)
+                existing.managed = bool(item.managed)
+                existing.source = source_value
+                existing.last_seen_at = seen_at
+                existing.is_active = True
+                if not was_active:
+                    reactivated += 1
+                updated += 1
+                row = existing
+            else:
+                row = InfraDiscoveryDevice(
                     customer_id=resolved_customer_id,
-                    customer_number=item.customer_number or "",
-                    customer_name=item.customer_name or "",
-                    source=item.source or "agent",
-                    hostname=item.hostname or "",
-                    ip=item.ip or "",
-                    mac=item.mac or "",
-                    protocol=item.protocol or "",
-                    device_type=item.device_type or "",
-                    vendor=item.vendor or "",
+                    customer_number=str(item.customer_number or "").strip(),
+                    customer_name=str(item.customer_name or "").strip(),
+                    source=source_value,
+                    hostname=hostname_value,
+                    ip=ip_value,
+                    mac=mac_value,
+                    protocol=protocol_value,
+                    device_type=device_type_value,
+                    vendor=vendor_value,
                     confidence=max(0, min(100, int(item.confidence or 0))),
-                    evidence=json.dumps(item.evidence or []),
+                    evidence=json.dumps(evidence_payload or []),
                     managed=bool(item.managed),
+                    is_active=True,
                     last_seen_at=seen_at,
                 )
+                db.add(row)
+                db.flush()
+                created += 1
+
+            if resolved_customer_id is not None:
+                scope = (int(resolved_customer_id), source_key)
+                touched = touched_ids_by_scope.get(scope)
+                if touched is None:
+                    touched = set()
+                    touched_ids_by_scope[scope] = touched
+                touched.add(int(row.id))
+
+        for (scope_customer_id, scope_source), seen_ids in touched_ids_by_scope.items():
+            stale_rows = (
+                db.query(InfraDiscoveryDevice)
+                .filter(
+                    InfraDiscoveryDevice.customer_id == scope_customer_id,
+                    func.lower(func.trim(InfraDiscoveryDevice.source)) == scope_source,
+                    or_(InfraDiscoveryDevice.is_active == True, InfraDiscoveryDevice.is_active.is_(None)),
+                    ~InfraDiscoveryDevice.id.in_(list(seen_ids) or [-1]),
+                )
+                .all()
             )
-            created += 1
+            for stale in stale_rows:
+                stale.is_active = False
+                inactivated += 1
+
         db.commit()
-    return {"status": "ok", "created": created, "updated": updated}
+    return {
+        "status": "ok",
+        "created": created,
+        "updated": updated,
+        "reactivated": reactivated,
+        "inactivated": inactivated,
+        "skipped": skipped,
+    }
 
 
 # ============ REPORT CUSTOMERS (DUMMY) ============
@@ -8515,6 +8996,7 @@ def delete_customer(customer_id: int):
 
 @app.get("/api/customers/{customer_id}/metrics")
 def get_customer_metrics(customer_id: int):
+    contract_time_budget: Dict[str, Any] = {}
     with SessionLocal() as db:
         customer = db.query(Customer).get(customer_id)
         if not customer:
@@ -8558,6 +9040,7 @@ def get_customer_metrics(customer_id: int):
         address_parts = [customer.street, customer.postal_code, customer.city, customer.country]
         address = ", ".join([part for part in address_parts if part])
         phone_numbers = [phone.number for phone in customer.phones]
+        contract_time_budget = _customer_contract_time_budget(db, customer, now_ms)
 
     with SessionLocal() as db:
         metrics_settings = _get_customer_metrics_settings(db)
@@ -8577,6 +9060,7 @@ def get_customer_metrics(customer_id: int):
     start_ms = int(time.time() * 1000) - 30 * 24 * 60 * 60 * 1000
     missed_calls = 0
     total_seconds = 0
+    total_calls = 0
     if phone_digits:
         conditions = []
         params = {"since": start_ms}
@@ -8589,7 +9073,8 @@ def get_customer_metrics(customer_id: int):
         where_clause = " OR ".join(conditions)
         sql = (
             "SELECT COALESCE(SUM(duration), 0) AS total_seconds, "
-            "COALESCE(SUM(CASE WHEN answered = false THEN 1 ELSE 0 END), 0) AS missed_calls "
+            "COALESCE(SUM(CASE WHEN answered = false THEN 1 ELSE 0 END), 0) AS missed_calls, "
+            "COALESCE(COUNT(*), 0) AS total_calls "
             "FROM telephony_calls "
             "WHERE start_time >= :since AND (" + where_clause + ")"
         )
@@ -8599,9 +9084,11 @@ def get_customer_metrics(customer_id: int):
                 if row:
                     total_seconds = int(row.get("total_seconds") or 0)
                     missed_calls = int(row.get("missed_calls") or 0)
+                    total_calls = int(row.get("total_calls") or 0)
         except Exception:
             total_seconds = 0
             missed_calls = 0
+            total_calls = 0
 
     total_minutes = round(total_seconds / 60, 1) if total_seconds else 0
     try:
@@ -8627,6 +9114,7 @@ def get_customer_metrics(customer_id: int):
 
     revenue_current_year = None
     revenue_last_year = None
+    revenue_total = None
     revenue_delta = None
     revenue_delta_pct = None
     if integration_settings:
@@ -8659,21 +9147,24 @@ def get_customer_metrics(customer_id: int):
                     start_current_year = datetime(now_dt.year, 1, 1)
                     start_last_year = datetime(now_dt.year - 1, 1, 1)
                     end_last_year = datetime(now_dt.year - 1, 12, 31, 23, 59, 59)
+                    sum_total = 0.0
                     sum_current = 0.0
                     sum_last = 0.0
                     for invoice in invoices:
                         if not _invoice_is_paid(invoice):
                             continue
-                        paid_date = _invoice_date_for_paid(invoice)
-                        if not paid_date:
-                            continue
                         amount = _invoice_paid_amount(invoice)
                         if amount <= 0:
+                            continue
+                        sum_total += amount
+                        paid_date = _invoice_date_for_paid(invoice)
+                        if not paid_date:
                             continue
                         if start_current_year <= paid_date <= now_dt:
                             sum_current += amount
                         elif start_last_year <= paid_date <= end_last_year:
                             sum_last += amount
+                    revenue_total = round(sum_total, 2)
                     revenue_current_year = round(sum_current, 2)
                     revenue_last_year = round(sum_last, 2)
                     revenue_delta = round(revenue_current_year - revenue_last_year, 2)
@@ -8682,10 +9173,12 @@ def get_customer_metrics(customer_id: int):
                 except SevdeskError:
                     revenue_current_year = None
                     revenue_last_year = None
+                    revenue_total = None
                     revenue_delta = None
                     revenue_delta_pct = None
 
     return {
+        "customerId": int(customer_id),
         "openTasks": open_tasks,
         "openTimeTasks": open_time_tasks,
         "openDayTasks": open_day_tasks,
@@ -8694,11 +9187,14 @@ def get_customer_metrics(customer_id: int):
         "distanceKm": distance_km,
         "mileageEur": mileage_eur,
         "missedCalls": missed_calls,
+        "totalCalls": total_calls,
         "totalMinutes": total_minutes,
+        "revenueTotalEur": revenue_total,
         "revenueCurrentYearEur": revenue_current_year,
         "revenueLastYearEur": revenue_last_year,
         "revenueDeltaEur": revenue_delta,
-        "revenueDeltaPct": revenue_delta_pct
+        "revenueDeltaPct": revenue_delta_pct,
+        "contractTimeBudget": contract_time_budget,
     }
 
 
@@ -10963,6 +11459,9 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         generated_at = now.strftime("%d.%m.%Y")
         valid_from = str(data.valid_from or "").strip() or generated_at
         runtime_months = max(1, _safe_nonnegative_int(data.runtime_months or 12))
+        monthly_hours_included = _safe_nonnegative_float(data.monthly_hours_included or 0.0)
+        if template_key not in {"wartung", "monitoring"}:
+            monthly_hours_included = 0.0
 
         servers = _safe_nonnegative_int(data.servers or 0)
         clients = _safe_nonnegative_int(data.clients or 0)
@@ -11039,6 +11538,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             "iot_devices": str(iot_devices),
             "monthly_total": _format_contract_currency(monthly_total),
             "yearly_total": _format_contract_currency(yearly_total),
+            "monthly_hours_included": _format_contract_hours(monthly_hours_included),
             "service_scope": escape(service_scope),
             "note_block": note_block,
         }
@@ -11070,6 +11570,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 "iot_devices": iot_devices,
                 "monthly_total": round(float(monthly_total or 0.0), 2),
                 "yearly_total": round(float(yearly_total or 0.0), 2),
+                "monthly_hours_included": round(float(monthly_hours_included or 0.0), 2),
                 "tariff": serialize_contract_tariff(tariff) if tariff else None,
             },
         }
@@ -11093,6 +11594,10 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
         status_value = str(data.status or "active").strip().lower()
         if status_value not in {"active", "proposal"}:
             status_value = "active"
+        doc_type_value = str(data.doc_type or "vertrag").strip().lower() or "vertrag"
+        monthly_hours_included = _safe_nonnegative_float(data.monthly_hours_included or 0.0)
+        if doc_type_value not in {"wartung", "monitoring"}:
+            monthly_hours_included = 0.0
         # Validate base64 payload.
         try:
             base64.b64decode(content_base64, validate=True)
@@ -11101,13 +11606,14 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
         row = CustomerContractDocument(
             customer_id=customer.id,
             title=title,
-            doc_type=str(data.doc_type or "vertrag").strip().lower() or "vertrag",
+            doc_type=doc_type_value,
             status=status_value,
             file_name=file_name,
             mime_type=str(data.mime_type or "application/pdf").strip() or "application/pdf",
             content_base64=content_base64,
             html_content=str(data.html_content or ""),
             template_key=str(data.template_key or "").strip().lower(),
+            monthly_hours_included=monthly_hours_included,
             note=str(data.note or "").strip(),
             created_at=int(time.time() * 1000),
         )

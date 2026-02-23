@@ -65,30 +65,12 @@ const api = {
       if (!r.ok) throw new Error(data?.detail || "tariff_deactivate_failed");
       return data;
     }),
-  listCustomerContractCalculations: (customerId) =>
-    fetch(`${API}/customers/${customerId}/contract_calculations`).then((r) => r.json()),
-  createCustomerContractCalculation: (customerId, payload) =>
-    fetch(`${API}/customers/${customerId}/contract_calculations`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.detail || "contract_calc_failed");
-      return data;
-    }),
   listCustomerContracts: (customerId, status = "") =>
     fetch(
       `${API}/customers/${customerId}/contracts${
         String(status || "").trim() ? `?status=${encodeURIComponent(String(status || "").trim())}` : ""
       }`
     ).then((r) => r.json()),
-  downloadLatestCustomerContract: (customerId, status) =>
-    fetch(
-      `${API}/customers/${customerId}/contracts/download_latest?status=${encodeURIComponent(
-        String(status || "").trim() || "active"
-      )}`
-    ),
   listCustomerDevelopment: (includeInactive = true, refresh = false) =>
     fetch(
       `${API}/customer_development?include_inactive=${includeInactive ? "1" : "0"}&refresh=${refresh ? "1" : "0"}`
@@ -180,7 +162,7 @@ const normalizeContractFlags = (flags) => {
     seen.add(key);
     values.push(key);
   });
-  if (seen.has("regie") && (seen.has("wartung") || seen.has("monitoring"))) {
+  if (seen.has("regie") && seen.has("wartung")) {
     return values.filter((entry) => entry !== "regie");
   }
   return values;
@@ -256,8 +238,7 @@ const applyContractFlagChange = (flags, contractId, checked) => {
     current.add(key);
     if (key === "regie") {
       current.delete("wartung");
-      current.delete("monitoring");
-    } else if (key === "wartung" || key === "monitoring") {
+    } else if (key === "wartung") {
       current.delete("regie");
     }
   } else {
@@ -288,22 +269,22 @@ const formatEurPrecise = (value) => {
   });
 };
 
-const parseMoneyInput = (value, fallback = 0) => {
-  const raw = String(value ?? "").trim();
-  if (!raw) {
-    const fallbackNumber = Number(fallback || 0);
-    return Number.isFinite(fallbackNumber) ? Math.max(0, fallbackNumber) : 0;
-  }
-  let normalized = raw.replace(/\s/g, "");
-  if (normalized.includes(",")) {
-    normalized = normalized.replace(/\./g, "").replace(",", ".");
-  }
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed)) {
-    const fallbackNumber = Number(fallback || 0);
-    return Number.isFinite(fallbackNumber) ? Math.max(0, fallbackNumber) : 0;
-  }
-  return Math.max(0, parsed);
+const parseHoursInput = (value) => {
+  const normalized = String(value || "")
+    .trim()
+    .replace(",", ".");
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return parsed;
+};
+
+const formatHours = (value, fractionDigits = 2) => {
+  const hours = Number(value || 0);
+  if (!Number.isFinite(hours)) return "0,00 h";
+  return `${hours.toLocaleString("de-DE", {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits
+  })} h`;
 };
 
 const deriveContractCountsFromDevelopment = (context) => {
@@ -343,6 +324,7 @@ export default function CustomerDirectoryView() {
   const [syncBusy, setSyncBusy] = useState(false);
   const [metrics, setMetrics] = useState(null);
   const [metricsStatus, setMetricsStatus] = useState("idle");
+  const [metricsReloadTick, setMetricsReloadTick] = useState(0);
   const [importPreview, setImportPreview] = useState(null);
   const [importApplyCreate, setImportApplyCreate] = useState(true);
   const [importApplyUpdate, setImportApplyUpdate] = useState(true);
@@ -384,12 +366,8 @@ export default function CustomerDirectoryView() {
     servers: "0",
     clients: "0",
     networkDevices: "0",
-    iotDevices: "0",
-    note: ""
+    iotDevices: "0"
   });
-  const [calcHistory, setCalcHistory] = useState([]);
-  const [calcHistoryStatus, setCalcHistoryStatus] = useState("idle");
-  const [calcSaveStatus, setCalcSaveStatus] = useState("idle");
   const [calcImportStatus, setCalcImportStatus] = useState("idle");
   const [customerContracts, setCustomerContracts] = useState([]);
   const [contractsStatus, setContractsStatus] = useState("idle");
@@ -399,11 +377,9 @@ export default function CustomerDirectoryView() {
   const [contractDraft, setContractDraft] = useState({
     title: "",
     docType: "vertrag",
-    note: "",
     validFrom: "",
     runtimeMonths: "12",
-    monthlyTotal: "",
-    yearlyTotal: "",
+    monthlyHoursIncluded: "0",
     markAsProposal: true
   });
   const saveTimers = useRef({});
@@ -557,29 +533,6 @@ export default function CustomerDirectoryView() {
 
   useEffect(() => {
     if (!activeId) {
-      setCalcHistory([]);
-      return;
-    }
-    let active = true;
-    setCalcHistoryStatus("loading");
-    api
-      .listCustomerContractCalculations(activeId)
-      .then((rows) => {
-        if (!active) return;
-        setCalcHistory(Array.isArray(rows) ? rows : []);
-        setCalcHistoryStatus("ready");
-      })
-      .catch(() => {
-        if (!active) return;
-        setCalcHistoryStatus("error");
-      });
-    return () => {
-      active = false;
-    };
-  }, [activeId]);
-
-  useEffect(() => {
-    if (!activeId) {
       setCustomerContracts([]);
       return;
     }
@@ -654,17 +607,13 @@ export default function CustomerDirectoryView() {
     return { monthly, yearly: monthly * 12, counts };
   }, [selectedTariff, calcInput]);
 
-  const contractTotals = useMemo(() => {
-    const hasMonthlyOverride = String(contractDraft.monthlyTotal || "").trim() !== "";
-    const hasYearlyOverride = String(contractDraft.yearlyTotal || "").trim() !== "";
-    const monthly = hasMonthlyOverride
-      ? parseMoneyInput(contractDraft.monthlyTotal, contractPreview.monthly)
-      : Number(contractPreview.monthly || 0);
-    const yearly = hasYearlyOverride
-      ? parseMoneyInput(contractDraft.yearlyTotal, contractPreview.yearly)
-      : monthly * 12;
-    return { monthly, yearly, hasMonthlyOverride, hasYearlyOverride };
-  }, [contractDraft.monthlyTotal, contractDraft.yearlyTotal, contractPreview.monthly, contractPreview.yearly]);
+  const contractTotals = useMemo(
+    () => ({
+      monthly: Number(contractPreview.monthly || 0),
+      yearly: Number(contractPreview.yearly || 0)
+    }),
+    [contractPreview.monthly, contractPreview.yearly]
+  );
 
   useEffect(() => {
     setGeneratedContract(null);
@@ -672,11 +621,9 @@ export default function CustomerDirectoryView() {
     activeId,
     contractDraft.title,
     contractDraft.docType,
-    contractDraft.note,
     contractDraft.validFrom,
     contractDraft.runtimeMonths,
-    contractDraft.monthlyTotal,
-    contractDraft.yearlyTotal,
+    contractDraft.monthlyHoursIncluded,
     selectedTariff?.id,
     contractPreview.monthly,
     contractPreview.yearly,
@@ -685,53 +632,6 @@ export default function CustomerDirectoryView() {
     contractPreview.counts.networkDevices,
     contractPreview.counts.iotDevices
   ]);
-
-  const refreshTariffs = async () => {
-    const list = await api.listContractTariffs(false);
-    const rows = Array.isArray(list) ? list : [];
-    setContractTariffs(rows);
-    setCalcInput((prev) => {
-      const currentExists = rows.some((item) => Number(item.id) === Number(prev.tariffId));
-      if (currentExists) return prev;
-      const firstActive = rows.find((item) => Boolean(item?.is_active));
-      return { ...prev, tariffId: firstActive?.id ?? null };
-    });
-  };
-
-  const saveTariffSuggestion = async () => {
-    if (!activeId || !selectedTariff?.id) return;
-    setCalcSaveStatus("saving");
-    try {
-      const saved = await api.createCustomerContractCalculation(activeId, {
-        tariff_id: selectedTariff.id,
-        servers: contractPreview.counts.servers,
-        clients: contractPreview.counts.clients,
-        network_devices: contractPreview.counts.networkDevices,
-        iot_devices: contractPreview.counts.iotDevices,
-        note: String(calcInput.note || "")
-      });
-      setCalcHistory((prev) => [saved, ...prev].slice(0, 50));
-      setCalcSaveStatus("saved");
-      setTimeout(() => setCalcSaveStatus("idle"), 1800);
-    } catch {
-      setCalcSaveStatus("error");
-      setTimeout(() => setCalcSaveStatus("idle"), 2200);
-    }
-  };
-
-  const applySuggestionToCalculator = (row) => {
-    if (!row) return;
-    setCalcInput((prev) => ({
-      ...prev,
-      tariffId: row.tariff_id || row.tariffId || prev.tariffId || null,
-      servers: String(row.servers ?? 0),
-      clients: String(row.clients ?? 0),
-      networkDevices: String(row.network_devices ?? row.networkDevices ?? 0),
-      iotDevices: String(row.iot_devices ?? row.iotDevices ?? 0),
-      note: String(row.note || "")
-    }));
-    setContractCalcModalOpen(true);
-  };
 
   const importCalcValuesFromRmm = async () => {
     if (!activeId) return;
@@ -754,10 +654,6 @@ export default function CustomerDirectoryView() {
         clients: String(counts.clients),
         networkDevices: String(counts.networkDevices),
         iotDevices: String(counts.iotDevices),
-        note: String(
-          prev.note ||
-            `Auto-Import Meta-Hub: ${counts.managed} RMM-Agents, ${counts.discovered} Inventar-Geräte`
-        ),
       }));
       setCalcImportStatus("done");
       setTimeout(() => setCalcImportStatus("idle"), 1800);
@@ -821,12 +717,18 @@ export default function CustomerDirectoryView() {
 
   const generateContractPreview = async (openModal = true) => {
     if (!activeId) return null;
+    const supportsHoursBudget = ["wartung", "monitoring"].includes(
+      String(contractDraft.docType || "").trim().toLowerCase()
+    );
+    const monthlyHoursIncluded = supportsHoursBudget
+      ? parseHoursInput(contractDraft.monthlyHoursIncluded)
+      : 0;
     setContractPreviewStatus("saving");
     try {
       const preview = await api.previewCustomerContract(activeId, {
         title: String(contractDraft.title || "").trim(),
         doc_type: String(contractDraft.docType || "vertrag"),
-        note: String(contractDraft.note || ""),
+        note: "",
         valid_from: String(contractDraft.validFrom || ""),
         runtime_months: Number(contractDraft.runtimeMonths || 12),
         tariff_id: selectedTariff?.id || null,
@@ -835,7 +737,8 @@ export default function CustomerDirectoryView() {
         network_devices: contractPreview.counts.networkDevices,
         iot_devices: contractPreview.counts.iotDevices,
         monthly_total: contractTotals.monthly,
-        yearly_total: contractTotals.yearly
+        yearly_total: contractTotals.yearly,
+        monthly_hours_included: monthlyHoursIncluded
       });
       setGeneratedContract(preview);
       setContractPreviewStatus("saved");
@@ -872,7 +775,7 @@ export default function CustomerDirectoryView() {
     }
   };
 
-  const saveGeneratedContract = async ({ downloadAfterSave = false } = {}) => {
+  const saveGeneratedContract = async () => {
     if (!activeId) return;
     setContractSaveStatus("saving");
     try {
@@ -891,19 +794,13 @@ export default function CustomerDirectoryView() {
         content_base64: contentBase64,
         html_content: String(source.html || ""),
         template_key: String(source.template_key || contractDraft.docType || "vertrag"),
-        note: String(contractDraft.note || ""),
+        monthly_hours_included: Number(source?.meta?.monthly_hours_included ?? parseHoursInput(contractDraft.monthlyHoursIncluded)),
+        note: "",
         status: contractDraft.markAsProposal ? "proposal" : "active"
       });
       setCustomerContracts((prev) => [saved, ...prev]);
       setGeneratedContract(source);
-      if (downloadAfterSave) {
-        const anchor = document.createElement("a");
-        anchor.href = dataUri;
-        anchor.download = source.file_name || "vertrag.pdf";
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      }
+      setMetricsReloadTick((prev) => prev + 1);
       setContractSaveStatus("saved");
       setTimeout(() => setContractSaveStatus("idle"), 1800);
     } catch {
@@ -931,31 +828,13 @@ export default function CustomerDirectoryView() {
     }
   };
 
-  const downloadLatestContractByStatus = async (status, fallbackName = "vertrag.pdf") => {
-    if (!activeId) return;
-    try {
-      const res = await api.downloadLatestCustomerContract(activeId, status);
-      if (!res.ok) throw new Error("download_latest_failed");
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = fallbackName;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.URL.revokeObjectURL(url);
-    } catch {
-      setToast("Kein passendes Vertragsdokument für diesen Status gefunden.");
-    }
-  };
-
   const cancelContractDocument = async (contractId) => {
     if (!activeId || !contractId) return;
     const reason = window.prompt("Stornogrund (optional):", "") || "";
     try {
       const updated = await api.cancelCustomerContract(activeId, contractId, reason);
       setCustomerContracts((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setMetricsReloadTick((prev) => prev + 1);
     } catch {
       setToast("Stornierung fehlgeschlagen.");
     }
@@ -966,6 +845,7 @@ export default function CustomerDirectoryView() {
     try {
       const updated = await api.reactivateCustomerContract(activeId, contractId);
       setCustomerContracts((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setMetricsReloadTick((prev) => prev + 1);
     } catch {
       setToast("Reaktivierung fehlgeschlagen.");
     }
@@ -976,6 +856,7 @@ export default function CustomerDirectoryView() {
     try {
       const updated = await api.markCustomerContractProposal(activeId, contractId);
       setCustomerContracts((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setMetricsReloadTick((prev) => prev + 1);
     } catch {
       setToast("Markierung als Vorschlag fehlgeschlagen.");
     }
@@ -1000,11 +881,9 @@ export default function CustomerDirectoryView() {
     setContractDraft({
       title: customerLabel ? `Wartungsvertrag ${customerLabel}` : "",
       docType: "wartung",
-      note: "",
       validFrom: "",
       runtimeMonths: "12",
-      monthlyTotal: "",
-      yearlyTotal: "",
+      monthlyHoursIncluded: "0",
       markAsProposal: true
     });
     setGeneratedContract(null);
@@ -1017,6 +896,7 @@ export default function CustomerDirectoryView() {
     try {
       await api.deleteCustomerContract(activeId, contractId);
       setCustomerContracts((prev) => prev.filter((item) => item.id !== contractId));
+      setMetricsReloadTick((prev) => prev + 1);
     } catch {
       setToast("Löschen fehlgeschlagen.");
     }
@@ -1079,11 +959,144 @@ export default function CustomerDirectoryView() {
 
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
   const editCustomer = customers.find((customer) => customer.id === editCustomerId) || null;
+  const editContractFlags = normalizeContractFlags(editCustomer?.contractFlags || []);
+  const editHasServiceContract =
+    Boolean(editCustomer?.maintenanceContract) ||
+    editContractFlags.includes("wartung") ||
+    editContractFlags.includes("monitoring");
+  const metricsCustomerId = Number(editCustomer?.id || activeCustomer?.id || 0);
+  const selectedCustomerMetrics =
+    metrics &&
+    Number(metrics?.customerId || 0) === metricsCustomerId &&
+    typeof metrics === "object"
+      ? metrics
+      : null;
+  const contractTimeBudget =
+    selectedCustomerMetrics?.contractTimeBudget &&
+    typeof selectedCustomerMetrics.contractTimeBudget === "object"
+      ? selectedCustomerMetrics.contractTimeBudget
+      : null;
+  const revenueDeltaPctValue = Number(selectedCustomerMetrics?.revenueDeltaPct);
+  const revenueDeltaPctLabel = Number.isFinite(revenueDeltaPctValue)
+    ? `${revenueDeltaPctValue > 0 ? "+" : ""}${revenueDeltaPctValue.toLocaleString("de-DE", {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1
+      })}%`
+    : "n/a";
+  const revenueDeltaPctTone = Number.isFinite(revenueDeltaPctValue)
+    ? revenueDeltaPctValue <= -10
+      ? "text-rose-700"
+      : revenueDeltaPctValue >= 10
+      ? "text-emerald-700"
+      : "text-amber-700"
+    : "text-sand-500";
+  const monthlyTaskHours = Number(contractTimeBudget?.taskHours || 0);
+  const monthlyTelephonyHours = Number(contractTimeBudget?.telephonyHours || 0);
+  const monthlyConsumedHours = Number(contractTimeBudget?.consumedHours || 0);
+  const openEffortHours = Number(selectedCustomerMetrics?.openTimeMinutes || 0) / 60;
   const totalCustomers = customers.length;
   const inactiveCustomers = customers.filter(
     (customer) => String(customer.status || "active").toLowerCase() === "inactive"
   ).length;
   const activeCustomers = Math.max(0, totalCustomers - inactiveCustomers);
+
+  const renderContractListItem = (item) => {
+    const status = String(item?.status || "active").toLowerCase();
+    const monthlyHoursIncluded = Number(item?.monthly_hours_included || 0);
+    const badgeClass =
+      status === "cancelled"
+        ? "border-rose-200 bg-rose-50 text-rose-700"
+        : status === "proposal"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : "border-emerald-200 bg-emerald-50 text-emerald-700";
+    const label = status === "cancelled" ? "Storniert" : status === "proposal" ? "Vorschlag" : "Aktiv";
+    return (
+      <div key={item.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-semibold text-sand-800">{item.title || "Vertrag"}</p>
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${badgeClass}`}>{label}</span>
+        </div>
+        {monthlyHoursIncluded > 0 ? (
+          <p className="mt-1 text-[11px] text-sand-600">Inklusivstunden: {formatHours(monthlyHoursIncluded)}</p>
+        ) : null}
+        {status === "proposal" ? (
+          <p className="mt-1 text-[11px] text-amber-700">Kunde hat noch nicht eingewilligt. Als Vorschlag geführt.</p>
+        ) : null}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              setPreviewModal({
+                open: true,
+                title: item.title || "Vertrag",
+                html: String(item.html_content || "<p>Keine Vorschau hinterlegt.</p>")
+              })
+            }
+            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+          >
+            <Eye size={11} /> Vorschau
+          </button>
+          <button
+            type="button"
+            onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
+            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+          >
+            <FileDown size={11} /> {status === "proposal" ? "Vorschlag PDF" : status === "active" ? "Final PDF" : "PDF"}
+          </button>
+          {status === "cancelled" ? (
+            <button
+              type="button"
+              onClick={() => reactivateContractDocument(item.id)}
+              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+            >
+              Reaktivieren
+            </button>
+          ) : status === "proposal" ? (
+            <>
+              <button
+                type="button"
+                onClick={() => reactivateContractDocument(item.id)}
+                className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
+              >
+                Als aktiv markieren
+              </button>
+              <button
+                type="button"
+                onClick={() => cancelContractDocument(item.id)}
+                className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+              >
+                Stornieren
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => markContractDocumentAsProposal(item.id)}
+                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
+              >
+                Als Vorschlag
+              </button>
+              <button
+                type="button"
+                onClick={() => cancelContractDocument(item.id)}
+                className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+              >
+                Stornieren
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => deleteContractDocument(item.id)}
+            className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+          >
+            <Trash2 size={11} /> Löschen
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   useEffect(() => {
     if (!activeCustomer?.id) {
@@ -1104,12 +1117,13 @@ export default function CustomerDirectoryView() {
       })
       .catch(() => {
         if (!active) return;
+        setMetrics(null);
         setMetricsStatus("error");
       });
     return () => {
       active = false;
     };
-  }, [activeCustomer?.id]);
+  }, [activeCustomer?.id, metricsReloadTick]);
 
   useEffect(() => {
     if (!activeCustomer?.name) {
@@ -1916,9 +1930,9 @@ export default function CustomerDirectoryView() {
   const renderContractCalculationContent = () => (
     <div className="space-y-3">
       <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
-        <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kundenspezifische Kalkulation</p>
-        <div className="mt-2.5 grid gap-2 md:grid-cols-4">
-          <label className="block md:col-span-2">
+        <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kalkulation</p>
+        <div className="mt-2.5 space-y-2.5">
+          <label className="block">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">1) Vertragstyp</span>
             <select
               value={contractDraft.docType}
@@ -1931,7 +1945,7 @@ export default function CustomerDirectoryView() {
               <option value="avv_dsgvo">AVV / DSGVO</option>
             </select>
           </label>
-          <label className="block md:col-span-2">
+          <label className="block">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Tarif</span>
             <select
               value={calcInput.tariffId || ""}
@@ -1944,91 +1958,81 @@ export default function CustomerDirectoryView() {
                   : "Tarif wählen (optional)"}
               </option>
               {filteredActiveTariffs.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} ({item.category})
-                  </option>
-                ))}
+                <option key={item.id} value={item.id}>
+                  {item.name} ({item.category})
+                </option>
+              ))}
             </select>
           </label>
-          <div className="md:col-span-2 flex items-end" />
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">3) Server</span>
-            <input value={calcInput.servers} onChange={(event) => setCalcInput((prev) => ({ ...prev, servers: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Clients</span>
-            <input value={calcInput.clients} onChange={(event) => setCalcInput((prev) => ({ ...prev, clients: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Netzwerkgeräte</span>
-            <input value={calcInput.networkDevices} onChange={(event) => setCalcInput((prev) => ({ ...prev, networkDevices: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">IoT</span>
-            <input value={calcInput.iotDevices} onChange={(event) => setCalcInput((prev) => ({ ...prev, iotDevices: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
-          </label>
-          <label className="block md:col-span-4">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
-            <input value={calcInput.note} onChange={(event) => setCalcInput((prev) => ({ ...prev, note: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
-          </label>
+          {contractTariffsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Tarife…</p> : null}
+          {contractTariffsStatus === "error" ? <p className="text-xs text-rose-600">Tarife konnten nicht geladen werden.</p> : null}
+          <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">3) Mengenblock</p>
+              <button
+                type="button"
+                onClick={importCalcValuesFromRmm}
+                className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+              >
+                Aus RMM/Discovery übernehmen
+              </button>
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-4">
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">Server</span>
+                <input
+                  value={calcInput.servers}
+                  onChange={(event) => setCalcInput((prev) => ({ ...prev, servers: event.target.value }))}
+                  className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">Clients</span>
+                <input
+                  value={calcInput.clients}
+                  onChange={(event) => setCalcInput((prev) => ({ ...prev, clients: event.target.value }))}
+                  className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">Netzwerkgeräte</span>
+                <input
+                  value={calcInput.networkDevices}
+                  onChange={(event) => setCalcInput((prev) => ({ ...prev, networkDevices: event.target.value }))}
+                  className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">IoT</span>
+                <input
+                  value={calcInput.iotDevices}
+                  onChange={(event) => setCalcInput((prev) => ({ ...prev, iotDevices: event.target.value }))}
+                  className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+                />
+              </label>
+            </div>
+          </div>
         </div>
-        <div className="mt-2.5 grid gap-2 md:grid-cols-[1fr_1fr_auto] items-center">
+        <div className="mt-2.5 grid gap-2 md:grid-cols-2">
           <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
-            <p className="text-[10px] uppercase tracking-wide text-sand-500">Monat</p>
+            <p className="text-[10px] uppercase tracking-wide text-sand-500">Monatspreis</p>
             <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractPreview.monthly)}</p>
           </div>
           <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
-            <p className="text-[10px] uppercase tracking-wide text-sand-500">Jahr</p>
+            <p className="text-[10px] uppercase tracking-wide text-sand-500">Jahrespreis</p>
             <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractPreview.yearly)}</p>
           </div>
-          <button
-            type="button"
-            onClick={saveTariffSuggestion}
-            disabled={!selectedTariff}
-            className={`inline-flex items-center justify-center gap-2 rounded-full border px-4 py-2 text-xs uppercase tracking-wide ${
-              selectedTariff ? "border-sand-200 bg-sand-900 text-white" : "border-sand-200 bg-sand-100 text-sand-400"
-            }`}
-          >
-            Tarif als Vorschlag speichern
-          </button>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          {calcSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
-          {calcSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
           {calcImportStatus === "loading" ? <span className="text-xs text-sand-500">Importiere aus Meta-Hub…</span> : null}
           {calcImportStatus === "done" ? <span className="text-xs text-emerald-600">Werte übernommen</span> : null}
           {calcImportStatus === "empty" ? <span className="text-xs text-amber-700">Keine Meta-Hub Infrastrukturdaten gefunden</span> : null}
           {calcImportStatus === "error" ? <span className="text-xs text-rose-600">Meta-Hub Import fehlgeschlagen</span> : null}
         </div>
-        <div className="mt-3">
-          <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Vorschlags-Historie</p>
-          <div className="mt-1.5 space-y-1.5 max-h-48 overflow-auto pr-1">
-            {(calcHistory || []).map((row) => (
-              <div key={row.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
-                <p className="font-semibold text-sand-800">
-                  {row.tariff_name} ({row.tariff_category})
-                </p>
-                <p className="text-[11px] text-sand-600">
-                  Server {row.servers} · Clients {row.clients} · Netzwerk {row.network_devices} · IoT {row.iot_devices}
-                </p>
-                <p className="text-[11px] text-sand-700">
-                  {formatEurPrecise(row.monthly_total)} / Monat · {formatEurPrecise(row.yearly_total)} / Jahr
-                </p>
-                <p className="text-[10px] text-sand-500">
-                  {new Date(row.created_at || Date.now()).toLocaleString("de-DE")}
-                </p>
-              </div>
-            ))}
-            {calcHistoryStatus === "loading" ? <p className="text-xs text-sand-500">Lade Historie…</p> : null}
-            {!calcHistory.length && calcHistoryStatus !== "loading" ? (
-              <p className="text-xs text-sand-500">Noch keine gespeicherten Vorschläge.</p>
-            ) : null}
-          </div>
-        </div>
       </div>
       <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Neuen Vertrag anlegen</p>
+          <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Vertragsdetail</p>
           <span className="text-[11px] text-sand-500">
             Grundlage: {selectedTariff ? `${selectedTariff.name}` : "Ohne Tarif (z.B. AVV)"}
           </span>
@@ -2072,37 +2076,43 @@ export default function CustomerDirectoryView() {
               className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             />
           </label>
-          <label className="block md:col-span-2">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Hinweis im Vertrag</span>
-            <input
-              value={contractDraft.note}
-              onChange={(event) => setContractDraft((prev) => ({ ...prev, note: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Monatspreis (optional)</span>
-            <input
-              value={contractDraft.monthlyTotal}
-              onChange={(event) => setContractDraft((prev) => ({ ...prev, monthlyTotal: event.target.value }))}
-              placeholder={formatEurPrecise(contractPreview.monthly)}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Jahrespreis (optional)</span>
-            <input
-              value={contractDraft.yearlyTotal}
-              onChange={(event) => setContractDraft((prev) => ({ ...prev, yearlyTotal: event.target.value }))}
-              placeholder={formatEurPrecise(contractPreview.yearly)}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            />
-          </label>
+          {["wartung", "monitoring"].includes(String(contractDraft.docType || "").trim().toLowerCase()) ? (
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Inklusivstunden pro Monat</span>
+              <input
+                type="number"
+                min="0"
+                step="0.25"
+                value={contractDraft.monthlyHoursIncluded}
+                onChange={(event) => setContractDraft((prev) => ({ ...prev, monthlyHoursIncluded: event.target.value }))}
+                className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+              />
+            </label>
+          ) : null}
         </div>
-        <p className="mt-2 text-[11px] text-sand-500">
-          Tarifpreise sind Vorschlagswerte. Leer = Vorschlag verwenden.
-          {` Aktuell: ${formatEurPrecise(contractTotals.monthly)} / Monat · ${formatEurPrecise(contractTotals.yearly)} / Jahr.`}
-        </p>
+        <div
+          className={`mt-2.5 grid gap-2 ${
+            ["wartung", "monitoring"].includes(String(contractDraft.docType || "").trim().toLowerCase())
+              ? "md:grid-cols-3"
+              : "md:grid-cols-2"
+          }`}
+        >
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5">
+            <p className="text-[10px] uppercase tracking-wide text-emerald-700">Monatspreis übernommen</p>
+            <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.monthly)}</p>
+          </div>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5">
+            <p className="text-[10px] uppercase tracking-wide text-emerald-700">Jahrespreis übernommen</p>
+            <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.yearly)}</p>
+          </div>
+          {["wartung", "monitoring"].includes(String(contractDraft.docType || "").trim().toLowerCase()) ? (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-sky-700">Stundenbudget / Monat</p>
+              <p className="text-base font-semibold text-sky-900">{formatHours(parseHoursInput(contractDraft.monthlyHoursIncluded))}</p>
+            </div>
+          ) : null}
+        </div>
+        <p className="mt-2 text-[11px] text-sand-500">Preis wird direkt aus der Kalkulation übernommen.</p>
         <label className="mt-2 inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
           <input
             type="checkbox"
@@ -2136,14 +2146,6 @@ export default function CustomerDirectoryView() {
           >
             <BadgeCheck size={12} />
             {contractDraft.markAsProposal ? "Als Vorschlag speichern" : "Als aktiv speichern"}
-          </button>
-          <button
-            type="button"
-            onClick={() => saveGeneratedContract({ downloadAfterSave: true })}
-            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100"
-          >
-            <FileDown size={12} />
-            Speichern + PDF laden
           </button>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -2391,7 +2393,7 @@ export default function CustomerDirectoryView() {
                   {[
                     { id: "wartung", label: "Wartung" },
                     { id: "monitoring", label: "Monitoring" },
-                    { id: "regie", label: "Regie (kein Vertrag)" }
+                    { id: "regie", label: "Regie" }
                   ].map((contract) => (
                     <label key={contract.id} className="inline-flex items-center gap-2">
                       <input
@@ -2415,6 +2417,126 @@ export default function CustomerDirectoryView() {
                   ))}
                 </div>
               </div>
+              <div className="mt-2 rounded-xl border border-sand-200 bg-white p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[10px] uppercase tracking-wide text-sand-500">Kundenkennzahlen</p>
+                  <span className="text-[11px] text-sand-500">Umsatz · Aufwand · Kommunikation</span>
+                </div>
+                {metricsStatus === "loading" ? (
+                  <p className="mt-1.5 text-xs text-sand-500">Lade Kennzahlen…</p>
+                ) : null}
+                {metricsStatus === "error" ? (
+                  <p className="mt-1.5 text-xs text-rose-600">Kennzahlen konnten nicht geladen werden.</p>
+                ) : null}
+                {metricsStatus === "ready" && selectedCustomerMetrics ? (
+                  <>
+                    <div className="mt-2 grid gap-2 md:grid-cols-5">
+                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Umsatz gesamt</p>
+                        <p className="text-sm font-semibold text-sand-900">{formatEur(selectedCustomerMetrics.revenueTotalEur)}</p>
+                      </div>
+                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Umsatz laufend</p>
+                        <p className="text-sm font-semibold text-sand-900">{formatEur(selectedCustomerMetrics.revenueCurrentYearEur)}</p>
+                      </div>
+                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufwand Monat</p>
+                        <p className="text-sm font-semibold text-sand-900">{formatHours(monthlyConsumedHours)}</p>
+                      </div>
+                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Kommunikation 30T</p>
+                        <p className="text-sm font-semibold text-sand-900">
+                          {Number(selectedCustomerMetrics.totalCalls || 0)} Calls
+                        </p>
+                        <p className="text-[11px] text-sand-600">
+                          {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Last</p>
+                        <p className="text-sm font-semibold text-sand-900">
+                          {Number(selectedCustomerMetrics.openTasks || 0)} Aufgaben
+                        </p>
+                        <p className="text-[11px] text-sand-600">{formatHours(openEffortHours, 1)} offen</p>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[11px] text-sand-600">
+                      Monat: Aufgabe {formatHours(monthlyTaskHours, 1)} · Telefon {formatHours(monthlyTelephonyHours, 1)} ·
+                      Gesprächszeit 30T {formatHours(Number(selectedCustomerMetrics.totalMinutes || 0) / 60, 1)}.
+                    </p>
+                    <p className={`mt-1 text-[11px] ${revenueDeltaPctTone}`}>
+                      Umsatztrend zum Vorjahr: {revenueDeltaPctLabel}
+                    </p>
+                  </>
+                ) : null}
+              </div>
+              {editHasServiceContract ? (
+                <div className="mt-2 rounded-xl border border-sand-200 bg-white p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Stundenbudget (aktueller Monat)</p>
+                    <span className="text-[11px] text-sand-500">{contractTimeBudget?.monthLabel || "Aktueller Monat"}</span>
+                  </div>
+                  {metricsStatus === "loading" ? (
+                    <p className="mt-1.5 text-xs text-sand-500">Berechne Vertragsstunden…</p>
+                  ) : null}
+                  {metricsStatus === "error" ? (
+                    <p className="mt-1.5 text-xs text-rose-600">Stundenbilanz konnte nicht geladen werden.</p>
+                  ) : null}
+                  {metricsStatus === "ready" && contractTimeBudget ? (
+                    <>
+                      <div className="mt-2 grid gap-2 md:grid-cols-4">
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Inkludiert</p>
+                          <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.includedHours)}</p>
+                        </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Verbraucht</p>
+                          <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.consumedHours)}</p>
+                        </div>
+                        <div
+                          className={`rounded-lg border px-2.5 py-1.5 ${
+                            contractTimeBudget.isOverrun
+                              ? "border-rose-200 bg-rose-50"
+                              : "border-emerald-200 bg-emerald-50"
+                          }`}
+                        >
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">
+                            {contractTimeBudget.isOverrun ? "Überzug" : "Rest"}
+                          </p>
+                          <p
+                            className={`text-sm font-semibold ${
+                              contractTimeBudget.isOverrun ? "text-rose-700" : "text-emerald-700"
+                            }`}
+                          >
+                            {formatHours(
+                              contractTimeBudget.isOverrun
+                                ? contractTimeBudget.overrunHours
+                                : contractTimeBudget.remainingHours
+                            )}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufteilung</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            Aufgabe {formatHours(contractTimeBudget.taskHours, 1)}
+                          </p>
+                          <p className="text-[11px] text-sand-600">
+                            Telefon {formatHours(contractTimeBudget.telephonyHours, 1)}
+                          </p>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[11px] text-sand-600">
+                        Verbrauch aus {contractTimeBudget.taskCount || 0} Zeitaufgaben und {contractTimeBudget.callCount || 0} Telefonaten.
+                      </p>
+                      {contractTimeBudget.missingIncludedHours ? (
+                        <p className="mt-1 text-[11px] text-amber-700">
+                          Vertrag vorhanden, aber keine Inklusivstunden hinterlegt. Bitte im Vertragsdetail setzen.
+                        </p>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="mt-2 grid gap-2 md:grid-cols-2">
                 <label className="block md:col-span-2">
                   <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
@@ -2543,182 +2665,20 @@ export default function CustomerDirectoryView() {
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => downloadLatestContractByStatus("proposal", "vertrag_vorschlag.pdf")}
-                        className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
-                      >
-                        Letzten Vorschlag laden
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => downloadLatestContractByStatus("active", "vertrag_final.pdf")}
-                        className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
-                      >
-                        Aktiven Vertrag laden
-                      </button>
-                      <button
-                        type="button"
                         onClick={openContractCreator}
                         className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
                       >
-                        Neuer Vertrag anlegen (inkl. Kalkulation)
+                        Vertragsdetail öffnen
                       </button>
                     </div>
                   </div>
+                  {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
+                  {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
                   <div className="space-y-2 max-h-64 overflow-auto pr-1">
-                    {(customerContracts || []).map((item) => (
-                      <div key={item.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="font-semibold text-sand-800">{item.title || "Vertrag"}</p>
-                          {(() => {
-                            const status = String(item.status || "active").toLowerCase();
-                            const badgeClass =
-                              status === "cancelled"
-                                ? "border-rose-200 bg-rose-50 text-rose-700"
-                                : status === "proposal"
-                                ? "border-amber-200 bg-amber-50 text-amber-700"
-                                : "border-emerald-200 bg-emerald-50 text-emerald-700";
-                            const label = status === "cancelled" ? "Storniert" : status === "proposal" ? "Vorschlag" : "Aktiv";
-                            return (
-                              <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${badgeClass}`}>
-                                {label}
-                              </span>
-                            );
-                          })()}
-                        </div>
-                        {String(item.status || "active").toLowerCase() === "proposal" ? (
-                          <p className="mt-1 text-[11px] text-amber-700">
-                            Kunde hat noch nicht eingewilligt. Als Vorschlag geführt.
-                          </p>
-                        ) : null}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPreviewModal({
-                                open: true,
-                                title: item.title || "Vertrag",
-                                html: String(item.html_content || "<p>Keine Vorschau hinterlegt.</p>")
-                              })
-                            }
-                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                          >
-                            <Eye size={11} /> Vorschau
-                          </button>
-                          {(() => {
-                            const status = String(item.status || "active").toLowerCase();
-                            const label =
-                              status === "proposal"
-                                ? "Vorschlag PDF"
-                                : status === "active"
-                                ? "Final PDF"
-                                : "PDF";
-                            return (
-                              <button
-                                type="button"
-                                onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
-                                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                              >
-                                <FileDown size={11} /> {label}
-                              </button>
-                            );
-                          })()}
-                          {String(item.status || "active").toLowerCase() === "cancelled" ? (
-                            <button
-                              type="button"
-                              onClick={() => reactivateContractDocument(item.id)}
-                              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                            >
-                              Reaktivieren
-                            </button>
-                          ) : String(item.status || "active").toLowerCase() === "proposal" ? (
-                            <button
-                              type="button"
-                              onClick={() => reactivateContractDocument(item.id)}
-                              className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
-                            >
-                              Als aktiv markieren
-                            </button>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => markContractDocumentAsProposal(item.id)}
-                                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
-                              >
-                                Als Vorschlag
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => cancelContractDocument(item.id)}
-                                className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                              >
-                                Stornieren
-                              </button>
-                            </>
-                          )}
-                          {String(item.status || "active").toLowerCase() === "proposal" ? (
-                            <button
-                              type="button"
-                              onClick={() => cancelContractDocument(item.id)}
-                              className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                            >
-                              Stornieren
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            onClick={() => deleteContractDocument(item.id)}
-                            className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                          >
-                            <Trash2 size={11} /> Löschen
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
-                    {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
+                    {(customerContracts || []).map((item) => renderContractListItem(item))}
                     {!customerContracts.length && contractsStatus !== "loading" ? (
                       <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
                     ) : null}
-                  </div>
-                  <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
-                    <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Vorschläge</p>
-                      <span className="text-[11px] text-sand-500">Aus Vertragskalkulation gespeichert</span>
-                    </div>
-                    <div className="space-y-2 max-h-56 overflow-auto pr-1">
-                      {(calcHistory || []).map((row) => (
-                        <div key={row.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="font-semibold text-sand-800">
-                              {row.tariff_name || "Tarif"} · {String(row.tariff_category || "").toUpperCase()}
-                            </p>
-                            <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-700">
-                              Vorschlag
-                            </span>
-                          </div>
-                          <p className="mt-1 text-[11px] text-sand-600">
-                            {formatEurPrecise(row.monthly_total)} / Monat · {formatEurPrecise(row.yearly_total)} / Jahr
-                          </p>
-                          <p className="text-[10px] text-sand-500">
-                            {new Date(row.created_at || Date.now()).toLocaleString("de-DE")}
-                          </p>
-                          <div className="mt-2">
-                            <button
-                              type="button"
-                              onClick={() => applySuggestionToCalculator(row)}
-                              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                            >
-                              In Kalkulation übernehmen
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                      {calcHistoryStatus === "loading" ? <p className="text-xs text-sand-500">Lade Vorschläge…</p> : null}
-                      {!calcHistory.length && calcHistoryStatus !== "loading" ? (
-                        <p className="text-xs text-sand-500">Noch keine Vorschläge vorhanden.</p>
-                      ) : null}
-                    </div>
                   </div>
                 </div>
               ) : null}
