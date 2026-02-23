@@ -17,6 +17,8 @@ Dieses Setup ergänzt die bestehende Tactical-RMM-API-Anbindung um einen Netzsca
   - Ping sweep je Subnetz
   - optional SNMP-Walk (`--snmp`, nutzt `snmpwalk`, fallback `snmpget`)
   - Heuristik für `device_type`, `vendor`, `confidence`, `evidence`
+  - schreibt vollständige Discovery-Liste als JSON in die RMM-Script-History
+    (`QT_DISCOVERY_JSON_BEGIN` / `QT_DISCOVERY_JSON_END`)
   - Upload an IT-Dashboard
   - lokales TTL-Cache, damit nicht bei jedem Lauf neu gescannt wird
   - optionale Subnetz-Ableitung aus Tactical-RMM-Agent-Details

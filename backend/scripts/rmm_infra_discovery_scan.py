@@ -646,6 +646,51 @@ def _post_discovery(
         raise RuntimeError(f"Discovery upload failed: {exc}") from exc
 
 
+def _emit_history_discovery_payload(
+    *,
+    customer_id: Optional[int],
+    customer_number: str,
+    customer_name: str,
+    source: str,
+    subnets: List[str],
+    hosts: List[DiscoveredHost],
+) -> None:
+    now_ms = _now_ms()
+    payload_items = []
+    for host in hosts:
+        payload_items.append(
+            {
+                "ip": host.ip,
+                "hostname": host.hostname,
+                "mac": host.mac,
+                "protocol": host.protocol,
+                "device_type": host.device_type,
+                "vendor": host.vendor,
+                "confidence": int(host.confidence),
+                "evidence": host.evidence[:6],
+                "managed": bool(host.managed),
+                "seen_at": now_ms,
+            }
+        )
+    payload = {
+        "version": 1,
+        "generated_at": now_ms,
+        "customer_id": customer_id,
+        "customer_number": customer_number,
+        "customer_name": customer_name,
+        "source": source,
+        "subnets": [str(item).strip() for item in (subnets or []) if str(item).strip()],
+        "count": len(payload_items),
+        "items": payload_items,
+    }
+    # Keep a machine-readable payload in Tactical RMM script history so
+    # downstream systems can pull complete discovery inventory even if API
+    # ingest is unavailable.
+    print("QT_DISCOVERY_JSON_BEGIN")
+    print(json.dumps(payload, ensure_ascii=False))
+    print("QT_DISCOVERY_JSON_END")
+
+
 def main() -> int:
     args = _parse_args()
     api_base = _normalize_api_url(args.api_url)
@@ -716,6 +761,14 @@ def main() -> int:
         managed_ips=managed_ips,
     )
     print(f"[INFO] Hosts discovered: {len(discovered)}")
+    _emit_history_discovery_payload(
+        customer_id=args.customer_id,
+        customer_number=str(args.customer_number or "").strip(),
+        customer_name=str(args.customer_name or "").strip(),
+        source=str(args.source or "rmm_agent_scan").strip() or "rmm_agent_scan",
+        subnets=subnets,
+        hosts=discovered,
+    )
 
     response = _post_discovery(
         api_base=api_base,

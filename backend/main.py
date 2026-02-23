@@ -37,6 +37,18 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or (
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL") or "http://ollama:11434"
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "llama3.2:3b"
 OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS") or "180")
+CUSTOMER_META_HUB_URL = str(os.environ.get("CUSTOMER_META_HUB_URL") or "").strip().rstrip("/")
+CUSTOMER_META_HUB_ENABLED = str(os.environ.get("CUSTOMER_META_HUB_ENABLED") or "").strip().lower() not in {
+    "",
+    "0",
+    "false",
+    "no",
+    "off",
+}
+CUSTOMER_META_HUB_TIMEOUT_SECONDS = max(2, int(os.environ.get("CUSTOMER_META_HUB_TIMEOUT_SECONDS") or "8"))
+CUSTOMER_META_HUB_BYPASS_HEADER = "x-meta-hub-bypass"
+META_HUB_INTERNAL_TOKEN = str(os.environ.get("META_HUB_INTERNAL_TOKEN") or "").strip()
+META_HUB_INTERNAL_TOKEN_HEADER = "x-meta-hub-token"
 _geo_cache: Dict[str, Optional[tuple[float, float]]] = {}
 GEO_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 ROUTE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -373,6 +385,11 @@ class IntegrationSettings(Base):
     sevdesk_hourly_rate_eur = Column(String, default="")
     icecat_api_token = Column(String, default="")
     icecat_enabled = Column(Boolean, default=False)
+    meta_hub_rmm_enabled = Column(Boolean, default=True)
+    meta_hub_rmm_customer_field_name = Column(String, default="Kundennummer")
+    meta_hub_email_enabled = Column(Boolean, default=False)
+    meta_hub_refresh_seconds = Column(Integer, default=300)
+    meta_hub_mailboxes_json = Column(Text, default="[]")
 
 
 class InfraDiscoveryDevice(Base):
@@ -642,6 +659,16 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN icecat_api_token VARCHAR DEFAULT ''")
     if "icecat_enabled" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN icecat_enabled BOOLEAN DEFAULT FALSE")
+    if "meta_hub_rmm_enabled" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_rmm_enabled BOOLEAN DEFAULT TRUE")
+    if "meta_hub_rmm_customer_field_name" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_rmm_customer_field_name VARCHAR DEFAULT 'Kundennummer'")
+    if "meta_hub_email_enabled" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_email_enabled BOOLEAN DEFAULT FALSE")
+    if "meta_hub_refresh_seconds" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_refresh_seconds INTEGER DEFAULT 300")
+    if "meta_hub_mailboxes_json" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_mailboxes_json TEXT DEFAULT '[]'")
     if statements:
         with engine.begin() as connection:
             for statement in statements:
@@ -1324,6 +1351,11 @@ class IntegrationSettingsUpdate(BaseModel):
     sevdesk_hourly_rate_eur: Optional[str] = None
     icecat_api_token: Optional[str] = None
     icecat_enabled: Optional[bool] = None
+    meta_hub_rmm_enabled: Optional[bool] = None
+    meta_hub_rmm_customer_field_name: Optional[str] = None
+    meta_hub_email_enabled: Optional[bool] = None
+    meta_hub_refresh_seconds: Optional[int] = None
+    meta_hub_mailboxes: Optional[List[Dict[str, Any]]] = None
 
 
 class SmtpSettingsUpdate(BaseModel):
@@ -3017,7 +3049,120 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "items": [serialize_report_item(i) for i in report.items],
     }
 
+
+def _normalize_meta_hub_mailbox(raw: Dict[str, Any]) -> Dict[str, Any]:
+    mailbox_id = str(raw.get("id") or "").strip() or str(uuid.uuid4())
+    host = str(raw.get("host") or "").strip()
+    username = str(raw.get("username") or "").strip()
+    password = str(raw.get("password") or "").strip()
+    folder = str(raw.get("folder") or "INBOX").strip() or "INBOX"
+    name = str(raw.get("name") or "").strip()
+    email = str(raw.get("email") or "").strip()
+    enabled = bool(raw.get("enabled", True))
+    use_tls = bool(raw.get("use_tls", True))
+    use_ssl = bool(raw.get("use_ssl", False))
+    port_value = raw.get("port")
+    try:
+        port = int(port_value) if port_value not in (None, "") else (993 if use_ssl else 993)
+    except Exception:
+        port = 993 if use_ssl else 993
+    port = max(1, min(port, 65535))
+    if not name:
+        name = email or username or host or "Postfach"
+    return {
+        "id": mailbox_id,
+        "name": name,
+        "email": email,
+        "host": host,
+        "port": port,
+        "username": username,
+        "password": password,
+        "folder": folder,
+        "enabled": enabled,
+        "use_tls": use_tls,
+        "use_ssl": use_ssl,
+    }
+
+
+def _parse_meta_hub_mailboxes(raw: Any) -> List[Dict[str, Any]]:
+    payload: Any = raw
+    if isinstance(raw, str):
+        text_value = raw.strip()
+        if not text_value:
+            return []
+        try:
+            payload = json.loads(text_value)
+        except Exception:
+            return []
+    if not isinstance(payload, list):
+        return []
+    normalized: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        row = _normalize_meta_hub_mailbox(item)
+        row_id = str(row.get("id") or "").strip()
+        if not row_id or row_id in seen_ids:
+            row["id"] = str(uuid.uuid4())
+        seen_ids.add(str(row["id"]))
+        normalized.append(row)
+    return normalized
+
+
+def _serialize_meta_hub_mailboxes_for_response(raw: Any) -> List[Dict[str, Any]]:
+    rows = _parse_meta_hub_mailboxes(raw)
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "id": row.get("id") or "",
+                "name": row.get("name") or "",
+                "email": row.get("email") or "",
+                "host": row.get("host") or "",
+                "port": int(row.get("port") or 993),
+                "username": row.get("username") or "",
+                "password": "",
+                "has_password": bool(str(row.get("password") or "").strip()),
+                "folder": row.get("folder") or "INBOX",
+                "enabled": bool(row.get("enabled", True)),
+                "use_tls": bool(row.get("use_tls", True)),
+                "use_ssl": bool(row.get("use_ssl", False)),
+            }
+        )
+    return out
+
+
+def _merge_meta_hub_mailboxes(existing_raw: Any, incoming_raw: Any) -> List[Dict[str, Any]]:
+    existing = _parse_meta_hub_mailboxes(existing_raw)
+    existing_by_id = {str(row.get("id") or "").strip(): row for row in existing if str(row.get("id") or "").strip()}
+    if incoming_raw is None:
+        return existing
+    if not isinstance(incoming_raw, list):
+        return existing
+    merged: List[Dict[str, Any]] = []
+    seen_ids: Set[str] = set()
+    for item in incoming_raw:
+        if not isinstance(item, dict):
+            continue
+        normalized = _normalize_meta_hub_mailbox(item)
+        row_id = str(normalized.get("id") or "").strip()
+        if not row_id:
+            row_id = str(uuid.uuid4())
+            normalized["id"] = row_id
+        previous = existing_by_id.get(row_id)
+        if previous and not str(item.get("password") or "").strip():
+            normalized["password"] = str(previous.get("password") or "")
+        if row_id in seen_ids:
+            normalized["id"] = str(uuid.uuid4())
+            row_id = str(normalized["id"])
+        seen_ids.add(row_id)
+        merged.append(normalized)
+    return merged
+
+
 def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, Any]:
+    meta_hub_mailboxes = _serialize_meta_hub_mailboxes_for_response(settings.meta_hub_mailboxes_json)
     return {
         "id": settings.id,
         "rmm_host": settings.rmm_host,
@@ -3059,6 +3204,12 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "has_sevdesk_api_token": bool(settings.sevdesk_api_token),
         "icecat_enabled": bool(settings.icecat_enabled),
         "has_icecat_api_token": bool(settings.icecat_api_token),
+        "meta_hub_rmm_enabled": bool(settings.meta_hub_rmm_enabled),
+        "meta_hub_rmm_customer_field_name": settings.meta_hub_rmm_customer_field_name or "Kundennummer",
+        "meta_hub_email_enabled": bool(settings.meta_hub_email_enabled),
+        "meta_hub_refresh_seconds": int(settings.meta_hub_refresh_seconds or 300),
+        "meta_hub_mailboxes": meta_hub_mailboxes,
+        "meta_hub_mailbox_count": len(meta_hub_mailboxes),
     }
 
 
@@ -3810,6 +3961,46 @@ def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict
     }
 
 
+def _contract_counts_from_development_context(context: Dict[str, Any]) -> Dict[str, int]:
+    infra = context.get("infra") if isinstance(context.get("infra"), dict) else {}
+    inventory_mix = infra.get("inventoryMix") if isinstance(infra.get("inventoryMix"), dict) else {}
+    server_count = _safe_nonnegative_int(inventory_mix.get("server"))
+    workstation_count = _safe_nonnegative_int(inventory_mix.get("workstation"))
+    other_count = _safe_nonnegative_int(inventory_mix.get("other"))
+    network_count = (
+        _safe_nonnegative_int(inventory_mix.get("network"))
+        + _safe_nonnegative_int(inventory_mix.get("firewall"))
+        + _safe_nonnegative_int(inventory_mix.get("printer"))
+    )
+    iot_count = _safe_nonnegative_int(inventory_mix.get("iot"))
+    return {
+        "servers": server_count,
+        "clients": workstation_count + other_count,
+        "network_devices": network_count,
+        "iot_devices": iot_count,
+    }
+
+
+def _load_contract_counts_from_meta_hub(customer_id: int) -> Optional[Dict[str, int]]:
+    try:
+        payload = _resolve_customer_development_payload(
+            include_inactive=True,
+            customer_id=int(customer_id),
+            full=True,
+            refresh=False,
+        )
+        contexts = payload.get("contexts") if isinstance(payload.get("contexts"), list) else []
+        if not contexts:
+            return None
+        context = contexts[0] if isinstance(contexts[0], dict) else {}
+        counts = _contract_counts_from_development_context(context)
+        if any(int(counts.get(key) or 0) > 0 for key in ("servers", "clients", "network_devices", "iot_devices")):
+            return counts
+    except Exception as exc:
+        logger.info("Contract preview counts fallback via meta-hub failed for customer %s: %s", customer_id, exc)
+    return None
+
+
 def _get_smtp_settings(db) -> SmtpSettings:
     settings = db.query(SmtpSettings).first()
     if not settings:
@@ -4545,6 +4736,73 @@ def _tactical_payload_rows(payload: Any) -> List[Dict[str, Any]]:
     return []
 
 
+def _tactical_fetch_rows(
+    session: requests.Session,
+    host: str,
+    path_candidates: List[str],
+    *,
+    timeout: int = 8,
+    retries: int = 1,
+) -> Tuple[List[Dict[str, Any]], str]:
+    for path in path_candidates:
+        res, _ = _tactical_request(session, host, "GET", path, timeout=timeout, retries=retries)
+        if not res or not res.ok:
+            continue
+        try:
+            payload = res.json()
+        except ValueError:
+            continue
+        rows = _tactical_payload_rows(payload)
+        if rows:
+            return rows, path
+    return [], ""
+
+
+def _fetch_latest_discovery_payload_from_agent_history(
+    session: requests.Session,
+    host: str,
+    agent_id: str,
+) -> Optional[Dict[str, Any]]:
+    if not str(agent_id or "").strip():
+        return None
+    history_res, _ = _tactical_request(
+        session,
+        host,
+        "GET",
+        f"/agents/{quote(str(agent_id).strip())}/history/",
+        timeout=20,
+        retries=0,
+    )
+    if not history_res or not history_res.ok:
+        return None
+    try:
+        history_rows = history_res.json()
+    except Exception:
+        return None
+    if not isinstance(history_rows, list):
+        return None
+    for row in history_rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("type") or "").strip().lower() != "script_run":
+            continue
+        script_name = str(row.get("script_name") or "").strip().lower()
+        if "infra" not in script_name or "discover" not in script_name:
+            continue
+        script_results = row.get("script_results") if isinstance(row.get("script_results"), dict) else {}
+        payload = _extract_discovery_payload_from_script_output(str(script_results.get("stdout") or ""))
+        if not isinstance(payload, dict):
+            continue
+        generated_at = int(_safe_nonnegative_int(payload.get("generated_at") or 0))
+        if generated_at <= 0:
+            generated_at = _parse_iso8601_to_epoch_ms(row.get("time"))
+        return {
+            "generated_at": generated_at,
+            "payload": payload,
+        }
+    return None
+
+
 def _tactical_site_cache_key(settings: Optional[IntegrationSettings]) -> str:
     if not settings:
         return ""
@@ -4689,22 +4947,7 @@ def _fetch_tactical_rmm_site_lookup(settings: Optional[IntegrationSettings]) -> 
         "/api/v3/sites/",
         "/api/v3/sites",
     ]
-    rows: List[Dict[str, Any]] = []
-    source_path = ""
-    for path in list_candidates:
-        res, _ = _tactical_request(session, host, "GET", path, timeout=8, retries=1)
-        if not res or not res.ok:
-            continue
-        try:
-            payload = res.json()
-        except ValueError:
-            continue
-        parsed = _tactical_payload_rows(payload)
-        if not parsed:
-            continue
-        rows = parsed
-        source_path = path
-        break
+    rows, source_path = _tactical_fetch_rows(session, host, list_candidates, timeout=8, retries=1)
 
     by_id: Dict[str, Dict[str, Any]] = {}
     by_name: Dict[str, Dict[str, Any]] = {}
@@ -6024,11 +6267,47 @@ def _managed_agent_inventory_category(agent: Dict[str, Any]) -> str:
     return "workstation"
 
 
-def _discovery_inventory_category(row: InfraDiscoveryDevice) -> str:
-    device_type = _dev_normalize_text(str(row.device_type or ""))
-    vendor = _dev_normalize_text(str(row.vendor or ""))
-    hostname = _dev_normalize_text(str(row.hostname or ""))
-    evidence_text = _dev_normalize_text(str(row.evidence or ""))
+def _discovery_row_value(row: Any, key: str) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _discovery_row_to_dict(row: Any) -> Dict[str, Any]:
+    evidence_value = _discovery_row_value(row, "evidence")
+    evidence_payload: List[str] = []
+    if isinstance(evidence_value, list):
+        evidence_payload = [str(item).strip() for item in evidence_value if str(item).strip()]
+    elif isinstance(evidence_value, str):
+        text_value = evidence_value.strip()
+        if text_value:
+            try:
+                parsed = json.loads(text_value)
+                if isinstance(parsed, list):
+                    evidence_payload = [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                evidence_payload = [text_value]
+    return {
+        "source": str(_discovery_row_value(row, "source") or "discovery").strip() or "discovery",
+        "hostname": str(_discovery_row_value(row, "hostname") or "").strip(),
+        "ip": str(_discovery_row_value(row, "ip") or "").strip(),
+        "mac": str(_discovery_row_value(row, "mac") or "").strip(),
+        "protocol": str(_discovery_row_value(row, "protocol") or "").strip(),
+        "deviceType": str(_discovery_row_value(row, "device_type") or _discovery_row_value(row, "deviceType") or "").strip(),
+        "vendor": str(_discovery_row_value(row, "vendor") or "").strip(),
+        "confidence": int(_safe_nonnegative_int(_discovery_row_value(row, "confidence") or 0)),
+        "evidence": evidence_payload,
+        "managed": bool(_discovery_row_value(row, "managed")),
+        "lastSeenAt": int(_safe_nonnegative_int(_discovery_row_value(row, "last_seen_at") or _discovery_row_value(row, "seen_at") or 0)),
+    }
+
+
+def _discovery_inventory_category(row: Any) -> str:
+    normalized = _discovery_row_to_dict(row)
+    device_type = _dev_normalize_text(str(normalized.get("deviceType") or ""))
+    vendor = _dev_normalize_text(str(normalized.get("vendor") or ""))
+    hostname = _dev_normalize_text(str(normalized.get("hostname") or ""))
+    evidence_text = _dev_normalize_text(" ".join(str(item) for item in (normalized.get("evidence") or [])))
     combined = " ".join(part for part in [device_type, vendor, hostname, evidence_text] if part).strip()
     if any(token in combined for token in ("server", "windows server", "linux", "hyper v", "esxi", "dc", "srv", "rds", "sql")):
         return "server"
@@ -6041,6 +6320,135 @@ def _discovery_inventory_category(row: InfraDiscoveryDevice) -> str:
     if any(token in combined for token in ("switch", "router", "gateway", "access point", "ap", "wifi", "wlan", "network")):
         return "network"
     return "other"
+
+
+def _extract_discovery_payload_from_script_output(text: str) -> Optional[Dict[str, Any]]:
+    raw_text = str(text or "")
+    if not raw_text:
+        return None
+    begin_marker = "QT_DISCOVERY_JSON_BEGIN"
+    end_marker = "QT_DISCOVERY_JSON_END"
+    begin = raw_text.find(begin_marker)
+    if begin >= 0:
+        end = raw_text.find(end_marker, begin + len(begin_marker))
+        if end > begin:
+            payload_text = raw_text[begin + len(begin_marker):end].strip()
+            if payload_text:
+                try:
+                    parsed = json.loads(payload_text)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    return None
+    return None
+
+
+def _parse_iso8601_to_epoch_ms(value: Any) -> int:
+    text_value = str(value or "").strip()
+    if not text_value:
+        return 0
+    try:
+        if text_value.endswith("Z"):
+            text_value = text_value[:-1] + "+00:00"
+        return int(datetime.fromisoformat(text_value).timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def _fetch_rmm_history_discovery_rows(
+    integration: Optional[IntegrationSettings],
+    customer: Customer,
+    matched_agents: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not matched_agents:
+        return []
+    session, host = _build_tactical_rmm_session(integration)
+    if not session or not host:
+        return []
+    customer_number_key = _normalize_customer_number(customer.creditor_number)
+    customer_name_key = _dev_normalize_text(customer.name)
+    out: List[Dict[str, Any]] = []
+    seen_device_keys: Set[str] = set()
+    for agent in matched_agents[:12]:
+        agent_id = _extract_agent_id(agent)
+        if not agent_id:
+            continue
+        history_res, _ = _tactical_request(
+            session,
+            host,
+            "GET",
+            f"/agents/{quote(agent_id)}/history/",
+            timeout=25,
+            retries=1,
+        )
+        if not history_res or not history_res.ok:
+            continue
+        try:
+            history_rows = history_res.json()
+        except Exception:
+            continue
+        if not isinstance(history_rows, list):
+            continue
+        payload: Optional[Dict[str, Any]] = None
+        payload_time_ms = 0
+        for history_row in history_rows:
+            if not isinstance(history_row, dict):
+                continue
+            if str(history_row.get("type") or "").strip().lower() != "script_run":
+                continue
+            script_name = str(history_row.get("script_name") or "").strip().lower()
+            if "infra" not in script_name or "discover" not in script_name:
+                continue
+            script_results = history_row.get("script_results") if isinstance(history_row.get("script_results"), dict) else {}
+            stdout_text = str(script_results.get("stdout") or "")
+            parsed = _extract_discovery_payload_from_script_output(stdout_text)
+            if not isinstance(parsed, dict):
+                continue
+            payload = parsed
+            payload_time_ms = _parse_iso8601_to_epoch_ms(history_row.get("time")) or int(time.time() * 1000)
+            break
+        if not payload:
+            continue
+        payload_customer_id = _safe_nonnegative_int(payload.get("customer_id"))
+        payload_customer_number = _normalize_customer_number(payload.get("customer_number"))
+        payload_customer_name = _dev_normalize_text(payload.get("customer_name"))
+        customer_matches = (
+            (payload_customer_id > 0 and payload_customer_id == int(customer.id))
+            or (customer_number_key and payload_customer_number and payload_customer_number == customer_number_key)
+            or (customer_name_key and payload_customer_name and payload_customer_name == customer_name_key)
+        )
+        if not customer_matches:
+            continue
+        items = payload.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            ip = str(item.get("ip") or "").strip()
+            mac = str(item.get("mac") or "").strip()
+            device_key = (ip or "").lower() or (mac or "").lower()
+            if not device_key:
+                continue
+            if device_key in seen_device_keys:
+                continue
+            seen_device_keys.add(device_key)
+            out.append(
+                {
+                    "source": str(item.get("source") or payload.get("source") or "rmm_history_scan").strip() or "rmm_history_scan",
+                    "hostname": str(item.get("hostname") or "").strip(),
+                    "ip": ip,
+                    "mac": mac,
+                    "protocol": str(item.get("protocol") or "").strip(),
+                    "device_type": str(item.get("device_type") or item.get("deviceType") or "").strip(),
+                    "vendor": str(item.get("vendor") or "").strip(),
+                    "confidence": int(_safe_nonnegative_int(item.get("confidence") or 0)),
+                    "evidence": list(item.get("evidence") or []) if isinstance(item.get("evidence"), list) else [],
+                    "managed": bool(item.get("managed")),
+                    "seen_at": int(_safe_nonnegative_int(item.get("seen_at") or payload_time_ms)),
+                }
+            )
+    return out
 
 
 def _build_customer_development_context(
@@ -6534,6 +6942,89 @@ def _build_customer_development_payload(
         return payload
 
 
+def _meta_hub_bypass_requested(request: Optional[Request]) -> bool:
+    if request is None:
+        return False
+    raw = str(request.headers.get(CUSTOMER_META_HUB_BYPASS_HEADER) or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _fetch_customer_development_payload_from_meta_hub(
+    *,
+    include_inactive: bool = False,
+    customer_id: Optional[int] = None,
+    full: bool = False,
+    refresh: bool = False,
+) -> Dict[str, Any]:
+    if not CUSTOMER_META_HUB_ENABLED:
+        raise HTTPException(503, "Customer Meta-Hub is disabled")
+    if not CUSTOMER_META_HUB_URL:
+        raise HTTPException(503, "Customer Meta-Hub URL is not configured")
+    try:
+        if refresh:
+            refresh_timeout = max(CUSTOMER_META_HUB_TIMEOUT_SECONDS, 20)
+            refresh_res = requests.post(
+                f"{CUSTOMER_META_HUB_URL}/refresh",
+                json={"force": True, "background": False},
+                timeout=refresh_timeout,
+            )
+            if not refresh_res.ok:
+                raise HTTPException(503, f"Meta-Hub refresh failed ({refresh_res.status_code})")
+        params: Dict[str, Any] = {"include_inactive": "1" if include_inactive else "0"}
+        if customer_id is not None:
+            params["customer_id"] = int(customer_id)
+        response = requests.get(
+            f"{CUSTOMER_META_HUB_URL}/snapshot",
+            params=params,
+            timeout=CUSTOMER_META_HUB_TIMEOUT_SECONDS,
+        )
+        if not response.ok:
+            raise HTTPException(503, f"Meta-Hub snapshot unavailable ({response.status_code})")
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(503, "Meta-Hub returned invalid payload")
+        contexts = payload.get("contexts")
+        if not isinstance(contexts, list):
+            raise HTTPException(503, "Meta-Hub payload missing contexts")
+        if full and contexts:
+            sample = contexts[0] if isinstance(contexts[0], dict) else {}
+            if not isinstance(sample.get("managedInfrastructureDevices"), list):
+                raise HTTPException(503, "Meta-Hub snapshot is not prepared in full mode")
+        payload["fromCache"] = True
+        payload["fromMetaHub"] = True
+        sources = payload.get("sources") if isinstance(payload.get("sources"), dict) else {}
+        payload["sources"] = {**sources, "metaHub": True}
+        return payload
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Meta-hub fetch failed: %s", exc)
+        raise HTTPException(503, "Customer Meta-Hub unavailable")
+
+
+def _resolve_customer_development_payload(
+    *,
+    include_inactive: bool = False,
+    customer_id: Optional[int] = None,
+    full: bool = False,
+    refresh: bool = False,
+    request: Optional[Request] = None,
+) -> Dict[str, Any]:
+    if _meta_hub_bypass_requested(request):
+        return _build_customer_development_payload(
+            include_inactive=include_inactive,
+            customer_id=customer_id,
+            full=full,
+            refresh=refresh,
+        )
+    return _fetch_customer_development_payload_from_meta_hub(
+        include_inactive=include_inactive,
+        customer_id=customer_id,
+        full=full,
+        refresh=refresh,
+    )
+
+
 def _customer_development_ai_sources(context: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
     source = context.get("source") if isinstance(context, dict) else {}
     source = source if isinstance(source, dict) else {}
@@ -6911,21 +7402,28 @@ def get_customers():
 
 
 @app.get("/api/customer_development")
-def get_customer_development(include_inactive: bool = False, full: bool = False, refresh: bool = False):
-    return _build_customer_development_payload(
+def get_customer_development(
+    request: Request,
+    include_inactive: bool = False,
+    full: bool = False,
+    refresh: bool = False,
+):
+    return _resolve_customer_development_payload(
         include_inactive=include_inactive,
         full=full,
         refresh=refresh,
+        request=request,
     )
 
 
 @app.get("/api/customers/{customer_id}/development")
-def get_customer_development_for_customer(customer_id: int, refresh: bool = False):
-    payload = _build_customer_development_payload(
+def get_customer_development_for_customer(customer_id: int, request: Request, refresh: bool = False):
+    payload = _resolve_customer_development_payload(
         include_inactive=True,
         customer_id=customer_id,
         full=True,
         refresh=refresh,
+        request=request,
     )
     contexts = payload.get("contexts") or []
     if not contexts:
@@ -7296,7 +7794,7 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
         mode = "summary"
 
     if mode == "newsletter":
-        payload = _build_customer_development_payload(include_inactive=False, full=False)
+        payload = _resolve_customer_development_payload(include_inactive=False, full=False)
         contexts = payload.get("contexts") or []
         if not contexts:
             raise HTTPException(404, "No customer contexts available")
@@ -7343,7 +7841,7 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
 
     if data.customer_id is None:
         raise HTTPException(400, "customer_id required for this mode")
-    payload = _build_customer_development_payload(
+    payload = _resolve_customer_development_payload(
         include_inactive=True,
         customer_id=int(data.customer_id),
         full=True,
@@ -7372,7 +7870,7 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
 def customer_development_report_suggestion_preview(
     data: CustomerDevelopmentReportSuggestionPreviewRequest,
 ):
-    payload = _build_customer_development_payload(
+    payload = _resolve_customer_development_payload(
         include_inactive=True,
         customer_id=int(data.customer_id),
         full=True,
@@ -7400,7 +7898,7 @@ def customer_development_report_suggestion_import(
 ):
     if not bool(data.confirm):
         raise HTTPException(400, "confirm=true required for report import")
-    payload = _build_customer_development_payload(
+    payload = _resolve_customer_development_payload(
         include_inactive=True,
         customer_id=int(data.customer_id),
         full=True,
@@ -8477,6 +8975,16 @@ def update_integrations(data: IntegrationSettingsUpdate):
         rmm_fields_changed = any(
             field in incoming for field in ("rmm_host", "rmm_api_key", "rmm_api_key_header")
         )
+        meta_hub_fields_changed = any(
+            field in incoming
+            for field in (
+                "meta_hub_rmm_enabled",
+                "meta_hub_rmm_customer_field_name",
+                "meta_hub_email_enabled",
+                "meta_hub_refresh_seconds",
+                "meta_hub_mailboxes",
+            )
+        )
         sensitive_fields = {
             "rmm_password",
             "rmm_api_key",
@@ -8488,17 +8996,26 @@ def update_integrations(data: IntegrationSettingsUpdate):
             "sevdesk_api_token",
             "icecat_api_token",
         }
+        incoming_mailboxes = incoming.pop("meta_hub_mailboxes", None)
         for field, value in incoming.items():
             if field in sensitive_fields and value in (None, ""):
                 continue
+            if field == "meta_hub_refresh_seconds":
+                safe_refresh = int(value or 300)
+                safe_refresh = max(30, min(safe_refresh, 86400))
+                setattr(settings, field, safe_refresh)
+                continue
             setattr(settings, field, value)
+        if incoming_mailboxes is not None:
+            merged_mailboxes = _merge_meta_hub_mailboxes(settings.meta_hub_mailboxes_json, incoming_mailboxes)
+            settings.meta_hub_mailboxes_json = json.dumps(merged_mailboxes)
         # Tactical RMM is API-key based; legacy basic-auth fields are ignored.
         if "rmm_api_key" in incoming:
             settings.rmm_user = ""
             settings.rmm_password = ""
 
         db.commit()
-        if rmm_fields_changed:
+        if rmm_fields_changed or meta_hub_fields_changed:
             _tactical_site_lookup_cache.clear()
             _customer_development_cache.clear()
             _customer_cve_cache.clear()
@@ -8526,6 +9043,150 @@ def get_icecat_status():
     except requests.RequestException as exc:
         raise HTTPException(502, f"Marketplace import error: {exc}") from exc
     return response.json()
+
+
+def _meta_hub_internal_authorized(request: Request) -> bool:
+    if not _meta_hub_bypass_requested(request):
+        return False
+    if not META_HUB_INTERNAL_TOKEN:
+        return False
+    incoming = str(request.headers.get(META_HUB_INTERNAL_TOKEN_HEADER) or "").strip()
+    if not incoming:
+        return False
+    return hmac.compare_digest(incoming, META_HUB_INTERNAL_TOKEN)
+
+
+@app.get("/api/internal/customer_development/rmm_snapshot")
+def get_internal_customer_development_rmm_snapshot(request: Request):
+    if not _meta_hub_internal_authorized(request):
+        raise HTTPException(403, "Meta-Hub internal access denied")
+
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        meta_hub_mailboxes = _parse_meta_hub_mailboxes(settings.meta_hub_mailboxes_json)
+        mailbox_summaries: List[Dict[str, Any]] = []
+        for row in meta_hub_mailboxes:
+            mailbox_summaries.append(
+                {
+                    "id": str(row.get("id") or "").strip(),
+                    "name": str(row.get("name") or "").strip(),
+                    "email": str(row.get("email") or "").strip(),
+                    "host": str(row.get("host") or "").strip(),
+                    "port": int(row.get("port") or 993),
+                    "username": str(row.get("username") or "").strip(),
+                    "folder": str(row.get("folder") or "INBOX").strip() or "INBOX",
+                    "enabled": bool(row.get("enabled", True)),
+                    "use_tls": bool(row.get("use_tls", True)),
+                    "use_ssl": bool(row.get("use_ssl", False)),
+                    "has_password": bool(str(row.get("password") or "").strip()),
+                }
+            )
+        meta_hub_refresh_seconds = int(settings.meta_hub_refresh_seconds or 300)
+        meta_hub_refresh_seconds = max(30, min(meta_hub_refresh_seconds, 86400))
+        meta_hub_config = {
+            "rmm_enabled": bool(settings.meta_hub_rmm_enabled),
+            "rmm_customer_field_name": str(settings.meta_hub_rmm_customer_field_name or "Kundennummer").strip()
+            or "Kundennummer",
+            "email_enabled": bool(settings.meta_hub_email_enabled),
+            "refresh_seconds": meta_hub_refresh_seconds,
+            "mailbox_count": len(mailbox_summaries),
+            "mailboxes": mailbox_summaries,
+        }
+
+    probe = _probe_tactical_rmm(settings)
+    session, host = _build_tactical_rmm_session(settings)
+    if not session or not host:
+        return {
+            "connected": False,
+            "checkedAt": probe.get("checkedAt") or datetime.now().isoformat(),
+            "host": host,
+            "agentsPath": probe.get("agentsPath") or "",
+            "clientsPath": "",
+            "customFieldsPath": "",
+            "sampleCount": int(probe.get("sampleCount") or 0),
+            "agents": [],
+            "clients": [],
+            "customFields": [],
+            "error": probe.get("error") or "RMM session not available",
+            "metaHubConfig": meta_hub_config,
+        }
+
+    client_path_candidates = [
+        "/clients/?detail=true&limit=1000",
+        "/clients/?detail=true",
+        "/clients/?limit=1000",
+        "/clients/",
+        "/clients",
+        "/sites/?detail=true&limit=1000",
+        "/sites/?detail=true",
+        "/sites/?limit=1000",
+        "/sites/",
+        "/sites",
+        "/api/v3/clients/?detail=true&limit=1000",
+        "/api/v3/clients/?detail=true",
+        "/api/v3/clients/?limit=1000",
+        "/api/v3/clients/",
+        "/api/v3/clients",
+        "/api/v3/sites/?detail=true&limit=1000",
+        "/api/v3/sites/?detail=true",
+        "/api/v3/sites/?limit=1000",
+        "/api/v3/sites/",
+        "/api/v3/sites",
+    ]
+    custom_fields_path_candidates = [
+        "/core/customfields/?limit=1000",
+        "/core/customfields/",
+        "/core/customfields",
+        "/api/v3/core/customfields/?limit=1000",
+        "/api/v3/core/customfields/",
+        "/api/v3/core/customfields",
+    ]
+
+    clients, clients_path = _tactical_fetch_rows(session, host, client_path_candidates, timeout=12, retries=1)
+    custom_fields, custom_fields_path = _tactical_fetch_rows(
+        session,
+        host,
+        custom_fields_path_candidates,
+        timeout=12,
+        retries=1,
+    )
+    agents = probe.get("agents") if isinstance(probe.get("agents"), list) else []
+    discovery_payload_by_agent: Dict[str, Dict[str, Any]] = {}
+    for agent in agents[:200]:
+        if not isinstance(agent, dict):
+            continue
+        agent_id = _extract_agent_id(agent)
+        if not agent_id:
+            continue
+        latest_payload = _fetch_latest_discovery_payload_from_agent_history(session, host, agent_id)
+        if not isinstance(latest_payload, dict):
+            continue
+        payload = latest_payload.get("payload") if isinstance(latest_payload.get("payload"), dict) else {}
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        discovery_payload_by_agent[agent_id] = {
+            "generated_at": int(_safe_nonnegative_int(latest_payload.get("generated_at") or 0)),
+            "count": len([item for item in items if isinstance(item, dict)]),
+            "payload": payload,
+        }
+    return {
+        "connected": bool(probe.get("connected")),
+        "checkedAt": probe.get("checkedAt") or datetime.now().isoformat(),
+        "host": host,
+        "agentsPath": probe.get("agentsPath") or "",
+        "clientsPath": clients_path,
+        "customFieldsPath": custom_fields_path,
+        "sampleCount": int(probe.get("sampleCount") or 0),
+        "agents": agents,
+        "clients": clients,
+        "customFields": custom_fields,
+        "discoveryPayloadByAgent": discovery_payload_by_agent,
+        "error": probe.get("error") or "",
+        "metaHubConfig": meta_hub_config,
+    }
 
 
 @app.get("/api/rmm/health")
@@ -9892,9 +10553,26 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         clients = _safe_nonnegative_int(data.clients or 0)
         network_devices = _safe_nonnegative_int(data.network_devices or 0)
         iot_devices = _safe_nonnegative_int(data.iot_devices or 0)
+        counts_source = "request"
         monthly_total = float(data.monthly_total or 0.0)
         yearly_total = float(data.yearly_total or 0.0)
         service_scope = "Standardleistungen laut vereinbartem Serviceumfang."
+
+        counts_are_empty = (
+            servers <= 0
+            and clients <= 0
+            and network_devices <= 0
+            and iot_devices <= 0
+        )
+        if counts_are_empty and not data.calculation_id:
+            meta_hub_counts = _load_contract_counts_from_meta_hub(customer.id)
+            if meta_hub_counts:
+                servers = _safe_nonnegative_int(meta_hub_counts.get("servers"))
+                clients = _safe_nonnegative_int(meta_hub_counts.get("clients"))
+                network_devices = _safe_nonnegative_int(meta_hub_counts.get("network_devices"))
+                iot_devices = _safe_nonnegative_int(meta_hub_counts.get("iot_devices"))
+                counts_source = "meta_hub"
+                service_scope = "Meta-Hub Infrastrukturvorschlag (RMM/Discovery konsolidiert)."
 
         tariff = None
         if data.calculation_id:
@@ -9904,6 +10582,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 clients = _safe_nonnegative_int(calc.clients)
                 network_devices = _safe_nonnegative_int(calc.network_devices)
                 iot_devices = _safe_nonnegative_int(calc.iot_devices)
+                counts_source = "calculation"
                 monthly_total = float(calc.monthly_total or 0.0)
                 yearly_total = float(calc.yearly_total or 0.0)
                 if calc.tariff_name:
@@ -9964,6 +10643,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 "generated_at": generated_at,
                 "valid_from": valid_from,
                 "runtime_months": runtime_months,
+                "counts_source": counts_source,
                 "servers": servers,
                 "clients": clients,
                 "network_devices": network_devices,

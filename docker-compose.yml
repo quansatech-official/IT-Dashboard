@@ -32,8 +32,34 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:latest}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-180}
+      CUSTOMER_META_HUB_URL: ${CUSTOMER_META_HUB_URL:-http://meta-hub:8010}
+      CUSTOMER_META_HUB_ENABLED: ${CUSTOMER_META_HUB_ENABLED:-1}
+      CUSTOMER_META_HUB_TIMEOUT_SECONDS: ${CUSTOMER_META_HUB_TIMEOUT_SECONDS:-8}
+      META_HUB_INTERNAL_TOKEN: ${META_HUB_INTERNAL_TOKEN:-change-me-meta-hub-token}
     ports:
       - "${BACKEND_PORT:-9873}:8000"
+
+  meta-hub:
+    build:
+      context: ./meta-hub
+    container_name: it-dashboard-meta-hub
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      META_HUB_BACKEND_URL: ${META_HUB_BACKEND_URL:-http://backend:8000}
+      META_HUB_REFRESH_SECONDS: ${META_HUB_REFRESH_SECONDS:-300}
+      META_HUB_TIMEOUT_SECONDS: ${META_HUB_TIMEOUT_SECONDS:-120}
+      META_HUB_CACHE_FILE: ${META_HUB_CACHE_FILE:-/data/customer_development_snapshot.json}
+      META_HUB_SOURCE_INCLUDE_INACTIVE: ${META_HUB_SOURCE_INCLUDE_INACTIVE:-1}
+      META_HUB_SOURCE_FULL: ${META_HUB_SOURCE_FULL:-1}
+      META_HUB_AUTO_REFRESH: ${META_HUB_AUTO_REFRESH:-1}
+      META_HUB_INTERNAL_TOKEN: ${META_HUB_INTERNAL_TOKEN:-change-me-meta-hub-token}
+      META_HUB_RMM_TIMEOUT_SECONDS: ${META_HUB_RMM_TIMEOUT_SECONDS:-30}
+    volumes:
+      - meta-hub-data:/data
+    ports:
+      - "${META_HUB_PORT:-8010}:8010"
 
   marketplace-import-service:
     build:
@@ -135,3 +161,4 @@ volumes:
   dashboard-db:
   ollama-data:
   marketplace-import-data:
+  meta-hub-data:

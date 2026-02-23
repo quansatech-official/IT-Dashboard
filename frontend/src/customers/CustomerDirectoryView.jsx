@@ -88,6 +88,10 @@ const api = {
     }),
   listCustomerContracts: (customerId) =>
     fetch(`${API}/customers/${customerId}/contracts`).then((r) => r.json()),
+  listCustomerDevelopment: (includeInactive = true, refresh = false) =>
+    fetch(
+      `${API}/customer_development?include_inactive=${includeInactive ? "1" : "0"}&refresh=${refresh ? "1" : "0"}`
+    ).then((r) => r.json()),
   getCustomerDevelopment: (customerId, refresh = false) =>
     fetch(`${API}/customers/${customerId}/development?refresh=${refresh ? "1" : "0"}`).then((r) => r.json()),
   previewCustomerContract: (customerId, payload) =>
@@ -301,6 +305,34 @@ const parseMoneyInput = (value, fallback = 0) => {
   return Math.max(0, parsed);
 };
 
+const deriveContractCountsFromDevelopment = (context) => {
+  if (!context || typeof context !== "object") {
+    return {
+      servers: 0,
+      clients: 0,
+      networkDevices: 0,
+      iotDevices: 0,
+      managed: 0,
+      discovered: 0
+    };
+  }
+  const infra = context.infra && typeof context.infra === "object" ? context.infra : {};
+  const mix = infra.inventoryMix && typeof infra.inventoryMix === "object" ? infra.inventoryMix : {};
+  const toCount = (value) => {
+    const parsed = Number.parseInt(String(value ?? "0"), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+    return parsed;
+  };
+  return {
+    servers: toCount(mix.server),
+    clients: toCount(mix.workstation) + toCount(mix.other),
+    networkDevices: toCount(mix.network) + toCount(mix.firewall) + toCount(mix.printer),
+    iotDevices: toCount(mix.iot),
+    managed: toCount(infra.managedAssets),
+    discovered: toCount(infra.discoveredAssets)
+  };
+};
+
 export default function CustomerDirectoryView() {
   const [customers, setCustomers] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -329,6 +361,8 @@ export default function CustomerDirectoryView() {
   const [c2dBusy, setC2dBusy] = useState(false);
   const [editCustomerId, setEditCustomerId] = useState(null);
   const [toast, setToast] = useState("");
+  const [developmentByCustomerId, setDevelopmentByCustomerId] = useState({});
+  const [developmentListStatus, setDevelopmentListStatus] = useState("idle");
   const [previewModal, setPreviewModal] = useState({
     open: false,
     title: "",
@@ -383,6 +417,33 @@ export default function CustomerDirectoryView() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setDevelopmentListStatus("loading");
+    api
+      .listCustomerDevelopment(true, false)
+      .then((payload) => {
+        if (!active) return;
+        const contexts = Array.isArray(payload?.contexts) ? payload.contexts : [];
+        const next = {};
+        contexts.forEach((row) => {
+          const id = Number(row?.customerId);
+          if (!Number.isFinite(id) || id <= 0) return;
+          next[id] = row;
+        });
+        setDevelopmentByCustomerId(next);
+        setDevelopmentListStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setDevelopmentByCustomerId({});
+        setDevelopmentListStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [customers.length]);
 
   useEffect(() => {
     let active = true;
@@ -652,52 +713,26 @@ export default function CustomerDirectoryView() {
     if (!activeId) return;
     setCalcImportStatus("loading");
     try {
-      const data = await api.getCustomerDevelopment(activeId, true);
-      const managed = Array.isArray(data?.managedInfrastructureDevices) ? data.managedInfrastructureDevices : [];
-      const discovered = Array.isArray(data?.discoveredInfrastructureDevices) ? data.discoveredInfrastructureDevices : [];
-      if (!managed.length && !discovered.length) {
+      let context = developmentByCustomerId[activeId] || null;
+      if (!context) {
+        context = await api.getCustomerDevelopment(activeId, true);
+      }
+      const counts = deriveContractCountsFromDevelopment(context);
+      if (!counts.servers && !counts.clients && !counts.networkDevices && !counts.iotDevices) {
         setCalcImportStatus("empty");
         setTimeout(() => setCalcImportStatus("idle"), 2200);
         return;
       }
-      const serverCount = managed.filter((device) => {
-        const os = String(device?.os || "").toLowerCase();
-        const host = String(device?.hostname || "").toLowerCase();
-        return (
-          os.includes("server") ||
-          host.includes("srv") ||
-          host.includes("dc") ||
-          host.includes("fs") ||
-          host.includes("rds")
-        );
-      }).length;
-      const clientCount = Math.max(managed.length - serverCount, 0);
-      const networkCount = discovered.filter((device) => {
-        const type = String(device?.deviceType || "").toLowerCase();
-        const protocol = String(device?.protocol || "").toLowerCase();
-        return (
-          type.includes("router") ||
-          type.includes("switch") ||
-          type.includes("firewall") ||
-          type.includes("gateway") ||
-          type.includes("printer") ||
-          protocol.includes("snmp")
-        );
-      }).length;
-      const iotCount = discovered.filter((device) => {
-        const type = String(device?.deviceType || "").toLowerCase();
-        return type.includes("iot") || type.includes("camera") || type.includes("sensor");
-      }).length;
 
       setCalcInput((prev) => ({
         ...prev,
-        servers: String(serverCount),
-        clients: String(clientCount),
-        networkDevices: String(networkCount),
-        iotDevices: String(iotCount),
+        servers: String(counts.servers),
+        clients: String(counts.clients),
+        networkDevices: String(counts.networkDevices),
+        iotDevices: String(counts.iotDevices),
         note: String(
           prev.note ||
-            `Auto-Import RMM/Discovery: ${managed.length} Agents, ${discovered.length} Discovery-Geräte`
+            `Auto-Import Meta-Hub: ${counts.managed} RMM-Agents, ${counts.discovered} Inventar-Geräte`
         ),
       }));
       setCalcImportStatus("done");
@@ -908,6 +943,19 @@ export default function CustomerDirectoryView() {
   const openContractCreator = () => {
     if (!activeCustomer) return;
     const customerLabel = String(activeCustomer.name || "").trim();
+    const context = developmentByCustomerId[activeCustomer.id] || null;
+    const counts = deriveContractCountsFromDevelopment(context);
+    setCalcInput((prev) => ({
+      ...prev,
+      servers: String(counts.servers),
+      clients: String(counts.clients),
+      networkDevices: String(counts.networkDevices),
+      iotDevices: String(counts.iotDevices),
+      note: String(
+        prev.note ||
+          `Meta-Hub Vorschlag: ${counts.managed} RMM-Agents, ${counts.discovered} Inventar-Geräte`
+      ),
+    }));
     setContractDraft({
       title: customerLabel ? `Wartungsvertrag ${customerLabel}` : "",
       docType: "wartung",
@@ -1852,7 +1900,7 @@ export default function CustomerDirectoryView() {
               onClick={importCalcValuesFromRmm}
               className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100"
             >
-              Vorschlagswerte aus RMM laden
+              Vorschlagswerte aus Meta-Hub laden
             </button>
           </div>
           <label className="block">
@@ -1899,10 +1947,10 @@ export default function CustomerDirectoryView() {
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {calcSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Gespeichert</span> : null}
           {calcSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
-          {calcImportStatus === "loading" ? <span className="text-xs text-sand-500">Importiere aus RMM…</span> : null}
+          {calcImportStatus === "loading" ? <span className="text-xs text-sand-500">Importiere aus Meta-Hub…</span> : null}
           {calcImportStatus === "done" ? <span className="text-xs text-emerald-600">Werte übernommen</span> : null}
-          {calcImportStatus === "empty" ? <span className="text-xs text-amber-700">Keine RMM/Discovery-Daten gefunden</span> : null}
-          {calcImportStatus === "error" ? <span className="text-xs text-rose-600">RMM-Import fehlgeschlagen</span> : null}
+          {calcImportStatus === "empty" ? <span className="text-xs text-amber-700">Keine Meta-Hub Infrastrukturdaten gefunden</span> : null}
+          {calcImportStatus === "error" ? <span className="text-xs text-rose-600">Meta-Hub Import fehlgeschlagen</span> : null}
         </div>
         <div className="mt-3">
           <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Vorschlags-Historie</p>
@@ -2737,6 +2785,23 @@ export default function CustomerDirectoryView() {
                           {customer.creditorNumber || "Ohne Nr."}
                           {customer.shortCode ? ` · ${customer.shortCode}` : ""}
                         </p>
+                        {(() => {
+                          const context = developmentByCustomerId[customer.id];
+                          if (!context) {
+                            return (
+                              <p className="mt-1 text-[10px] text-sand-400">
+                                {developmentListStatus === "loading" ? "Meta-Hub lädt…" : "Keine Meta-Hub Daten"}
+                              </p>
+                            );
+                          }
+                          const infra = context?.infra || {};
+                          return (
+                            <p className="mt-1 text-[10px] text-sand-600">
+                              {Number(infra?.managedAssets || 0)} Agents · Updates {Number(infra?.openUpdates || 0)} · Fehler{" "}
+                              {Number(infra?.errorCount || 0)} · Warnungen {Number(infra?.warningCount || 0)}
+                            </p>
+                          );
+                        })()}
                       </td>
                       <td className="px-3 py-2 align-top">
                         <div className="flex flex-wrap items-center gap-2">
