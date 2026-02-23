@@ -8,7 +8,9 @@ import {
   Cpu,
   Eye,
   Info,
+  Mail,
   Monitor,
+  Phone,
   Plus,
   Printer,
   RefreshCw,
@@ -31,12 +33,6 @@ const stateBadgeClass = (state) => {
   if (state === "POTENTIAL") return "border-sky-200 bg-sky-50 text-sky-700";
   if (state === "INACTIVE") return "border-slate-300 bg-slate-100 text-slate-600";
   return "border-emerald-200 bg-emerald-50 text-emerald-700";
-};
-
-const formatPct = (value) => {
-  const n = Number(value || 0);
-  if (!Number.isFinite(n)) return "0%";
-  return `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
 };
 
 const formatEur = (value) => {
@@ -280,22 +276,13 @@ const PriorityBar = ({ item }) => {
   );
 };
 
-const revenueComparisonPercents = (lastYear, currentYear) => {
-  const last = Math.max(0, Number(lastYear || 0));
-  const current = Math.max(0, Number(currentYear || 0));
-  if (!Number.isFinite(last) || !Number.isFinite(current)) {
-    return { lastPct: 0, currentPct: 0 };
-  }
-  if (last <= 0 && current <= 0) {
-    return { lastPct: 0, currentPct: 0 };
-  }
-  if (last <= 0) {
-    return { lastPct: 0, currentPct: 100 };
-  }
-  return {
-    lastPct: 100,
-    currentPct: clampPercent((current / last) * 100),
-  };
+const activityFreshnessPercent = (days, freshThreshold = 30, staleThreshold = 120) => {
+  const n = Number(days);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  if (n <= freshThreshold) return 100;
+  if (n >= staleThreshold) return 0;
+  const span = Math.max(1, staleThreshold - freshThreshold);
+  return clampPercent(((staleThreshold - n) / span) * 100);
 };
 
 const formatDateTime = (value) => {
@@ -377,6 +364,52 @@ const deriveDisplaySignals = (item, maxItems = 4) => {
   });
   unique.sort((a, b) => signalScore(b) - signalScore(a));
   return unique.slice(0, Math.max(1, maxItems));
+};
+
+const actionTypeMeta = (value) => {
+  const type = String(value || "").trim().toLowerCase();
+  if (type === "security") {
+    return {
+      key: "security",
+      label: "Security",
+      Icon: Shield,
+      badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
+      cardClass: "border-rose-200 bg-rose-50/40",
+      sourceHint: "RMM/Discovery",
+      baseScore: 82,
+    };
+  }
+  if (type === "lifecycle") {
+    return {
+      key: "lifecycle",
+      label: "Lifecycle",
+      Icon: Clock3,
+      badgeClass: "border-amber-200 bg-amber-50 text-amber-700",
+      cardClass: "border-amber-200 bg-amber-50/40",
+      sourceHint: "RMM/Inventar",
+      baseScore: 74,
+    };
+  }
+  if (type === "betreuung") {
+    return {
+      key: "betreuung",
+      label: "Kundenkontakt",
+      Icon: Users,
+      badgeClass: "border-sky-200 bg-sky-50 text-sky-700",
+      cardClass: "border-sky-200 bg-sky-50/40",
+      sourceHint: "Faktura/Kommunikation",
+      baseScore: 78,
+    };
+  }
+  return {
+    key: "hinweis",
+    label: "Hinweis",
+    Icon: AlertTriangle,
+    badgeClass: "border-sand-200 bg-sand-100 text-sand-700",
+    cardClass: "border-sand-200 bg-sand-50",
+    sourceHint: "Analyse",
+    baseScore: 66,
+  };
 };
 
 const classifyWorkSnippet = (value) => {
@@ -559,10 +592,77 @@ const maxCveScore = (finding) => {
   return Math.max(...scores);
 };
 
-const cveStatusBadge = ({ hasFinding, updateAvailable, cveCount }) => {
+const cvePriorityLabel = (score) => {
+  const numeric = Number(score);
+  if (!Number.isFinite(numeric)) return "Unbekannt";
+  if (numeric >= 9) return "Kritisch";
+  if (numeric >= 7) return "Hoch";
+  if (numeric >= 4) return "Mittel";
+  if (numeric > 0) return "Niedrig";
+  return "Info";
+};
+
+const cveStatusBadge = ({ actionRequired, updateAvailable, highestScore, cveCount }) => {
   if (updateAvailable) return "border-rose-200 bg-rose-50 text-rose-700";
-  if (hasFinding && cveCount > 0) return "border-amber-200 bg-amber-50 text-amber-700";
+  if (actionRequired && Number(highestScore || 0) >= 9) return "border-rose-200 bg-rose-50 text-rose-700";
+  if (actionRequired || cveCount > 0) return "border-amber-200 bg-amber-50 text-amber-700";
   return "border-emerald-200 bg-emerald-50 text-emerald-700";
+};
+
+const buildCveRows = (agent) => {
+  const findings = Array.isArray(agent?.findings) ? agent.findings : [];
+  const softwareRows = Array.isArray(agent?.software) ? agent.software : [];
+  const findingByNameVersion = new Map();
+  const findingByName = new Map();
+  findings.forEach((finding) => {
+    const nameKey = normalizeTextKey(finding?.name);
+    const versionKey = normalizeTextKey(finding?.version);
+    if (!nameKey) return;
+    if (versionKey) findingByNameVersion.set(`${nameKey}|${versionKey}`, finding);
+    if (!findingByName.has(nameKey)) findingByName.set(nameKey, finding);
+  });
+  const resolveFinding = (pkg) => {
+    const nameKey = normalizeTextKey(pkg?.name);
+    const versionKey = normalizeTextKey(pkg?.version);
+    if (!nameKey) return null;
+    return findingByNameVersion.get(`${nameKey}|${versionKey}`) || findingByName.get(nameKey) || null;
+  };
+
+  const rows = softwareRows.map((pkg) => {
+    const finding = resolveFinding(pkg);
+    const latestVersion = latestFixedVersion(finding);
+    const cveCount = Array.isArray(finding?.cves) ? finding.cves.length : 0;
+    const highestScore = maxCveScore(finding);
+    const hasFinding = Boolean(finding) && (cveCount > 0 || Boolean(latestVersion));
+    const currentVersion = String(pkg?.version || "").trim();
+    const updateAvailable =
+      hasFinding && Boolean(latestVersion) && (!currentVersion || isNewerVersion(latestVersion, currentVersion));
+    const actionRequired = updateAvailable || cveCount > 0;
+    return {
+      name: String(pkg?.name || "Unbekannt"),
+      currentVersion,
+      latestVersion,
+      cveCount,
+      highestScore,
+      hasFinding,
+      updateAvailable,
+      actionRequired,
+    };
+  });
+
+  const sortedRows = [...rows].sort((left, right) => {
+    if (left.actionRequired !== right.actionRequired) return Number(right.actionRequired) - Number(left.actionRequired);
+    if (left.updateAvailable !== right.updateAvailable) return Number(right.updateAvailable) - Number(left.updateAvailable);
+    if ((left.cveCount || 0) !== (right.cveCount || 0)) return (right.cveCount || 0) - (left.cveCount || 0);
+    if ((left.highestScore || 0) !== (right.highestScore || 0)) return (right.highestScore || 0) - (left.highestScore || 0);
+    if (left.hasFinding !== right.hasFinding) return Number(right.hasFinding) - Number(left.hasFinding);
+    return String(left.name || "").localeCompare(String(right.name || ""), "de", { sensitivity: "base" });
+  });
+  const relevantRows = sortedRows.filter((row) => row.actionRequired || row.hasFinding);
+  const actionRows = sortedRows.filter((row) => row.actionRequired);
+  const updateAvailableCount = sortedRows.filter((row) => row.updateAvailable).length;
+  const knownFixCount = sortedRows.filter((row) => Boolean(row.latestVersion)).length;
+  return { rows: sortedRows, relevantRows, actionRows, updateAvailableCount, knownFixCount };
 };
 
 const LoadingProgress = ({ label, progress }) => (
@@ -627,6 +727,9 @@ export default function CustomerDevelopmentView() {
     nameOnlyCandidates: 0,
     mappingHint: "",
     agents: [],
+    lookupSkipped: 0,
+    lookupMaxUnique: 0,
+    lookupBudgetSeconds: 0,
     fromCache: false,
     error: ""
   });
@@ -636,7 +739,6 @@ export default function CustomerDevelopmentView() {
     error: "",
   });
   const [discoveryProgress, setDiscoveryProgress] = useState(0);
-  const [expandedInfraAgents, setExpandedInfraAgents] = useState({});
   const [expandedCveAgents, setExpandedCveAgents] = useState({});
   const [workItemsExpanded, setWorkItemsExpanded] = useState(false);
   const [cveProgress, setCveProgress] = useState(0);
@@ -644,7 +746,7 @@ export default function CustomerDevelopmentView() {
   const [viewMode, setViewMode] = useState("list");
   const [filters, setFilters] = useState({
     noContract: false,
-    revenueFalling: false,
+    activityDue: false,
     highCommunication: false,
     infraRisk: false,
     searchNeedle: ""
@@ -803,7 +905,7 @@ export default function CustomerDevelopmentView() {
   const filteredContexts = useMemo(() => {
     return contexts.filter((item) => {
       if (filters.noContract && item.hasMaintenanceContract) return false;
-      if (filters.revenueFalling && Number(item.revenueTrendPct || 0) >= 0) return false;
+      if (filters.activityDue && !Boolean(item.contactDue || item.invoiceActivityDue)) return false;
       if (filters.highCommunication && Number(item.communicationLoad || 0) < 120) return false;
       if (filters.infraRisk && Number(item.infrastructureRisk || 0) < 25) return false;
       const needle = String(filters.searchNeedle || "").trim().toLowerCase();
@@ -854,6 +956,20 @@ export default function CustomerDevelopmentView() {
         status: "todo"
       })
     });
+  };
+
+  const openCustomerMail = () => {
+    const email = String(detailData?.customerEmail || "").trim();
+    if (!email) return;
+    const subject = encodeURIComponent(
+      `Abstimmung ${detailModal.customerName || "Kunde"}`
+    );
+    window.location.href = `mailto:${email}?subject=${subject}`;
+  };
+
+  const startAiContactFlow = (mode) => {
+    setDetailTab("ki");
+    runAiAssist(mode);
   };
 
   const actionSuggestions = useMemo(() => {
@@ -1038,6 +1154,9 @@ export default function CustomerDevelopmentView() {
       nameOnlyCandidates: 0,
       mappingHint: "",
       agents: [],
+      lookupSkipped: 0,
+      lookupMaxUnique: 0,
+      lookupBudgetSeconds: 0,
       fromCache: false,
       error: ""
     });
@@ -1071,6 +1190,9 @@ export default function CustomerDevelopmentView() {
       nameOnlyCandidates: 0,
       mappingHint: "",
       agents: [],
+      lookupSkipped: 0,
+      lookupMaxUnique: 0,
+      lookupBudgetSeconds: 0,
       fromCache: false,
       error: ""
     });
@@ -1096,6 +1218,9 @@ export default function CustomerDevelopmentView() {
       nameOnlyCandidates: 0,
       mappingHint: "",
       agents: [],
+      lookupSkipped: 0,
+      lookupMaxUnique: 0,
+      lookupBudgetSeconds: 0,
       fromCache: false,
       error: ""
     });
@@ -1117,6 +1242,9 @@ export default function CustomerDevelopmentView() {
         nameOnlyCandidates: Number(data?.nameOnlyCandidates || 0),
         mappingHint: String(data?.mappingHint || ""),
         agents: Array.isArray(data?.agents) ? data.agents : [],
+        lookupSkipped: Number(data?.lookupSkipped || 0),
+        lookupMaxUnique: Number(data?.lookupMaxUnique || 0),
+        lookupBudgetSeconds: Number(data?.lookupBudgetSeconds || 0),
         fromCache: Boolean(data?.fromCache),
         error: ""
       });
@@ -1129,6 +1257,9 @@ export default function CustomerDevelopmentView() {
         nameOnlyCandidates: 0,
         mappingHint: "",
         agents: [],
+        lookupSkipped: 0,
+        lookupMaxUnique: 0,
+        lookupBudgetSeconds: 0,
         fromCache: false,
         error:
           error?.name === "AbortError"
@@ -1248,21 +1379,75 @@ export default function CustomerDevelopmentView() {
     let findingPrograms = 0;
     let totalCves = 0;
     let updateCandidates = 0;
+    let actionRequired = 0;
+    let knownFixPrograms = 0;
     agents.forEach((agent) => {
-      const findings = Array.isArray(agent?.findings) ? agent.findings : [];
-      findings.forEach((finding) => {
-        findingPrograms += 1;
-        const cves = Array.isArray(finding?.cves) ? finding.cves : [];
-        totalCves += cves.length;
-        const latest = latestFixedVersion(finding);
-        if (latest) updateCandidates += 1;
-      });
+      const summary = buildCveRows(agent);
+      findingPrograms += summary.relevantRows.length;
+      totalCves += summary.relevantRows.reduce((acc, row) => acc + Number(row.cveCount || 0), 0);
+      updateCandidates += summary.updateAvailableCount;
+      actionRequired += summary.actionRows.length;
+      knownFixPrograms += summary.knownFixCount;
     });
     return {
       findingPrograms,
       totalCves,
       updateCandidates,
+      actionRequired,
+      knownFixPrograms,
     };
+  }, [cveScan.agents]);
+  const cveActionTop = useMemo(() => {
+    const agents = Array.isArray(cveScan.agents) ? cveScan.agents : [];
+    const rows = [];
+    agents.forEach((agent) => {
+      const hostname = String(agent?.hostname || "Agent").trim() || "Agent";
+      const summary = buildCveRows(agent);
+      summary.actionRows.forEach((row) => {
+        rows.push({
+          ...row,
+          hostname,
+        });
+      });
+    });
+    const grouped = new Map();
+    rows.forEach((row) => {
+      const key = normalizeTextKey(row.name);
+      if (!key) return;
+      const existing = grouped.get(key);
+      if (!existing) {
+        grouped.set(key, {
+          name: row.name,
+          hosts: new Set([row.hostname]),
+          maxScore: Number(row.highestScore || 0),
+          maxCves: Number(row.cveCount || 0),
+          updateAvailable: Boolean(row.updateAvailable),
+          latestVersion: row.latestVersion,
+          currentVersions: new Set([row.currentVersion || "n/a"]),
+        });
+        return;
+      }
+      existing.hosts.add(row.hostname);
+      existing.currentVersions.add(row.currentVersion || "n/a");
+      existing.maxScore = Math.max(Number(existing.maxScore || 0), Number(row.highestScore || 0));
+      existing.maxCves = Math.max(Number(existing.maxCves || 0), Number(row.cveCount || 0));
+      existing.updateAvailable = existing.updateAvailable || Boolean(row.updateAvailable);
+      if (!existing.latestVersion && row.latestVersion) existing.latestVersion = row.latestVersion;
+    });
+    return [...grouped.values()]
+      .map((entry) => ({
+        ...entry,
+        hostCount: entry.hosts.size,
+        currentVersion: [...entry.currentVersions][0] || "n/a",
+      }))
+      .sort((a, b) => {
+        if (a.updateAvailable !== b.updateAvailable) return Number(b.updateAvailable) - Number(a.updateAvailable);
+        if ((a.maxScore || 0) !== (b.maxScore || 0)) return (b.maxScore || 0) - (a.maxScore || 0);
+        if ((a.maxCves || 0) !== (b.maxCves || 0)) return (b.maxCves || 0) - (a.maxCves || 0);
+        if ((a.hostCount || 0) !== (b.hostCount || 0)) return (b.hostCount || 0) - (a.hostCount || 0);
+        return String(a.name || "").localeCompare(String(b.name || ""), "de", { sensitivity: "base" });
+      })
+      .slice(0, 8);
   }, [cveScan.agents]);
 
   const grouped = useMemo(() => {
@@ -1304,10 +1489,13 @@ export default function CustomerDevelopmentView() {
     };
   }, [filteredContexts, neglectedCustomers]);
 
-  const revenueBars = revenueComparisonPercents(
-    detailData?.revenueLastYearEur,
-    detailData?.revenueCurrentYearEur
-  );
+  const interactionDaysRaw = Number(detailData?.daysSinceInteraction);
+  const invoiceDaysRaw = Number(detailData?.daysSinceLastInvoice);
+  const interactionDays = Number.isFinite(interactionDaysRaw) && interactionDaysRaw >= 0 ? Math.round(interactionDaysRaw) : null;
+  const invoiceDays = Number.isFinite(invoiceDaysRaw) && invoiceDaysRaw >= 0 ? Math.round(invoiceDaysRaw) : null;
+  const interactionFreshness = activityFreshnessPercent(interactionDays, 21, 120);
+  const invoiceFreshness = activityFreshnessPercent(invoiceDays, 30, 120);
+  const detailNeedsAction = Boolean(detailData?.contactDue || detailData?.invoiceActivityDue);
   const detailPriorityTier = getPriorityTier(detailData || {});
   const workSummaryTags = deriveWorkSummaryTags(
     detailData?.workSummary?.summary,
@@ -1319,16 +1507,114 @@ export default function CustomerDevelopmentView() {
   );
   const detailSignals = useMemo(() => deriveDisplaySignals(detailData || {}, 5), [detailData]);
   const infraActionHints = useMemo(() => buildInfraActionHints(detailData || {}), [detailData]);
-  const overviewBusinessRecommendations = useMemo(() => {
-    const source = detailData?.recommendations || detailData?.topRecommendations || [];
-    if (!Array.isArray(source)) return [];
-    return source
-      .filter((rec) => {
-        const recType = String(rec?.type || "").toLowerCase();
-        return recType !== "security" && recType !== "lifecycle";
-      })
-      .slice(0, 3);
+  const sourceReadiness = useMemo(() => {
+    const source = detailData?.source && typeof detailData.source === "object" ? detailData.source : {};
+    const infra = detailData?.infra && typeof detailData.infra === "object" ? detailData.infra : {};
+    const daysSinceInvoice = detailData?.daysSinceLastInvoice;
+    const communicationCount = Number(detailData?.communicationFrequency || 0);
+    const hasMail = Boolean(String(detailData?.customerEmail || "").trim());
+    const discoveredAssets = Number(infra?.discoveredAssets || 0);
+    const managedAssets = Number(infra?.managedAssets || 0);
+    return [
+      {
+        key: "sevdesk",
+        label: "Faktura",
+        active: Boolean(source?.sevdesk) || typeof daysSinceInvoice === "number",
+        detail: typeof daysSinceInvoice === "number" ? `${daysSinceInvoice} Tage` : "keine Rechnungsdaten",
+      },
+      {
+        key: "rmm",
+        label: "RMM",
+        active: Boolean(source?.tacticalRmm) || managedAssets > 0,
+        detail: managedAssets > 0 ? `${managedAssets} Agents` : "keine Agent-Zuordnung",
+      },
+      {
+        key: "discovery",
+        label: "Discovery",
+        active: Number(source?.discovery || 0) > 0 || discoveredAssets > 0,
+        detail: discoveredAssets > 0 ? `${discoveredAssets} Geräte` : "kein Inventar-Snapshot",
+      },
+      {
+        key: "kontakt",
+        label: "Kontakt",
+        active: communicationCount > 0 || hasMail,
+        detail: hasMail ? "E-Mail vorhanden" : `${communicationCount} Calls (30T)`,
+      },
+    ];
   }, [detailData]);
+  const actionableItems = useMemo(() => {
+    if (!detailData) return [];
+    const rawRecommendations = Array.isArray(detailData?.recommendations)
+      ? detailData.recommendations
+      : Array.isArray(detailData?.topRecommendations)
+        ? detailData.topRecommendations
+        : [];
+    const candidates = [...rawRecommendations, ...infraActionHints];
+    const items = [];
+    const seen = new Set();
+    const pushItem = (entry, fallbackType = "hinweis", fallbackWhy = "") => {
+      const title = String(entry?.title || "").trim();
+      if (!title) return;
+      const why = String(entry?.why || fallbackWhy || "").trim();
+      const key = `${title.toLowerCase()}|${why.toLowerCase()}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const meta = actionTypeMeta(entry?.type || fallbackType);
+      const text = `${title} ${why}`.toLowerCase();
+      let score = Number(meta.baseScore || 65);
+      if (detailData?.contactDue && (meta.key === "betreuung" || /(kontakt|mail|anruf|reaktivierung|betreuung)/i.test(text))) {
+        score += 14;
+      }
+      if (detailData?.invoiceActivityDue && /(rechnung|leistung|reaktivierung|review)/i.test(text)) {
+        score += 12;
+      }
+      if (meta.key === "security" && Number(detailData?.infra?.errorCount || 0) > 0) {
+        score += 12;
+      }
+      if (meta.key === "security" && Number(detailData?.infra?.openUpdates || 0) > 0) {
+        score += 8;
+      }
+      if (meta.key === "lifecycle" && Number(detailData?.infra?.osExpiredCount || 0) > 0) {
+        score += 10;
+      }
+      if (/(sofort|priorisiert|abgelaufen|offline|fehler|unmanaged|kritisch|eol)/i.test(text)) {
+        score += 10;
+      }
+      score = Math.max(0, Math.min(99, score));
+      const priorityLabel = score >= 88 ? "Sofort" : score >= 74 ? "Diese Woche" : "Einplanen";
+      const priorityClass =
+        score >= 88
+          ? "border-rose-200 bg-rose-50 text-rose-700"
+          : score >= 74
+            ? "border-amber-200 bg-amber-50 text-amber-700"
+            : "border-sky-200 bg-sky-50 text-sky-700";
+      items.push({
+        key,
+        title,
+        why: why || "Aus den Kundendaten wurde ein konkreter Handlungsbedarf erkannt.",
+        taskTitle: `Kundenentwicklung: ${title}`,
+        score,
+        priorityLabel,
+        priorityClass,
+        ...meta,
+      });
+    };
+    candidates.forEach((entry) => pushItem(entry));
+    if (!items.length) {
+      detailSignals.forEach((signal) =>
+        pushItem(
+          { title: signal, why: "Signal aus den aktuellen Datenquellen.", type: "betreuung" },
+          "betreuung",
+          "Signal aus den aktuellen Datenquellen."
+        )
+      );
+    }
+    return items.sort((a, b) => b.score - a.score).slice(0, 6);
+  }, [detailData, detailSignals, infraActionHints]);
+  const primaryAction = actionableItems[0] || null;
+  const hasCustomerMail = Boolean(String(detailData?.customerEmail || "").trim());
+  const runningCallGuide = isAiActionRunning(detailModal.customerId, "aktivierung_call");
+  const runningMailGuide = isAiActionRunning(detailModal.customerId, "aktivierung_mail");
   return (
       <div className="min-h-screen bg-sand-50 text-sand-900">
       {detailModal.open ? (
@@ -1442,6 +1728,10 @@ export default function CustomerDevelopmentView() {
                     </p>
                   </div>
                 </div>
+                <div className="mt-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5 text-[10px] text-sky-800">
+                  Schnellansicht zeigt nur entscheidbare Kernsignale. Keine Daten gehen verloren: alle Rohdaten sind in den
+                  aufklappbaren Detailblöcken verfügbar.
+                </div>
               </div>
             ) : null}
             <div className="min-h-0 flex-1 overflow-auto bg-sand-50 p-5">
@@ -1506,140 +1796,241 @@ export default function CustomerDevelopmentView() {
 
                   {detailTab === "overview" ? (
                   <>
-                  <div className="grid gap-2 md:grid-cols-2">
-                    <div className="rounded-2xl border border-sand-200 bg-white p-2.5">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Umsatzvergleich</p>
-                      <div className="mt-1.5 space-y-1.5">
+                  <div className="grid gap-2 md:grid-cols-[minmax(220px,0.7fr)_minmax(0,1.3fr)]">
+                    <div className="rounded-2xl border border-sand-200 bg-white p-2">
+                      <p className="text-[9px] uppercase tracking-[0.16em] text-sand-500">Aktivitätsfenster</p>
+                      <div className="mt-1 space-y-1">
                         <div>
-                          <div className="flex items-center justify-between text-[10px] text-sand-600">
-                            <span>Vorjahr</span>
-                            <span>{formatEur(detailData.revenueLastYearEur)}</span>
+                          <div className="flex items-center justify-between text-[9px] text-sand-600">
+                            <span>Kundenkontakt</span>
+                            <span>{interactionDays === null ? "n/a" : `${interactionDays} Tage`}</span>
                           </div>
-                          <div className="h-1.5 rounded-full bg-sand-100">
-                            <div className="h-1.5 rounded-full bg-sand-500" style={{ width: `${revenueBars.lastPct}%` }} />
+                          <div className="h-1 rounded-full bg-sand-100">
+                            <div
+                              className={`h-1 rounded-full ${detailData.contactDue ? "bg-rose-400" : "bg-emerald-500"}`}
+                              style={{ width: `${interactionFreshness}%` }}
+                            />
                           </div>
                         </div>
                         <div>
-                          <div className="flex items-center justify-between text-[10px] text-sand-600">
-                            <span>Aktuelles Jahr</span>
-                            <span>{formatEur(detailData.revenueCurrentYearEur)}</span>
+                          <div className="flex items-center justify-between text-[9px] text-sand-600">
+                            <span>Rechnungsaktivität</span>
+                            <span>{invoiceDays === null ? "n/a" : `${invoiceDays} Tage`}</span>
                           </div>
-                          <div className="h-1.5 rounded-full bg-sand-100">
+                          <div className="h-1 rounded-full bg-sand-100">
                             <div
-                              className={`h-1.5 rounded-full ${
-                                Number(detailData.revenueTrendPct || 0) < 0 ? "bg-rose-400" : "bg-emerald-500"
-                              }`}
-                              style={{ width: `${revenueBars.currentPct}%` }}
+                              className={`h-1 rounded-full ${detailData.invoiceActivityDue ? "bg-rose-400" : "bg-sky-500"}`}
+                              style={{ width: `${invoiceFreshness}%` }}
                             />
                           </div>
                         </div>
                       </div>
-                      <p className="mt-1.5 text-[10px] text-sand-600">Trend: {formatPct(detailData.revenueTrendPct)}</p>
+                      <p className={`mt-1 text-[9px] ${detailNeedsAction ? "text-rose-700" : "text-emerald-700"}`}>
+                        {detailNeedsAction ? "Betreuung fällig" : "Aktivitätslage stabil"}
+                      </p>
                     </div>
 
                     <div className="rounded-2xl border border-sand-200 bg-white p-2.5">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Risikozusammensetzung</p>
-                      <div className="mt-1.5 space-y-1.5">
-                        <div>
-                          <div className="flex items-center justify-between text-[10px] text-sand-600">
-                            <span>Business</span>
-                            <span>{detailData.businessRisk ?? 0}</span>
-                          </div>
-                          <div className="h-1.5 rounded-full bg-sand-100">
-                            <div className="h-1.5 rounded-full bg-amber-400" style={{ width: `${clampPercent(detailData.businessRisk)}%` }} />
-                          </div>
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Kernsignale Technik</p>
+                      <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Updates</p>
+                          <p className={`text-sm font-semibold ${Number(detailData?.infra?.openUpdates || 0) > 0 ? "text-rose-700" : "text-emerald-700"}`}>
+                            {Number(detailData?.infra?.openUpdates || 0)}
+                          </p>
                         </div>
-                        <div>
-                          <div className="flex items-center justify-between text-[10px] text-sand-600">
-                            <span>Infrastruktur</span>
-                            <span>{detailData.infrastructureRisk ?? 0}</span>
-                          </div>
-                          <div className="h-1.5 rounded-full bg-sand-100">
-                            <div className="h-1.5 rounded-full bg-rose-400" style={{ width: `${clampPercent(detailData.infrastructureRisk)}%` }} />
-                          </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">OS EOL erreicht</p>
+                          <p className={`text-sm font-semibold ${Number(detailData?.infra?.osExpiredCount || 0) > 0 ? "text-rose-700" : "text-emerald-700"}`}>
+                            {Number(detailData?.infra?.osExpiredCount || 0)}
+                          </p>
                         </div>
-                      </div>
-                      <div className="mt-2">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Signale</p>
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {detailSignals.map((signal, idx) => (
-                            <span key={`${signal}-${idx}`} className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] text-sand-700">
-                              {signal}
-                            </span>
-                          ))}
-                          {!detailSignals.length ? (
-                            <span className="text-[10px] text-sand-500">Keine besonderen Signale.</span>
-                          ) : null}
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">OS EOL bald</p>
+                          <p className={`text-sm font-semibold ${Number(detailData?.infra?.osEolSoonCount || 0) > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                            {Number(detailData?.infra?.osEolSoonCount || 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene CVEs</p>
+                          <p className={`text-sm font-semibold ${Number(detailData?.infra?.openCves || 0) > 0 ? "text-rose-700" : "text-emerald-700"}`}>
+                            {Number(detailData?.infra?.openCves || 0)}
+                          </p>
                         </div>
                       </div>
-                      <div className="mt-2">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Empfehlungen</p>
-                        <div className="mt-1 space-y-1">
-                          {overviewBusinessRecommendations.map((rec, idx) => (
-                            <p key={`${rec?.title || "r"}-${idx}`} className="text-[11px] text-sand-700">
-                              <span className="font-semibold">{rec?.title || "Empfehlung"}:</span>{" "}
-                              {compactWorkSnippet(rec?.why || "", 120)}
-                            </p>
-                          ))}
-                          {!overviewBusinessRecommendations.length ? (
-                            <p className="text-[10px] text-sand-500">Keine Empfehlungen vorhanden.</p>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Handlungsempfehlungen</p>
-                    <div className="mt-2 grid gap-2 md:grid-cols-2">
-                      {infraActionHints.length ? (
-                        infraActionHints.map((rec, idx) => {
-                          const recType = String(rec?.type || "").toLowerCase();
-                          const isSecurity = recType === "security";
-                          const isLifecycle = recType === "lifecycle";
-                          const RecIcon = isSecurity ? Shield : isLifecycle ? Clock3 : AlertTriangle;
-                          const typeClass = isSecurity
-                            ? "border-rose-200 bg-rose-50 text-rose-700"
-                            : isLifecycle
-                              ? "border-amber-200 bg-amber-50 text-amber-700"
-                              : "border-sand-200 bg-sand-100 text-sand-700";
-                          const cardClass = isSecurity
-                            ? "border-rose-200"
-                            : isLifecycle
-                              ? "border-amber-200"
-                              : "border-sand-200";
-                          const typeLabel = isSecurity ? "Security" : isLifecycle ? "Lifecycle" : "Hinweis";
-                          return (
-                            <div
-                              key={`${rec?.title || "infra-rec"}-${idx}`}
-                              className={`rounded-xl border bg-white p-2.5 ${cardClass}`}
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex min-w-0 items-start gap-2">
-                                  <div className={`mt-0.5 rounded-lg border p-1 ${typeClass}`}>
-                                    <RecIcon size={13} />
-                                  </div>
-                                  <div className="min-w-0">
-                                    <p className="text-xs font-semibold text-sand-900 leading-5">
-                                      {rec?.title || "Empfehlung"}
-                                    </p>
-                                  </div>
-                                </div>
-                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${typeClass}`}>
-                                  {typeLabel}
-                                </span>
+                      <p className="mt-2 text-[10px] text-sand-600">
+                        Fokus: nur direkte Handlungshebel auf einen Blick.
+                      </p>
+                      <details className="mt-2 rounded-lg border border-sand-200 bg-sand-50 p-2">
+                        <summary className="cursor-pointer text-[10px] uppercase tracking-[0.18em] text-sand-600">
+                          Detaildaten anzeigen (Risiko, Quellen, Signale)
+                        </summary>
+                        <div className="mt-2 space-y-2">
+                          <div className="space-y-1.5">
+                            <div>
+                              <div className="flex items-center justify-between text-[10px] text-sand-600">
+                                <span>Business</span>
+                                <span>{detailData.businessRisk ?? 0}</span>
                               </div>
-                              <p className="mt-1.5 text-[11px] leading-5 text-sand-600">
-                                {rec?.why || ""}
-                              </p>
+                              <div className="h-1.5 rounded-full bg-sand-100">
+                                <div className="h-1.5 rounded-full bg-amber-400" style={{ width: `${clampPercent(detailData.businessRisk)}%` }} />
+                              </div>
                             </div>
-                          );
-                        })
-                      ) : (
-                        <p className="text-xs text-sand-500">Keine akuten Infrastruktur-Maßnahmen erkannt.</p>
-                      )}
+                            <div>
+                              <div className="flex items-center justify-between text-[10px] text-sand-600">
+                                <span>Infrastruktur</span>
+                                <span>{detailData.infrastructureRisk ?? 0}</span>
+                              </div>
+                              <div className="h-1.5 rounded-full bg-sand-100">
+                                <div className="h-1.5 rounded-full bg-rose-400" style={{ width: `${clampPercent(detailData.infrastructureRisk)}%` }} />
+                              </div>
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Datenquellen</p>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {sourceReadiness.map((entry) => (
+                                <span
+                                  key={`source-${entry.key}`}
+                                  className={`rounded-full border px-2 py-0.5 text-[10px] ${
+                                    entry.active
+                                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                      : "border-amber-200 bg-amber-50 text-amber-700"
+                                  }`}
+                                >
+                                  {entry.label}: {entry.detail}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Top-Signale</p>
+                            <div className="mt-1 space-y-1">
+                              {detailSignals.slice(0, 4).map((signal, idx) => (
+                                <p key={`top-signal-${idx}`} className="text-[11px] text-sand-700">
+                                  - {signal}
+                                </p>
+                              ))}
+                              {!detailSignals.length ? (
+                                <p className="text-[10px] text-sand-500">Keine besonderen Signale erkannt.</p>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      </details>
                     </div>
-                  </div>
+	                  </div>
+	
+	                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
+	                    <div className="flex flex-wrap items-start justify-between gap-2">
+	                      <div>
+	                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Handlungsbedarf auf einen Blick</p>
+	                        <p className="mt-0.5 text-[11px] text-sand-600">
+	                          Priorisierte Maßnahmen aus Faktura, Kommunikation, RMM und Discovery.
+	                        </p>
+	                      </div>
+	                      {primaryAction ? (
+	                        <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${primaryAction.priorityClass}`}>
+	                          Nächster Schritt: {primaryAction.priorityLabel}
+	                        </span>
+	                      ) : null}
+	                    </div>
+	                    <div className="mt-2 flex flex-wrap gap-1.5">
+	                      <button
+	                        type="button"
+	                        onClick={() => startAiContactFlow("aktivierung_call")}
+	                        disabled={aiBusy}
+	                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-sand-900 px-2.5 py-1 text-[10px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-70"
+	                      >
+	                        {runningCallGuide ? <InlineSpinner /> : <Phone size={11} />}
+	                        {runningCallGuide ? "Lädt..." : "Telefonleitfaden"}
+	                      </button>
+	                      <button
+	                        type="button"
+	                        onClick={() => startAiContactFlow("aktivierung_mail")}
+	                        disabled={aiBusy}
+	                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-60"
+	                      >
+	                        {runningMailGuide ? <InlineSpinner /> : <Sparkles size={11} />}
+	                        {runningMailGuide ? "Lädt..." : "Mail-Entwurf (KI)"}
+	                      </button>
+	                      <button
+	                        type="button"
+	                        onClick={() => createTask(primaryAction?.taskTitle || "Follow-up Kundenentwicklung")}
+	                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+	                      >
+	                        <Plus size={11} />
+	                        Aufgabe anlegen
+	                      </button>
+	                      <button
+	                        type="button"
+	                        onClick={openCustomerMail}
+	                        disabled={!hasCustomerMail}
+	                        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
+	                          hasCustomerMail
+	                            ? "border-sand-200 bg-white text-sand-700 hover:bg-sand-100"
+	                            : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
+	                        }`}
+	                      >
+	                        <Mail size={11} />
+	                        E-Mail öffnen
+	                      </button>
+	                    </div>
+	                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+	                      {actionableItems.length ? (
+	                        actionableItems.map((item) => {
+	                          const ActionIcon = item.Icon;
+	                          return (
+	                            <div key={item.key} className={`rounded-xl border p-2.5 ${item.cardClass}`}>
+	                              <div className="flex flex-wrap items-start justify-between gap-2">
+	                                <div className="flex min-w-0 items-start gap-2">
+	                                  <div className={`mt-0.5 rounded-lg border p-1 ${item.badgeClass}`}>
+	                                    <ActionIcon size={13} />
+	                                  </div>
+	                                  <div className="min-w-0">
+	                                    <p className="text-xs font-semibold leading-5 text-sand-900">
+	                                      {item.title}
+	                                    </p>
+	                                    <p className="text-[10px] text-sand-500">{item.sourceHint}</p>
+	                                  </div>
+	                                </div>
+	                                <div className="flex flex-wrap items-center gap-1">
+	                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${item.badgeClass}`}>
+	                                    {item.label}
+	                                  </span>
+	                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${item.priorityClass}`}>
+	                                    {item.priorityLabel}
+	                                  </span>
+	                                </div>
+	                              </div>
+	                              <p className="mt-1.5 text-[11px] leading-5 text-sand-700">{item.why}</p>
+	                              <div className="mt-2 flex flex-wrap gap-1.5">
+	                                <button
+	                                  type="button"
+	                                  onClick={() => createTask(item.taskTitle)}
+	                                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+	                                >
+	                                  <Plus size={10} />
+	                                  Aufgabe
+	                                </button>
+	                                <button
+	                                  type="button"
+	                                  onClick={() => startAiContactFlow("aktivierung_call")}
+	                                  disabled={aiBusy}
+	                                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-60"
+	                                >
+	                                  {runningCallGuide ? <InlineSpinner /> : <Sparkles size={10} />}
+	                                  Leitfaden
+	                                </button>
+	                              </div>
+	                            </div>
+	                          );
+	                        })
+	                      ) : (
+	                        <p className="text-xs text-sand-500">Kein akuter Handlungsbedarf erkannt.</p>
+	                      )}
+	                    </div>
+	                  </div>
 
                   <div className="rounded-2xl border border-sand-200 bg-white p-2.5">
                     <div className="flex items-center justify-between gap-2">
@@ -1788,194 +2179,231 @@ export default function CustomerDevelopmentView() {
                         );
                         return (
                           <>
-                      <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="grid gap-2 sm:grid-cols-3">
                         <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
                           <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agents</p>
-                          <p className="text-xs font-semibold text-sand-800">
-                            {(detailData.managedInfrastructureDevices || []).length}
-                          </p>
+                          <p className="text-xs font-semibold text-sand-800">{(detailData.managedInfrastructureDevices || []).length}</p>
                         </div>
                         <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
                           <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Geräte</p>
-                          <p className="text-xs font-semibold text-sand-800">
-                            {activeDiscoveryDevices.length}
+                          <p className="text-xs font-semibold text-sand-800">{activeDiscoveryDevices.length}</p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Updates</p>
+                          <p className={`text-xs font-semibold ${Number(detailData?.infra?.openUpdates || 0) > 0 ? "text-rose-700" : "text-emerald-700"}`}>
+                            {Number(detailData?.infra?.openUpdates || 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">EOL erreicht</p>
+                          <p className={`text-xs font-semibold ${Number(detailData?.infra?.osExpiredCount || 0) > 0 ? "text-rose-700" : "text-emerald-700"}`}>
+                            {Number(detailData?.infra?.osExpiredCount || 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">EOL bald</p>
+                          <p className={`text-xs font-semibold ${Number(detailData?.infra?.osEolSoonCount || 0) > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                            {Number(detailData?.infra?.osEolSoonCount || 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Unmanaged</p>
+                          <p className={`text-xs font-semibold ${Number(detailData?.infra?.unmanagedCount || 0) > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                            {Number(detailData?.infra?.unmanagedCount || 0)}
                           </p>
                         </div>
                       </div>
+                      <p className="text-[10px] text-sand-600">
+                        Schnellansicht für Entscheidungen. Vollständige Agent-/Discovery-Listen bleiben darunter aufklappbar.
+                      </p>
                       {detailData?.infra?.rmmMappingHint &&
                       (detailData?.managedInfrastructureDevices || []).length === 0 ? (
                         <div className="rounded-xl border border-amber-200 bg-amber-50 p-2">
                           <p className="text-xs text-amber-800">{detailData.infra.rmmMappingHint}</p>
                         </div>
                       ) : null}
-                      <div className="space-y-2">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agenten</p>
+                      <details className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                        <summary className="cursor-pointer text-[10px] uppercase tracking-[0.18em] text-sand-600">
+                          RMM-Agenten Details ({(detailData.managedInfrastructureDevices || []).length})
+                        </summary>
+                        <div className="mt-2 space-y-1.5">
                         {(detailData.managedInfrastructureDevices || []).length ? (
-                          (detailData.managedInfrastructureDevices || []).map((device, idx) => {
-                            const expanded = Boolean(expandedInfraAgents[device?.agentId || `idx-${idx}`]);
-                            const errorCount = Number(device?.errorCount || 0);
-                            const warningCount = Number(device?.warningCount || 0);
-                            const updatesCount = Number(device?.openUpdates || 0);
-                            const lifecycle = resolveAgentLifecycle(device);
-                            const lifecycleStatus = String(lifecycle?.status || "").toLowerCase();
-                            const lifecycleLabel =
-                              lifecycleStatus === "expired"
-                                ? "EOL erreicht"
-                                : lifecycleStatus === "soon"
-                                  ? "EOL bald"
-                                  : "";
-                            const lifecycleClass =
-                              lifecycleStatus === "expired"
-                                ? "border-rose-200 bg-rose-50 text-rose-700"
-                                : lifecycleStatus === "soon"
-                                  ? "border-amber-200 bg-amber-50 text-amber-700"
-                                  : "border-emerald-200 bg-emerald-50 text-emerald-700";
-                            return (
-                              <div key={`${device?.agentId || idx}`} className="rounded-xl border border-sand-200 bg-white p-2 text-xs text-sand-700 shadow-sm">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="flex min-w-0 items-center gap-2">
-                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-sand-200 bg-sand-50 text-sand-700">
-                                      {(() => {
-                                        const AgentIcon = getAgentIcon(device);
-                                        return <AgentIcon size={14} />;
-                                      })()}
-                                    </div>
-                                    <div className="min-w-0">
-                                      <p className="truncate text-xs font-semibold text-sand-900">{device?.hostname || "Unbekannter Agent"}</p>
-                                      <p className="truncate text-[10px] text-sand-500">
-                                        {device?.client || "Client n/a"} · {device?.site || "Site n/a"}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="flex items-start gap-1.5">
-                                    <span
-                                      className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${
-                                        typeof device?.online === "boolean"
-                                          ? device.online
-                                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                            : "border-rose-200 bg-rose-50 text-rose-700"
-                                          : "border-sand-200 bg-white text-sand-600"
-                                      }`}
-                                    >
-                                      {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
-                                    </span>
-                                    {lifecycleLabel ? (
-                                      <span className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${lifecycleClass}`}>
-                                        {lifecycleLabel}
-                                      </span>
-                                    ) : null}
-                                    <div className="flex flex-col items-stretch gap-1">
-                                      <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-rose-700">
-                                        E {errorCount}
-                                      </span>
-                                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-amber-700">
-                                        W {warningCount}
-                                      </span>
-                                      <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-sky-700">
-                                        U {updatesCount}
-                                      </span>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setExpandedInfraAgents((prev) => ({
-                                          ...prev,
-                                          [device?.agentId || `idx-${idx}`]: !prev[device?.agentId || `idx-${idx}`]
-                                        }))
-                                      }
-                                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[9px] uppercase tracking-wide hover:bg-sand-100"
-                                    >
-                                      {expanded ? "Details ausblenden" : "Details anzeigen"}
-                                      {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                                    </button>
-                                  </div>
-                                </div>
-
-                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-sand-600">
-                                  <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">
-                                    OS: {device?.os || "n/a"}
-                                  </span>
-                                  <span className={`rounded-full border px-2 py-0.5 ${lifecycleClass}`}>
-                                    EOL: {lifecycle?.eol_date || "n/a"}
-                                  </span>
-                                </div>
-
-                                {expanded ? (
-                                  <div className="mt-1.5 rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5 text-[10px] text-sand-700 space-y-1">
-                                    <p>
-                                      <span className="font-semibold text-sand-800">Updates:</span> {updatesCount}
-                                      {" "} (Windows {Number(device?.windowsUpdates || 0)} · 3rd-Party {Number(device?.thirdPartyUpdates || 0)} · CVE {Number(device?.openCves || 0)})
-                                    </p>
-                                    {lifecycleStatus === "expired" ? (
-                                      <p className="text-rose-700">
-                                        <span className="font-semibold">OS Lifecycle:</span> Support abgelaufen (EOL {lifecycle?.eol_date || "n/a"})
-                                      </p>
-                                    ) : lifecycleStatus === "soon" ? (
-                                      <p className="text-amber-700">
-                                        <span className="font-semibold">OS Lifecycle:</span> Support endet bald (EOL {lifecycle?.eol_date || "n/a"})
-                                      </p>
-                                    ) : (
-                                      <p className="text-emerald-700">
-                                        <span className="font-semibold">OS Lifecycle:</span> Support aktiv
-                                      </p>
-                                    )}
-                                    <p className="inline-flex items-center gap-1 text-sand-600"><Clock3 size={11} /> Last Seen: {formatDateTime(device?.lastSeen)}</p>
-                                  </div>
-                                ) : null}
-                              </div>
-                            );
-                          })
+                          <div className="overflow-x-auto rounded-lg border border-sand-200 bg-white">
+                            <table className="min-w-full table-auto text-xs text-sand-700">
+                              <thead>
+                                <tr className="border-b border-sand-200 text-left text-[10px] uppercase tracking-wide text-sand-500">
+                                  <th className="w-[150px] py-1.5 pr-2 font-medium">Agent</th>
+                                  <th className="py-1.5 pr-3 font-medium">Kunde</th>
+                                  <th className="py-1.5 pr-3 font-medium">Standort</th>
+                                  <th className="py-1.5 pr-3 font-medium">OS</th>
+                                  <th className="py-1.5 pr-3 font-medium">Status</th>
+                                  <th className="py-1.5 pr-3 font-medium">E/W/U</th>
+                                  <th className="py-1.5 pr-3 font-medium">EOL</th>
+                                  <th className="py-1.5 font-medium">Last Seen</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-sand-100">
+                                {(detailData.managedInfrastructureDevices || []).map((device, idx) => {
+                                  const errorCount = Number(device?.errorCount || 0);
+                                  const warningCount = Number(device?.warningCount || 0);
+                                  const updatesCount = Number(device?.openUpdates || 0);
+                                  const lifecycle = resolveAgentLifecycle(device);
+                                  const lifecycleStatus = String(lifecycle?.status || "").toLowerCase();
+                                  const lifecycleLabel =
+                                    lifecycleStatus === "expired"
+                                      ? "EOL erreicht"
+                                      : lifecycleStatus === "soon"
+                                        ? "EOL bald"
+                                        : lifecycleStatus === "supported"
+                                          ? "Support aktiv"
+                                          : "n/a";
+                                  const lifecycleLabelClass =
+                                    lifecycleStatus === "expired"
+                                      ? "text-rose-700"
+                                      : lifecycleStatus === "soon"
+                                        ? "text-amber-700"
+                                        : lifecycleStatus === "supported"
+                                          ? "text-emerald-700"
+                                          : "text-sand-500";
+                                  const statusClass =
+                                    typeof device?.online === "boolean"
+                                      ? device.online
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                        : "border-rose-200 bg-rose-50 text-rose-700"
+                                      : "border-sand-200 bg-white text-sand-600";
+                                  const AgentIcon = getAgentIcon(device);
+                                  return (
+                                    <tr key={`${device?.agentId || idx}`} className="align-top">
+                                      <td className="w-[150px] max-w-[150px] py-1.5 pr-2">
+                                        <div className="flex min-w-0 items-start gap-1.5">
+                                          <AgentIcon size={12} className="mt-0.5 shrink-0 text-sand-500" />
+                                          <span
+                                            className="min-w-0 text-sand-900 font-semibold leading-4"
+                                            style={{
+                                              display: "-webkit-box",
+                                              WebkitLineClamp: 2,
+                                              WebkitBoxOrient: "vertical",
+                                              overflow: "hidden",
+                                            }}
+                                          >
+                                            {device?.hostname || "Unbekannter Agent"}
+                                          </span>
+                                        </div>
+                                        <div className="text-[10px] text-sand-500">
+                                          {device?.agentId ? `ID ${String(device.agentId)}` : "ID n/a"}
+                                        </div>
+                                      </td>
+                                      <td className="max-w-[170px] truncate py-1.5 pr-3" title={device?.client || ""}>
+                                        {device?.client || "n/a"}
+                                      </td>
+                                      <td className="max-w-[170px] truncate py-1.5 pr-3" title={device?.site || ""}>
+                                        {device?.site || "n/a"}
+                                      </td>
+                                      <td className="max-w-[220px] truncate py-1.5 pr-3" title={device?.os || ""}>
+                                        {device?.os || "n/a"}
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3">
+                                        <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${statusClass}`}>
+                                          {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
+                                        </span>
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3 font-mono text-[11px]">
+                                        <span className="text-rose-700">{errorCount}</span>
+                                        <span className="text-sand-500">/</span>
+                                        <span className="text-amber-700">{warningCount}</span>
+                                        <span className="text-sand-500">/</span>
+                                        <span className="text-sky-700">{updatesCount}</span>
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3">
+                                        {lifecycle?.eol_date || "n/a"}
+                                        <div className={`text-[10px] ${lifecycleLabelClass}`}>{lifecycleLabel}</div>
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5">{formatDateTime(device?.lastSeen)}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
                         ) : (
                           <p className="text-sm text-sand-500">Keine zugeordneten RMM-Agenten gefunden.</p>
                         )}
-                      </div>
-                      <div className="space-y-2 pt-1">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Geräte</p>
+                        </div>
+                      </details>
+                      <details className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                        <summary className="cursor-pointer text-[10px] uppercase tracking-[0.18em] text-sand-600">
+                          Discovery-Geräte Details ({activeDiscoveryDevices.length})
+                        </summary>
+                        <div className="mt-2 space-y-1.5">
                         {activeDiscoveryDevices.length ? (
-                          activeDiscoveryDevices.map((device, idx) => (
-                            <div
-                              key={`${device?.ip || device?.mac || device?.hostname || idx}`}
-                              className="grid items-center gap-2 rounded-lg border border-sand-200 bg-white px-2 py-1.5 text-xs text-sand-700 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1.4fr)_minmax(0,1fr)]"
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-sand-200 bg-sand-50 text-sand-700">
-                                  {(() => {
-                                    const DiscoveryIcon = getDiscoveryIcon(device);
-                                    return <DiscoveryIcon size={12} />;
-                                  })()}
-                                </div>
-                                <p className="truncate text-[11px] font-semibold text-sand-800">
-                                  {device?.hostname || device?.ip || "Unbekanntes Gerät"}
-                                </p>
-                                <span className="shrink-0 rounded-full border border-sand-200 bg-sand-50 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-sand-600">
-                                  {formatDiscoveryTypeLabel(device?.deviceType)}
-                                </span>
-                                {device?.vendor ? (
-                                  <span className="shrink-0 rounded-full border border-sand-200 bg-sand-50 px-1.5 py-0.5 text-[9px] text-sand-600">
-                                    {String(device.vendor)}
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div className="truncate text-[10px] text-sand-600">
-                                {device?.ip ? `IP ${device.ip}` : "IP n/a"}
-                                {device?.mac ? ` · MAC ${device.mac}` : ""}
-                                {device?.protocol ? ` · ${String(device.protocol).toUpperCase()}` : ""}
-                              </div>
-                              <div className="truncate text-right text-[10px] text-sand-500">
-                                {device?.source || "Discovery"}
-                                {typeof device?.confidence === "number"
-                                  ? ` · ${Math.max(0, Math.min(100, Number(device.confidence || 0)))}%`
-                                  : ""}
-                                {device?.lastSeenAt ? ` · ${formatDateTime(device.lastSeenAt)}` : ""}
-                              </div>
-                            </div>
-                          ))
+                          <div className="overflow-x-auto rounded-lg border border-sand-200 bg-white">
+                            <table className="min-w-full table-auto text-xs text-sand-700">
+                              <thead>
+                                <tr className="border-b border-sand-200 text-left text-[10px] uppercase tracking-wide text-sand-500">
+                                  <th className="w-[150px] py-1.5 pr-2 font-medium">Gerät</th>
+                                  <th className="py-1.5 pr-3 font-medium">Typ</th>
+                                  <th className="py-1.5 pr-3 font-medium">IP</th>
+                                  <th className="py-1.5 pr-3 font-medium">MAC</th>
+                                  <th className="py-1.5 pr-3 font-medium">Hersteller</th>
+                                  <th className="py-1.5 pr-3 font-medium">Quelle/Protokoll</th>
+                                  <th className="py-1.5 pr-3 font-medium">Vertrauen</th>
+                                  <th className="py-1.5 font-medium">Zuletzt gesehen</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-sand-100">
+                                {activeDiscoveryDevices.map((device, idx) => {
+                                  const DiscoveryIcon = getDiscoveryIcon(device);
+                                  return (
+                                    <tr key={`${device?.ip || device?.mac || device?.hostname || idx}`} className="align-top">
+                                      <td className="w-[150px] max-w-[150px] py-1.5 pr-2">
+                                        <div className="flex min-w-0 items-start gap-1.5">
+                                          <DiscoveryIcon size={12} className="mt-0.5 shrink-0 text-sand-500" />
+                                          <span
+                                            className="min-w-0 text-sand-900 font-semibold leading-4"
+                                            style={{
+                                              display: "-webkit-box",
+                                              WebkitLineClamp: 2,
+                                              WebkitBoxOrient: "vertical",
+                                              overflow: "hidden",
+                                            }}
+                                          >
+                                            {device?.hostname || device?.ip || "Unbekanntes Gerät"}
+                                          </span>
+                                        </div>
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3">
+                                        {formatDiscoveryTypeLabel(device?.deviceType)}
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3">{device?.ip || "n/a"}</td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3 font-mono">{device?.mac || "n/a"}</td>
+                                      <td className="max-w-[180px] truncate py-1.5 pr-3" title={device?.vendor || ""}>
+                                        {device?.vendor || "n/a"}
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3">
+                                        {device?.source || "Discovery"}
+                                        {device?.protocol ? ` / ${String(device.protocol).toUpperCase()}` : ""}
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3">
+                                        {typeof device?.confidence === "number"
+                                          ? `${Math.max(0, Math.min(100, Number(device.confidence || 0)))}%`
+                                          : "n/a"}
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5">
+                                        {device?.lastSeenAt ? formatDateTime(device.lastSeenAt) : "n/a"}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
                         ) : (
                           <p className="text-sm text-sand-500">
                             Noch keine Discovery-Geräte vorhanden. Starte den Scan über den Button oben.
                           </p>
                         )}
-                      </div>
+                        </div>
+                      </details>
                           </>
                         );
                       })()}
@@ -2016,7 +2444,7 @@ export default function CustomerDevelopmentView() {
                       {cveScan.error ? <p className="text-sm text-rose-600">{cveScan.error}</p> : null}
                       {cveScan.status === "ready" ? (
                         <div className="space-y-2">
-                          <div className="grid gap-2 sm:grid-cols-4">
+                          <div className="grid gap-2 sm:grid-cols-5">
                             <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
                               <p className="text-[10px] uppercase tracking-wide text-sand-500">Geprüfte Software</p>
                               <p className="text-sm font-semibold text-sand-800">{Number(cveScan.scannedSoftware || 0)}</p>
@@ -2030,13 +2458,56 @@ export default function CustomerDevelopmentView() {
                               <p className="text-sm font-semibold text-amber-700">{cveOverview.findingPrograms}</p>
                             </div>
                             <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
-                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Updates möglich</p>
-                              <p className="text-sm font-semibold text-rose-700">{cveOverview.updateCandidates}</p>
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Updatebedarf</p>
+                              <p className="text-sm font-semibold text-rose-700">{cveOverview.actionRequired}</p>
+                            </div>
+                            <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Konkretes Update möglich</p>
+                              <p className="text-sm font-semibold text-sky-700">{cveOverview.updateCandidates}</p>
                             </div>
                           </div>
                           <p className="text-xs text-sand-500">
-                            Datenstand: {cveScan.fromCache ? "Cache" : "Live"} · CVE-Einträge: {cveOverview.totalCves}
+                            Datenstand: {cveScan.fromCache ? "Cache" : "Live"} · CVE-Einträge: {cveOverview.totalCves} ·
+                            {" "}Fix-Version bekannt: {cveOverview.knownFixPrograms}
                           </p>
+                          {cveActionTop.length ? (
+                            <div className="rounded-xl border border-rose-200 bg-rose-50/40 p-2">
+                              <p className="text-[10px] uppercase tracking-wide text-rose-700">Programme mit Updatebedarf (Top)</p>
+                              <div className="mt-1 overflow-x-auto">
+                                <table className="min-w-full text-[11px]">
+                                  <thead className="text-sand-600">
+                                    <tr>
+                                      <th className="py-1 pr-3 text-left">Programm</th>
+                                      <th className="py-1 pr-3 text-left">Stand</th>
+                                      <th className="py-1 pr-3 text-left">Fix</th>
+                                      <th className="py-1 pr-3 text-left">CVEs</th>
+                                      <th className="py-1 text-left">Betroffene Agenten</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {cveActionTop.map((row) => (
+                                      <tr key={`cve-top-${row.name}`} className="border-t border-rose-100">
+                                        <td className="py-1 pr-3 font-semibold text-sand-800">{row.name}</td>
+                                        <td className="py-1 pr-3 text-sand-700">{row.currentVersion || "n/a"}</td>
+                                        <td className="py-1 pr-3 text-sand-700">{row.latestVersion || "—"}</td>
+                                        <td className="py-1 pr-3 text-sand-700">
+                                          {row.maxCves}
+                                          {row.maxScore > 0 ? ` · max ${row.maxScore}` : ""}
+                                        </td>
+                                        <td className="py-1 text-sand-700">{row.hostCount}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          ) : null}
+                          {Number(cveScan.lookupSkipped || 0) > 0 ? (
+                            <p className="text-xs text-amber-700">
+                              Hinweis: Bei {Number(cveScan.lookupSkipped || 0)} Programmen wurde der externe CVE-Lookup wegen Zeitbudget
+                              {" "}(~{Number(cveScan.lookupBudgetSeconds || 0)}s) übersprungen. Für vollständige Tiefe ggf. erneut scannen.
+                            </p>
+                          ) : null}
                           {Number(cveScan.matchedAgents || 0) === 0 ? (
                             <p className="text-sm text-sand-500">
                               {cveScan.mappingHint || "Keine zugeordneten RMM-Agenten für diesen Kunden gefunden."}
@@ -2048,57 +2519,25 @@ export default function CustomerDevelopmentView() {
                             </p>
                           ) : null}
                           {(cveScan.agents || []).length ? (
-                            <div className="space-y-2">
-                              {(cveScan.agents || []).map((agent, idx) => {
-                                const findings = Array.isArray(agent?.findings) ? agent.findings : [];
-                                const softwareRows = Array.isArray(agent?.software) ? agent.software : [];
-                                const findingByNameVersion = new Map();
-                                const findingByName = new Map();
-                                findings.forEach((finding) => {
-                                  const nameKey = normalizeTextKey(finding?.name);
-                                  const versionKey = normalizeTextKey(finding?.version);
-                                  if (!nameKey) return;
-                                  if (versionKey) findingByNameVersion.set(`${nameKey}|${versionKey}`, finding);
-                                  if (!findingByName.has(nameKey)) findingByName.set(nameKey, finding);
-                                });
-                                const resolveFinding = (pkg) => {
-                                  const nameKey = normalizeTextKey(pkg?.name);
-                                  const versionKey = normalizeTextKey(pkg?.version);
-                                  if (!nameKey) return null;
-                                  return findingByNameVersion.get(`${nameKey}|${versionKey}`) || findingByName.get(nameKey) || null;
-                                };
-                                const rows = softwareRows.map((pkg) => {
-                                  const finding = resolveFinding(pkg);
-                                  const latestVersion = latestFixedVersion(finding);
-                                  const cveCount = Array.isArray(finding?.cves) ? finding.cves.length : 0;
-                                  const highestScore = maxCveScore(finding);
-                                  const hasFinding = Boolean(finding) && (cveCount > 0 || Boolean(latestVersion));
-                                  const currentVersion = String(pkg?.version || "").trim();
-                                  const updateAvailable =
-                                    hasFinding && Boolean(latestVersion) && (!currentVersion || isNewerVersion(latestVersion, currentVersion));
-                                  return {
-                                    name: String(pkg?.name || "Unbekannt"),
-                                    currentVersion,
-                                    latestVersion,
-                                    cveCount,
-                                    highestScore,
-                                    hasFinding,
-                                    updateAvailable,
-                                  };
-                                });
-                                const sortedRows = [...rows].sort((left, right) => {
-                                  if (left.updateAvailable !== right.updateAvailable) return Number(right.updateAvailable) - Number(left.updateAvailable);
-                                  if (left.hasFinding !== right.hasFinding) return Number(right.hasFinding) - Number(left.hasFinding);
-                                  if ((left.cveCount || 0) !== (right.cveCount || 0)) return (right.cveCount || 0) - (left.cveCount || 0);
-                                  if ((left.highestScore || 0) !== (right.highestScore || 0)) return (right.highestScore || 0) - (left.highestScore || 0);
-                                  return String(left.name || "").localeCompare(String(right.name || ""), "de", { sensitivity: "base" });
-                                });
-                                const relevantRows = sortedRows.filter((row) => row.hasFinding || row.updateAvailable);
+                            <details className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                              <summary className="cursor-pointer text-[10px] uppercase tracking-[0.18em] text-sand-600">
+                                Agent-Detailtabellen ({(cveScan.agents || []).length})
+                              </summary>
+                              <p className="mt-1 text-[10px] text-sand-600">
+                                Schnellsicht oben zeigt Handlungsbedarf. Hier sind alle Softwaredetails je Agent vollständig vorhanden.
+                              </p>
+                              <div className="mt-2 space-y-2">
+                                {(cveScan.agents || []).map((agent, idx) => {
+                                const summary = buildCveRows(agent);
+                                const sortedRows = summary.rows;
+                                const relevantRows = summary.relevantRows;
+                                const actionRows = summary.actionRows;
                                 const agentKey = String(agent?.agentId || `agent-${idx}`);
                                 const showAllRows = Boolean(expandedCveAgents[agentKey]);
                                 const rowsToRender = showAllRows ? sortedRows : relevantRows;
                                 const hiddenRows = Math.max(0, sortedRows.length - rowsToRender.length);
-                                const agentUpdates = findings.filter((item) => Boolean(latestFixedVersion(item))).length;
+                                const agentUpdates = summary.updateAvailableCount;
+                                const agentNeedsAction = actionRows.length;
                                 return (
                                   <div key={agentKey} className="rounded-xl border border-sand-200 bg-sand-50 p-2 space-y-2">
                                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2108,10 +2547,13 @@ export default function CustomerDevelopmentView() {
                                           Software {Number(agent?.softwareCount || 0)}
                                         </span>
                                         <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">
-                                          Treffer {Number(agent?.findingCount || 0)}
+                                          Treffer {relevantRows.length}
                                         </span>
                                         <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] text-rose-700">
-                                          Updates {agentUpdates}
+                                          Updatebedarf {agentNeedsAction}
+                                        </span>
+                                        <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] text-sky-700">
+                                          Konkretes Update {agentUpdates}
                                         </span>
                                         {sortedRows.length > relevantRows.length ? (
                                           <button
@@ -2138,9 +2580,9 @@ export default function CustomerDevelopmentView() {
                                           <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
                                             <tr>
                                               <th className="px-2 py-1.5 text-left">Programm</th>
-                                              <th className="px-2 py-1.5 text-left">Aktuell</th>
-                                              <th className="px-2 py-1.5 text-left">Neuere Version</th>
-                                              <th className="px-2 py-1.5 text-left">CVEs</th>
+                                              <th className="px-2 py-1.5 text-left">Installiert</th>
+                                              <th className="px-2 py-1.5 text-left">Fix-Version</th>
+                                              <th className="px-2 py-1.5 text-left">Risiko</th>
                                               <th className="px-2 py-1.5 text-left">Status</th>
                                             </tr>
                                           </thead>
@@ -2148,6 +2590,8 @@ export default function CustomerDevelopmentView() {
                                             {rowsToRender.map((row, rowIdx) => {
                                               const statusText = row.updateAvailable
                                                 ? "Update verfügbar"
+                                                : row.actionRequired
+                                                ? "Update prüfen (CVE)"
                                                 : row.hasFinding
                                                 ? "Prüfen"
                                                 : "Kein Treffer";
@@ -2157,8 +2601,8 @@ export default function CustomerDevelopmentView() {
                                                   <td className="px-2 py-1.5 text-sand-700">{row.currentVersion || "n/a"}</td>
                                                   <td className="px-2 py-1.5 text-sand-700">{row.latestVersion || "—"}</td>
                                                   <td className="px-2 py-1.5 text-sand-700">
-                                                    {row.cveCount}
-                                                    {row.highestScore !== null ? ` · max ${row.highestScore}` : ""}
+                                                    {row.cveCount > 0 ? `${row.cveCount} CVE` : "—"}
+                                                    {row.highestScore !== null ? ` · max ${row.highestScore} (${cvePriorityLabel(row.highestScore)})` : ""}
                                                   </td>
                                                   <td className="px-2 py-1.5">
                                                     <span className={`rounded-full border px-2 py-0.5 text-[10px] ${cveStatusBadge(row)}`}>{statusText}</span>
@@ -2172,7 +2616,7 @@ export default function CustomerDevelopmentView() {
                                     ) : null}
                                     {!showAllRows && hiddenRows > 0 ? (
                                       <p className="text-[11px] text-sand-500">
-                                        {hiddenRows} Programme ohne CVE-Hinweis ausgeblendet.
+                                        {hiddenRows} Programme ohne Handlungsbedarf ausgeblendet.
                                       </p>
                                     ) : null}
                                     {!sortedRows.length && Number(agent?.softwareCount || 0) > 0 ? (
@@ -2187,7 +2631,8 @@ export default function CustomerDevelopmentView() {
                                   </div>
                                 );
                               })}
-                            </div>
+                              </div>
+                            </details>
                           ) : Number(cveScan.matchedAgents || 0) > 0 ? (
                             <p className="text-sm text-sand-500">Agenten vorhanden, aber keine Softwaredaten vom RMM geliefert.</p>
                           ) : (
@@ -2291,13 +2736,13 @@ export default function CustomerDevelopmentView() {
               <button
                 type="button"
                 onClick={() =>
-                  setFilters({
-                    noContract: false,
-                    revenueFalling: false,
-                    highCommunication: false,
-                    infraRisk: false,
-                    searchNeedle: ""
-                  })
+                    setFilters({
+                      noContract: false,
+                      activityDue: false,
+                      highCommunication: false,
+                      infraRisk: false,
+                      searchNeedle: ""
+                    })
                 }
                 className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
               >
@@ -2326,19 +2771,19 @@ export default function CustomerDevelopmentView() {
                 Ohne Vertrag
               </label>
               <label className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 flex items-center gap-1.5 leading-none">
-                <TrendingDown size={12} className="text-sand-500" />
+                <Clock3 size={12} className="text-sand-500" />
                 <input
                   type="checkbox"
-                  checked={filters.revenueFalling}
+                  checked={filters.activityDue}
                   onChange={(event) =>
-                    setFilters((prev) => ({ ...prev, revenueFalling: event.target.checked }))
+                    setFilters((prev) => ({ ...prev, activityDue: event.target.checked }))
                   }
                   className="h-3 w-3"
                 />
-                Umsatz sinkt
+                Betreuung fällig
               </label>
               <label className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 flex items-center gap-1.5 leading-none">
-                <Clock3 size={12} className="text-sand-500" />
+                <Phone size={12} className="text-sand-500" />
                 <input
                   type="checkbox"
                   checked={filters.highCommunication}
@@ -2561,7 +3006,7 @@ export default function CustomerDevelopmentView() {
           <div className="mt-2 grid gap-2 md:grid-cols-2 text-xs text-sand-600">
             <div className="rounded-2xl border border-sand-200 bg-sand-50 p-2">
               <p className="font-semibold text-sand-700">Business-Signale</p>
-              <p>Umsatztrend, Aufgabenlast, Kommunikationslast, Vertragslage.</p>
+              <p>Kontakt-/Rechnungsaktivität, Aufgabenlast, Kommunikationslast, Vertragslage.</p>
             </div>
             <div className="rounded-2xl border border-sand-200 bg-sand-50 p-2">
               <p className="font-semibold text-sand-700">Infrastruktur-Signale</p>

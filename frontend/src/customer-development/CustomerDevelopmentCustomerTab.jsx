@@ -100,6 +100,10 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
   const isAiActionRunning = (mode) =>
     Boolean(aiBusy) &&
     aiActionKey === `${Number(customerId || 0)}:${String(mode || "summary").toLowerCase()}`;
+  const interactionDaysRaw = Number(context?.daysSinceInteraction);
+  const hasInteractionDays = Number.isFinite(interactionDaysRaw) && interactionDaysRaw >= 0;
+  const interactionDays = hasInteractionDays ? Math.round(interactionDaysRaw) : null;
+  const contactNeedsAction = Boolean(context?.contactDue);
 
   if (!customerId) {
     return <p className="text-sm text-sand-500">Kein Kunde ausgewählt.</p>;
@@ -147,11 +151,11 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
           <p className="text-lg font-metrics text-sand-900">{context?.riskScore ?? 0}</p>
         </div>
         <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
-          <p className="text-[10px] uppercase tracking-wide text-sand-500">Umsatztrend</p>
-          <p className={`text-lg font-metrics ${Number(context?.revenueTrendPct || 0) < 0 ? "text-rose-700" : "text-emerald-700"}`}>
-            {Number(context?.revenueTrendPct || 0) > 0 ? "+" : ""}
-            {Number(context?.revenueTrendPct || 0).toFixed(1)}%
+          <p className="text-[10px] uppercase tracking-wide text-sand-500">Letzter Kontakt</p>
+          <p className={`text-lg font-metrics ${contactNeedsAction ? "text-rose-700" : "text-emerald-700"}`}>
+            {interactionDays === null ? "n/a" : `${interactionDays} T`}
           </p>
+          <p className="text-[11px] text-sand-600">{contactNeedsAction ? "Kontakt fällig" : "im Plan"}</p>
         </div>
         <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
           <p className="text-[10px] uppercase tracking-wide text-sand-500">Infrastruktur</p>

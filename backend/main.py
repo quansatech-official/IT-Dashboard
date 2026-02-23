@@ -7127,28 +7127,6 @@ def _build_customer_development_context(
                 }
             )
 
-    # Umsatztrend nur dann als Risiko nutzen, wenn zusätzlich wenig Bindungsaktivität vorliegt.
-    trend_drop_is_strong = revenue_trend_pct <= -35
-    is_high_value_customer = revenue_last_year >= 8000 or revenue_current_year >= 8000
-    low_current_revenue = revenue_current_year <= 2500
-    weak_binding_signals = (
-        not is_engaged_customer
-        and interaction_load < 3
-        and telephony["calls"] < 4
-        and telephony["missed"] < 3
-    )
-    if trend_drop_is_strong and low_current_revenue and not has_contract and not is_regie_customer and weak_binding_signals:
-        business_risk += 12
-        signals.append(f"Umsatzprofil rückläufig ({revenue_trend_pct}%)")
-        recommendations.append(
-            {
-                "type": "betreuung",
-                "title": "Reaktivierungs-Check einplanen",
-                "why": "Deutlicher Rückgang bei gleichzeitig geringer Interaktion.",
-            }
-        )
-    elif trend_drop_is_strong and is_high_value_customer:
-        signals.append("Umsatzprofil volatil (möglicher Einmaleffekt)")
     if interaction_load >= 8:
         business_risk += 10
         signals.append("Viele offene Aufgaben")
@@ -7565,6 +7543,40 @@ def _resolve_customer_development_payload(
     )
 
 
+def _resolve_customer_development_payload_with_fallback(
+    *,
+    include_inactive: bool = False,
+    customer_id: Optional[int] = None,
+    full: bool = False,
+    refresh: bool = False,
+    request: Optional[Request] = None,
+) -> Dict[str, Any]:
+    try:
+        return _resolve_customer_development_payload(
+            include_inactive=include_inactive,
+            customer_id=customer_id,
+            full=full,
+            refresh=refresh,
+            request=request,
+        )
+    except HTTPException as exc:
+        if int(exc.status_code or 500) == 404:
+            raise
+        logger.warning(
+            "Customer development payload fallback to local snapshot (status=%s, detail=%s)",
+            exc.status_code,
+            getattr(exc, "detail", ""),
+        )
+    except Exception as exc:
+        logger.warning("Customer development payload fallback to local snapshot: %s", exc)
+    return _build_customer_development_payload(
+        include_inactive=include_inactive,
+        customer_id=customer_id,
+        full=full,
+        refresh=refresh,
+    )
+
+
 def _customer_development_ai_sources(context: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
     source = context.get("source") if isinstance(context, dict) else {}
     source = source if isinstance(source, dict) else {}
@@ -7705,13 +7717,14 @@ def _customer_development_ai_prompt(
     customer_name = str(context.get("customerName") or "Kunde")
     state = str(context.get("developmentState") or "STABLE")
     risk = int(context.get("riskScore") or 0)
-    trend = float(context.get("revenueTrendPct") or 0)
     has_contract = bool(context.get("hasMaintenanceContract"))
     contract_flags = [str(item or "").strip().lower() for item in (context.get("contractFlags") or []) if str(item or "").strip()]
     is_regie_customer = bool(context.get("isRegieCustomer")) or (("regie" in contract_flags) and not has_contract)
     service_model_label = "Regie (nach Aufwand)" if is_regie_customer else ("Wartung/Monitoring" if has_contract else "Kein Vertrag")
     infra = context.get("infra") or {}
     work_summary = context.get("workSummary") or {}
+    days_since_interaction = context.get("daysSinceInteraction")
+    contact_due = bool(context.get("contactDue"))
     days_since_invoice = context.get("daysSinceLastInvoice")
     invoice_due = bool(context.get("invoiceActivityDue"))
     recommendations = context.get("recommendations") or context.get("topRecommendations") or []
@@ -7797,9 +7810,10 @@ def _customer_development_ai_prompt(
         f"Kunde: {customer_name}\n"
         f"Status: {state}\n"
         f"Risiko: {risk}/100\n"
-        f"Umsatztrend: {trend:+.1f}%\n"
         f"Wartungs-/Monitoringvertrag vorhanden: {'ja' if has_contract else 'nein'}\n"
         f"Betreuungsmodell: {service_model_label}\n"
+        f"Tage seit letzter Interaktion: {days_since_interaction if isinstance(days_since_interaction, int) else 'n/a'}\n"
+        f"Kontaktfaelligkeit: {'ja' if contact_due else 'nein'}\n"
         f"Tage seit letzter Rechnung: {days_since_invoice if isinstance(days_since_invoice, int) else 'n/a'}\n"
         f"Reaktivierung aus Rechnungsaktivitaet noetig: {'ja' if invoice_due else 'nein'}\n"
         f"Infrastruktur: Coverage {int(float(infra.get('coverageRatio') or 0) * 100)}%, "
@@ -8045,7 +8059,7 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
         deduped_agents.append(device)
 
     query_agent_ids = [str(row.get("agentId") or "").strip() for row in deduped_agents if str(row.get("agentId") or "").strip()]
-    software_rows = _fetch_tactical_rmm_software(integration, query_agent_ids, per_agent_limit=80)
+    software_rows = _fetch_tactical_rmm_software(integration, query_agent_ids, per_agent_limit=120)
 
     agent_meta: Dict[str, Dict[str, Any]] = {}
     ordered_agent_keys: List[str] = []
@@ -8080,17 +8094,18 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
     agents_payload: List[Dict[str, Any]] = []
     lookup_cache: Dict[Tuple[str, str], Tuple[List[Dict[str, Any]], List[str]]] = {}
     lookup_started_at = time.time()
-    lookup_budget_seconds = 55.0
-    lookup_max_unique = 40
+    lookup_budget_seconds = 65.0
+    lookup_max_unique = 70
     lookup_unique_count = 0
+    lookup_skipped = 0
     scanned = 0
     for agent_key in ordered_agent_keys:
         meta = agent_meta.get(agent_key, {"agentId": "", "hostname": "", "site": "", "client": "", "online": None})
         agent_id = str(meta.get("agentId") or "").strip()
         software_map = per_agent_software.get(agent_id, {}) if agent_id else {}
-        software_list = list(software_map.values())[:20]
+        software_list = list(software_map.values())[:40]
         agent_findings: List[Dict[str, Any]] = []
-        for item in software_list[:12]:
+        for item in software_list:
             scanned += 1
             name = str(item.get("name") or "").strip()
             version = str(item.get("version") or "").strip()
@@ -8103,6 +8118,7 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
                     or lookup_unique_count >= lookup_max_unique
                 )
                 if budget_exceeded:
+                    lookup_skipped += 1
                     cves, fixed_versions = [], []
                 else:
                     lookup_unique_count += 1
@@ -8157,6 +8173,9 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
         "mappingHint": mapping_hint,
         "rmmConnected": bool(source.get("tacticalRmm")) or matched_agents_count > 0 or name_only_candidates > 0,
         "agents": agents_payload,
+        "lookupSkipped": int(lookup_skipped),
+        "lookupMaxUnique": int(lookup_max_unique),
+        "lookupBudgetSeconds": int(lookup_budget_seconds),
         "generatedAt": now_ms,
         "fromCache": False,
     }
@@ -8418,13 +8437,17 @@ def run_customer_development_discovery(customer_id: int, request: Request):
 
 
 @app.post("/api/customer_development/ai_assist")
-def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
+def customer_development_ai_assist(data: CustomerDevelopmentAiRequest, request: Request):
     mode = str(data.mode or "summary").strip().lower()
     if mode not in {"summary", "mail", "leitfaden", "analyse", "angebot", "kundenbericht", "newsletter", "aktivierung_mail", "aktivierung_call"}:
         mode = "summary"
 
     if mode == "newsletter":
-        payload = _resolve_customer_development_payload(include_inactive=False, full=False)
+        payload = _resolve_customer_development_payload_with_fallback(
+            include_inactive=False,
+            full=False,
+            request=request,
+        )
         contexts = payload.get("contexts") or []
         if not contexts:
             raise HTTPException(404, "No customer contexts available")
@@ -8471,10 +8494,11 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest):
 
     if data.customer_id is None:
         raise HTTPException(400, "customer_id required for this mode")
-    payload = _resolve_customer_development_payload(
+    payload = _resolve_customer_development_payload_with_fallback(
         include_inactive=True,
         customer_id=int(data.customer_id),
         full=True,
+        request=request,
     )
     contexts = payload.get("contexts") or []
     if not contexts:

@@ -14,7 +14,8 @@ import {
   Plus,
   Search,
   Trash2,
-  Users
+  Users,
+  X
 } from "lucide-react";
 import { renderReportHTML, uid } from "../reporting/utils";
 import { telephonyService } from "../telephony/telephonyService";
@@ -670,6 +671,7 @@ export default function CustomerDirectoryView() {
     container.style.left = "-9999px";
     container.style.top = "0";
     container.style.width = "210mm";
+    container.style.boxSizing = "border-box";
     container.style.background = "#ffffff";
     container.style.padding = "12mm";
     document.body.appendChild(container);
@@ -688,14 +690,20 @@ export default function CustomerDirectoryView() {
             })
         )
       );
+      if (document.fonts?.ready) {
+        await document.fonts.ready;
+      }
+      const renderScale = Math.max(2, Math.min(window.devicePixelRatio || 1, 3));
       const canvas = await html2canvas(container, {
-        scale: 1,
+        scale: renderScale,
         useCORS: true,
         backgroundColor: "#ffffff",
+        windowWidth: container.scrollWidth,
+        windowHeight: container.scrollHeight,
         logging: false
       });
       const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-      const imgData = canvas.toDataURL("image/jpeg", 0.92);
+      const imgData = canvas.toDataURL("image/jpeg", 0.98);
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
       const ratio = pageWidth / canvas.width;
@@ -976,20 +984,6 @@ export default function CustomerDirectoryView() {
     typeof selectedCustomerMetrics.contractTimeBudget === "object"
       ? selectedCustomerMetrics.contractTimeBudget
       : null;
-  const revenueDeltaPctValue = Number(selectedCustomerMetrics?.revenueDeltaPct);
-  const revenueDeltaPctLabel = Number.isFinite(revenueDeltaPctValue)
-    ? `${revenueDeltaPctValue > 0 ? "+" : ""}${revenueDeltaPctValue.toLocaleString("de-DE", {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1
-      })}%`
-    : "n/a";
-  const revenueDeltaPctTone = Number.isFinite(revenueDeltaPctValue)
-    ? revenueDeltaPctValue <= -10
-      ? "text-rose-700"
-      : revenueDeltaPctValue >= 10
-      ? "text-emerald-700"
-      : "text-amber-700"
-    : "text-sand-500";
   const monthlyTaskHours = Number(contractTimeBudget?.taskHours || 0);
   const monthlyTelephonyHours = Number(contractTimeBudget?.telephonyHours || 0);
   const monthlyConsumedHours = Number(contractTimeBudget?.consumedHours || 0);
@@ -2255,8 +2249,9 @@ export default function CustomerDirectoryView() {
               </div>
               <button
                 onClick={() => setEditCustomerId(null)}
-                className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                className="inline-flex items-center gap-1 rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
               >
+                <X size={12} />
                 Schließen
               </button>
             </div>
@@ -2265,52 +2260,57 @@ export default function CustomerDirectoryView() {
                 <button
                   type="button"
                   onClick={() => setSettingsTab("details")}
-                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
                     settingsTab === "details"
                       ? "border-sand-900 bg-sand-900 text-white"
                       : "border-sand-200 bg-white hover:bg-sand-100"
                   }`}
                 >
+                  <Building2 size={12} />
                   Stammdaten
                 </button>
                 <button
                   type="button"
                   onClick={() => setSettingsTab("development")}
-                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
                     settingsTab === "development"
                       ? "border-sand-900 bg-sand-900 text-white"
                       : "border-sand-200 bg-white hover:bg-sand-100"
                   }`}
                 >
+                  <BadgeCheck size={12} />
                   Kundenentwicklung
                 </button>
                 <button
                   type="button"
                   onClick={() => setSettingsTab("contracts")}
-                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
                     settingsTab === "contracts"
                       ? "border-sand-900 bg-sand-900 text-white"
                       : "border-sand-200 bg-white hover:bg-sand-100"
                   }`}
                 >
+                  <FileDown size={12} />
                   Verträge
                 </button>
                 <button
                   type="button"
                   onClick={() => setSettingsTab("inventory")}
-                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
                     settingsTab === "inventory"
                       ? "border-sand-900 bg-sand-900 text-white"
                       : "border-sand-200 bg-white hover:bg-sand-100"
                   }`}
                 >
+                  <BookPlus size={12} />
                   Inventar
                 </button>
                 <button
                   type="button"
                   onClick={() => handleRemove(editCustomer.id)}
-                  className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                  className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
                 >
+                  <Trash2 size={12} />
                   Kunde löschen
                 </button>
               </div>
@@ -2464,8 +2464,10 @@ export default function CustomerDirectoryView() {
                       Monat: Aufgabe {formatHours(monthlyTaskHours, 1)} · Telefon {formatHours(monthlyTelephonyHours, 1)} ·
                       Gesprächszeit 30T {formatHours(Number(selectedCustomerMetrics.totalMinutes || 0) / 60, 1)}.
                     </p>
-                    <p className={`mt-1 text-[11px] ${revenueDeltaPctTone}`}>
-                      Umsatztrend zum Vorjahr: {revenueDeltaPctLabel}
+                    <p className="mt-1 text-[11px] text-sand-600">
+                      Betreuungsaktivität 30T: {Number(selectedCustomerMetrics.totalCalls || 0)} Calls ·{" "}
+                      {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst ·{" "}
+                      {Number(selectedCustomerMetrics.openTasks || 0)} offene Aufgaben.
                     </p>
                   </>
                 ) : null}
@@ -2666,9 +2668,10 @@ export default function CustomerDirectoryView() {
                       <button
                         type="button"
                         onClick={openContractCreator}
-                        className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
                       >
-                        Vertragsdetail öffnen
+                        <Plus size={12} />
+                        Neuer Vertrag
                       </button>
                     </div>
                   </div>
