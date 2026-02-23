@@ -283,6 +283,24 @@ const formatEurPrecise = (value) => {
   });
 };
 
+const parseMoneyInput = (value, fallback = 0) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    const fallbackNumber = Number(fallback || 0);
+    return Number.isFinite(fallbackNumber) ? Math.max(0, fallbackNumber) : 0;
+  }
+  let normalized = raw.replace(/\s/g, "");
+  if (normalized.includes(",")) {
+    normalized = normalized.replace(/\./g, "").replace(",", ".");
+  }
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) {
+    const fallbackNumber = Number(fallback || 0);
+    return Number.isFinite(fallbackNumber) ? Math.max(0, fallbackNumber) : 0;
+  }
+  return Math.max(0, parsed);
+};
+
 export default function CustomerDirectoryView() {
   const [customers, setCustomers] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -349,6 +367,8 @@ export default function CustomerDirectoryView() {
     note: "",
     validFrom: "",
     runtimeMonths: "12",
+    monthlyTotal: "",
+    yearlyTotal: "",
     markAsProposal: true
   });
   const saveTimers = useRef({});
@@ -549,6 +569,18 @@ export default function CustomerDirectoryView() {
     return { monthly, yearly: monthly * 12, counts };
   }, [selectedTariff, calcInput]);
 
+  const contractTotals = useMemo(() => {
+    const hasMonthlyOverride = String(contractDraft.monthlyTotal || "").trim() !== "";
+    const hasYearlyOverride = String(contractDraft.yearlyTotal || "").trim() !== "";
+    const monthly = hasMonthlyOverride
+      ? parseMoneyInput(contractDraft.monthlyTotal, contractPreview.monthly)
+      : Number(contractPreview.monthly || 0);
+    const yearly = hasYearlyOverride
+      ? parseMoneyInput(contractDraft.yearlyTotal, contractPreview.yearly)
+      : monthly * 12;
+    return { monthly, yearly, hasMonthlyOverride, hasYearlyOverride };
+  }, [contractDraft.monthlyTotal, contractDraft.yearlyTotal, contractPreview.monthly, contractPreview.yearly]);
+
   useEffect(() => {
     setGeneratedContract(null);
   }, [
@@ -558,6 +590,8 @@ export default function CustomerDirectoryView() {
     contractDraft.note,
     contractDraft.validFrom,
     contractDraft.runtimeMonths,
+    contractDraft.monthlyTotal,
+    contractDraft.yearlyTotal,
     selectedTariff?.id,
     contractPreview.monthly,
     contractPreview.yearly,
@@ -741,8 +775,8 @@ export default function CustomerDirectoryView() {
         clients: contractPreview.counts.clients,
         network_devices: contractPreview.counts.networkDevices,
         iot_devices: contractPreview.counts.iotDevices,
-        monthly_total: contractPreview.monthly,
-        yearly_total: contractPreview.yearly
+        monthly_total: contractTotals.monthly,
+        yearly_total: contractTotals.yearly
       });
       setGeneratedContract(preview);
       setContractPreviewStatus("saved");
@@ -757,6 +791,7 @@ export default function CustomerDirectoryView() {
       return preview;
     } catch {
       setContractPreviewStatus("error");
+      setToast("Vorschau konnte nicht erstellt werden.");
       setTimeout(() => setContractPreviewStatus("idle"), 2200);
       return null;
     }
@@ -780,10 +815,6 @@ export default function CustomerDirectoryView() {
 
   const saveGeneratedContract = async () => {
     if (!activeId) return;
-    if (!selectedTariff) {
-      setToast("Bitte zuerst einen Tarif für die Kalkulation wählen.");
-      return;
-    }
     setContractSaveStatus("saving");
     try {
       const source = generatedContract || (await generateContractPreview(false));
@@ -811,6 +842,8 @@ export default function CustomerDirectoryView() {
         note: "",
         validFrom: "",
         runtimeMonths: "12",
+        monthlyTotal: "",
+        yearlyTotal: "",
         markAsProposal: true
       });
       setGeneratedContract(null);
@@ -881,6 +914,8 @@ export default function CustomerDirectoryView() {
       note: "",
       validFrom: "",
       runtimeMonths: "12",
+      monthlyTotal: "",
+      yearlyTotal: "",
       markAsProposal: true
     });
     setGeneratedContract(null);
@@ -1899,7 +1934,7 @@ export default function CustomerDirectoryView() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Neuen Vertrag anlegen</p>
           <span className="text-[11px] text-sand-500">
-            Grundlage: {selectedTariff ? `${selectedTariff.name} (v${selectedTariff.version || 1})` : "Bitte Tarif wählen"}
+            Grundlage: {selectedTariff ? `${selectedTariff.name} (v${selectedTariff.version || 1})` : "Ohne Tarif (z.B. AVV)"}
           </span>
         </div>
         <div className="mt-2.5 grid gap-2 md:grid-cols-2">
@@ -1952,7 +1987,29 @@ export default function CustomerDirectoryView() {
               className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             />
           </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Monatspreis (optional)</span>
+            <input
+              value={contractDraft.monthlyTotal}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, monthlyTotal: event.target.value }))}
+              placeholder={formatEurPrecise(contractPreview.monthly)}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Jahrespreis (optional)</span>
+            <input
+              value={contractDraft.yearlyTotal}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, yearlyTotal: event.target.value }))}
+              placeholder={formatEurPrecise(contractPreview.yearly)}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            />
+          </label>
         </div>
+        <p className="mt-2 text-[11px] text-sand-500">
+          Tarifpreise sind Vorschlagswerte. Leer = Vorschlag verwenden.
+          {` Aktuell: ${formatEurPrecise(contractTotals.monthly)} / Monat · ${formatEurPrecise(contractTotals.yearly)} / Jahr.`}
+        </p>
         <label className="mt-2 inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
           <input
             type="checkbox"
@@ -1966,12 +2023,7 @@ export default function CustomerDirectoryView() {
           <button
             type="button"
             onClick={() => generateContractPreview(true)}
-            disabled={!selectedTariff}
-            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-wide ${
-              selectedTariff
-                ? "border-sand-200 bg-white hover:bg-sand-100"
-                : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
-            }`}
+            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100"
           >
             <Eye size={12} />
             Vorschau öffnen
@@ -1979,12 +2031,7 @@ export default function CustomerDirectoryView() {
           <button
             type="button"
             onClick={exportGeneratedContractPdf}
-            disabled={!selectedTariff}
-            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-wide ${
-              selectedTariff
-                ? "border-sand-200 bg-white hover:bg-sand-100"
-                : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
-            }`}
+            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100"
           >
             <FileDown size={12} />
             PDF laden
@@ -1992,12 +2039,7 @@ export default function CustomerDirectoryView() {
           <button
             type="button"
             onClick={saveGeneratedContract}
-            disabled={!selectedTariff}
-            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-wide ${
-              selectedTariff
-                ? "border-sand-200 bg-sand-900 text-white hover:opacity-90"
-                : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
-            }`}
+            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90"
           >
             <BadgeCheck size={12} />
             {contractDraft.markAsProposal ? "Als Vorschlag speichern" : "Als aktiv speichern"}
