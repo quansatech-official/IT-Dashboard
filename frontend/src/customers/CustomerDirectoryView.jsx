@@ -57,16 +57,6 @@ const api = {
       if (!r.ok) throw new Error(data?.detail || "tariff_create_failed");
       return data;
     }),
-  createContractTariffVersion: (tariffId, payload) =>
-    fetch(`${API}/contract_tariffs/${tariffId}/new_version`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.detail || "tariff_version_failed");
-      return data;
-    }),
   deactivateContractTariff: (tariffId) =>
     fetch(`${API}/contract_tariffs/${tariffId}/deactivate`, {
       method: "POST"
@@ -87,8 +77,18 @@ const api = {
       if (!r.ok) throw new Error(data?.detail || "contract_calc_failed");
       return data;
     }),
-  listCustomerContracts: (customerId) =>
-    fetch(`${API}/customers/${customerId}/contracts`).then((r) => r.json()),
+  listCustomerContracts: (customerId, status = "") =>
+    fetch(
+      `${API}/customers/${customerId}/contracts${
+        String(status || "").trim() ? `?status=${encodeURIComponent(String(status || "").trim())}` : ""
+      }`
+    ).then((r) => r.json()),
+  downloadLatestCustomerContract: (customerId, status) =>
+    fetch(
+      `${API}/customers/${customerId}/contracts/download_latest?status=${encodeURIComponent(
+        String(status || "").trim() || "active"
+      )}`
+    ),
   listCustomerDevelopment: (includeInactive = true, refresh = false) =>
     fetch(
       `${API}/customer_development?include_inactive=${includeInactive ? "1" : "0"}&refresh=${refresh ? "1" : "0"}`
@@ -612,6 +612,29 @@ export default function CustomerDirectoryView() {
     [contractTariffs, calcInput.tariffId]
   );
 
+  const tariffCategoryForContractType = useMemo(() => {
+    const type = String(contractDraft.docType || "vertrag").trim().toLowerCase();
+    if (type === "wartung") return "wartung";
+    if (type === "monitoring") return "monitoring";
+    return "";
+  }, [contractDraft.docType]);
+
+  const filteredActiveTariffs = useMemo(() => {
+    const activeTariffs = (contractTariffs || []).filter((item) => Boolean(item?.is_active));
+    if (!tariffCategoryForContractType) return activeTariffs;
+    return activeTariffs.filter(
+      (item) => String(item?.category || "").trim().toLowerCase() === tariffCategoryForContractType
+    );
+  }, [contractTariffs, tariffCategoryForContractType]);
+
+  useEffect(() => {
+    setCalcInput((prev) => {
+      const currentExists = filteredActiveTariffs.some((item) => Number(item?.id) === Number(prev.tariffId));
+      if (currentExists) return prev;
+      return { ...prev, tariffId: filteredActiveTariffs[0]?.id ?? null };
+    });
+  }, [filteredActiveTariffs]);
+
   const contractPreview = useMemo(() => {
     if (!selectedTariff) {
       return { monthly: 0, yearly: 0, counts: { servers: 0, clients: 0, networkDevices: 0, iotDevices: 0 } };
@@ -849,7 +872,7 @@ export default function CustomerDirectoryView() {
     }
   };
 
-  const saveGeneratedContract = async () => {
+  const saveGeneratedContract = async ({ downloadAfterSave = false } = {}) => {
     if (!activeId) return;
     setContractSaveStatus("saving");
     try {
@@ -872,17 +895,15 @@ export default function CustomerDirectoryView() {
         status: contractDraft.markAsProposal ? "proposal" : "active"
       });
       setCustomerContracts((prev) => [saved, ...prev]);
-      setContractDraft({
-        title: "",
-        docType: "vertrag",
-        note: "",
-        validFrom: "",
-        runtimeMonths: "12",
-        monthlyTotal: "",
-        yearlyTotal: "",
-        markAsProposal: true
-      });
-      setGeneratedContract(null);
+      setGeneratedContract(source);
+      if (downloadAfterSave) {
+        const anchor = document.createElement("a");
+        anchor.href = dataUri;
+        anchor.download = source.file_name || "vertrag.pdf";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      }
       setContractSaveStatus("saved");
       setTimeout(() => setContractSaveStatus("idle"), 1800);
     } catch {
@@ -907,6 +928,25 @@ export default function CustomerDirectoryView() {
       window.URL.revokeObjectURL(url);
     } catch {
       setToast("Vertrag konnte nicht heruntergeladen werden.");
+    }
+  };
+
+  const downloadLatestContractByStatus = async (status, fallbackName = "vertrag.pdf") => {
+    if (!activeId) return;
+    try {
+      const res = await api.downloadLatestCustomerContract(activeId, status);
+      if (!res.ok) throw new Error("download_latest_failed");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = fallbackName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      setToast("Kein passendes Vertragsdokument für diesen Status gefunden.");
     }
   };
 
@@ -1879,33 +1919,40 @@ export default function CustomerDirectoryView() {
         <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kundenspezifische Kalkulation</p>
         <div className="mt-2.5 grid gap-2 md:grid-cols-4">
           <label className="block md:col-span-2">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Tarif</span>
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">1) Vertragstyp</span>
+            <select
+              value={contractDraft.docType}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, docType: event.target.value }))}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            >
+              <option value="vertrag">IT-Servicevertrag</option>
+              <option value="wartung">Wartungsvertrag</option>
+              <option value="monitoring">Monitoringvertrag</option>
+              <option value="avv_dsgvo">AVV / DSGVO</option>
+            </select>
+          </label>
+          <label className="block md:col-span-2">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Tarif</span>
             <select
               value={calcInput.tariffId || ""}
               onChange={(event) => setCalcInput((prev) => ({ ...prev, tariffId: Number(event.target.value) || null }))}
               className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             >
-              <option value="">Tarif wählen</option>
-              {(contractTariffs || [])
-                .filter((item) => Boolean(item?.is_active))
-                .map((item) => (
+              <option value="">
+                {tariffCategoryForContractType
+                  ? `Tarif für ${tariffCategoryForContractType} wählen`
+                  : "Tarif wählen (optional)"}
+              </option>
+              {filteredActiveTariffs.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.name} ({item.category}) · v{item.version}
+                    {item.name} ({item.category})
                   </option>
                 ))}
             </select>
           </label>
-          <div className="md:col-span-2 flex items-end">
-            <button
-              type="button"
-              onClick={importCalcValuesFromRmm}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100"
-            >
-              Vorschlagswerte aus Meta-Hub laden
-            </button>
-          </div>
+          <div className="md:col-span-2 flex items-end" />
           <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Server</span>
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">3) Server</span>
             <input value={calcInput.servers} onChange={(event) => setCalcInput((prev) => ({ ...prev, servers: event.target.value }))} className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm" />
           </label>
           <label className="block">
@@ -1959,7 +2006,7 @@ export default function CustomerDirectoryView() {
             {(calcHistory || []).map((row) => (
               <div key={row.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
                 <p className="font-semibold text-sand-800">
-                  {row.tariff_name} ({row.tariff_category}) · v{row.tariff_version}
+                  {row.tariff_name} ({row.tariff_category})
                 </p>
                 <p className="text-[11px] text-sand-600">
                   Server {row.servers} · Clients {row.clients} · Netzwerk {row.network_devices} · IoT {row.iot_devices}
@@ -1983,7 +2030,7 @@ export default function CustomerDirectoryView() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Neuen Vertrag anlegen</p>
           <span className="text-[11px] text-sand-500">
-            Grundlage: {selectedTariff ? `${selectedTariff.name} (v${selectedTariff.version || 1})` : "Ohne Tarif (z.B. AVV)"}
+            Grundlage: {selectedTariff ? `${selectedTariff.name}` : "Ohne Tarif (z.B. AVV)"}
           </span>
         </div>
         <div className="mt-2.5 grid gap-2 md:grid-cols-2">
@@ -1996,19 +2043,16 @@ export default function CustomerDirectoryView() {
               placeholder="z.B. Wartungsvertrag Kunde"
             />
           </label>
-          <label className="block">
+          <div className="block">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">Vertragstyp</span>
-            <select
-              value={contractDraft.docType}
-              onChange={(event) => setContractDraft((prev) => ({ ...prev, docType: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            >
-              <option value="vertrag">IT-Servicevertrag</option>
-              <option value="wartung">Wartungsvertrag</option>
-              <option value="monitoring">Monitoringvertrag</option>
-              <option value="avv_dsgvo">AVV / DSGVO</option>
-            </select>
-          </label>
+            <p className="mt-1 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm text-sand-800">
+              {String(contractDraft.docType || "vertrag")
+                .replace("avv_dsgvo", "AVV / DSGVO")
+                .replace("wartung", "Wartung")
+                .replace("monitoring", "Monitoring")
+                .replace("vertrag", "IT-Servicevertrag")}
+            </p>
+          </div>
           <label className="block">
             <span className="text-[10px] uppercase tracking-wide text-sand-500">Gültig ab</span>
             <input
@@ -2087,11 +2131,19 @@ export default function CustomerDirectoryView() {
           </button>
           <button
             type="button"
-            onClick={saveGeneratedContract}
+            onClick={() => saveGeneratedContract()}
             className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90"
           >
             <BadgeCheck size={12} />
             {contractDraft.markAsProposal ? "Als Vorschlag speichern" : "Als aktiv speichern"}
+          </button>
+          <button
+            type="button"
+            onClick={() => saveGeneratedContract({ downloadAfterSave: true })}
+            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+          >
+            <FileDown size={12} />
+            Speichern + PDF laden
           </button>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -2488,13 +2540,29 @@ export default function CustomerDirectoryView() {
                 <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3 space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge</p>
-                    <button
-                      type="button"
-                      onClick={openContractCreator}
-                      className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
-                    >
-                      Neuer Vertrag anlegen (inkl. Kalkulation)
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => downloadLatestContractByStatus("proposal", "vertrag_vorschlag.pdf")}
+                        className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[11px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
+                      >
+                        Letzten Vorschlag laden
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadLatestContractByStatus("active", "vertrag_final.pdf")}
+                        className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[11px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
+                      >
+                        Aktiven Vertrag laden
+                      </button>
+                      <button
+                        type="button"
+                        onClick={openContractCreator}
+                        className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        Neuer Vertrag anlegen (inkl. Kalkulation)
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-2 max-h-64 overflow-auto pr-1">
                     {(customerContracts || []).map((item) => (
@@ -2536,13 +2604,24 @@ export default function CustomerDirectoryView() {
                           >
                             <Eye size={11} /> Vorschau
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
-                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                          >
-                            <FileDown size={11} /> PDF
-                          </button>
+                          {(() => {
+                            const status = String(item.status || "active").toLowerCase();
+                            const label =
+                              status === "proposal"
+                                ? "Vorschlag PDF"
+                                : status === "active"
+                                ? "Final PDF"
+                                : "PDF";
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
+                                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                              >
+                                <FileDown size={11} /> {label}
+                              </button>
+                            );
+                          })()}
                           {String(item.status || "active").toLowerCase() === "cancelled" ? (
                             <button
                               type="button"
@@ -2612,7 +2691,7 @@ export default function CustomerDirectoryView() {
                         <div key={row.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
                           <div className="flex items-center justify-between gap-2">
                             <p className="font-semibold text-sand-800">
-                              {row.tariff_name || "Tarif"} · {String(row.tariff_category || "").toUpperCase()} · v{row.tariff_version || 1}
+                              {row.tariff_name || "Tarif"} · {String(row.tariff_category || "").toUpperCase()}
                             </p>
                             <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-700">
                               Vorschlag
@@ -2812,10 +2891,16 @@ export default function CustomerDirectoryView() {
                             );
                           }
                           const infra = context?.infra || {};
+                          const managedAssets = Number(infra?.managedAssets || 0);
+                          const openUpdates = Number(infra?.openUpdates || 0);
+                          const errorCount = Number(infra?.errorCount || 0);
+                          const warningCount = Number(infra?.warningCount || 0);
+                          if (managedAssets === 0 && openUpdates === 0 && errorCount === 0 && warningCount === 0) {
+                            return null;
+                          }
                           return (
                             <p className="mt-1 text-[10px] text-sand-600">
-                              {Number(infra?.managedAssets || 0)} Agents · Updates {Number(infra?.openUpdates || 0)} · Fehler{" "}
-                              {Number(infra?.errorCount || 0)} · Warnungen {Number(infra?.warningCount || 0)}
+                              {managedAssets} Agents · Updates {openUpdates} · Fehler {errorCount} · Warnungen {warningCount}
                             </p>
                           );
                         })()}

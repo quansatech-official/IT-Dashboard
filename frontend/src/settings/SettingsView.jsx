@@ -352,8 +352,7 @@ export default function SettingsView() {
     price_iot_monthly: "",
     notes: ""
   });
-  const [tariffDraftMode, setTariffDraftMode] = useState("create");
-  const [tariffSourceId, setTariffSourceId] = useState(null);
+  const [tariffEditId, setTariffEditId] = useState(null);
   const [tariffSaveStatus, setTariffSaveStatus] = useState("idle");
   const [aiPromptsStatus, setAiPromptsStatus] = useState("idle");
   const [contractTemplatesStatus, setContractTemplatesStatus] = useState("idle");
@@ -876,11 +875,10 @@ export default function SettingsView() {
       price_iot_monthly: "",
       notes: ""
     });
-    setTariffDraftMode("create");
-    setTariffSourceId(null);
+    setTariffEditId(null);
   };
 
-  const startTariffVersion = (tariff) => {
+  const startTariffEdit = (tariff) => {
     if (!tariff) return;
     setTariffDraft({
       name: String(tariff.name || ""),
@@ -892,8 +890,7 @@ export default function SettingsView() {
       price_iot_monthly: String(tariff.price_iot_monthly ?? ""),
       notes: String(tariff.notes || "")
     });
-    setTariffDraftMode("version");
-    setTariffSourceId(Number(tariff.id));
+    setTariffEditId(Number(tariff.id));
   };
 
   const refreshTariffs = async () => {
@@ -922,12 +919,11 @@ export default function SettingsView() {
         price_iot_monthly: Number(tariffDraft.price_iot_monthly || 0),
         notes: String(tariffDraft.notes || "")
       };
-      const endpoint =
-        tariffDraftMode === "version" && tariffSourceId
-          ? `${API}/contract_tariffs/${tariffSourceId}/new_version`
-          : `${API}/contract_tariffs`;
+      const endpoint = tariffEditId
+        ? `${API}/contract_tariffs/${tariffEditId}`
+        : `${API}/contract_tariffs`;
       const res = await fetch(endpoint, {
-        method: "POST",
+        method: tariffEditId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
@@ -2035,7 +2031,7 @@ export default function SettingsView() {
           {contractTariffsOpen ? (
             <>
               <p className="mt-2 text-sm text-sand-600">
-                Tarife für Wartung/Monitoring zentral verwalten. Änderungen als neue Version bleiben historisch sauber.
+                Tarife für Wartung/Monitoring zentral verwalten. Tarife sind Vorschlagswerte; der Endpreis wird pro Kunde individuell übernommen oder angepasst.
               </p>
               <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-4">
                 <div className="grid gap-2 md:grid-cols-4">
@@ -2114,9 +2110,9 @@ export default function SettingsView() {
                     onClick={saveTariffDraft}
                     className="rounded-full border border-sand-200 bg-sand-900 px-3 py-2 uppercase tracking-wide text-white hover:opacity-90"
                   >
-                    {tariffDraftMode === "version" ? "Neue Version speichern" : "Tarif anlegen"}
+                    {tariffEditId ? "Tarif aktualisieren" : "Tarif anlegen"}
                   </button>
-                  {tariffDraftMode === "version" ? (
+                  {tariffEditId ? (
                     <button
                       type="button"
                       onClick={resetTariffDraft}
@@ -2134,7 +2130,7 @@ export default function SettingsView() {
                     <div key={tariff.id} className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs">
                       <div className="flex items-center justify-between gap-2">
                         <p className="font-semibold text-sand-800">
-                          {tariff.name} · {String(tariff.category || "").toUpperCase()} · v{tariff.version}
+                          {tariff.name} · {String(tariff.category || "").toUpperCase()}
                         </p>
                         <div className="flex items-center gap-2">
                           <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${tariff.is_active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-sand-200 bg-sand-100 text-sand-600"}`}>
@@ -2142,10 +2138,10 @@ export default function SettingsView() {
                           </span>
                           <button
                             type="button"
-                            onClick={() => startTariffVersion(tariff)}
+                            onClick={() => startTariffEdit(tariff)}
                             className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
                           >
-                            Neue Version
+                            Bearbeiten
                           </button>
                           {tariff.is_active ? (
                             <button

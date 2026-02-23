@@ -782,9 +782,8 @@ def main() -> int:
         )
         print(f"[INFO] Upload response: {json.dumps(response, ensure_ascii=False)}")
     except Exception as exc:
-        # Discovery inventory is already written to script history as JSON.
-        # Backend ingest is optional and must not fail the entire run.
-        print(f"[WARN] Upload skipped: {exc}")
+        print(f"[ERROR] Discovery upload failed: {exc}")
+        return 1
 
     cache_entries = cache.get("entries") if isinstance(cache.get("entries"), dict) else {}
     cache_entries[cache_key] = {

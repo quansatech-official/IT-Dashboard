@@ -1452,6 +1452,18 @@ class ContractTariffVersionCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class ContractTariffUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    base_price_monthly: Optional[float] = None
+    price_server_monthly: Optional[float] = None
+    price_client_monthly: Optional[float] = None
+    price_network_monthly: Optional[float] = None
+    price_iot_monthly: Optional[float] = None
+    notes: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class CustomerContractCalculationCreate(BaseModel):
     tariff_id: int
     servers: int = 0
@@ -4039,6 +4051,63 @@ def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict
     }
 
 
+def _normalize_contract_document_status(value: Any, *, allow_cancelled: bool = True) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    aliases = {
+        "proposal": "proposal",
+        "vorschlag": "proposal",
+        "active": "active",
+        "aktiv": "active",
+        "final": "active",
+        "endgueltig": "active",
+        "endgültig": "active",
+        "cancelled": "cancelled",
+        "storniert": "cancelled",
+    }
+    normalized = aliases.get(raw, raw)
+    allowed = {"proposal", "active"}
+    if allow_cancelled:
+        allowed.add("cancelled")
+    return normalized if normalized in allowed else ""
+
+
+def _contract_download_filename(row: CustomerContractDocument) -> str:
+    base_name = str(row.file_name or f"vertrag_{row.id}.pdf").strip() or f"vertrag_{row.id}.pdf"
+    root, ext = os.path.splitext(base_name)
+    root = str(root or "").strip() or f"vertrag_{row.id}"
+    ext = str(ext or "").strip() or ".pdf"
+    status = _normalize_contract_document_status(row.status, allow_cancelled=True) or "active"
+    suffix = {
+        "proposal": "vorschlag",
+        "active": "final",
+        "cancelled": "storniert",
+    }.get(status, "dokument")
+    if not root.lower().endswith(f"_{suffix}"):
+        root = f"{root}_{suffix}"
+    return f"{root}{ext}"
+
+
+def _build_contract_download_response(row: CustomerContractDocument) -> Response:
+    if not str(row.content_base64 or "").strip():
+        raise HTTPException(404, "No document payload stored")
+    try:
+        content = base64.b64decode(str(row.content_base64 or "").strip())
+    except Exception:
+        raise HTTPException(500, "Stored document payload is invalid")
+    filename = _contract_download_filename(row)
+    status_value = _normalize_contract_document_status(row.status, allow_cancelled=True) or "active"
+    return Response(
+        content=content,
+        media_type=str(row.mime_type or "application/pdf"),
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Contract-Status": status_value,
+        },
+    )
+
+
 def _contract_counts_from_development_context(context: Dict[str, Any]) -> Dict[str, int]:
     infra = context.get("infra") if isinstance(context.get("infra"), dict) else {}
     inventory_mix = infra.get("inventoryMix") if isinstance(infra.get("inventoryMix"), dict) else {}
@@ -4859,7 +4928,12 @@ def _fetch_latest_discovery_payload_from_agent_history(
         return None
     if not isinstance(history_rows, list):
         return None
-    for row in history_rows:
+    history_rows_sorted = sorted(
+        [row for row in history_rows if isinstance(row, dict)],
+        key=lambda row: _parse_iso8601_to_epoch_ms(row.get("time")),
+        reverse=True,
+    )
+    for row in history_rows_sorted:
         if not isinstance(row, dict):
             continue
         if str(row.get("type") or "").strip().lower() != "script_run":
@@ -6099,6 +6173,22 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                             if normalized:
                                 number_candidates.add(normalized)
 
+                # Tactical custom_fields often arrive as compact rows like:
+                # {"id":7,"field":4,"client":12,"value":"1018"}
+                # without a human-readable field label in the same object.
+                # In that shape, still treat the value as customer-number candidate.
+                has_compact_custom_field_shape = (
+                    ("value" in node or "val" in node)
+                    and any(key in node for key in ("field", "field_id", "fieldid", "custom_field", "customField"))
+                    and any(key in node for key in ("client", "client_id", "site", "site_id", "agent", "agent_id"))
+                )
+                if has_compact_custom_field_shape:
+                    for raw_value in value_candidates:
+                        for candidate_value in _extract_value_candidates(raw_value):
+                            normalized = _normalize_candidate_number(candidate_value)
+                            if normalized:
+                                number_candidates.add(normalized)
+
                 # Pattern: {"customField":{"name":"Kundennummer"},"value":"1018"}
                 for field_container_key in (
                     "customField",
@@ -6467,9 +6557,14 @@ def _fetch_rmm_history_discovery_rows(
             continue
         if not isinstance(history_rows, list):
             continue
+        history_rows_sorted = sorted(
+            [row for row in history_rows if isinstance(row, dict)],
+            key=lambda row: _parse_iso8601_to_epoch_ms(row.get("time")),
+            reverse=True,
+        )
         payload: Optional[Dict[str, Any]] = None
         payload_time_ms = 0
-        for history_row in history_rows:
+        for history_row in history_rows_sorted:
             if not isinstance(history_row, dict):
                 continue
             if str(history_row.get("type") or "").strip().lower() != "script_run":
@@ -6587,6 +6682,8 @@ def _build_customer_development_context(
         revenue_trend_pct = 100.0
     last_invoice_at, days_since_last_invoice, invoice_activity_due = _extract_invoice_activity_from_row(matched_sevdesk, now_dt)
 
+    integration = db.query(IntegrationSettings).first()
+
     discovery_conditions = [InfraDiscoveryDevice.customer_id == customer.id]
     if str(customer.creditor_number or "").strip():
         discovery_conditions.append(
@@ -6609,17 +6706,17 @@ def _build_customer_development_context(
                 for row in name_candidates
                 if _dev_normalize_text(str(row.customer_name or "")) == normalized_customer_name
             ]
-    discovered_total = len(customer_discovery_rows)
-    discovered_unmanaged = sum(1 for row in customer_discovery_rows if not bool(row.managed))
-
     managed_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
     name_only_matches = [agent for agent in tactical_agents if _agent_matches_customer_name_only(agent, customer)]
     if full and managed_agents:
         managed_agent_ids = [_extract_agent_id(agent) for agent in managed_agents if _extract_agent_id(agent)]
         if managed_agent_ids:
-            integration = db.query(IntegrationSettings).first()
             managed_agent_details = _fetch_tactical_rmm_agent_detail_map(integration, managed_agent_ids)
             managed_agents = [{**agent, **(managed_agent_details.get(_extract_agent_id(agent), {}))} for agent in managed_agents]
+    discovered_total = len(customer_discovery_rows)
+    discovered_unmanaged = sum(
+        1 for row in customer_discovery_rows if not bool(_discovery_row_value(row, "managed"))
+    )
     managed_count = len(managed_agents)
     offline_count = sum(1 for agent in managed_agents if not _agent_is_online(agent))
     managed_health = [_build_agent_health_summary(agent, now_dt) for agent in managed_agents]
@@ -6649,7 +6746,7 @@ def _build_customer_development_context(
         inventory_mix[key] = int(inventory_mix.get(key) or 0) + 1
     for row in customer_discovery_rows:
         # Managed entries are likely duplicates of RMM agents.
-        if bool(row.managed):
+        if bool(_discovery_row_value(row, "managed")):
             continue
         key = _normalize_inventory_category(_discovery_inventory_category(row))
         inventory_mix[key] = int(inventory_mix.get(key) or 0) + 1
@@ -6909,26 +7006,20 @@ def _build_customer_development_context(
         )
     discovered_devices = []
     for row in customer_discovery_rows:
-        evidence_payload: List[str] = []
-        try:
-            parsed_evidence = json.loads(row.evidence or "[]")
-            if isinstance(parsed_evidence, list):
-                evidence_payload = [str(item).strip() for item in parsed_evidence if str(item).strip()]
-        except Exception:
-            evidence_payload = []
+        normalized_row = _discovery_row_to_dict(row)
         discovered_devices.append(
             {
-                "source": str(row.source or "discovery").strip() or "discovery",
-                "hostname": str(row.hostname or "").strip(),
-                "ip": str(row.ip or "").strip(),
-                "mac": str(row.mac or "").strip(),
-                "protocol": str(row.protocol or "").strip(),
-                "deviceType": str(row.device_type or "").strip(),
-                "vendor": str(row.vendor or "").strip(),
-                "confidence": int(row.confidence or 0),
-                "evidence": evidence_payload,
-                "managed": bool(row.managed),
-                "lastSeenAt": int(row.last_seen_at or 0),
+                "source": str(normalized_row.get("source") or "discovery").strip() or "discovery",
+                "hostname": str(normalized_row.get("hostname") or "").strip(),
+                "ip": str(normalized_row.get("ip") or "").strip(),
+                "mac": str(normalized_row.get("mac") or "").strip(),
+                "protocol": str(normalized_row.get("protocol") or "").strip(),
+                "deviceType": str(normalized_row.get("deviceType") or "").strip(),
+                "vendor": str(normalized_row.get("vendor") or "").strip(),
+                "confidence": int(normalized_row.get("confidence") or 0),
+                "evidence": list(normalized_row.get("evidence") or []),
+                "managed": bool(normalized_row.get("managed")),
+                "lastSeenAt": int(normalized_row.get("lastSeenAt") or 0),
             }
         )
     light["recommendations"] = recommendations
@@ -7546,8 +7637,19 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
     if not refresh and cached and now_ms - int(cached.get("cachedAt") or 0) < CUSTOMER_CVE_CACHE_TTL_MS:
         payload = cached.get("payload")
         if isinstance(payload, dict):
-            payload["fromCache"] = True
-            return payload
+            # Avoid serving stale legacy cache entries where matching failed before
+            # customer-number fallback improvements were applied.
+            if (
+                int(payload.get("matchedAgents") or 0) == 0
+                and (
+                    int(payload.get("nameOnlyCandidates") or 0) > 0
+                    or not bool(payload.get("rmmConnected"))
+                )
+            ):
+                payload = None
+            if isinstance(payload, dict):
+                payload["fromCache"] = True
+                return payload
 
     with SessionLocal() as db:
         customer = db.query(Customer).get(customer_id)
@@ -10632,7 +10734,7 @@ def get_contract_tariffs(active_only: bool = True):
             query.order_by(
                 ContractTariff.category.asc(),
                 ContractTariff.name.asc(),
-                ContractTariff.version.desc(),
+                ContractTariff.id.asc(),
             )
             .all()
         )
@@ -10670,51 +10772,46 @@ def create_contract_tariff(data: ContractTariffCreate):
         return serialize_contract_tariff(row)
 
 
+@app.put("/api/contract_tariffs/{tariff_id}")
+def update_contract_tariff(tariff_id: int, data: ContractTariffUpdate):
+    with SessionLocal() as db:
+        row = db.query(ContractTariff).get(tariff_id)
+        if not row:
+            raise HTTPException(404, "Tariff not found")
+        if data.name is not None:
+            row.name = str(data.name or "").strip()
+        if data.category is not None:
+            row.category = str(data.category or "").strip().lower()
+        if row.category not in {"wartung", "monitoring"}:
+            raise HTTPException(400, "category must be 'wartung' or 'monitoring'")
+        if not str(row.name or "").strip():
+            raise HTTPException(400, "name is required")
+        if data.base_price_monthly is not None:
+            row.base_price_monthly = _safe_nonnegative_float(data.base_price_monthly)
+        if data.price_server_monthly is not None:
+            row.price_server_monthly = _safe_nonnegative_float(data.price_server_monthly)
+        if data.price_client_monthly is not None:
+            row.price_client_monthly = _safe_nonnegative_float(data.price_client_monthly)
+        if data.price_network_monthly is not None:
+            row.price_network_monthly = _safe_nonnegative_float(data.price_network_monthly)
+        if data.price_iot_monthly is not None:
+            row.price_iot_monthly = _safe_nonnegative_float(data.price_iot_monthly)
+        if data.notes is not None:
+            row.notes = str(data.notes or "").strip()
+        if data.is_active is not None:
+            row.is_active = bool(data.is_active)
+        db.commit()
+        db.refresh(row)
+        return serialize_contract_tariff(row)
+
+
 @app.post("/api/contract_tariffs/{tariff_id}/new_version")
 def create_contract_tariff_version(tariff_id: int, data: ContractTariffVersionCreate):
-    with SessionLocal() as db:
-        source = db.query(ContractTariff).get(tariff_id)
-        if not source:
-            raise HTTPException(404, "Tariff not found")
-        max_version = (
-            db.query(func.max(ContractTariff.version))
-            .filter(ContractTariff.family_key == source.family_key)
-            .scalar()
-        ) or 1
-        new_row = ContractTariff(
-            family_key=source.family_key,
-            name=str(data.name if data.name is not None else source.name or "").strip(),
-            category=str(data.category if data.category is not None else source.category or "").strip().lower(),
-            version=int(max_version) + 1,
-            is_active=True,
-            currency=source.currency or "EUR",
-            base_price_monthly=_safe_nonnegative_float(
-                source.base_price_monthly if data.base_price_monthly is None else data.base_price_monthly
-            ),
-            price_server_monthly=_safe_nonnegative_float(
-                source.price_server_monthly if data.price_server_monthly is None else data.price_server_monthly
-            ),
-            price_client_monthly=_safe_nonnegative_float(
-                source.price_client_monthly if data.price_client_monthly is None else data.price_client_monthly
-            ),
-            price_network_monthly=_safe_nonnegative_float(
-                source.price_network_monthly if data.price_network_monthly is None else data.price_network_monthly
-            ),
-            price_iot_monthly=_safe_nonnegative_float(
-                source.price_iot_monthly if data.price_iot_monthly is None else data.price_iot_monthly
-            ),
-            notes=str(source.notes if data.notes is None else data.notes or "").strip(),
-            created_at=int(time.time() * 1000),
-        )
-        if new_row.category not in {"wartung", "monitoring"}:
-            raise HTTPException(400, "category must be 'wartung' or 'monitoring'")
-        if not new_row.name:
-            raise HTTPException(400, "name is required")
-        source.is_active = False
-        db.add(new_row)
-        db.commit()
-        db.refresh(new_row)
-        return serialize_contract_tariff(new_row)
+    # Backwards compatible endpoint: tariff updates are now in-place (no versioning).
+    return update_contract_tariff(
+        tariff_id,
+        ContractTariffUpdate(**data.dict(exclude_unset=True)),
+    )
 
 
 @app.post("/api/contract_tariffs/{tariff_id}/deactivate")
@@ -10802,17 +10899,18 @@ def create_customer_contract_calculation(customer_id: int, data: CustomerContrac
 
 
 @app.get("/api/customers/{customer_id}/contracts")
-def get_customer_contract_documents(customer_id: int):
+def get_customer_contract_documents(customer_id: int, status: Optional[str] = None):
     with SessionLocal() as db:
         customer = db.query(Customer).get(customer_id)
         if not customer:
             raise HTTPException(404, "Customer not found")
-        rows = (
-            db.query(CustomerContractDocument)
-            .filter(CustomerContractDocument.customer_id == customer.id)
-            .order_by(CustomerContractDocument.created_at.desc(), CustomerContractDocument.id.desc())
-            .all()
-        )
+        query = db.query(CustomerContractDocument).filter(CustomerContractDocument.customer_id == customer.id)
+        if status is not None and str(status).strip():
+            status_value = _normalize_contract_document_status(status, allow_cancelled=True)
+            if not status_value:
+                raise HTTPException(400, "status must be proposal, active/final or cancelled")
+            query = query.filter(CustomerContractDocument.status == status_value)
+        rows = query.order_by(CustomerContractDocument.created_at.desc(), CustomerContractDocument.id.desc()).all()
         return [serialize_customer_contract_document(row) for row in rows]
 
 
@@ -10876,22 +10974,27 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 monthly_total = float(calc.monthly_total or 0.0)
                 yearly_total = float(calc.yearly_total or 0.0)
                 if calc.tariff_name:
-                    service_scope = f"Tarif: {calc.tariff_name} (v{int(calc.tariff_version or 1)})."
+                    service_scope = f"Tarif: {calc.tariff_name}."
                 if calc.tariff_id:
                     tariff = db.query(ContractTariff).get(int(calc.tariff_id))
         if data.tariff_id:
             tariff_candidate = db.query(ContractTariff).get(int(data.tariff_id))
             if tariff_candidate:
                 tariff = tariff_candidate
-                monthly_total = _calc_contract_total_monthly(
+                suggested_monthly_total = _calc_contract_total_monthly(
                     tariff,
                     servers=servers,
                     clients=clients,
                     network_devices=network_devices,
                     iot_devices=iot_devices,
                 )
-                yearly_total = monthly_total * 12.0
-                service_scope = f"Tarif: {str(tariff.name or 'Service').strip()} (v{int(tariff.version or 1)})."
+                suggested_yearly_total = suggested_monthly_total * 12.0
+                # Tariff is a pricing suggestion. Keep explicit request totals if provided.
+                if data.monthly_total is None:
+                    monthly_total = suggested_monthly_total
+                if data.yearly_total is None:
+                    yearly_total = monthly_total * 12.0 if data.monthly_total is not None else suggested_yearly_total
+                service_scope = f"Tarif: {str(tariff.name or 'Service').strip()}."
 
         note_raw = str(data.note or "").strip()
         note_block = (
@@ -11075,18 +11178,30 @@ def download_customer_contract_document(customer_id: int, contract_id: int):
         )
         if not row:
             raise HTTPException(404, "Contract document not found")
-        if not str(row.content_base64 or "").strip():
-            raise HTTPException(404, "No document payload stored")
-        try:
-            content = base64.b64decode(str(row.content_base64 or "").strip())
-        except Exception:
-            raise HTTPException(500, "Stored document payload is invalid")
-        filename = str(row.file_name or f"vertrag_{row.id}.pdf").strip() or f"vertrag_{row.id}.pdf"
-        return Response(
-            content=content,
-            media_type=str(row.mime_type or "application/pdf"),
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        return _build_contract_download_response(row)
+
+
+@app.get("/api/customers/{customer_id}/contracts/download_latest")
+def download_latest_customer_contract_document(customer_id: int, status: str = "active"):
+    status_value = _normalize_contract_document_status(status, allow_cancelled=False)
+    if not status_value:
+        raise HTTPException(400, "status must be proposal or active/final")
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerContractDocument)
+            .filter(
+                CustomerContractDocument.customer_id == customer.id,
+                CustomerContractDocument.status == status_value,
+            )
+            .order_by(CustomerContractDocument.created_at.desc(), CustomerContractDocument.id.desc())
+            .first()
         )
+        if not row:
+            raise HTTPException(404, f"No contract with status '{status_value}' found")
+        return _build_contract_download_response(row)
 
 
 @app.delete("/api/customers/{customer_id}/contracts/{contract_id}")

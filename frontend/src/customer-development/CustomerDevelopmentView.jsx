@@ -288,6 +288,38 @@ const classifyWorkSnippet = (value) => {
   return "Leistung";
 };
 
+const deriveWorkSummaryTags = (summary, items) => {
+  const tags = [];
+  const pushTag = (value) => {
+    const tag = String(value || "").trim();
+    if (!tag) return;
+    if (tags.includes(tag)) return;
+    tags.push(tag);
+  };
+  const summaryText = String(summary || "").toLowerCase();
+  [
+    ["firewall", "Firewall"],
+    ["backup", "Backup"],
+    ["sicherung", "Backup"],
+    ["server", "Server"],
+    ["windows 11", "Windows 11"],
+    ["windows server", "Windows Server"],
+    ["terminalserver", "Terminalserver"],
+    ["netz", "Netzwerk"],
+    ["drucker", "Drucker"],
+    ["bmd", "BMD"],
+  ].forEach(([needle, label]) => {
+    if (summaryText.includes(needle)) pushTag(label);
+  });
+  (items || []).slice(0, 5).forEach((row) => {
+    (row?.positionSnippets || []).slice(0, 3).forEach((snippet) => {
+      pushTag(classifyWorkSnippet(snippet));
+    });
+  });
+  if (!tags.length) pushTag("Allgemeiner Support");
+  return tags.slice(0, 10);
+};
+
 const getAgentIcon = (device) => {
   const hostname = String(device?.hostname || "").toLowerCase();
   const os = String(device?.os || "").toLowerCase();
@@ -421,6 +453,7 @@ export default function CustomerDevelopmentView() {
   });
   const [discoveryProgress, setDiscoveryProgress] = useState(0);
   const [expandedInfraAgents, setExpandedInfraAgents] = useState({});
+  const [workItemsExpanded, setWorkItemsExpanded] = useState(false);
   const [cveProgress, setCveProgress] = useState(0);
   const [includeInactive, setIncludeInactive] = useState(false);
   const [viewMode, setViewMode] = useState("list");
@@ -810,6 +843,7 @@ export default function CustomerDevelopmentView() {
     setDetailData(null);
     setDetailStatus("idle");
     setDetailTab("overview");
+    setWorkItemsExpanded(false);
     setCveScan({
       status: "idle",
       scannedSoftware: 0,
@@ -842,6 +876,7 @@ export default function CustomerDevelopmentView() {
     setDetailData(null);
     setDetailStatus("idle");
     setDetailTab("overview");
+    setWorkItemsExpanded(false);
     setCveScan({
       status: "idle",
       scannedSoftware: 0,
@@ -1064,26 +1099,49 @@ export default function CustomerDevelopmentView() {
     detailData?.revenueLastYearEur,
     detailData?.revenueCurrentYearEur
   );
+  const detailPriorityTier = getPriorityTier(detailData || {});
+  const workSummaryTags = deriveWorkSummaryTags(
+    detailData?.workSummary?.summary,
+    detailData?.workSummary?.items || []
+  );
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       {detailModal.open ? (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-sand-900/40 px-4 pt-5 pb-8">
           <div className="w-full max-w-6xl rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
-            <div className="flex items-center justify-between border-b border-sand-200 px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sand-200 px-5 py-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Details</p>
                 <h3 className="text-lg font-display text-sand-900">
                   {detailModal.customerName || "Kunde"} · Kundenanalyse
                 </h3>
               </div>
-              <button
-                type="button"
-                onClick={closeDetail}
-                className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
-                title="Schließen"
-              >
-                <X size={14} />
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => loadDetail(true)}
+                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                >
+                  <RefreshCw size={11} />
+                  Aktualisieren
+                </button>
+                <button
+                  type="button"
+                  onClick={() => createTask(actionSuggestions?.[0]?.title || "Follow-up Kundenentwicklung")}
+                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                >
+                  <Plus size={11} />
+                  Aufgabe
+                </button>
+                <button
+                  type="button"
+                  onClick={closeDetail}
+                  className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                  title="Schließen"
+                >
+                  <X size={14} />
+                </button>
+              </div>
             </div>
             <div className="border-b border-sand-200 bg-white px-5 py-2">
               <div className="flex flex-wrap items-center gap-2">
@@ -1123,6 +1181,44 @@ export default function CustomerDevelopmentView() {
                 </button>
               </div>
             </div>
+            {detailData ? (
+              <div className="border-b border-sand-200 bg-sand-50 px-5 py-2">
+                <div className="grid gap-1.5 md:grid-cols-5 text-[11px]">
+                  <div className="rounded-lg border border-sand-200 bg-white px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Status</p>
+                    <span className={`mt-0.5 inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${stateBadgeClass(detailData.developmentState)}`}>
+                      {detailData.developmentState || "STABLE"}
+                    </span>
+                  </div>
+                  <div className="rounded-lg border border-sand-200 bg-white px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Risiko</p>
+                    <p className="text-sm font-semibold text-sand-900">{detailData.riskScore ?? 0}/100</p>
+                  </div>
+                  <div className="rounded-lg border border-sand-200 bg-white px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Priorität</p>
+                    <span className={`mt-0.5 inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${detailPriorityTier.badgeClass}`}>
+                      {detailPriorityTier.label}
+                    </span>
+                  </div>
+                  <div className="rounded-lg border border-sand-200 bg-white px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Kontakt</p>
+                    <p className="text-sm text-sand-800">
+                      {typeof detailData.daysSinceInteraction === "number"
+                        ? `vor ${detailData.daysSinceInteraction} Tagen`
+                        : "n/a"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-sand-200 bg-white px-2 py-1">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Letzte Rechnung</p>
+                    <p className="text-sm text-sand-800">
+                      {typeof detailData.daysSinceLastInvoice === "number"
+                        ? `vor ${detailData.daysSinceLastInvoice} Tagen`
+                        : "n/a"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div className="max-h-[83vh] overflow-auto p-5 bg-sand-50">
               {detailStatus === "loading" ? (
                 <LoadingProgress label="Lade Analytics" progress={detailProgress} />
@@ -1130,21 +1226,6 @@ export default function CustomerDevelopmentView() {
                 <p className="text-sm text-rose-600">Details konnten nicht geladen werden.</p>
               ) : detailData ? (
                 <div className="space-y-4">
-                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Aktionen</p>
-                      <div className="flex flex-wrap items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => createTask(actionSuggestions?.[0]?.title || "Follow-up Kundenentwicklung")}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-xs hover:bg-sand-100"
-                        >
-                          <Plus size={12} /> Aufgabe anlegen
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
                   {detailTab === "ki" ? (
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">KI Unterstützung</p>
@@ -1200,144 +1281,84 @@ export default function CustomerDevelopmentView() {
 
                   {detailTab === "overview" ? (
                   <>
-                  <div className="grid gap-3 md:grid-cols-5">
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Status</p>
-                      <span className={`mt-1 inline-flex rounded-full border px-2 py-1 text-[10px] uppercase tracking-wide ${stateBadgeClass(detailData.developmentState)}`}>
-                        {detailData.developmentState || "STABLE"}
-                      </span>
-                    </div>
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Risiko</p>
-                      <p className="text-lg font-metrics">{detailData.riskScore ?? 0}/100</p>
-                    </div>
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Priorität</p>
-                      <div className="mt-1">
-                        <PriorityBar item={detailData || {}} />
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Vertrag</p>
-                      <p className="text-sm text-sand-700">
-                        {detailData.hasMaintenanceContract ? "vorhanden" : "kein Vertrag"}
-                      </p>
-                    </div>
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Letzte Rechnung</p>
-                      <p className="text-sm text-sand-700">
-                        {typeof detailData.daysSinceLastInvoice === "number"
-                          ? `vor ${detailData.daysSinceLastInvoice} Tagen`
-                          : "n/a"}
-                      </p>
-                      {detailData.invoiceActivityDue ? (
-                        <span className="mt-1 inline-flex rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
-                          Reaktivierung nötig
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Umsatzvergleich</p>
-                      <div className="mt-2 space-y-2">
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <div className="rounded-2xl border border-sand-200 bg-white p-2.5">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Umsatzvergleich</p>
+                      <div className="mt-1.5 space-y-1.5">
                         <div>
-                          <div className="flex items-center justify-between text-[11px] text-sand-600">
+                          <div className="flex items-center justify-between text-[10px] text-sand-600">
                             <span>Vorjahr</span>
                             <span>{formatEur(detailData.revenueLastYearEur)}</span>
                           </div>
-                          <div className="h-2 rounded-full bg-sand-100">
-                            <div
-                              className="h-2 rounded-full bg-sand-500"
-                              style={{
-                                width: `${revenueBars.lastPct}%`
-                              }}
-                            />
+                          <div className="h-1.5 rounded-full bg-sand-100">
+                            <div className="h-1.5 rounded-full bg-sand-500" style={{ width: `${revenueBars.lastPct}%` }} />
                           </div>
                         </div>
                         <div>
-                          <div className="flex items-center justify-between text-[11px] text-sand-600">
+                          <div className="flex items-center justify-between text-[10px] text-sand-600">
                             <span>Aktuelles Jahr</span>
                             <span>{formatEur(detailData.revenueCurrentYearEur)}</span>
                           </div>
-                          <div className="h-2 rounded-full bg-sand-100">
+                          <div className="h-1.5 rounded-full bg-sand-100">
                             <div
-                              className={`h-2 rounded-full ${
+                              className={`h-1.5 rounded-full ${
                                 Number(detailData.revenueTrendPct || 0) < 0 ? "bg-rose-400" : "bg-emerald-500"
                               }`}
-                              style={{
-                                width: `${revenueBars.currentPct}%`
-                              }}
+                              style={{ width: `${revenueBars.currentPct}%` }}
                             />
                           </div>
                         </div>
                       </div>
-                      <p className="mt-2 text-[11px] text-sand-500">
-                        Trend: {formatPct(detailData.revenueTrendPct)}
-                      </p>
+                      <p className="mt-1.5 text-[10px] text-sand-600">Trend: {formatPct(detailData.revenueTrendPct)}</p>
                     </div>
 
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Risikozusammensetzung</p>
-                      <div className="mt-2 space-y-2">
+                    <div className="rounded-2xl border border-sand-200 bg-white p-2.5">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Risikozusammensetzung</p>
+                      <div className="mt-1.5 space-y-1.5">
                         <div>
-                          <div className="flex items-center justify-between text-[11px] text-sand-600">
-                            <span>Business Risk</span>
+                          <div className="flex items-center justify-between text-[10px] text-sand-600">
+                            <span>Business</span>
                             <span>{detailData.businessRisk ?? 0}</span>
                           </div>
-                          <div className="h-2 rounded-full bg-sand-100">
-                            <div
-                              className="h-2 rounded-full bg-amber-400"
-                              style={{ width: `${clampPercent(detailData.businessRisk)}%` }}
-                            />
+                          <div className="h-1.5 rounded-full bg-sand-100">
+                            <div className="h-1.5 rounded-full bg-amber-400" style={{ width: `${clampPercent(detailData.businessRisk)}%` }} />
                           </div>
                         </div>
                         <div>
-                          <div className="flex items-center justify-between text-[11px] text-sand-600">
-                            <span>Infra Risk</span>
+                          <div className="flex items-center justify-between text-[10px] text-sand-600">
+                            <span>Infrastruktur</span>
                             <span>{detailData.infrastructureRisk ?? 0}</span>
                           </div>
-                          <div className="h-2 rounded-full bg-sand-100">
-                            <div
-                              className="h-2 rounded-full bg-rose-400"
-                              style={{ width: `${clampPercent(detailData.infrastructureRisk)}%` }}
-                            />
+                          <div className="h-1.5 rounded-full bg-sand-100">
+                            <div className="h-1.5 rounded-full bg-rose-400" style={{ width: `${clampPercent(detailData.infrastructureRisk)}%` }} />
                           </div>
                         </div>
                       </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                    <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Infrastruktur Analytics</p>
-                    <div className="mt-2 grid gap-2 md:grid-cols-3 text-xs">
-                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
-                        <p className="text-sand-500">Coverage</p>
-                        <p className="font-semibold text-sand-800">
-                          {Math.round(ratioToPercent(detailData.infra?.coverageRatio))}%
-                        </p>
-                        <div className="mt-1 h-1.5 rounded-full bg-sand-200">
-                          <div
-                            className="h-1.5 rounded-full bg-emerald-500"
-                            style={{ width: `${ratioToPercent(detailData.infra?.coverageRatio)}%` }}
-                          />
+                      <div className="mt-2">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Signale</p>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {(detailData.reasons || detailData.signals || []).slice(0, 4).map((signal, idx) => (
+                            <span key={`${signal}-${idx}`} className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] text-sand-700">
+                              {signal}
+                            </span>
+                          ))}
+                          {!(detailData.reasons || detailData.signals || []).length ? (
+                            <span className="text-[10px] text-sand-500">Keine besonderen Signale.</span>
+                          ) : null}
                         </div>
                       </div>
-                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
-                        <p className="text-sand-500">Unmanaged</p>
-                        <p className="font-semibold text-sand-800">{detailData.infra?.unmanagedCount || 0}</p>
-                      </div>
-                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
-                        <p className="text-sand-500">Offline Rate</p>
-                        <p className="font-semibold text-sand-800">
-                          {Math.round(ratioToPercent(detailData.infra?.offlineRate))}%
-                        </p>
-                        <div className="mt-1 h-1.5 rounded-full bg-sand-200">
-                          <div
-                            className="h-1.5 rounded-full bg-rose-500"
-                            style={{ width: `${ratioToPercent(detailData.infra?.offlineRate)}%` }}
-                          />
+                      <div className="mt-2">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Empfehlungen</p>
+                        <div className="mt-1 space-y-1">
+                          {(detailData.recommendations || detailData.topRecommendations || []).slice(0, 3).map((rec, idx) => (
+                            <p key={`${rec?.title || "r"}-${idx}`} className="text-[11px] text-sand-700">
+                              <span className="font-semibold">{rec?.title || "Empfehlung"}:</span>{" "}
+                              {compactWorkSnippet(rec?.why || "", 120)}
+                            </p>
+                          ))}
+                          {!(detailData.recommendations || detailData.topRecommendations || []).length ? (
+                            <p className="text-[10px] text-sand-500">Keine Empfehlungen vorhanden.</p>
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -1346,106 +1367,71 @@ export default function CustomerDevelopmentView() {
                   <div className="rounded-2xl border border-sand-200 bg-white p-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Letzte Arbeiten (Rechnungen)</p>
-                      <span className="text-[11px] text-sand-500">Top 5</span>
+                      <button
+                        type="button"
+                        onClick={() => setWorkItemsExpanded((prev) => !prev)}
+                        disabled={!(detailData.workSummary?.items || []).length}
+                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {workItemsExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                        {workItemsExpanded
+                          ? "Rechnungen ausblenden"
+                          : (detailData.workSummary?.items || []).length
+                            ? `Top ${Math.min(5, (detailData.workSummary?.items || []).length)} anzeigen`
+                            : "Keine Rechnungen"}
+                      </button>
                     </div>
-                    <div className="mt-2 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">System-Zusammenfassung</p>
-                      <p className="mt-1 text-xs leading-5 text-sand-700 break-words">
+                    <div className="mt-1.5 rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5">
+                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Stichworte</p>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {workSummaryTags.map((tag) => (
+                          <span key={tag} className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="mt-1 text-[11px] text-sand-600">
                         {compactWorkSnippet(
                           String(detailData.workSummary?.summary || "").trim() || "Noch keine Zusammenfassung vorhanden.",
-                          640
+                          220
                         )}
                       </p>
                     </div>
-                    <div className="mt-2 space-y-1.5">
-                      {(detailData.workSummary?.items || []).slice(0, 5).map((row, idx) => {
-                        const invoiceLabel = row.invoiceNumber || `Rechnung #${row.invoiceId || "n/a"}`;
-                        const snippets = (row.positionSnippets || [])
-                          .map((snippet) => normalizeWorkSnippet(snippet))
-                          .filter(Boolean);
-                        return (
-                        <div
-                          key={`work-row-${row.invoiceId || idx}`}
-                          className="rounded-lg border border-sand-200 bg-sand-50 p-2"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="rounded-full border border-sand-300 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
-                                Rechnung
-                              </span>
-                              <span className="text-xs font-semibold text-sand-900">{invoiceLabel}</span>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-[11px] text-sand-600">{row.date || "n/a"}</p>
-                              <p className="text-xs font-semibold text-sand-900">{formatEur(row.amountEur)}</p>
+                    {workItemsExpanded ? (
+                      <div className="mt-2 space-y-1.5">
+                        {(detailData.workSummary?.items || []).slice(0, 5).map((row, idx) => {
+                          const invoiceLabel = row.invoiceNumber || `Rechnung #${row.invoiceId || "n/a"}`;
+                          const snippets = (row.positionSnippets || [])
+                            .map((snippet) => normalizeWorkSnippet(snippet))
+                            .filter(Boolean);
+                          const lineSummary = compactWorkSnippet(
+                            snippets.slice(0, 2).join(" · ") || "Keine Positionsdetails vorhanden.",
+                            180
+                          );
+                          return (
+                          <div
+                            key={`work-row-${row.invoiceId || idx}`}
+                            className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5"
+                          >
+                            <div className="grid items-center gap-1.5 md:grid-cols-[auto_auto_auto_minmax(0,1fr)]">
+                              <span className="text-[11px] font-semibold text-sand-900">{invoiceLabel}</span>
+                              <span className="text-[10px] text-sand-600">{row.date || "n/a"}</span>
+                              <span className="text-[11px] font-semibold text-sand-800">{formatEur(row.amountEur)}</span>
+                              <p className="truncate text-[11px] text-sand-700">{lineSummary}</p>
                             </div>
                           </div>
-                          {snippets.length ? (
-                            <div className="mt-1.5 space-y-1">
-                              {snippets.slice(0, 3).map((snippet, sIdx) => (
-                                <div
-                                  key={`snippet-${sIdx}`}
-                                  className="rounded-md border border-sand-200 bg-white px-2 py-1"
-                                >
-                                  <div className="inline-flex rounded-full border border-sand-200 bg-sand-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
-                                    {classifyWorkSnippet(snippet)}
-                                  </div>
-                                  <p className="mt-0.5 text-[11px] leading-4 text-sand-700 break-words">
-                                    {compactWorkSnippet(snippet, 190)}
-                                  </p>
-                                </div>
-                              ))}
-                              {snippets.length > 3 ? (
-                                <p className="text-[11px] text-sand-500">
-                                  +{snippets.length - 3} weitere Positionen
-                                </p>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <p className="mt-1.5 text-[11px] text-sand-500">Keine Positionsdetails vorhanden.</p>
-                          )}
-                        </div>
-                      );
-                      })}
-                      {!(detailData.workSummary?.items || []).length ? (
-                        <p className="text-xs text-sand-500">Keine Rechnungspositionen für die letzten Arbeiten gefunden.</p>
-                      ) : null}
-                    </div>
+                        );
+                        })}
+                        {!(detailData.workSummary?.items || []).length ? (
+                          <p className="text-xs text-sand-500">Keine Rechnungspositionen für die letzten Arbeiten gefunden.</p>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Signale</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {(detailData.reasons || detailData.signals || []).length ? (
-                          (detailData.reasons || detailData.signals || []).map((signal, idx) => (
-                            <span
-                              key={`${signal}-${idx}`}
-                              className="rounded-full border border-sand-200 bg-sand-50 px-2 py-1 text-xs text-sand-700"
-                            >
-                              {signal}
-                            </span>
-                          ))
-                        ) : (
-                          <span className="text-xs text-sand-500">Keine besonderen Signale.</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Empfehlungen</p>
-                      <div className="mt-2 space-y-2">
-                        {(detailData.recommendations || detailData.topRecommendations || []).slice(0, 5).map((rec, idx) => (
-                          <div key={`${rec?.title || "r"}-${idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2">
-                            <p className="text-xs font-semibold text-sand-800">{rec?.title || "Empfehlung"}</p>
-                            <p className="text-[11px] text-sand-500">{rec?.why || ""}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
                   <div className="rounded-2xl border border-sand-200 bg-white p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Telefonbriefing</p>
+                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Kundenbriefing</p>
                       <button
                         type="button"
                         onClick={() => setDetailTab("ki")}
@@ -2044,34 +2030,20 @@ export default function CustomerDevelopmentView() {
               </div>
               <span className="text-[10px] text-sand-500">{neglectedCustomers.length}</span>
             </div>
-            <div className="mt-1.5 grid gap-1 text-[10px]">
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1">
-                <p className="text-amber-700">Kontakt</p>
-                <p className="font-semibold text-amber-900">{neglectedStats.overdueByContact}</p>
-              </div>
-              <div className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1">
-                <p className="text-rose-700">Umsetzung</p>
-                <p className="font-semibold text-rose-900">{neglectedStats.overdueByInvoice}</p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1">
-                <p className="text-sand-600">Druck</p>
-                <p className="font-semibold text-sand-800">{neglectedStats.highPriority}</p>
-              </div>
-            </div>
-            <div className="mt-1.5 space-y-1">
-              {neglectedCustomers.slice(0, 3).map((entry) => (
-                <button
-                  key={`neglect-compact-${entry.item?.customerId}`}
-                  type="button"
-                  onClick={() => openDetail(entry.item)}
-                  className="w-full rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 text-left text-[10px] hover:bg-sand-100"
-                >
-                  <p className="truncate font-semibold text-sand-800">{entry.item?.customerName || "Unbekannt"}</p>
-                  <p className="text-sand-500">Score {entry.score}</p>
-                </button>
-              ))}
+            <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-700">
+                Kontakt {neglectedStats.overdueByContact}
+              </span>
+              <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-rose-700">
+                Umsetzung {neglectedStats.overdueByInvoice}
+              </span>
+              <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-sand-700">
+                Druck {neglectedStats.highPriority}
+              </span>
               {!neglectedCustomers.length ? (
-                <p className="text-[10px] text-sand-500">Keine auffälligen Kunden.</p>
+                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-sand-500">
+                  Keine auffälligen Kunden
+                </span>
               ) : null}
             </div>
           </section>
@@ -2092,7 +2064,6 @@ export default function CustomerDevelopmentView() {
                   <th className="py-2 pr-3">Vertrag & Inventar</th>
                   <th className="py-2 pr-3">Priorität</th>
                   <th className="py-2 pr-3">Kontakt</th>
-                  <th className="py-2 pr-3">Umsatztrend</th>
                   <th className="py-2 pr-3">Aktion</th>
                 </tr>
               </thead>
@@ -2103,7 +2074,16 @@ export default function CustomerDevelopmentView() {
                   return (
                   <tr
                     key={item.customerId}
-                    className={`border-t border-sand-100 ${index % 2 === 1 ? "bg-sand-50/70" : "bg-white"}`}
+                    className={`cursor-pointer border-t border-sand-100 ${index % 2 === 1 ? "bg-sand-50/70" : "bg-white"} hover:bg-sand-100/60`}
+                    onClick={() => openDetail(item)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openDetail(item);
+                      }
+                    }}
                   >
                     <td className="py-2 pr-3">
                       <div className="font-semibold text-sand-800">{item.customerName || "Unbekannt"}</div>
@@ -2135,6 +2115,9 @@ export default function CustomerDevelopmentView() {
                     <td className="py-2 pr-3">
                       <PriorityBar item={item} />
                       <p className="mt-1 text-[10px] text-sand-500">Aktivierungs-Score: {score}</p>
+                      <p className="text-[10px] text-sand-500">
+                        Thema: {item.topRecommendations?.[0]?.title || "Kein Top-Thema"}
+                      </p>
                     </td>
                     <td className="py-2 pr-3">
                       <p className="text-[11px] text-sand-700">
@@ -2154,14 +2137,6 @@ export default function CustomerDevelopmentView() {
                           Umsetzung stockt
                         </span>
                       ) : null}
-                    </td>
-                    <td className="py-2 pr-3">
-                      <span className={Number(item.revenueTrendPct) < 0 ? "text-rose-600" : "text-emerald-700"}>
-                        {formatPct(item.revenueTrendPct)}
-                      </span>
-                      <p className="mt-1 text-[11px] text-sand-600">
-                        {item.topRecommendations?.[0]?.title || "Kein Top-Thema"}
-                      </p>
                     </td>
                     <td className="py-2 pr-3">
                       <div className="flex flex-wrap items-center gap-1.5">
