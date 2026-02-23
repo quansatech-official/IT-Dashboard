@@ -2,11 +2,12 @@ from fastapi import FastAPI, HTTPException, Response, Request, Form, Header
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, List, Tuple, Set
+from typing import Optional, Dict, Any, List, Tuple, Set, Callable
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text,
     Boolean, BigInteger, ForeignKey, Float, inspect, text, func, or_
 )
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 import os
 import math
@@ -64,6 +65,14 @@ OLLAMA_RESPONSE_CACHE_MAX_ENTRIES = max(
 OLLAMA_MISSING_MODEL_TTL_SECONDS = max(
     0,
     int(os.environ.get("OLLAMA_MISSING_MODEL_TTL_SECONDS") or "600"),
+)
+DB_STARTUP_RETRY_ATTEMPTS = max(
+    1,
+    int(os.environ.get("DB_STARTUP_RETRY_ATTEMPTS") or "30"),
+)
+DB_STARTUP_RETRY_DELAY_SECONDS = max(
+    0.5,
+    float(os.environ.get("DB_STARTUP_RETRY_DELAY_SECONDS") or "2"),
 )
 CUSTOMER_META_HUB_URL = str(os.environ.get("CUSTOMER_META_HUB_URL") or "").strip().rstrip("/")
 CUSTOMER_META_HUB_ENABLED = str(os.environ.get("CUSTOMER_META_HUB_ENABLED") or "").strip().lower() not in {
@@ -638,7 +647,41 @@ class CustomerContractDocument(Base):
     cancelled_at = Column(BigInteger, default=0)
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
-Base.metadata.create_all(bind=engine)
+
+def _run_db_startup_step(step_name: str, callback: Callable[[], None]) -> None:
+    attempts = max(1, int(DB_STARTUP_RETRY_ATTEMPTS or 1))
+    delay_seconds = max(0.5, float(DB_STARTUP_RETRY_DELAY_SECONDS or 0.5))
+    for attempt in range(1, attempts + 1):
+        try:
+            callback()
+            if attempt > 1:
+                logger.info(
+                    "DB startup step '%s' succeeded on attempt %s/%s",
+                    step_name,
+                    attempt,
+                    attempts,
+                )
+            return
+        except SQLAlchemyError as exc:
+            if attempt >= attempts:
+                logger.exception(
+                    "DB startup step '%s' failed after %s attempts",
+                    step_name,
+                    attempts,
+                )
+                raise
+            logger.warning(
+                "DB startup step '%s' failed (%s/%s): %s. Retrying in %.1fs",
+                step_name,
+                attempt,
+                attempts,
+                exc,
+                delay_seconds,
+            )
+            time.sleep(delay_seconds)
+
+
+_run_db_startup_step("create_all", lambda: Base.metadata.create_all(bind=engine))
 
 def _ensure_purchasing_items_columns() -> None:
     inspector = inspect(engine)
@@ -657,7 +700,7 @@ def _ensure_purchasing_items_columns() -> None:
             connection.execute(text(statement))
 
 
-_ensure_purchasing_items_columns()
+_run_db_startup_step("ensure_purchasing_items_columns", _ensure_purchasing_items_columns)
 
 def _ensure_integration_settings_columns() -> None:
     inspector = inspect(engine)
@@ -754,7 +797,7 @@ def _ensure_integration_settings_columns() -> None:
             for statement in statements:
                 connection.execute(text(statement))
 
-_ensure_integration_settings_columns()
+_run_db_startup_step("ensure_integration_settings_columns", _ensure_integration_settings_columns)
 
 def _ensure_pbx_phonebook_columns() -> None:
     inspector = inspect(engine)
@@ -768,7 +811,7 @@ def _ensure_pbx_phonebook_columns() -> None:
             text("ALTER TABLE pbx_phonebook_entries ADD COLUMN is_global BOOLEAN DEFAULT FALSE")
         )
 
-_ensure_pbx_phonebook_columns()
+_run_db_startup_step("ensure_pbx_phonebook_columns", _ensure_pbx_phonebook_columns)
 
 
 def _ensure_customer_metrics_settings_columns() -> None:
@@ -784,7 +827,7 @@ def _ensure_customer_metrics_settings_columns() -> None:
         )
 
 
-_ensure_customer_metrics_settings_columns()
+_run_db_startup_step("ensure_customer_metrics_settings_columns", _ensure_customer_metrics_settings_columns)
 
 
 def _ensure_report_sent_column() -> None:
@@ -798,7 +841,7 @@ def _ensure_report_sent_column() -> None:
         connection.execute(text("ALTER TABLE reports ADD COLUMN sent_at BIGINT DEFAULT 0"))
 
 
-_ensure_report_sent_column()
+_run_db_startup_step("ensure_report_sent_column", _ensure_report_sent_column)
 
 
 def _ensure_report_opened_columns() -> None:
@@ -840,7 +883,7 @@ def _ensure_report_opened_columns() -> None:
             )
 
 
-_ensure_report_opened_columns()
+_run_db_startup_step("ensure_report_opened_columns", _ensure_report_opened_columns)
 
 
 def _ensure_offer_opened_columns() -> None:
@@ -868,7 +911,7 @@ def _ensure_offer_opened_columns() -> None:
             connection.execute(text(statement))
 
 
-_ensure_offer_opened_columns()
+_run_db_startup_step("ensure_offer_opened_columns", _ensure_offer_opened_columns)
 
 
 def _ensure_report_catalog_group_column() -> None:
@@ -882,7 +925,7 @@ def _ensure_report_catalog_group_column() -> None:
         connection.execute(text("ALTER TABLE report_catalog ADD COLUMN \"group\" VARCHAR"))
 
 
-_ensure_report_catalog_group_column()
+_run_db_startup_step("ensure_report_catalog_group_column", _ensure_report_catalog_group_column)
 
 
 def _ensure_report_item_columns() -> None:
@@ -906,7 +949,7 @@ def _ensure_report_item_columns() -> None:
             connection.execute(text(statement))
 
 
-_ensure_report_item_columns()
+_run_db_startup_step("ensure_report_item_columns", _ensure_report_item_columns)
 
 
 def _ensure_smtp_settings_columns() -> None:
@@ -924,7 +967,7 @@ def _ensure_smtp_settings_columns() -> None:
             connection.execute(text(statement))
 
 
-_ensure_smtp_settings_columns()
+_run_db_startup_step("ensure_smtp_settings_columns", _ensure_smtp_settings_columns)
 
 
 def _ensure_customer_columns() -> None:
@@ -984,7 +1027,7 @@ def _ensure_customer_columns() -> None:
             )
 
 
-_ensure_customer_columns()
+_run_db_startup_step("ensure_customer_columns", _ensure_customer_columns)
 
 
 def _ensure_delivery_note_columns() -> None:
@@ -1004,7 +1047,7 @@ def _ensure_delivery_note_columns() -> None:
             connection.execute(text(statement))
 
 
-_ensure_delivery_note_columns()
+_run_db_startup_step("ensure_delivery_note_columns", _ensure_delivery_note_columns)
 
 
 def _ensure_report_columns() -> None:
@@ -1022,7 +1065,7 @@ def _ensure_report_columns() -> None:
             connection.execute(text(statement))
 
 
-_ensure_report_columns()
+_run_db_startup_step("ensure_report_columns", _ensure_report_columns)
 
 
 def _ensure_day_tasks_columns() -> None:
@@ -1078,7 +1121,7 @@ def _ensure_day_tasks_columns() -> None:
             connection.execute(text(statement))
 
 
-_ensure_day_tasks_columns()
+_run_db_startup_step("ensure_day_tasks_columns", _ensure_day_tasks_columns)
 
 
 def _ensure_day_task_groups_columns() -> None:
@@ -1094,7 +1137,7 @@ def _ensure_day_task_groups_columns() -> None:
         )
 
 
-_ensure_day_task_groups_columns()
+_run_db_startup_step("ensure_day_task_groups_columns", _ensure_day_task_groups_columns)
 
 
 def _ensure_infra_discovery_columns() -> None:
@@ -1120,7 +1163,7 @@ def _ensure_infra_discovery_columns() -> None:
             connection.execute(text(statement))
 
 
-_ensure_infra_discovery_columns()
+_run_db_startup_step("ensure_infra_discovery_columns", _ensure_infra_discovery_columns)
 
 def _ensure_customer_contract_documents_columns() -> None:
     inspector = inspect(engine)
@@ -1141,7 +1184,10 @@ def _ensure_customer_contract_documents_columns() -> None:
             connection.execute(text(statement))
 
 
-_ensure_customer_contract_documents_columns()
+_run_db_startup_step(
+    "ensure_customer_contract_documents_columns",
+    _ensure_customer_contract_documents_columns,
+)
 
 # ================= SCHEMAS ==================
 class CustomerPhoneSchema(BaseModel):
@@ -3868,7 +3914,10 @@ def _migrate_contract_templates_to_supported_types() -> None:
         db.commit()
 
 
-_migrate_contract_templates_to_supported_types()
+_run_db_startup_step(
+    "migrate_contract_templates_to_supported_types",
+    _migrate_contract_templates_to_supported_types,
+)
 
 
 def _render_prompt(template: str, values: Dict[str, str]) -> str:
