@@ -25,8 +25,10 @@ services:
     container_name: it-dashboard-backend
     restart: unless-stopped
     depends_on:
-      - db
-      - ollama
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-it_user}:${POSTGRES_PASSWORD:-it_secret_password}@db:5432/${POSTGRES_DB:-it_dashboard}}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
@@ -60,9 +62,9 @@ services:
           "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)\"",
         ]
       interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 15s
+      timeout: 6s
+      retries: 30
+      start_period: 120s
 
   meta-hub:
     build:
