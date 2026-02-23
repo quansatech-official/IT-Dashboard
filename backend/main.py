@@ -7631,21 +7631,14 @@ def get_customer_development_work_summary_ai(customer_id: int):
 
 
 @app.get("/api/customers/{customer_id}/development/cve_scan")
-def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
+def get_customer_development_cve_scan(customer_id: int, request: Request, refresh: bool = False):
     now_ms = int(time.time() * 1000)
     cached = _customer_cve_cache.get(int(customer_id))
     if not refresh and cached and now_ms - int(cached.get("cachedAt") or 0) < CUSTOMER_CVE_CACHE_TTL_MS:
         payload = cached.get("payload")
         if isinstance(payload, dict):
-            # Avoid serving stale legacy cache entries where matching failed before
-            # customer-number fallback improvements were applied.
-            if (
-                int(payload.get("matchedAgents") or 0) == 0
-                and (
-                    int(payload.get("nameOnlyCandidates") or 0) > 0
-                    or not bool(payload.get("rmmConnected"))
-                )
-            ):
+            # Avoid serving stale cache when agent matching was empty.
+            if int(payload.get("matchedAgents") or 0) == 0:
                 payload = None
             if isinstance(payload, dict):
                 payload["fromCache"] = True
@@ -7656,44 +7649,52 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
         if not customer:
             raise HTTPException(404, "Customer not found")
         integration = db.query(IntegrationSettings).first()
-        tactical_agents, tactical_connected = _fetch_tactical_rmm_agents(integration)
-        matched_agents = [agent for agent in tactical_agents if _agent_matches_customer(agent, customer)]
-        name_only_matches = [agent for agent in tactical_agents if _agent_matches_customer_name_only(agent, customer)]
-        mapping_mode = "exact"
-        selected_agents = matched_agents
-        if not selected_agents and name_only_matches:
-            mapping_mode = "name_only"
-            selected_agents = name_only_matches
+    development_payload = _resolve_customer_development_payload(
+        include_inactive=True,
+        customer_id=customer_id,
+        full=True,
+        refresh=refresh,
+        request=request,
+    )
+    contexts = development_payload.get("contexts") if isinstance(development_payload.get("contexts"), list) else []
+    if not contexts:
+        raise HTTPException(404, "Customer not found")
+    context = contexts[0] if isinstance(contexts[0], dict) else {}
+    infra = context.get("infra") if isinstance(context.get("infra"), dict) else {}
+    source = context.get("source") if isinstance(context.get("source"), dict) else {}
 
-        deduped_agents: List[Dict[str, Any]] = []
-        seen_agent_ids: Set[str] = set()
-        for agent in selected_agents:
-            agent_id = _extract_agent_id(agent)
-            if not agent_id or agent_id in seen_agent_ids:
+    managed_devices_raw = context.get("managedInfrastructureDevices")
+    managed_devices_raw = managed_devices_raw if isinstance(managed_devices_raw, list) else []
+    managed_devices = [row for row in managed_devices_raw if isinstance(row, dict)]
+
+    deduped_agents: List[Dict[str, Any]] = []
+    seen_agent_ids: Set[str] = set()
+    for device in managed_devices:
+        agent_id = str(device.get("agentId") or "").strip()
+        if agent_id:
+            if agent_id in seen_agent_ids:
                 continue
             seen_agent_ids.add(agent_id)
-            deduped_agents.append(agent)
+        deduped_agents.append(device)
 
-        agent_ids = [_extract_agent_id(agent) for agent in deduped_agents if _extract_agent_id(agent)]
-        if agent_ids:
-            detail_map = _fetch_tactical_rmm_agent_detail_map(integration, agent_ids)
-            deduped_agents = [{**agent, **(detail_map.get(_extract_agent_id(agent), {}))} for agent in deduped_agents]
-        software_rows = _fetch_tactical_rmm_software(integration, agent_ids, per_agent_limit=80)
+    query_agent_ids = [str(row.get("agentId") or "").strip() for row in deduped_agents if str(row.get("agentId") or "").strip()]
+    software_rows = _fetch_tactical_rmm_software(integration, query_agent_ids, per_agent_limit=80)
 
     agent_meta: Dict[str, Dict[str, Any]] = {}
-    for agent in deduped_agents:
-        agent_id = _extract_agent_id(agent)
-        if not agent_id:
-            continue
-        agent_meta[agent_id] = {
+    ordered_agent_keys: List[str] = []
+    for index, agent in enumerate(deduped_agents):
+        agent_id = str(agent.get("agentId") or "").strip()
+        stable_key = agent_id or f"idx:{index}"
+        ordered_agent_keys.append(stable_key)
+        agent_meta[stable_key] = {
             "agentId": agent_id,
-            "hostname": _agent_field_text(agent, "hostname", "name"),
-            "site": _agent_field_text(agent, "site", "site_name"),
-            "client": _agent_field_text(agent, "client", "client_name", "customer"),
-            "online": bool(_agent_is_online(agent)),
-            "os": _agent_field_text(agent, "operating_system", "operatingSystem", "plat_name", "plat", "platform", "os"),
-            "version": _agent_field_text(agent, "version", "agent_version", "agentVersion"),
-            "lastSeen": _agent_field_text(agent, "last_seen", "last_seen_time", "lastseen", "last_checkin", "last_ping"),
+            "hostname": str(agent.get("hostname") or "").strip(),
+            "site": str(agent.get("site") or "").strip(),
+            "client": str(agent.get("client") or "").strip(),
+            "online": bool(agent.get("online")),
+            "os": str(agent.get("os") or "").strip(),
+            "version": str(agent.get("version") or "").strip(),
+            "lastSeen": str(agent.get("lastSeen") or "").strip(),
         }
 
     per_agent_software: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -7710,14 +7711,11 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
             software_by_name[key] = {"name": name, "version": version}
 
     agents_payload: List[Dict[str, Any]] = []
-    ordered_agent_ids: List[str] = []
-    for agent in deduped_agents:
-        agent_id = _extract_agent_id(agent)
-        if agent_id and agent_id not in ordered_agent_ids:
-            ordered_agent_ids.append(agent_id)
     scanned = 0
-    for agent_id in ordered_agent_ids:
-        software_map = per_agent_software.get(agent_id, {})
+    for agent_key in ordered_agent_keys:
+        meta = agent_meta.get(agent_key, {"agentId": "", "hostname": "", "site": "", "client": "", "online": None})
+        agent_id = str(meta.get("agentId") or "").strip()
+        software_map = per_agent_software.get(agent_id, {}) if agent_id else {}
         software_list = list(software_map.values())[:20]
         agent_findings: List[Dict[str, Any]] = []
         for item in software_list[:12]:
@@ -7742,7 +7740,6 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
             ),
             reverse=True,
         )
-        meta = agent_meta.get(agent_id, {"agentId": agent_id, "hostname": "", "site": "", "client": "", "online": None})
         agents_payload.append(
             {
                 **meta,
@@ -7753,18 +7750,27 @@ def get_customer_development_cve_scan(customer_id: int, refresh: bool = False):
             }
         )
     agents_payload.sort(key=lambda row: (-(row.get("findingCount") or 0), str(row.get("hostname") or "")))
+
+    matched_agents_count = len(deduped_agents)
+    name_only_candidates = int(_safe_nonnegative_int(infra.get("nameOnlyCandidateCount") or 0))
+    mapping_hint = str(infra.get("rmmMappingHint") or "").strip()
+    if matched_agents_count > 0:
+        mapping_mode = "exact"
+    elif name_only_candidates > 0:
+        mapping_mode = "name_only"
+    else:
+        mapping_mode = "none"
+    if mapping_mode == "name_only" and not mapping_hint:
+        mapping_hint = "RMM-Agenten via Name gefunden, aber ohne Kundennummer-Zuordnung im RMM."
+
     payload = {
         "customerId": customer_id,
         "scannedSoftware": scanned,
-        "matchedAgents": len(agent_ids),
-        "nameOnlyCandidates": len(name_only_matches),
+        "matchedAgents": matched_agents_count,
+        "nameOnlyCandidates": name_only_candidates,
         "mappingMode": mapping_mode,
-        "mappingHint": (
-            "RMM-Agenten via Name gefunden, aber ohne Kundennummer-Zuordnung im RMM."
-            if mapping_mode == "name_only"
-            else ""
-        ),
-        "rmmConnected": bool(tactical_connected),
+        "mappingHint": mapping_hint,
+        "rmmConnected": bool(source.get("tacticalRmm")) or matched_agents_count > 0 or name_only_candidates > 0,
         "agents": agents_payload,
         "generatedAt": now_ms,
         "fromCache": False,

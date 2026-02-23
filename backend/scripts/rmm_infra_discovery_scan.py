@@ -12,6 +12,7 @@ Features:
 from __future__ import annotations
 
 import argparse
+import http.client
 import ipaddress
 import json
 import os
@@ -634,11 +635,25 @@ def _post_discovery(
     request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=25) as response:
-            payload = response.read().decode("utf-8", errors="replace")
+            partial_response = False
+            try:
+                payload_bytes = response.read()
+            except http.client.IncompleteRead as exc:
+                # Backend already accepted the request body; tolerate truncated response body.
+                partial_response = True
+                payload_bytes = exc.partial or b""
+            payload = payload_bytes.decode("utf-8", errors="replace")
             if not payload:
-                return {"status": "ok"}
-            parsed = json.loads(payload)
-            return parsed if isinstance(parsed, dict) else {"status": "ok"}
+                return {"status": "ok", **({"warning": "incomplete_response"} if partial_response else {})}
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                parsed = {}
+            if isinstance(parsed, dict) and parsed:
+                if partial_response:
+                    parsed.setdefault("warning", "incomplete_response")
+                return parsed
+            return {"status": "ok", **({"warning": "incomplete_response"} if partial_response else {})}
     except urllib.error.HTTPError as exc:
         message = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Discovery upload failed ({exc.code}): {message}") from exc

@@ -212,6 +212,56 @@ const callFocusPoints = (item) => {
   return points.slice(0, 4);
 };
 
+const buildInfraActionHints = (item) => {
+  const infra = item?.infra || {};
+  const hints = [];
+  const errorCount = Number(infra?.errorCount || 0);
+  const warningCount = Number(infra?.warningCount || 0);
+  const windowsUpdates = Number(infra?.windowsUpdates || 0);
+  const thirdPartyUpdates = Number(infra?.thirdPartyUpdates || 0);
+  const openCves = Number(infra?.openCves || 0);
+  const openUpdates = Number(infra?.openUpdates || 0);
+  const osExpiredCount = Number(infra?.osExpiredCount || 0);
+  const osEolSoonCount = Number(infra?.osEolSoonCount || 0);
+  const effectiveOpenUpdates = Math.max(openUpdates, windowsUpdates + thirdPartyUpdates + openCves);
+
+  if (errorCount > 0) {
+    hints.push({
+      type: "security",
+      title: "Agent-Fehler priorisiert beheben",
+      why: `Es liegen ${errorCount} Fehlerhinweise auf den zugeordneten RMM-Agents vor.`,
+    });
+  }
+  if (warningCount > 0) {
+    hints.push({
+      type: "lifecycle",
+      title: "Agent-Warnungen prüfen",
+      why: `Es liegen ${warningCount} Warnhinweise auf den zugeordneten RMM-Agents vor.`,
+    });
+  }
+  if (effectiveOpenUpdates > 0) {
+    hints.push({
+      type: "security",
+      title: "Patch-Backlog abbauen",
+      why: `Offene Updates: Windows ${windowsUpdates}, 3rd-Party ${thirdPartyUpdates}, CVE-bezogen ${openCves}.`,
+    });
+  }
+  if (osExpiredCount > 0) {
+    hints.push({
+      type: "lifecycle",
+      title: "OS-Migration sofort planen",
+      why: `${osExpiredCount} Systeme sind außerhalb des Supports (EOL überschritten).`,
+    });
+  } else if (osEolSoonCount > 0) {
+    hints.push({
+      type: "lifecycle",
+      title: "OS-Upgrade-Roadmap festlegen",
+      why: `${osEolSoonCount} Systeme erreichen innerhalb von 12 Monaten das Supportende.`,
+    });
+  }
+  return hints.slice(0, 6);
+};
+
 const PriorityBar = ({ item }) => {
   const tier = getPriorityTier(item);
   const activeClass =
@@ -1104,6 +1154,17 @@ export default function CustomerDevelopmentView() {
     detailData?.workSummary?.summary,
     detailData?.workSummary?.items || []
   );
+  const infraActionHints = useMemo(() => buildInfraActionHints(detailData || {}), [detailData]);
+  const overviewBusinessRecommendations = useMemo(() => {
+    const source = detailData?.recommendations || detailData?.topRecommendations || [];
+    if (!Array.isArray(source)) return [];
+    return source
+      .filter((rec) => {
+        const recType = String(rec?.type || "").toLowerCase();
+        return recType !== "security" && recType !== "lifecycle";
+      })
+      .slice(0, 3);
+  }, [detailData]);
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       {detailModal.open ? (
@@ -1350,17 +1411,69 @@ export default function CustomerDevelopmentView() {
                       <div className="mt-2">
                         <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Empfehlungen</p>
                         <div className="mt-1 space-y-1">
-                          {(detailData.recommendations || detailData.topRecommendations || []).slice(0, 3).map((rec, idx) => (
+                          {overviewBusinessRecommendations.map((rec, idx) => (
                             <p key={`${rec?.title || "r"}-${idx}`} className="text-[11px] text-sand-700">
                               <span className="font-semibold">{rec?.title || "Empfehlung"}:</span>{" "}
                               {compactWorkSnippet(rec?.why || "", 120)}
                             </p>
                           ))}
-                          {!(detailData.recommendations || detailData.topRecommendations || []).length ? (
+                          {!overviewBusinessRecommendations.length ? (
                             <p className="text-[10px] text-sand-500">Keine Empfehlungen vorhanden.</p>
                           ) : null}
                         </div>
                       </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Handlungsempfehlungen</p>
+                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+                      {infraActionHints.length ? (
+                        infraActionHints.map((rec, idx) => {
+                          const recType = String(rec?.type || "").toLowerCase();
+                          const isSecurity = recType === "security";
+                          const isLifecycle = recType === "lifecycle";
+                          const RecIcon = isSecurity ? Shield : isLifecycle ? Clock3 : AlertTriangle;
+                          const typeClass = isSecurity
+                            ? "border-rose-200 bg-rose-50 text-rose-700"
+                            : isLifecycle
+                              ? "border-amber-200 bg-amber-50 text-amber-700"
+                              : "border-sand-200 bg-sand-100 text-sand-700";
+                          const cardClass = isSecurity
+                            ? "border-rose-200"
+                            : isLifecycle
+                              ? "border-amber-200"
+                              : "border-sand-200";
+                          const typeLabel = isSecurity ? "Security" : isLifecycle ? "Lifecycle" : "Hinweis";
+                          return (
+                            <div
+                              key={`${rec?.title || "infra-rec"}-${idx}`}
+                              className={`rounded-xl border bg-white p-2.5 ${cardClass}`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex min-w-0 items-start gap-2">
+                                  <div className={`mt-0.5 rounded-lg border p-1 ${typeClass}`}>
+                                    <RecIcon size={13} />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-semibold text-sand-900 leading-5">
+                                      {rec?.title || "Empfehlung"}
+                                    </p>
+                                  </div>
+                                </div>
+                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${typeClass}`}>
+                                  {typeLabel}
+                                </span>
+                              </div>
+                              <p className="mt-1.5 text-[11px] leading-5 text-sand-600">
+                                {rec?.why || ""}
+                              </p>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <p className="text-xs text-sand-500">Keine akuten Infrastruktur-Maßnahmen erkannt.</p>
+                      )}
                     </div>
                   </div>
 
@@ -1507,57 +1620,6 @@ export default function CustomerDevelopmentView() {
                           <p className="text-xs text-amber-800">{detailData.infra.rmmMappingHint}</p>
                         </div>
                       ) : null}
-                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Handlungsempfehlungen</p>
-                        <div className="mt-2 grid gap-2 md:grid-cols-2">
-                          {(detailData.infraActionHints || []).length ? (
-                            (detailData.infraActionHints || []).map((rec, idx) => {
-                              const recType = String(rec?.type || "").toLowerCase();
-                              const isSecurity = recType === "security";
-                              const isLifecycle = recType === "lifecycle";
-                              const RecIcon = isSecurity ? Shield : isLifecycle ? Clock3 : AlertTriangle;
-                              const typeClass = isSecurity
-                                ? "border-rose-200 bg-rose-50 text-rose-700"
-                                : isLifecycle
-                                  ? "border-amber-200 bg-amber-50 text-amber-700"
-                                  : "border-sand-200 bg-sand-100 text-sand-700";
-                              const cardClass = isSecurity
-                                ? "border-rose-200"
-                                : isLifecycle
-                                  ? "border-amber-200"
-                                  : "border-sand-200";
-                              const typeLabel = isSecurity ? "Security" : isLifecycle ? "Lifecycle" : "Hinweis";
-                              return (
-                                <div
-                                  key={`${rec?.title || "infra-rec"}-${idx}`}
-                                  className={`rounded-xl border bg-white p-2.5 ${cardClass}`}
-                                >
-                                  <div className="flex items-start justify-between gap-2">
-                                    <div className="flex min-w-0 items-start gap-2">
-                                      <div className={`mt-0.5 rounded-lg border p-1 ${typeClass}`}>
-                                        <RecIcon size={13} />
-                                      </div>
-                                      <div className="min-w-0">
-                                        <p className="text-xs font-semibold text-sand-900 leading-5">
-                                          {rec?.title || "Empfehlung"}
-                                        </p>
-                                      </div>
-                                    </div>
-                                    <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${typeClass}`}>
-                                      {typeLabel}
-                                    </span>
-                                  </div>
-                                  <p className="mt-1.5 text-[11px] leading-5 text-sand-600">
-                                    {rec?.why || ""}
-                                  </p>
-                                </div>
-                              );
-                            })
-                          ) : (
-                            <p className="text-xs text-sand-500">Keine akuten Infrastruktur-Maßnahmen erkannt.</p>
-                          )}
-                        </div>
-                      </div>
                       <div className="space-y-2">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agenten</p>
                         {(detailData.managedInfrastructureDevices || []).length ? (
