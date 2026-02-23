@@ -5,6 +5,7 @@ import re
 import threading
 import time
 import unicodedata
+import ipaddress
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
@@ -50,6 +51,21 @@ BYPASS_HEADER_VALUE = str(os.environ.get("META_HUB_BYPASS_VALUE") or "1").strip(
 INTERNAL_TOKEN = str(os.environ.get("META_HUB_INTERNAL_TOKEN") or "").strip()
 INTERNAL_TOKEN_HEADER = str(os.environ.get("META_HUB_INTERNAL_TOKEN_HEADER") or "X-Meta-Hub-Token").strip() or "X-Meta-Hub-Token"
 RMM_SNAPSHOT_TIMEOUT_SECONDS = float(os.environ.get("META_HUB_RMM_TIMEOUT_SECONDS") or "30")
+MAC_VENDOR_LOOKUP_ENABLED = _to_bool(os.environ.get("META_HUB_MAC_VENDOR_LOOKUP_ENABLED"), default=True)
+MAC_VENDOR_API_TEMPLATE = str(
+    os.environ.get("META_HUB_MAC_VENDOR_API_TEMPLATE") or "https://api.macvendors.com/{mac}"
+).strip()
+MAC_VENDOR_TIMEOUT_SECONDS = float(os.environ.get("META_HUB_MAC_VENDOR_TIMEOUT_SECONDS") or "1.8")
+MAC_VENDOR_MAX_LOOKUPS_PER_REFRESH = _to_positive_int(
+    os.environ.get("META_HUB_MAC_VENDOR_MAX_LOOKUPS_PER_REFRESH"),
+    default=30,
+    minimum=0,
+)
+MAC_VENDOR_CACHE_TTL_MS = _to_positive_int(
+    os.environ.get("META_HUB_MAC_VENDOR_CACHE_TTL_SECONDS"),
+    default=30 * 24 * 60 * 60,
+    minimum=60,
+) * 1000
 
 if not logging.getLogger().handlers:
     logging.basicConfig(
@@ -72,6 +88,7 @@ _state: Dict[str, Any] = {
     "lastError": "",
     "refreshIntervalSeconds": REFRESH_INTERVAL_SECONDS,
 }
+_mac_vendor_cache: Dict[str, Dict[str, Any]] = {}
 
 
 class RefreshRequest(BaseModel):
@@ -758,6 +775,357 @@ def _agent_to_managed_device(agent: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+DISCOVERY_OUI_VENDOR_MAP: Dict[str, str] = {
+    "B827EB": "Raspberry Pi",
+    "D850E6": "Ubiquiti",
+    "F09FC2": "Ubiquiti",
+    "001B63": "Cisco",
+    "000C29": "VMware",
+    "005056": "VMware",
+    "3CD92B": "HPE",
+    "001560": "HP",
+    "001C42": "Parallels",
+    "F4EC38": "Netgear",
+    "001D7E": "Fortinet",
+    "AC9E17": "MikroTik",
+    "2CF05D": "QNAP",
+    "001132": "Synology",
+}
+
+
+def _normalize_discovery_mac(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = text.strip("[](){}<>,;")
+    if re.fullmatch(r"[0-9a-f]{2}(?:[:-][0-9a-f]{2}){5}", text):
+        return text.replace("-", ":")
+    if re.fullmatch(r"[0-9a-f]{4}(?:\\.[0-9a-f]{4}){2}", text):
+        compact = text.replace(".", "")
+        return ":".join(compact[i : i + 2] for i in range(0, 12, 2))
+    compact = re.sub(r"[^0-9a-f]", "", text)
+    if len(compact) == 12:
+        return ":".join(compact[i : i + 2] for i in range(0, 12, 2))
+    return ""
+
+
+def _normalize_discovery_vendor(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if _dev_normalize_text(text) in {"n a", "na", "unknown", "unbekannt", "none", "null", "kein"}:
+        return ""
+    return text
+
+
+def _mac_oui_prefix(mac: str) -> str:
+    compact = "".join(ch for ch in str(mac or "").upper() if ch in "0123456789ABCDEF")
+    return compact[:6] if len(compact) >= 6 else ""
+
+
+def _extract_vendor_from_api_payload(payload: Any) -> str:
+    if isinstance(payload, str):
+        return _normalize_discovery_vendor(payload)
+    if isinstance(payload, list):
+        for item in payload:
+            vendor = _extract_vendor_from_api_payload(item)
+            if vendor:
+                return vendor
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    for key in (
+        "result",
+        "data",
+        "vendor",
+        "manufacturer",
+        "company",
+        "organization_name",
+        "org",
+        "name",
+    ):
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if isinstance(value, (dict, list)):
+            nested_vendor = _extract_vendor_from_api_payload(value)
+            if nested_vendor:
+                return nested_vendor
+            continue
+        vendor = _normalize_discovery_vendor(value)
+        if vendor:
+            return vendor
+    return ""
+
+
+def _lookup_vendor_from_public_api(mac: str, lookup_state: Optional[Dict[str, int]] = None) -> str:
+    if not MAC_VENDOR_LOOKUP_ENABLED:
+        return ""
+    normalized_mac = _normalize_discovery_mac(mac)
+    if not normalized_mac:
+        return ""
+    oui = _mac_oui_prefix(normalized_mac)
+    if not oui:
+        return ""
+
+    now_ms = int(time.time() * 1000)
+    cache_key = oui
+    cached = _mac_vendor_cache.get(cache_key)
+    if isinstance(cached, dict):
+        cached_at = _safe_int(cached.get("cachedAt"), default=0)
+        ttl_ms = _safe_int(cached.get("ttlMs"), default=MAC_VENDOR_CACHE_TTL_MS)
+        if cached_at > 0 and ttl_ms > 0 and (now_ms - cached_at) < ttl_ms:
+            return _normalize_discovery_vendor(cached.get("vendor"))
+
+    if isinstance(lookup_state, dict):
+        calls = _safe_int(lookup_state.get("calls"), default=0)
+        limit = _safe_int(lookup_state.get("limit"), default=MAC_VENDOR_MAX_LOOKUPS_PER_REFRESH)
+        if limit >= 0 and calls >= limit:
+            return ""
+        lookup_state["calls"] = calls + 1
+
+    template = str(MAC_VENDOR_API_TEMPLATE or "").strip()
+    if not template:
+        return ""
+    if "{mac}" in template:
+        url = template.replace("{mac}", normalized_mac)
+    else:
+        url = f"{template.rstrip('/')}/{normalized_mac}"
+
+    vendor = ""
+    ttl_ms = MAC_VENDOR_CACHE_TTL_MS
+    try:
+        response = requests.get(
+            url,
+            timeout=max(0.3, float(MAC_VENDOR_TIMEOUT_SECONDS or 1.8)),
+            headers={"User-Agent": "QT-MetaHub/1.0"},
+        )
+        if response.ok:
+            content_type = str(response.headers.get("content-type") or "").lower()
+            if "json" in content_type:
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = None
+                vendor = _extract_vendor_from_api_payload(payload)
+            else:
+                vendor = _normalize_discovery_vendor(response.text)
+        else:
+            ttl_ms = 6 * 60 * 60 * 1000
+    except Exception:
+        ttl_ms = 60 * 60 * 1000
+
+    _mac_vendor_cache[cache_key] = {
+        "cachedAt": now_ms,
+        "vendor": vendor,
+        "ttlMs": ttl_ms if vendor else min(ttl_ms, 6 * 60 * 60 * 1000),
+    }
+    return vendor
+
+
+def _normalize_discovery_device_type(value: Any) -> str:
+    normalized = _dev_normalize_text(value).replace(" ", "_")
+    if not normalized:
+        return "unknown"
+    if any(token in normalized for token in ("firewall", "fortigate", "pfsense", "sophos", "utm")):
+        return "firewall"
+    if "switch" in normalized:
+        return "switch"
+    if any(token in normalized for token in ("router", "gateway")):
+        return "router"
+    if any(token in normalized for token in ("access_point", "wlan", "wifi", "hotspot")):
+        return "access_point"
+    if any(token in normalized for token in ("printer", "drucker", "laserjet", "xerox", "canon", "kyocera", "brother")):
+        return "printer"
+    if any(token in normalized for token in ("nas", "synology", "qnap")):
+        return "nas"
+    if any(token in normalized for token in ("server", "dc", "rds", "sql", "esxi", "hyper_v")):
+        return "server"
+    if any(token in normalized for token in ("workstation", "desktop", "laptop", "notebook", "client", "pc")):
+        return "workstation"
+    if any(token in normalized for token in ("iot", "camera", "sensor", "door")):
+        return "iot"
+    return "unknown"
+
+
+def _normalize_discovery_active(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return True
+        return normalized not in {"0", "false", "no", "off", "inactive"}
+    return bool(value)
+
+
+def _discovery_text_blob(row: Dict[str, Any]) -> str:
+    evidence = row.get("evidence") if isinstance(row.get("evidence"), list) else []
+    parts = [
+        str(row.get("hostname") or ""),
+        str(row.get("deviceType") or ""),
+        str(row.get("vendor") or ""),
+        str(row.get("protocol") or ""),
+        " ".join(str(item or "") for item in evidence),
+    ]
+    return _dev_normalize_text(" ".join(parts))
+
+
+def _infer_discovery_vendor(row: Dict[str, Any], lookup_state: Optional[Dict[str, int]] = None) -> str:
+    existing_vendor = _normalize_discovery_vendor(row.get("vendor"))
+    if existing_vendor:
+        return existing_vendor
+    mac = _normalize_discovery_mac(row.get("mac"))
+    if mac:
+        oui = _mac_oui_prefix(mac)
+        if oui and oui in DISCOVERY_OUI_VENDOR_MAP:
+            return DISCOVERY_OUI_VENDOR_MAP[oui]
+        api_vendor = _lookup_vendor_from_public_api(mac, lookup_state=lookup_state)
+        if api_vendor:
+            return api_vendor
+    text = _discovery_text_blob(row)
+    vendor_hints = [
+        ("fortinet", "Fortinet"),
+        ("sophos", "Sophos"),
+        ("ubiquiti", "Ubiquiti"),
+        ("unifi", "Ubiquiti"),
+        ("cisco", "Cisco"),
+        ("mikrotik", "MikroTik"),
+        ("synology", "Synology"),
+        ("qnap", "QNAP"),
+        ("hewlett packard", "HPE"),
+        ("hpe", "HPE"),
+        (" hp", "HP"),
+        ("xerox", "Xerox"),
+        ("kyocera", "Kyocera"),
+        ("canon", "Canon"),
+        ("brother", "Brother"),
+    ]
+    for hint, vendor_name in vendor_hints:
+        if hint in text:
+            return vendor_name
+    hostname = str(row.get("hostname") or "").strip().upper()
+    if re.match(r"^HP[0-9A-F]{4,}", hostname):
+        return "HP"
+    if hostname.startswith("NPI"):
+        return "Kyocera"
+    return ""
+
+
+def _infer_discovery_device_type(row: Dict[str, Any]) -> str:
+    existing_type = _normalize_discovery_device_type(row.get("deviceType"))
+    if existing_type != "unknown":
+        return existing_type
+    text = _discovery_text_blob(row)
+    if any(token in text for token in ("firewall", "fortigate", "pfsense", "sophos", "utm")):
+        return "firewall"
+    if any(token in text for token in (" switch ", "switch", "core sw", "managed switch")):
+        return "switch"
+    if any(token in text for token in ("router", "gateway", "mikrotik")):
+        return "router"
+    if any(token in text for token in ("access point", "wifi", "wlan", "unifi", "uck")):
+        return "access_point"
+    if any(token in text for token in ("printer", "drucker", "laserjet", "xerox", "canon", "kyocera", "brother", "npi", "km9")):
+        return "printer"
+    if any(token in text for token in (" nas ", "nas ", "synology", "qnap")):
+        return "nas"
+    if any(token in text for token in ("server", " dc ", " rds ", " sql ", "esxi", "hyper v")):
+        return "server"
+    if any(token in text for token in ("workstation", "desktop", "laptop", "notebook", " pc ", "pc ", " win ", " nb ")):
+        return "workstation"
+    if any(token in text for token in ("camera", "sensor", "door", "iot")):
+        return "iot"
+    return "unknown"
+
+
+def _sanitize_discovery_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    active_raw = row.get("active")
+    if active_raw is None:
+        active_raw = row.get("is_active")
+    sanitized: Dict[str, Any] = {
+        "source": str(row.get("source") or "discovery").strip() or "discovery",
+        "hostname": str(row.get("hostname") or "").strip(),
+        "ip": str(row.get("ip") or "").strip(),
+        "mac": _normalize_discovery_mac(row.get("mac")),
+        "protocol": str(row.get("protocol") or "").strip().lower(),
+        "deviceType": _normalize_discovery_device_type(row.get("deviceType")),
+        "vendor": _normalize_discovery_vendor(row.get("vendor")),
+        "confidence": max(0, min(100, _safe_int(row.get("confidence"), default=0))),
+        "evidence": [str(item).strip() for item in (row.get("evidence") if isinstance(row.get("evidence"), list) else []) if str(item).strip()],
+        "managed": bool(row.get("managed")),
+        "active": _normalize_discovery_active(active_raw),
+        "lastSeenAt": max(0, _safe_int(row.get("lastSeenAt"), default=0)),
+    }
+    return sanitized
+
+
+def _merge_discovery_rows(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+    incoming_seen = max(0, _safe_int(incoming.get("lastSeenAt"), default=0))
+    existing_seen = max(0, _safe_int(existing.get("lastSeenAt"), default=0))
+    is_newer = incoming_seen >= existing_seen
+
+    def _pick_text(key: str) -> None:
+        current = str(merged.get(key) or "").strip()
+        candidate = str(incoming.get(key) or "").strip()
+        if not candidate:
+            return
+        if not current or (is_newer and len(candidate) >= len(current)):
+            merged[key] = candidate
+
+    for key in ("hostname", "ip", "mac", "vendor", "source"):
+        _pick_text(key)
+    protocol_priority = {"snmp": 3, "wmi": 2, "icmp": 1, "ping": 1, "": 0}
+    current_proto = str(merged.get("protocol") or "").strip().lower()
+    candidate_proto = str(incoming.get("protocol") or "").strip().lower()
+    if protocol_priority.get(candidate_proto, 0) > protocol_priority.get(current_proto, 0):
+        merged["protocol"] = candidate_proto
+
+    current_type = _normalize_discovery_device_type(merged.get("deviceType"))
+    candidate_type = _normalize_discovery_device_type(incoming.get("deviceType"))
+    if current_type == "unknown" and candidate_type != "unknown":
+        merged["deviceType"] = candidate_type
+
+    merged["managed"] = bool(merged.get("managed")) or bool(incoming.get("managed"))
+    current_active = _normalize_discovery_active(merged.get("active"))
+    incoming_active = _normalize_discovery_active(incoming.get("active"))
+    if incoming_seen > existing_seen:
+        merged["active"] = incoming_active
+    elif incoming_seen < existing_seen:
+        merged["active"] = current_active
+    else:
+        merged["active"] = current_active and incoming_active
+    merged["confidence"] = max(
+        max(0, min(100, _safe_int(merged.get("confidence"), default=0))),
+        max(0, min(100, _safe_int(incoming.get("confidence"), default=0))),
+    )
+    merged["lastSeenAt"] = max(existing_seen, incoming_seen)
+
+    evidence_values: List[str] = []
+    for evidence_set in (merged.get("evidence"), incoming.get("evidence")):
+        if not isinstance(evidence_set, list):
+            continue
+        for item in evidence_set:
+            text = str(item or "").strip()
+            if text and text not in evidence_values:
+                evidence_values.append(text)
+    merged["evidence"] = evidence_values[:8]
+    return merged
+
+
+def _key_for_discovery_row(row: Dict[str, Any]) -> str:
+    ip = str(row.get("ip") or "").strip().lower()
+    mac = _normalize_discovery_mac(row.get("mac"))
+    host = _dev_normalize_text(row.get("hostname"))
+    if mac:
+        return f"mac:{mac}"
+    if ip:
+        return f"ip:{ip}"
+    if host:
+        return f"host:{host}"
+    return ""
+
+
 def _history_discovery_items_for_agent(
     rmm_snapshot: Dict[str, Any],
     agent_id: str,
@@ -792,32 +1160,58 @@ def _history_discovery_items_for_agent(
                 "confidence": _safe_int(item.get("confidence"), default=0),
                 "evidence": item.get("evidence") if isinstance(item.get("evidence"), list) else [],
                 "managed": bool(item.get("managed")),
+                "active": True,
                 "lastSeenAt": _safe_int(item.get("seen_at"), default=0),
             }
         )
     return out
 
 
-def _merge_discovered_devices(base: List[Dict[str, Any]], incoming: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
-
-    def _key(row: Dict[str, Any]) -> str:
-        ip = str(row.get("ip") or "").strip().lower()
-        mac = str(row.get("mac") or "").strip().lower()
-        host = str(row.get("hostname") or "").strip().lower()
-        return ip or mac or host
-
-    for row in list(base or []) + list(incoming or []):
-        if not isinstance(row, dict):
+def _merge_discovered_devices(
+    base: List[Dict[str, Any]],
+    incoming: List[Dict[str, Any]],
+    *,
+    lookup_state: Optional[Dict[str, int]] = None,
+) -> List[Dict[str, Any]]:
+    merged_by_key: Dict[str, Dict[str, Any]] = {}
+    fallback_index = 0
+    for raw_row in list(base or []) + list(incoming or []):
+        if not isinstance(raw_row, dict):
             continue
-        key = _key(row)
+        row = _sanitize_discovery_row(raw_row)
+        key = _key_for_discovery_row(row)
         if not key:
-            continue
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(row)
+            fallback_index += 1
+            key = f"row:{fallback_index}"
+        existing = merged_by_key.get(key)
+        if existing is None:
+            merged_by_key[key] = row
+        else:
+            merged_by_key[key] = _merge_discovery_rows(existing, row)
+
+    out: List[Dict[str, Any]] = []
+    for row in merged_by_key.values():
+        enriched = dict(row)
+        enriched["vendor"] = _infer_discovery_vendor(enriched, lookup_state=lookup_state)
+        enriched["deviceType"] = _infer_discovery_device_type(enriched)
+        confidence = max(0, min(100, _safe_int(enriched.get("confidence"), default=0)))
+        if enriched["deviceType"] != "unknown":
+            confidence = max(confidence, 55)
+        if enriched["vendor"]:
+            confidence = max(confidence, 45)
+        enriched["confidence"] = confidence
+        out.append(enriched)
+
+    def _sort_key(row: Dict[str, Any]) -> Tuple[int, int, int, str, str]:
+        ip_text = str(row.get("ip") or "").strip()
+        active_rank = 0 if _normalize_discovery_active(row.get("active")) else 1
+        try:
+            ip_value = int(ipaddress.ip_address(ip_text))
+            return (active_rank, 0, ip_value, str(row.get("hostname") or "").lower(), str(row.get("mac") or "").lower())
+        except Exception:
+            return (active_rank, 1, 0, str(row.get("hostname") or "").lower(), str(row.get("mac") or "").lower())
+
+    out.sort(key=_sort_key)
     return out
 
 
@@ -849,6 +1243,10 @@ def _enrich_payload_with_rmm(raw: Dict[str, Any], rmm_snapshot: Dict[str, Any]) 
 
     patched_contexts: List[Dict[str, Any]] = []
     total_matched_agents = 0
+    vendor_lookup_state: Dict[str, int] = {
+        "calls": 0,
+        "limit": max(0, int(MAC_VENDOR_MAX_LOOKUPS_PER_REFRESH)),
+    }
     for context in contexts:
         if not isinstance(context, dict):
             continue
@@ -886,9 +1284,14 @@ def _enrich_payload_with_rmm(raw: Dict[str, Any], rmm_snapshot: Dict[str, Any]) 
             if not agent_id:
                 continue
             history_discovery.extend(_history_discovery_items_for_agent(rmm_snapshot, agent_id))
-        discovered_devices = _merge_discovered_devices(discovered_devices, history_discovery)
-        discovered_unmanaged = sum(1 for item in discovered_devices if not bool((item or {}).get("managed")))
-        discovered_total = len(discovered_devices) if discovered_devices else managed_count
+        discovered_devices = _merge_discovered_devices(
+            discovered_devices,
+            history_discovery,
+            lookup_state=vendor_lookup_state,
+        )
+        active_discovered_devices = [item for item in discovered_devices if _normalize_discovery_active((item or {}).get("active"))]
+        discovered_unmanaged = sum(1 for item in active_discovered_devices if not bool((item or {}).get("managed")))
+        discovered_total = len(active_discovered_devices) if active_discovered_devices else managed_count
         coverage_ratio = round((managed_count / discovered_total), 2) if discovered_total > 0 else 0.0
         unmanaged_count = max(discovered_total - managed_count, 0) + discovered_unmanaged
 
@@ -934,6 +1337,7 @@ def _enrich_payload_with_rmm(raw: Dict[str, Any], rmm_snapshot: Dict[str, Any]) 
 
         row["infra"] = infra
         row["managedInfrastructureDevices"] = managed_devices
+        row["discoveredInfrastructureDevices"] = discovered_devices
         row["infrastructureDevices"] = managed_devices + discovered_devices
 
         source = row.get("source") if isinstance(row.get("source"), dict) else {}

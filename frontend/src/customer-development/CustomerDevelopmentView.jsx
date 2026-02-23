@@ -60,16 +60,25 @@ const ratioToPercent = (ratio) => {
 const getPriorityTier = (item) => {
   const flags = normalizeContractFlags(item);
   const isRegieCustomer = flags.includes("regie") && !Boolean(item?.hasMaintenanceContract);
+  const backendPriority = Number(item?.priority);
   const risk = Number(item?.riskScore || 0);
-  const trend = Number(item?.revenueTrendPct || 0);
-  const revenueCurrent = Number(item?.revenueCurrentYearEur || 0);
-  const daysSince = Number(item?.daysSinceInteraction || 0);
   const contactDue = Boolean(item?.contactDue);
-  const daysSinceLastInvoice = Number(item?.daysSinceLastInvoice || 0);
   const invoiceActivityDue = Boolean(item?.invoiceActivityDue);
+  const score = Number.isFinite(backendPriority)
+    ? backendPriority
+    : Math.max(
+        0,
+        Math.min(
+          100,
+          risk +
+            (contactDue ? 12 : 0) +
+            (invoiceActivityDue ? 16 : 0) +
+            (!Boolean(item?.hasMaintenanceContract) && !isRegieCustomer ? 6 : 0)
+        )
+      );
 
   if (isRegieCustomer) {
-    if (contactDue && (daysSince >= 120 || daysSinceLastInvoice >= 120 || invoiceActivityDue || risk >= 70)) {
+    if (score >= 70 || (contactDue && invoiceActivityDue && risk >= 60)) {
       return {
         key: "amber",
         index: 1,
@@ -85,17 +94,7 @@ const getPriorityTier = (item) => {
     };
   }
 
-  if (
-    contactDue &&
-    (
-      daysSince >= 60 ||
-      daysSinceLastInvoice >= 75 ||
-      invoiceActivityDue ||
-      trend < -8 ||
-      revenueCurrent <= 1000 ||
-      risk >= 60
-    )
-  ) {
+  if (score >= 70 || ((contactDue || invoiceActivityDue) && risk >= 55)) {
     return {
       key: "red",
       index: 2,
@@ -103,7 +102,7 @@ const getPriorityTier = (item) => {
       badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
     };
   }
-  if (!contactDue && revenueCurrent > 0 && trend >= 0 && risk < 45) {
+  if (score < 40 && !contactDue && !invoiceActivityDue && risk < 45) {
     return {
       key: "green",
       index: 0,
@@ -152,24 +151,18 @@ const inventorySummary = (item) => {
 };
 
 const neglectScore = (item) => {
-  const daysSinceInteraction = Number(item?.daysSinceInteraction || 0);
-  const daysSinceInvoice = Number(item?.daysSinceLastInvoice || 0);
-  const trend = Number(item?.revenueTrendPct || 0);
-  const infraRisk = Number(item?.infrastructureRisk || 0);
+  const backendPriority = Number(item?.priority);
   const risk = Number(item?.riskScore || 0);
+  const contactDue = Boolean(item?.contactDue);
+  const invoiceDue = Boolean(item?.invoiceActivityDue);
   const hasContract = Boolean(item?.hasMaintenanceContract);
   const flags = normalizeContractFlags(item);
   const isRegieCustomer = flags.includes("regie") && !hasContract;
-  let score = 0;
-  if (Boolean(item?.contactDue)) score += 30;
-  score += Math.min(28, Math.max(0, daysSinceInteraction) * 0.4);
-  score += Math.min(22, Math.max(0, daysSinceInvoice - 30) * 0.35);
-  if (Boolean(item?.invoiceActivityDue)) score += 18;
-  if (!hasContract && !isRegieCustomer) score += 10;
-  if (isRegieCustomer) score -= 18;
-  if (trend < 0) score += Math.min(14, Math.abs(trend) * 0.25);
-  score += Math.min(14, infraRisk * 0.2);
-  score += Math.min(10, risk * 0.1);
+  let score = Number.isFinite(backendPriority) ? backendPriority : risk;
+  if (contactDue) score += 8;
+  if (invoiceDue) score += 12;
+  if (!hasContract && !isRegieCustomer) score += 6;
+  if (isRegieCustomer) score -= 14;
   return Math.round(Math.max(0, Math.min(100, score)));
 };
 
@@ -326,6 +319,66 @@ const compactWorkSnippet = (value, maxLength = 220) => {
   return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 };
 
+const deriveWorkHighlights = (summary, items, maxItems = 5) => {
+  const out = [];
+  const seen = new Set();
+  const push = (value) => {
+    const cleaned = compactWorkSnippet(value, 150);
+    const key = cleaned.toLowerCase();
+    if (!cleaned || seen.has(key)) return;
+    seen.add(key);
+    out.push(cleaned);
+  };
+  String(summary || "")
+    .split(/[;•\n]+/g)
+    .map((entry) => normalizeWorkSnippet(entry))
+    .forEach((entry) => push(entry));
+  (items || []).slice(0, 5).forEach((row) => {
+    (row?.positionSnippets || []).slice(0, 2).forEach((snippet) => push(snippet));
+  });
+  if (!out.length) push("Keine aussagekräftigen Leistungsdetails vorhanden.");
+  return out.slice(0, Math.max(1, maxItems));
+};
+
+const signalScore = (signal) => {
+  const text = String(signal || "").toLowerCase();
+  if (
+    text.includes("lange ohne") ||
+    text.includes("kontaktfällig") ||
+    text.includes("kontaktfaellig") ||
+    text.includes("veraltete") ||
+    text.includes("offline-agents")
+  ) {
+    return 3;
+  }
+  if (
+    text.includes("offene updates") ||
+    text.includes("warnungen") ||
+    text.includes("kein wartungs") ||
+    text.includes("niedrige rmm")
+  ) {
+    return 2;
+  }
+  return 1;
+};
+
+const deriveDisplaySignals = (item, maxItems = 4) => {
+  const raw = [...(item?.reasons || item?.signals || [])]
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .filter((entry) => !/aktive kundeninteraktion/i.test(entry));
+  const unique = [];
+  const seen = new Set();
+  raw.forEach((entry) => {
+    const key = entry.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    unique.push(entry);
+  });
+  unique.sort((a, b) => signalScore(b) - signalScore(a));
+  return unique.slice(0, Math.max(1, maxItems));
+};
+
 const classifyWorkSnippet = (value) => {
   const text = String(value || "").toLowerCase();
   if (text.includes("sicherung") || text.includes("backup")) return "Backup";
@@ -419,16 +472,97 @@ const getDiscoveryIcon = (device) => {
   const deviceType = String(device?.deviceType || "").toLowerCase();
   const protocol = String(device?.protocol || "").toLowerCase();
   if (deviceType.includes("printer")) return Printer;
+  if (deviceType.includes("server") || deviceType.includes("nas")) return Server;
+  if (
+    deviceType.includes("workstation") ||
+    deviceType.includes("pc") ||
+    deviceType.includes("desktop") ||
+    deviceType.includes("laptop")
+  ) {
+    return Monitor;
+  }
   if (
     deviceType.includes("firewall") ||
     deviceType.includes("router") ||
     deviceType.includes("switch") ||
     deviceType.includes("gateway") ||
+    deviceType.includes("access_point") ||
+    deviceType.includes("access point") ||
+    deviceType.includes("wlan") ||
+    deviceType.includes("wifi") ||
     protocol.includes("snmp")
   ) {
     return Router;
   }
   return Cpu;
+};
+
+const formatDiscoveryTypeLabel = (value) => {
+  const type = String(value || "").toLowerCase().trim();
+  if (!type) return "Unknown";
+  const labels = {
+    firewall: "Firewall",
+    switch: "Switch",
+    router: "Router",
+    access_point: "Access Point",
+    workstation: "PC",
+    server: "Server",
+    nas: "NAS",
+    printer: "Drucker",
+    iot: "IoT",
+    unknown: "Unknown",
+  };
+  if (labels[type]) return labels[type];
+  return type.replaceAll("_", " ");
+};
+
+const normalizeTextKey = (value) => String(value || "").trim().toLowerCase();
+
+const versionParts = (value) => {
+  const parts = String(value || "")
+    .match(/\d+/g)
+    ?.map((entry) => Number(entry))
+    .filter((entry) => Number.isFinite(entry));
+  return Array.isArray(parts) ? parts : [];
+};
+
+const isNewerVersion = (candidate, current) => {
+  const a = versionParts(candidate);
+  const b = versionParts(current);
+  if (!a.length || !b.length) {
+    const cand = String(candidate || "").trim();
+    const cur = String(current || "").trim();
+    return Boolean(cand) && Boolean(cur) && cand !== cur;
+  }
+  const maxLen = Math.max(a.length, b.length);
+  for (let index = 0; index < maxLen; index += 1) {
+    const left = a[index] || 0;
+    const right = b[index] || 0;
+    if (left > right) return true;
+    if (left < right) return false;
+  }
+  return false;
+};
+
+const latestFixedVersion = (finding) => {
+  const versions = Array.isArray(finding?.fixedVersions)
+    ? finding.fixedVersions.map((entry) => String(entry || "").trim()).filter(Boolean)
+    : [];
+  return versions.length ? versions[versions.length - 1] : "";
+};
+
+const maxCveScore = (finding) => {
+  const scores = (finding?.cves || [])
+    .map((entry) => Number(entry?.score))
+    .filter((entry) => Number.isFinite(entry));
+  if (!scores.length) return null;
+  return Math.max(...scores);
+};
+
+const cveStatusBadge = ({ hasFinding, updateAvailable, cveCount }) => {
+  if (updateAvailable) return "border-rose-200 bg-rose-50 text-rose-700";
+  if (hasFinding && cveCount > 0) return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-emerald-200 bg-emerald-50 text-emerald-700";
 };
 
 const LoadingProgress = ({ label, progress }) => (
@@ -503,6 +637,7 @@ export default function CustomerDevelopmentView() {
   });
   const [discoveryProgress, setDiscoveryProgress] = useState(0);
   const [expandedInfraAgents, setExpandedInfraAgents] = useState({});
+  const [expandedCveAgents, setExpandedCveAgents] = useState({});
   const [workItemsExpanded, setWorkItemsExpanded] = useState(false);
   const [cveProgress, setCveProgress] = useState(0);
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -741,7 +876,9 @@ export default function CustomerDevelopmentView() {
     if (detailTab === "infra") {
       const unmanaged = Number(detailData?.infra?.unmanagedCount || 0);
       const coveragePct = Math.round(ratioToPercent(detailData?.infra?.coverageRatio));
-      const discovered = Number((detailData?.discoveredInfrastructureDevices || []).length || 0);
+      const discovered = Number(
+        ((detailData?.discoveredInfrastructureDevices || []).filter((device) => device?.active !== false).length || 0)
+      );
       if (unmanaged > 0) {
         suggestions.push({
           label: `Unmanaged Geräte prüfen (${unmanaged})`,
@@ -1106,6 +1243,28 @@ export default function CustomerDevelopmentView() {
     runCveScan(false);
   }, [detailModal.open, detailModal.customerId, detailTab, cveScan.status]);
 
+  const cveOverview = useMemo(() => {
+    const agents = Array.isArray(cveScan.agents) ? cveScan.agents : [];
+    let findingPrograms = 0;
+    let totalCves = 0;
+    let updateCandidates = 0;
+    agents.forEach((agent) => {
+      const findings = Array.isArray(agent?.findings) ? agent.findings : [];
+      findings.forEach((finding) => {
+        findingPrograms += 1;
+        const cves = Array.isArray(finding?.cves) ? finding.cves : [];
+        totalCves += cves.length;
+        const latest = latestFixedVersion(finding);
+        if (latest) updateCandidates += 1;
+      });
+    });
+    return {
+      findingPrograms,
+      totalCves,
+      updateCandidates,
+    };
+  }, [cveScan.agents]);
+
   const grouped = useMemo(() => {
     const groups = { STABLE: [], POTENTIAL: [], ATTENTION: [], RISK: [], INACTIVE: [] };
     filteredContexts.forEach((item) => {
@@ -1154,6 +1313,11 @@ export default function CustomerDevelopmentView() {
     detailData?.workSummary?.summary,
     detailData?.workSummary?.items || []
   );
+  const workHighlights = useMemo(
+    () => deriveWorkHighlights(detailData?.workSummary?.summary, detailData?.workSummary?.items || [], 5),
+    [detailData?.workSummary?.summary, detailData?.workSummary?.items]
+  );
+  const detailSignals = useMemo(() => deriveDisplaySignals(detailData || {}, 5), [detailData]);
   const infraActionHints = useMemo(() => buildInfraActionHints(detailData || {}), [detailData]);
   const overviewBusinessRecommendations = useMemo(() => {
     const source = detailData?.recommendations || detailData?.topRecommendations || [];
@@ -1398,12 +1562,12 @@ export default function CustomerDevelopmentView() {
                       <div className="mt-2">
                         <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Signale</p>
                         <div className="mt-1 flex flex-wrap gap-1">
-                          {(detailData.reasons || detailData.signals || []).slice(0, 4).map((signal, idx) => (
+                          {detailSignals.map((signal, idx) => (
                             <span key={`${signal}-${idx}`} className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] text-sand-700">
                               {signal}
                             </span>
                           ))}
-                          {!(detailData.reasons || detailData.signals || []).length ? (
+                          {!detailSignals.length ? (
                             <span className="text-[10px] text-sand-500">Keine besonderen Signale.</span>
                           ) : null}
                         </div>
@@ -1503,12 +1667,14 @@ export default function CustomerDevelopmentView() {
                           </span>
                         ))}
                       </div>
-                      <p className="mt-1 text-[11px] text-sand-600">
-                        {compactWorkSnippet(
-                          String(detailData.workSummary?.summary || "").trim() || "Noch keine Zusammenfassung vorhanden.",
-                          220
-                        )}
-                      </p>
+                      <div className="mt-1.5 space-y-1">
+                        {workHighlights.map((line, idx) => (
+                          <p key={`work-highlight-${idx}`} className="flex items-start gap-1 text-[11px] leading-5 text-sand-700">
+                            <span className="mt-0.5 text-sand-400">•</span>
+                            <span>{line}</span>
+                          </p>
+                        ))}
+                      </div>
                     </div>
                     {workItemsExpanded ? (
                       <div className="mt-2 space-y-1.5">
@@ -1517,20 +1683,36 @@ export default function CustomerDevelopmentView() {
                           const snippets = (row.positionSnippets || [])
                             .map((snippet) => normalizeWorkSnippet(snippet))
                             .filter(Boolean);
-                          const lineSummary = compactWorkSnippet(
-                            snippets.slice(0, 2).join(" · ") || "Keine Positionsdetails vorhanden.",
-                            180
-                          );
+                          const categories = [...new Set(snippets.map((snippet) => classifyWorkSnippet(snippet)))].slice(0, 3);
                           return (
                           <div
                             key={`work-row-${row.invoiceId || idx}`}
-                            className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5"
+                            className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-2"
                           >
-                            <div className="grid items-center gap-1.5 md:grid-cols-[auto_auto_auto_minmax(0,1fr)]">
+                            <div className="flex flex-wrap items-center gap-1.5">
                               <span className="text-[11px] font-semibold text-sand-900">{invoiceLabel}</span>
-                              <span className="text-[10px] text-sand-600">{row.date || "n/a"}</span>
-                              <span className="text-[11px] font-semibold text-sand-800">{formatEur(row.amountEur)}</span>
-                              <p className="truncate text-[11px] text-sand-700">{lineSummary}</p>
+                              <span className="rounded-full border border-sand-200 bg-white px-1.5 py-0.5 text-[10px] text-sand-600">
+                                {row.date || "n/a"}
+                              </span>
+                              <span className="rounded-full border border-sand-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-sand-800">
+                                {formatEur(row.amountEur)}
+                              </span>
+                              {categories.map((category) => (
+                                <span
+                                  key={`${invoiceLabel}-${category}`}
+                                  className="rounded-full border border-sand-200 bg-white px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-sand-700"
+                                >
+                                  {category}
+                                </span>
+                              ))}
+                            </div>
+                            <div className="mt-1.5 space-y-1">
+                              {(snippets.length ? snippets : ["Keine Positionsdetails vorhanden."]).slice(0, 3).map((line, lineIdx) => (
+                                <p key={`${invoiceLabel}-line-${lineIdx}`} className="flex items-start gap-1 text-[11px] leading-5 text-sand-700">
+                                  <span className="mt-0.5 text-sand-400">•</span>
+                                  <span>{compactWorkSnippet(line, 200)}</span>
+                                </p>
+                              ))}
                             </div>
                           </div>
                         );
@@ -1600,6 +1782,12 @@ export default function CustomerDevelopmentView() {
                       ) : null}
                       {discoveryRun.message ? <p className="text-sm text-emerald-700">{discoveryRun.message}</p> : null}
                       {discoveryRun.error ? <p className="text-sm text-rose-600">{discoveryRun.error}</p> : null}
+                      {(() => {
+                        const activeDiscoveryDevices = (detailData?.discoveredInfrastructureDevices || []).filter(
+                          (device) => device?.active !== false
+                        );
+                        return (
+                          <>
                       <div className="grid gap-2 sm:grid-cols-2">
                         <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
                           <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agents</p>
@@ -1610,7 +1798,7 @@ export default function CustomerDevelopmentView() {
                         <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
                           <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Geräte</p>
                           <p className="text-xs font-semibold text-sand-800">
-                            {(detailData.discoveredInfrastructureDevices || []).length}
+                            {activeDiscoveryDevices.length}
                           </p>
                         </div>
                       </div>
@@ -1743,45 +1931,43 @@ export default function CustomerDevelopmentView() {
                       </div>
                       <div className="space-y-2 pt-1">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Geräte</p>
-                        {(detailData.discoveredInfrastructureDevices || []).length ? (
-                          (detailData.discoveredInfrastructureDevices || []).map((device, idx) => (
-                            <div key={`${device?.source || "d"}-${device?.hostname || idx}-${idx}`} className="rounded-xl border border-sand-200 bg-white p-2 text-xs text-sand-700">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <div className="h-7 w-7 rounded-lg border border-sand-200 bg-sand-50 text-sand-700 flex items-center justify-center shrink-0">
-                                    {(() => {
-                                      const DiscoveryIcon = getDiscoveryIcon(device);
-                                      return <DiscoveryIcon size={13} />;
-                                    })()}
-                                  </div>
-                                  <div className="min-w-0">
-                                    <p className="font-semibold text-sand-800 truncate text-xs">{device?.hostname || "Unbekanntes Gerät"}</p>
-                                    <p className="text-[10px] text-sand-500 truncate">
-                                      {device?.deviceType ? `Typ: ${String(device.deviceType)}` : "Typ: n/a"}
-                                      {device?.vendor ? ` · ${String(device.vendor)}` : ""}
-                                    </p>
-                                  </div>
+                        {activeDiscoveryDevices.length ? (
+                          activeDiscoveryDevices.map((device, idx) => (
+                            <div
+                              key={`${device?.ip || device?.mac || device?.hostname || idx}`}
+                              className="grid items-center gap-2 rounded-lg border border-sand-200 bg-white px-2 py-1.5 text-xs text-sand-700 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1.4fr)_minmax(0,1fr)]"
+                            >
+                              <div className="flex min-w-0 items-center gap-2">
+                                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-sand-200 bg-sand-50 text-sand-700">
+                                  {(() => {
+                                    const DiscoveryIcon = getDiscoveryIcon(device);
+                                    return <DiscoveryIcon size={12} />;
+                                  })()}
                                 </div>
-                                <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[9px] uppercase tracking-wide">
-                                  {device?.source || "Discovery"}
+                                <p className="truncate text-[11px] font-semibold text-sand-800">
+                                  {device?.hostname || device?.ip || "Unbekanntes Gerät"}
+                                </p>
+                                <span className="shrink-0 rounded-full border border-sand-200 bg-sand-50 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-sand-600">
+                                  {formatDiscoveryTypeLabel(device?.deviceType)}
                                 </span>
-                              </div>
-                              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-sand-600">
-                                <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">{device?.ip ? `IP ${device.ip}` : "IP n/a"}</span>
-                                {device?.mac ? <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">MAC {device.mac}</span> : null}
-                                {device?.protocol ? <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">{String(device.protocol).toUpperCase()}</span> : null}
-                                {typeof device?.confidence === "number" ? (
-                                  <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">
-                                    Confidence {Math.max(0, Math.min(100, Number(device.confidence || 0)))}%
+                                {device?.vendor ? (
+                                  <span className="shrink-0 rounded-full border border-sand-200 bg-sand-50 px-1.5 py-0.5 text-[9px] text-sand-600">
+                                    {String(device.vendor)}
                                   </span>
                                 ) : null}
                               </div>
-                              {Array.isArray(device?.evidence) && device.evidence.length ? (
-                                <p className="mt-1 text-[10px] text-sand-500">Hinweise: {device.evidence.slice(0, 4).join(", ")}</p>
-                              ) : null}
-                              <p className="mt-1 text-[10px] text-sand-500 inline-flex items-center gap-1">
-                                <Clock3 size={11} /> Last Seen: {formatDateTime(device?.lastSeenAt)}
-                              </p>
+                              <div className="truncate text-[10px] text-sand-600">
+                                {device?.ip ? `IP ${device.ip}` : "IP n/a"}
+                                {device?.mac ? ` · MAC ${device.mac}` : ""}
+                                {device?.protocol ? ` · ${String(device.protocol).toUpperCase()}` : ""}
+                              </div>
+                              <div className="truncate text-right text-[10px] text-sand-500">
+                                {device?.source || "Discovery"}
+                                {typeof device?.confidence === "number"
+                                  ? ` · ${Math.max(0, Math.min(100, Number(device.confidence || 0)))}%`
+                                  : ""}
+                                {device?.lastSeenAt ? ` · ${formatDateTime(device.lastSeenAt)}` : ""}
+                              </div>
                             </div>
                           ))
                         ) : (
@@ -1790,6 +1976,9 @@ export default function CustomerDevelopmentView() {
                           </p>
                         )}
                       </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   ) : null}
 
@@ -1827,9 +2016,26 @@ export default function CustomerDevelopmentView() {
                       {cveScan.error ? <p className="text-sm text-rose-600">{cveScan.error}</p> : null}
                       {cveScan.status === "ready" ? (
                         <div className="space-y-2">
+                          <div className="grid gap-2 sm:grid-cols-4">
+                            <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Geprüfte Software</p>
+                              <p className="text-sm font-semibold text-sand-800">{Number(cveScan.scannedSoftware || 0)}</p>
+                            </div>
+                            <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agents</p>
+                              <p className="text-sm font-semibold text-sand-800">{Number(cveScan.matchedAgents || 0)}</p>
+                            </div>
+                            <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Betroffene Programme</p>
+                              <p className="text-sm font-semibold text-amber-700">{cveOverview.findingPrograms}</p>
+                            </div>
+                            <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Updates möglich</p>
+                              <p className="text-sm font-semibold text-rose-700">{cveOverview.updateCandidates}</p>
+                            </div>
+                          </div>
                           <p className="text-xs text-sand-500">
-                            Geprüfte Software: {cveScan.scannedSoftware} · RMM Agents: {cveScan.matchedAgents}
-                            {cveScan.fromCache ? " · aus Cache" : " · live"}
+                            Datenstand: {cveScan.fromCache ? "Cache" : "Live"} · CVE-Einträge: {cveOverview.totalCves}
                           </p>
                           {Number(cveScan.matchedAgents || 0) === 0 ? (
                             <p className="text-sm text-sand-500">
@@ -1842,60 +2048,146 @@ export default function CustomerDevelopmentView() {
                             </p>
                           ) : null}
                           {(cveScan.agents || []).length ? (
-                            (cveScan.agents || []).map((agent, idx) => (
-                              <div key={`${agent?.agentId || idx}`} className="rounded-xl border border-sand-200 bg-sand-50 p-2 space-y-2">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <p className="text-xs font-semibold text-sand-800">
-                                    {agent?.hostname || "Unbekannter Agent"}
-                                  </p>
-                                  <span className="text-[10px] text-sand-500">
-                                    Findings: {agent?.findingCount || 0} · Software: {agent?.softwareCount || 0}
-                                  </span>
-                                </div>
-                                <p className="text-[11px] text-sand-600">
-                                  {agent?.client || "Client n/a"} · {agent?.site || "Site n/a"} ·{" "}
-                                  {typeof agent?.online === "boolean" ? (agent.online ? "Online" : "Offline") : "Status n/a"}
-                                </p>
-                                <p className="text-[11px] text-sand-600">OS: {agent?.os || "n/a"} · Last Seen: {agent?.lastSeen || "n/a"}</p>
-                                {(agent?.findings || []).length ? (
-                                  <div className="space-y-1">
-                                    {(agent.findings || []).map((item, itemIdx) => (
-                                      <div key={`${item?.name || "s"}-${itemIdx}`} className="rounded-lg border border-sand-200 bg-white px-2 py-1.5">
-                                        <p className="text-xs font-semibold text-sand-800">
-                                          {item?.name || "Software"} {item?.version ? `(${item.version})` : ""}
-                                        </p>
-                                        <p className="text-[11px] text-sand-600">
-                                          CVEs: {(item?.cves || []).map((cve) => cve?.id).filter(Boolean).join(", ") || "keine"}
-                                        </p>
-                                        <p className="text-[11px] text-sand-600">
-                                          Neuere/Fix-Versionen: {(item?.fixedVersions || []).join(", ") || "keine Daten"}
-                                        </p>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <p className="text-[11px] text-sand-500">Keine Treffer auf diesem Agent.</p>
-                                )}
-                                {(agent?.software || []).length ? (
-                                  <div className="rounded-lg border border-sand-200 bg-white px-2 py-1.5">
-                                    <p className="text-[11px] font-semibold text-sand-700">Geprüfte Programme</p>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {(agent.software || []).map((pkg, pkgIdx) => (
-                                        <span
-                                          key={`${pkg?.name || "pkg"}-${pkgIdx}`}
-                                          className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] text-sand-700"
-                                        >
-                                          {pkg?.name || "Unbekannt"}
-                                          {pkg?.version ? ` ${pkg.version}` : ""}
+                            <div className="space-y-2">
+                              {(cveScan.agents || []).map((agent, idx) => {
+                                const findings = Array.isArray(agent?.findings) ? agent.findings : [];
+                                const softwareRows = Array.isArray(agent?.software) ? agent.software : [];
+                                const findingByNameVersion = new Map();
+                                const findingByName = new Map();
+                                findings.forEach((finding) => {
+                                  const nameKey = normalizeTextKey(finding?.name);
+                                  const versionKey = normalizeTextKey(finding?.version);
+                                  if (!nameKey) return;
+                                  if (versionKey) findingByNameVersion.set(`${nameKey}|${versionKey}`, finding);
+                                  if (!findingByName.has(nameKey)) findingByName.set(nameKey, finding);
+                                });
+                                const resolveFinding = (pkg) => {
+                                  const nameKey = normalizeTextKey(pkg?.name);
+                                  const versionKey = normalizeTextKey(pkg?.version);
+                                  if (!nameKey) return null;
+                                  return findingByNameVersion.get(`${nameKey}|${versionKey}`) || findingByName.get(nameKey) || null;
+                                };
+                                const rows = softwareRows.map((pkg) => {
+                                  const finding = resolveFinding(pkg);
+                                  const latestVersion = latestFixedVersion(finding);
+                                  const cveCount = Array.isArray(finding?.cves) ? finding.cves.length : 0;
+                                  const highestScore = maxCveScore(finding);
+                                  const hasFinding = Boolean(finding) && (cveCount > 0 || Boolean(latestVersion));
+                                  const currentVersion = String(pkg?.version || "").trim();
+                                  const updateAvailable =
+                                    hasFinding && Boolean(latestVersion) && (!currentVersion || isNewerVersion(latestVersion, currentVersion));
+                                  return {
+                                    name: String(pkg?.name || "Unbekannt"),
+                                    currentVersion,
+                                    latestVersion,
+                                    cveCount,
+                                    highestScore,
+                                    hasFinding,
+                                    updateAvailable,
+                                  };
+                                });
+                                const sortedRows = [...rows].sort((left, right) => {
+                                  if (left.updateAvailable !== right.updateAvailable) return Number(right.updateAvailable) - Number(left.updateAvailable);
+                                  if (left.hasFinding !== right.hasFinding) return Number(right.hasFinding) - Number(left.hasFinding);
+                                  if ((left.cveCount || 0) !== (right.cveCount || 0)) return (right.cveCount || 0) - (left.cveCount || 0);
+                                  if ((left.highestScore || 0) !== (right.highestScore || 0)) return (right.highestScore || 0) - (left.highestScore || 0);
+                                  return String(left.name || "").localeCompare(String(right.name || ""), "de", { sensitivity: "base" });
+                                });
+                                const relevantRows = sortedRows.filter((row) => row.hasFinding || row.updateAvailable);
+                                const agentKey = String(agent?.agentId || `agent-${idx}`);
+                                const showAllRows = Boolean(expandedCveAgents[agentKey]);
+                                const rowsToRender = showAllRows ? sortedRows : relevantRows;
+                                const hiddenRows = Math.max(0, sortedRows.length - rowsToRender.length);
+                                const agentUpdates = findings.filter((item) => Boolean(latestFixedVersion(item))).length;
+                                return (
+                                  <div key={agentKey} className="rounded-xl border border-sand-200 bg-sand-50 p-2 space-y-2">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <p className="text-xs font-semibold text-sand-800">{agent?.hostname || "Unbekannter Agent"}</p>
+                                      <div className="flex flex-wrap items-center gap-1">
+                                        <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-600">
+                                          Software {Number(agent?.softwareCount || 0)}
                                         </span>
-                                      ))}
+                                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">
+                                          Treffer {Number(agent?.findingCount || 0)}
+                                        </span>
+                                        <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] text-rose-700">
+                                          Updates {agentUpdates}
+                                        </span>
+                                        {sortedRows.length > relevantRows.length ? (
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              setExpandedCveAgents((prev) => ({
+                                                ...prev,
+                                                [agentKey]: !prev[agentKey],
+                                              }))
+                                            }
+                                            className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-700 hover:bg-sand-100"
+                                          >
+                                            {showAllRows ? "Nur Treffer" : `Alle ${sortedRows.length}`}
+                                          </button>
+                                        ) : null}
+                                      </div>
                                     </div>
+                                    <p className="text-[11px] text-sand-600">
+                                      {agent?.client || "Client n/a"} · {agent?.site || "Site n/a"} · {typeof agent?.online === "boolean" ? (agent.online ? "Online" : "Offline") : "Status n/a"} · Last Seen: {agent?.lastSeen || "n/a"}
+                                    </p>
+                                    {rowsToRender.length ? (
+                                      <div className="overflow-x-auto rounded-lg border border-sand-200 bg-white">
+                                        <table className="min-w-full text-[11px]">
+                                          <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
+                                            <tr>
+                                              <th className="px-2 py-1.5 text-left">Programm</th>
+                                              <th className="px-2 py-1.5 text-left">Aktuell</th>
+                                              <th className="px-2 py-1.5 text-left">Neuere Version</th>
+                                              <th className="px-2 py-1.5 text-left">CVEs</th>
+                                              <th className="px-2 py-1.5 text-left">Status</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {rowsToRender.map((row, rowIdx) => {
+                                              const statusText = row.updateAvailable
+                                                ? "Update verfügbar"
+                                                : row.hasFinding
+                                                ? "Prüfen"
+                                                : "Kein Treffer";
+                                              return (
+                                                <tr key={`${row.name}-${row.currentVersion || "na"}-${rowIdx}`} className={rowIdx % 2 === 0 ? "bg-white" : "bg-sand-50/60"}>
+                                                  <td className="px-2 py-1.5 text-sand-800">{row.name || "Unbekannt"}</td>
+                                                  <td className="px-2 py-1.5 text-sand-700">{row.currentVersion || "n/a"}</td>
+                                                  <td className="px-2 py-1.5 text-sand-700">{row.latestVersion || "—"}</td>
+                                                  <td className="px-2 py-1.5 text-sand-700">
+                                                    {row.cveCount}
+                                                    {row.highestScore !== null ? ` · max ${row.highestScore}` : ""}
+                                                  </td>
+                                                  <td className="px-2 py-1.5">
+                                                    <span className={`rounded-full border px-2 py-0.5 text-[10px] ${cveStatusBadge(row)}`}>{statusText}</span>
+                                                  </td>
+                                                </tr>
+                                              );
+                                            })}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    ) : null}
+                                    {!showAllRows && hiddenRows > 0 ? (
+                                      <p className="text-[11px] text-sand-500">
+                                        {hiddenRows} Programme ohne CVE-Hinweis ausgeblendet.
+                                      </p>
+                                    ) : null}
+                                    {!sortedRows.length && Number(agent?.softwareCount || 0) > 0 ? (
+                                      <p className="text-[11px] text-sand-500">Programm-Liste im Cache noch nicht enthalten. Bitte „Neu scannen“.</p>
+                                    ) : null}
+                                    {!sortedRows.length && Number(agent?.softwareCount || 0) === 0 ? (
+                                      <p className="text-[11px] text-sand-500">Keine auswertbare Softwareliste auf diesem Agent.</p>
+                                    ) : null}
+                                    {sortedRows.length > 0 && relevantRows.length === 0 && !showAllRows ? (
+                                      <p className="text-[11px] text-emerald-700">Keine CVE-Treffer auf diesem Agent.</p>
+                                    ) : null}
                                   </div>
-                                ) : Number(agent?.softwareCount || 0) > 0 ? (
-                                  <p className="text-[11px] text-sand-500">Programm-Liste im Cache noch nicht enthalten. Bitte „Neu scannen“.</p>
-                                ) : null}
-                              </div>
-                            ))
+                                );
+                              })}
+                            </div>
                           ) : Number(cveScan.matchedAgents || 0) > 0 ? (
                             <p className="text-sm text-sand-500">Agenten vorhanden, aber keine Softwaredaten vom RMM geliefert.</p>
                           ) : (
@@ -1991,8 +2283,8 @@ export default function CustomerDevelopmentView() {
                     <Info size={10} />
                   </button>
                   <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-1.5 w-60 -translate-x-1/2 rounded-xl border border-sand-200 bg-white px-2.5 py-2 text-[10px] leading-relaxed text-sand-600 opacity-0 shadow-soft transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                    Grün: stabiler Umsatz ohne akuten Handlungsbedarf. Orange: beobachten. Rot: Kunde
-                    aktivieren.
+                    Priorität basiert auf Risiko, Kontakt-/Rechnungsaktivität und Vertragsstatus.
+                    Grün: stabil. Orange: beobachten. Rot: Kunde aktivieren.
                   </span>
                 </span>
               </div>
