@@ -5707,6 +5707,41 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
 
         number_candidates: Set[str] = set()
 
+        def _extract_value_candidates(raw_value: Any) -> List[Any]:
+            values: List[Any] = []
+            if raw_value is None:
+                return values
+            if isinstance(raw_value, (str, int, float)):
+                values.append(raw_value)
+                return values
+            if isinstance(raw_value, list):
+                for item in raw_value:
+                    values.extend(_extract_value_candidates(item))
+                return values
+            if isinstance(raw_value, dict):
+                for nested_key in (
+                    "value",
+                    "val",
+                    "data",
+                    "content",
+                    "text",
+                    "number",
+                    "customer_number",
+                    "customernumber",
+                    "kundennummer",
+                    "kunden_nummer",
+                    "kunden_nr",
+                    "kundennr",
+                    "custom_field_value",
+                    "customFieldValue",
+                    "raw_value",
+                    "rawValue",
+                ):
+                    if nested_key in raw_value:
+                        values.extend(_extract_value_candidates(raw_value.get(nested_key)))
+                return values
+            return values
+
         def _collect_numberish_fields(node: Any) -> None:
             if isinstance(node, dict):
                 # Common payload shape from RMM APIs:
@@ -5717,44 +5752,66 @@ def _agent_matches_customer(agent: Dict[str, Any], customer: Customer) -> bool:
                     node.get("label"),
                     node.get("key"),
                     node.get("title"),
+                    node.get("custom_field_name"),
+                    node.get("customFieldName"),
+                    node.get("field_name"),
+                    node.get("fieldName"),
                 ]
                 value_candidates = [
                     node.get("value"),
                     node.get("val"),
                     node.get("data"),
                     node.get("content"),
+                    node.get("values"),
+                    node.get("text"),
+                    node.get("custom_field_value"),
+                    node.get("customFieldValue"),
+                    node.get("field_value"),
+                    node.get("fieldValue"),
                 ]
                 for raw_label in label_candidates:
                     if not _is_customer_number_label(raw_label):
                         continue
                     for raw_value in value_candidates:
-                        normalized = _normalize_candidate_number(raw_value)
-                        if normalized:
-                            number_candidates.add(normalized)
+                        for candidate_value in _extract_value_candidates(raw_value):
+                            normalized = _normalize_candidate_number(candidate_value)
+                            if normalized:
+                                number_candidates.add(normalized)
+
+                # Pattern: {"customField":{"name":"Kundennummer"},"value":"1018"}
+                for field_container_key in (
+                    "customField",
+                    "custom_field",
+                    "fieldDefinition",
+                    "field_definition",
+                    "fieldDef",
+                    "definition",
+                ):
+                    field_container = node.get(field_container_key)
+                    if not isinstance(field_container, dict):
+                        continue
+                    nested_labels = [
+                        field_container.get("name"),
+                        field_container.get("field"),
+                        field_container.get("label"),
+                        field_container.get("key"),
+                        field_container.get("title"),
+                    ]
+                    if not any(_is_customer_number_label(item) for item in nested_labels):
+                        continue
+                    for raw_value in value_candidates:
+                        for candidate_value in _extract_value_candidates(raw_value):
+                            normalized = _normalize_candidate_number(candidate_value)
+                            if normalized:
+                                number_candidates.add(normalized)
+
                 for key, value in node.items():
                     key_text = str(key or "").strip().lower()
                     if _is_customer_number_label(key_text) and value is not None:
-                        if isinstance(value, (str, int, float)):
-                            normalized = _normalize_candidate_number(value)
+                        for candidate_value in _extract_value_candidates(value):
+                            normalized = _normalize_candidate_number(candidate_value)
                             if normalized:
                                 number_candidates.add(normalized)
-                        elif isinstance(value, dict):
-                            for nested_key in (
-                                "value",
-                                "val",
-                                "data",
-                                "content",
-                                "number",
-                                "customer_number",
-                                "customernumber",
-                                "kundennummer",
-                                "kunden_nummer",
-                                "kunden_nr",
-                                "kundennr",
-                            ):
-                                normalized = _normalize_candidate_number(value.get(nested_key))
-                                if normalized:
-                                    number_candidates.add(normalized)
                     _collect_numberish_fields(value)
                 return
             if isinstance(node, list):
