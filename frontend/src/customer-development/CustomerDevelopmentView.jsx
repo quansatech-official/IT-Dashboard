@@ -537,6 +537,20 @@ export default function CustomerDevelopmentView() {
         if (data === null) return;
         setDetailProgress(100);
         setDetailData(data || null);
+        const managedCount = Array.isArray(data?.managedInfrastructureDevices)
+          ? data.managedInfrastructureDevices.length
+          : 0;
+        if (managedCount > 0) {
+          setDiscoveryRun((prev) => {
+            const msg = String(prev?.message || "");
+            const err = String(prev?.error || "");
+            const hasStaleNoAgentHint =
+              msg.toLowerCase().includes("keine zugeordneten rmm-agenten") ||
+              err.toLowerCase().includes("keine zugeordneten rmm-agenten");
+            if (!hasStaleNoAgentHint) return prev;
+            return { status: "idle", message: "", error: "" };
+          });
+        }
         setWorkSummaryAi({ status: "idle", text: "", error: "" });
         setDetailStatus("ready");
       })
@@ -1530,21 +1544,22 @@ export default function CustomerDevelopmentView() {
                       ) : null}
                       {discoveryRun.message ? <p className="text-sm text-emerald-700">{discoveryRun.message}</p> : null}
                       {discoveryRun.error ? <p className="text-sm text-rose-600">{discoveryRun.error}</p> : null}
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
                           <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agents</p>
-                          <p className="text-sm font-semibold text-sand-800">
+                          <p className="text-xs font-semibold text-sand-800">
                             {(detailData.managedInfrastructureDevices || []).length}
                           </p>
                         </div>
-                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-2">
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
                           <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Geräte</p>
-                          <p className="text-sm font-semibold text-sand-800">
+                          <p className="text-xs font-semibold text-sand-800">
                             {(detailData.discoveredInfrastructureDevices || []).length}
                           </p>
                         </div>
                       </div>
-                      {detailData?.infra?.rmmMappingHint ? (
+                      {detailData?.infra?.rmmMappingHint &&
+                      (detailData?.managedInfrastructureDevices || []).length === 0 ? (
                         <div className="rounded-xl border border-amber-200 bg-amber-50 p-2">
                           <p className="text-xs text-amber-800">{detailData.infra.rmmMappingHint}</p>
                         </div>
@@ -1622,25 +1637,25 @@ export default function CustomerDevelopmentView() {
                                   ? "border-amber-200 bg-amber-50 text-amber-700"
                                   : "border-emerald-200 bg-emerald-50 text-emerald-700";
                             return (
-                              <div key={`${device?.agentId || idx}`} className="rounded-2xl border border-sand-200 bg-white p-3 text-xs text-sand-700 shadow-sm">
-                                <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div key={`${device?.agentId || idx}`} className="rounded-xl border border-sand-200 bg-white p-2 text-xs text-sand-700 shadow-sm">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
                                   <div className="flex min-w-0 items-center gap-2">
-                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-sand-200 bg-sand-50 text-sand-700">
+                                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-sand-200 bg-sand-50 text-sand-700">
                                       {(() => {
                                         const AgentIcon = getAgentIcon(device);
-                                        return <AgentIcon size={16} />;
+                                        return <AgentIcon size={14} />;
                                       })()}
                                     </div>
                                     <div className="min-w-0">
-                                      <p className="truncate text-sm font-semibold text-sand-900">{device?.hostname || "Unbekannter Agent"}</p>
-                                      <p className="truncate text-[11px] text-sand-500">
+                                      <p className="truncate text-xs font-semibold text-sand-900">{device?.hostname || "Unbekannter Agent"}</p>
+                                      <p className="truncate text-[10px] text-sand-500">
                                         {device?.client || "Client n/a"} · {device?.site || "Site n/a"}
                                       </p>
                                     </div>
                                   </div>
                                   <div className="flex flex-wrap items-center gap-1.5">
                                     <span
-                                      className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                      className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${
                                         typeof device?.online === "boolean"
                                           ? device.online
                                             ? "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -1650,8 +1665,17 @@ export default function CustomerDevelopmentView() {
                                     >
                                       {typeof device?.online === "boolean" ? (device.online ? "Online" : "Offline") : "Status n/a"}
                                     </span>
-                                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${lifecycleClass}`}>
+                                    <span className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${lifecycleClass}`}>
                                       {lifecycleLabel}
+                                    </span>
+                                    <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-rose-700">
+                                      E {errorCount}
+                                    </span>
+                                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-amber-700">
+                                      W {warningCount}
+                                    </span>
+                                    <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[9px] uppercase tracking-wide text-sky-700">
+                                      U {updatesCount}
                                     </span>
                                     <button
                                       type="button"
@@ -1661,7 +1685,7 @@ export default function CustomerDevelopmentView() {
                                           [device?.agentId || `idx-${idx}`]: !prev[device?.agentId || `idx-${idx}`]
                                         }))
                                       }
-                                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[9px] uppercase tracking-wide hover:bg-sand-100"
                                     >
                                       {expanded ? "Details ausblenden" : "Details anzeigen"}
                                       {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
@@ -1669,34 +1693,18 @@ export default function CustomerDevelopmentView() {
                                   </div>
                                 </div>
 
-                                <div className="mt-2 grid gap-2 sm:grid-cols-4">
-                                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5">
-                                    <p className="text-[10px] uppercase tracking-wide text-rose-700">Fehler</p>
-                                    <p className="text-sm font-semibold text-rose-800">{errorCount}</p>
-                                  </div>
-                                  <div className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1.5">
-                                    <p className="text-[10px] uppercase tracking-wide text-amber-700">Warnungen</p>
-                                    <p className="text-sm font-semibold text-amber-800">{warningCount}</p>
-                                  </div>
-                                  <div className="rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5">
-                                    <p className="text-[10px] uppercase tracking-wide text-sky-700">Updates</p>
-                                    <p className="text-sm font-semibold text-sky-800">{updatesCount}</p>
-                                  </div>
-                                  <div className={`rounded-lg border px-2 py-1.5 ${lifecycleClass}`}>
-                                    <p className="text-[10px] uppercase tracking-wide">Lifecycle</p>
-                                    <p className="text-sm font-semibold">{device?.lifecycle?.eol_date || "n/a"}</p>
-                                  </div>
-                                </div>
-
-                                <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-sand-600">
+                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-sand-600">
                                   <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">RMM</span>
                                   <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">
                                     OS: {device?.os || "n/a"}
                                   </span>
+                                  <span className={`rounded-full border px-2 py-0.5 ${lifecycleClass}`}>
+                                    EOL: {device?.lifecycle?.eol_date || "n/a"}
+                                  </span>
                                 </div>
 
                                 {expanded ? (
-                                  <div className="mt-2 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2 text-[11px] text-sand-700 space-y-1.5">
+                                  <div className="mt-1.5 rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5 text-[10px] text-sand-700 space-y-1">
                                     <p>
                                       <span className="font-semibold text-sand-800">Updates:</span> {updatesCount}
                                       {" "} (Windows {Number(device?.windowsUpdates || 0)} · 3rd-Party {Number(device?.thirdPartyUpdates || 0)} · CVE {Number(device?.openCves || 0)})
@@ -1714,7 +1722,7 @@ export default function CustomerDevelopmentView() {
                                         <span className="font-semibold">OS Lifecycle:</span> Support aktiv
                                       </p>
                                     )}
-                                    <p className="inline-flex items-center gap-1 text-sand-600"><Clock3 size={12} /> Last Seen: {formatDateTime(device?.lastSeen)}</p>
+                                    <p className="inline-flex items-center gap-1 text-sand-600"><Clock3 size={11} /> Last Seen: {formatDateTime(device?.lastSeen)}</p>
                                   </div>
                                 ) : null}
                               </div>
@@ -1728,28 +1736,28 @@ export default function CustomerDevelopmentView() {
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Geräte</p>
                         {(detailData.discoveredInfrastructureDevices || []).length ? (
                           (detailData.discoveredInfrastructureDevices || []).map((device, idx) => (
-                            <div key={`${device?.source || "d"}-${device?.hostname || idx}-${idx}`} className="rounded-2xl border border-sand-200 bg-white p-3 text-xs text-sand-700">
+                            <div key={`${device?.source || "d"}-${device?.hostname || idx}-${idx}`} className="rounded-xl border border-sand-200 bg-white p-2 text-xs text-sand-700">
                               <div className="flex items-start justify-between gap-3">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <div className="h-8 w-8 rounded-lg border border-sand-200 bg-sand-50 text-sand-700 flex items-center justify-center shrink-0">
+                                  <div className="h-7 w-7 rounded-lg border border-sand-200 bg-sand-50 text-sand-700 flex items-center justify-center shrink-0">
                                     {(() => {
                                       const DiscoveryIcon = getDiscoveryIcon(device);
-                                      return <DiscoveryIcon size={15} />;
+                                      return <DiscoveryIcon size={13} />;
                                     })()}
                                   </div>
                                   <div className="min-w-0">
-                                    <p className="font-semibold text-sand-800 truncate">{device?.hostname || "Unbekanntes Gerät"}</p>
-                                    <p className="text-[11px] text-sand-500 truncate">
+                                    <p className="font-semibold text-sand-800 truncate text-xs">{device?.hostname || "Unbekanntes Gerät"}</p>
+                                    <p className="text-[10px] text-sand-500 truncate">
                                       {device?.deviceType ? `Typ: ${String(device.deviceType)}` : "Typ: n/a"}
                                       {device?.vendor ? ` · ${String(device.vendor)}` : ""}
                                     </p>
                                   </div>
                                 </div>
-                                <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] uppercase tracking-wide">
+                                <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[9px] uppercase tracking-wide">
                                   {device?.source || "Discovery"}
                                 </span>
                               </div>
-                              <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-sand-600">
+                              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-sand-600">
                                 <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">{device?.ip ? `IP ${device.ip}` : "IP n/a"}</span>
                                 {device?.mac ? <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">MAC {device.mac}</span> : null}
                                 {device?.protocol ? <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5">{String(device.protocol).toUpperCase()}</span> : null}

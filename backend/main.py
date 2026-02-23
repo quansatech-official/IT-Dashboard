@@ -218,6 +218,36 @@ class DeliveryNote(Base):
     customer = relationship("Customer")
 
 
+class CustomerInventoryEvent(Base):
+    __tablename__ = "customer_inventory_events"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    device_label = Column(String, default="")
+    event_type = Column(String, default="wartung")
+    event_date = Column(String, default="")
+    note = Column(Text, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+    customer = relationship("Customer")
+
+
+class CustomerInventoryDeviceState(Base):
+    __tablename__ = "customer_inventory_device_states"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    source = Column(String, default="")
+    device_key = Column(String, default="")
+    device_label = Column(String, default="")
+    retired = Column(Boolean, default=False)
+    note = Column(Text, default="")
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+    customer = relationship("Customer")
+
+
 class GeoCache(Base):
     __tablename__ = "geo_cache"
 
@@ -1155,6 +1185,28 @@ class DeliveryNoteCreate(BaseModel):
     signature_base64: Optional[str] = ""
     time_from: Optional[str] = ""
     time_to: Optional[str] = ""
+
+
+class CustomerInventoryEventCreate(BaseModel):
+    device_label: Optional[str] = ""
+    event_type: Optional[str] = "wartung"
+    event_date: Optional[str] = ""
+    note: Optional[str] = ""
+
+
+class CustomerInventoryEventUpdate(BaseModel):
+    device_label: Optional[str] = None
+    event_type: Optional[str] = None
+    event_date: Optional[str] = None
+    note: Optional[str] = None
+
+
+class CustomerInventoryDeviceStateUpsert(BaseModel):
+    source: str
+    device_key: str
+    device_label: Optional[str] = ""
+    retired: Optional[bool] = False
+    note: Optional[str] = ""
 
 
 class EmployeeCreate(BaseModel):
@@ -2831,6 +2883,32 @@ def serialize_delivery_note(note: DeliveryNote) -> Dict[str, Any]:
         "time_from": note.time_from,
         "time_to": note.time_to,
         "created_at": note.created_at,
+    }
+
+
+def serialize_customer_inventory_event(item: CustomerInventoryEvent) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "customer_id": item.customer_id,
+        "device_label": item.device_label or "",
+        "event_type": item.event_type or "wartung",
+        "event_date": item.event_date or "",
+        "note": item.note or "",
+        "created_at": int(item.created_at or 0),
+        "updated_at": int(item.updated_at or 0),
+    }
+
+
+def serialize_customer_inventory_device_state(item: CustomerInventoryDeviceState) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "customer_id": item.customer_id,
+        "source": item.source or "",
+        "device_key": item.device_key or "",
+        "device_label": item.device_label or "",
+        "retired": bool(item.retired),
+        "note": item.note or "",
+        "updated_at": int(item.updated_at or 0),
     }
 
 
@@ -8555,6 +8633,154 @@ def delete_delivery_note(note_id: int):
         if not note:
             raise HTTPException(404, "Delivery note not found")
         db.delete(note)
+        db.commit()
+    return {"status": "ok"}
+
+
+@app.get("/api/customers/{customer_id}/inventory_events")
+def get_customer_inventory_events(customer_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        rows = (
+            db.query(CustomerInventoryEvent)
+            .filter(CustomerInventoryEvent.customer_id == customer_id)
+            .order_by(
+                CustomerInventoryEvent.event_date.desc(),
+                CustomerInventoryEvent.updated_at.desc(),
+                CustomerInventoryEvent.created_at.desc(),
+            )
+            .all()
+        )
+        return [serialize_customer_inventory_event(item) for item in rows]
+
+
+@app.post("/api/customers/{customer_id}/inventory_events")
+def create_customer_inventory_event(customer_id: int, data: CustomerInventoryEventCreate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        now_ms = int(time.time() * 1000)
+        event_type = str(data.event_type or "wartung").strip().lower() or "wartung"
+        row = CustomerInventoryEvent(
+            customer_id=customer_id,
+            device_label=str(data.device_label or "").strip(),
+            event_type=event_type,
+            event_date=str(data.event_date or "").strip(),
+            note=str(data.note or "").strip(),
+            created_at=now_ms,
+            updated_at=now_ms,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_inventory_event(row)
+
+
+@app.patch("/api/customers/{customer_id}/inventory_events/{event_id}")
+def update_customer_inventory_event(customer_id: int, event_id: int, data: CustomerInventoryEventUpdate):
+    with SessionLocal() as db:
+        row = (
+            db.query(CustomerInventoryEvent)
+            .filter(CustomerInventoryEvent.id == event_id, CustomerInventoryEvent.customer_id == customer_id)
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Inventory event not found")
+        updates = data.dict(exclude_unset=True)
+        if "device_label" in updates:
+            row.device_label = str(updates.get("device_label") or "").strip()
+        if "event_type" in updates:
+            row.event_type = str(updates.get("event_type") or "wartung").strip().lower() or "wartung"
+        if "event_date" in updates:
+            row.event_date = str(updates.get("event_date") or "").strip()
+        if "note" in updates:
+            row.note = str(updates.get("note") or "").strip()
+        row.updated_at = int(time.time() * 1000)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_inventory_event(row)
+
+
+@app.delete("/api/customers/{customer_id}/inventory_events/{event_id}")
+def delete_customer_inventory_event(customer_id: int, event_id: int):
+    with SessionLocal() as db:
+        row = (
+            db.query(CustomerInventoryEvent)
+            .filter(CustomerInventoryEvent.id == event_id, CustomerInventoryEvent.customer_id == customer_id)
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Inventory event not found")
+        db.delete(row)
+        db.commit()
+    return {"status": "ok"}
+
+
+@app.get("/api/customers/{customer_id}/inventory_device_states")
+def get_customer_inventory_device_states(customer_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        rows = (
+            db.query(CustomerInventoryDeviceState)
+            .filter(CustomerInventoryDeviceState.customer_id == customer_id)
+            .order_by(CustomerInventoryDeviceState.updated_at.desc(), CustomerInventoryDeviceState.id.desc())
+            .all()
+        )
+        return [serialize_customer_inventory_device_state(item) for item in rows]
+
+
+@app.put("/api/customers/{customer_id}/inventory_device_states")
+def upsert_customer_inventory_device_state(customer_id: int, data: CustomerInventoryDeviceStateUpsert):
+    source = str(data.source or "").strip().lower()
+    device_key = str(data.device_key or "").strip()
+    if not source or not device_key:
+        raise HTTPException(400, "source and device_key are required")
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerInventoryDeviceState)
+            .filter(
+                CustomerInventoryDeviceState.customer_id == customer_id,
+                CustomerInventoryDeviceState.source == source,
+                CustomerInventoryDeviceState.device_key == device_key,
+            )
+            .first()
+        )
+        if not row:
+            row = CustomerInventoryDeviceState(
+                customer_id=customer_id,
+                source=source,
+                device_key=device_key,
+            )
+        row.device_label = str(data.device_label or "").strip()
+        row.retired = bool(data.retired)
+        row.note = str(data.note or "").strip()
+        row.updated_at = int(time.time() * 1000)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_inventory_device_state(row)
+
+
+@app.delete("/api/customers/{customer_id}/inventory_device_states/{state_id}")
+def delete_customer_inventory_device_state(customer_id: int, state_id: int):
+    with SessionLocal() as db:
+        row = (
+            db.query(CustomerInventoryDeviceState)
+            .filter(CustomerInventoryDeviceState.id == state_id, CustomerInventoryDeviceState.customer_id == customer_id)
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Inventory device state not found")
+        db.delete(row)
         db.commit()
     return {"status": "ok"}
 

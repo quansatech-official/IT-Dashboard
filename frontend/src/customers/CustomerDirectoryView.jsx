@@ -19,6 +19,7 @@ import {
 import { renderReportHTML, uid } from "../reporting/utils";
 import { telephonyService } from "../telephony/telephonyService";
 import CustomerDevelopmentCustomerTab from "../customer-development/CustomerDevelopmentCustomerTab";
+import CustomerInventoryTab from "./CustomerInventoryTab";
 
 const API = "/api";
 
@@ -2242,6 +2243,17 @@ export default function CustomerDirectoryView() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setSettingsTab("inventory")}
+                  className={`rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                    settingsTab === "inventory"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white hover:bg-sand-100"
+                  }`}
+                >
+                  Inventar
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleRemove(editCustomer.id)}
                   className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
                 >
@@ -2629,6 +2641,11 @@ export default function CustomerDirectoryView() {
                       ) : null}
                     </div>
                   </div>
+                </div>
+              ) : null}
+              {settingsTab === "inventory" ? (
+                <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
+                  <CustomerInventoryTab customerId={editCustomer.id} />
                 </div>
               ) : null}
             </div>
