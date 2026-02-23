@@ -770,16 +770,21 @@ def main() -> int:
         hosts=discovered,
     )
 
-    response = _post_discovery(
-        api_base=api_base,
-        discovery_token=str(args.discovery_token or "").strip(),
-        customer_id=args.customer_id,
-        customer_number=str(args.customer_number or "").strip(),
-        customer_name=str(args.customer_name or "").strip(),
-        source=str(args.source or "rmm_agent_scan").strip() or "rmm_agent_scan",
-        hosts=discovered,
-    )
-    print(f"[INFO] Upload response: {json.dumps(response, ensure_ascii=False)}")
+    try:
+        response = _post_discovery(
+            api_base=api_base,
+            discovery_token=str(args.discovery_token or "").strip(),
+            customer_id=args.customer_id,
+            customer_number=str(args.customer_number or "").strip(),
+            customer_name=str(args.customer_name or "").strip(),
+            source=str(args.source or "rmm_agent_scan").strip() or "rmm_agent_scan",
+            hosts=discovered,
+        )
+        print(f"[INFO] Upload response: {json.dumps(response, ensure_ascii=False)}")
+    except Exception as exc:
+        # Discovery inventory is already written to script history as JSON.
+        # Backend ingest is optional and must not fail the entire run.
+        print(f"[WARN] Upload skipped: {exc}")
 
     cache_entries = cache.get("entries") if isinstance(cache.get("entries"), dict) else {}
     cache_entries[cache_key] = {

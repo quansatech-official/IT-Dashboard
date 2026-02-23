@@ -9216,6 +9216,11 @@ def rmm_health():
     }
 
 
+@app.get("/health")
+def backend_health():
+    return {"ok": True}
+
+
 @app.get("/api/sevdesk/health")
 def sevdesk_health():
     with SessionLocal() as db:
