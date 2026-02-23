@@ -276,15 +276,6 @@ const PriorityBar = ({ item }) => {
   );
 };
 
-const activityFreshnessPercent = (days, freshThreshold = 30, staleThreshold = 120) => {
-  const n = Number(days);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  if (n <= freshThreshold) return 100;
-  if (n >= staleThreshold) return 0;
-  const span = Math.max(1, staleThreshold - freshThreshold);
-  return clampPercent(((staleThreshold - n) / span) * 100);
-};
-
 const formatDateTime = (value) => {
   if (!value && value !== 0) return "n/a";
   const numeric = Number(value);
@@ -1489,13 +1480,6 @@ export default function CustomerDevelopmentView() {
     };
   }, [filteredContexts, neglectedCustomers]);
 
-  const interactionDaysRaw = Number(detailData?.daysSinceInteraction);
-  const invoiceDaysRaw = Number(detailData?.daysSinceLastInvoice);
-  const interactionDays = Number.isFinite(interactionDaysRaw) && interactionDaysRaw >= 0 ? Math.round(interactionDaysRaw) : null;
-  const invoiceDays = Number.isFinite(invoiceDaysRaw) && invoiceDaysRaw >= 0 ? Math.round(invoiceDaysRaw) : null;
-  const interactionFreshness = activityFreshnessPercent(interactionDays, 21, 120);
-  const invoiceFreshness = activityFreshnessPercent(invoiceDays, 30, 120);
-  const detailNeedsAction = Boolean(detailData?.contactDue || detailData?.invoiceActivityDue);
   const detailPriorityTier = getPriorityTier(detailData || {});
   const workSummaryTags = deriveWorkSummaryTags(
     detailData?.workSummary?.summary,
@@ -1792,40 +1776,7 @@ export default function CustomerDevelopmentView() {
 
                   {detailTab === "overview" ? (
                   <>
-                  <div className="grid gap-2 md:grid-cols-[minmax(220px,0.7fr)_minmax(0,1.3fr)]">
-                    <div className="rounded-2xl border border-sand-200 bg-white p-2">
-                      <p className="text-[9px] uppercase tracking-[0.16em] text-sand-500">Aktivitätsfenster</p>
-                      <div className="mt-1 space-y-1">
-                        <div>
-                          <div className="flex items-center justify-between text-[9px] text-sand-600">
-                            <span>Kundenkontakt</span>
-                            <span>{interactionDays === null ? "n/a" : `${interactionDays} Tage`}</span>
-                          </div>
-                          <div className="h-1 rounded-full bg-sand-100">
-                            <div
-                              className={`h-1 rounded-full ${detailData.contactDue ? "bg-rose-400" : "bg-emerald-500"}`}
-                              style={{ width: `${interactionFreshness}%` }}
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <div className="flex items-center justify-between text-[9px] text-sand-600">
-                            <span>Rechnungsaktivität</span>
-                            <span>{invoiceDays === null ? "n/a" : `${invoiceDays} Tage`}</span>
-                          </div>
-                          <div className="h-1 rounded-full bg-sand-100">
-                            <div
-                              className={`h-1 rounded-full ${detailData.invoiceActivityDue ? "bg-rose-400" : "bg-sky-500"}`}
-                              style={{ width: `${invoiceFreshness}%` }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                      <p className={`mt-1 text-[9px] ${detailNeedsAction ? "text-rose-700" : "text-emerald-700"}`}>
-                        {detailNeedsAction ? "Betreuung fällig" : "Aktivitätslage stabil"}
-                      </p>
-                    </div>
-
+                  <div className="grid gap-2">
                     <div className="rounded-2xl border border-sand-200 bg-white p-2.5">
                       <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Kernsignale Technik</p>
                       <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
