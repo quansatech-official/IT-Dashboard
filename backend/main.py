@@ -58,11 +58,17 @@ _sevdesk_contact_cache: Dict[str, Tuple[int, str]] = {}
 CUSTOMER_DEVELOPMENT_CACHE_TTL_MS = 5 * 60 * 1000
 CUSTOMER_CVE_CACHE_TTL_MS = 30 * 60 * 1000
 RECENT_WORK_SUMMARY_CACHE_TTL_MS = 15 * 60 * 1000
+NVD_LOOKUP_CACHE_TTL_MS = 12 * 60 * 60 * 1000
+OSV_LOOKUP_CACHE_TTL_MS = 12 * 60 * 60 * 1000
 _customer_development_cache: Dict[str, Dict[str, Any]] = {}
 _customer_cve_cache: Dict[int, Dict[str, Any]] = {}
 _recent_work_summary_cache: Dict[str, Dict[str, Any]] = {}
 TACTICAL_SITE_CACHE_TTL_MS = 5 * 60 * 1000
 _tactical_site_lookup_cache: Dict[str, Dict[str, Any]] = {}
+_nvd_lookup_cache: Dict[str, Dict[str, Any]] = {}
+_osv_lookup_cache: Dict[str, Dict[str, Any]] = {}
+_nvd_lookup_lock = threading.Lock()
+_osv_lookup_lock = threading.Lock()
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -5466,6 +5472,100 @@ def _safe_version_key(value: str) -> Tuple[int, str]:
     return (2, padded)
 
 
+def _software_compact_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _software_lookup_name_candidates(name: str) -> List[str]:
+    raw = _software_compact_text(name)
+    if not raw:
+        return []
+    seen: Set[str] = set()
+    out: List[str] = []
+
+    def push(candidate: str) -> None:
+        cleaned = _software_compact_text(candidate).strip(" -_")
+        if len(cleaned) < 3:
+            return
+        key = cleaned.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(cleaned)
+
+    push(raw)
+    no_arch = re.sub(r"\((?:x64|x86|64-bit|32-bit|amd64)\)", "", raw, flags=re.I)
+    push(no_arch)
+    dashed_version_trimmed = re.sub(r"\s*-\s*\d+(?:\.\d+){1,5}(?:\s*\(.*?\))?$", "", no_arch, flags=re.I)
+    push(dashed_version_trimmed)
+    component_trimmed = re.sub(
+        (
+            r"\b("
+            r"setup(?: support files)?|service pack \d+.*|native client|management objects|scriptdom|writer|"
+            r"shared framework|common files|connection info|database engine (?:services|shared)|additional runtime|"
+            r"redistributable|rsfx driver|plug-?in(?: ui)? extension|plug-?in proxy|plug-?in"
+            r")\b.*$"
+        ),
+        "",
+        no_arch,
+        flags=re.I,
+    )
+    push(component_trimmed)
+    for_match = re.search(r"\bfor\s+(.+)$", no_arch, flags=re.I)
+    if for_match:
+        push(for_match.group(1))
+    sql_match = re.search(r"(microsoft\s+sql\s+server\s+\d{4})", no_arch, flags=re.I)
+    if sql_match:
+        push(sql_match.group(1))
+    return out[:4]
+
+
+def _software_lookup_version_candidates(name: str, version: str) -> List[str]:
+    seen: Set[str] = set()
+    out: List[str] = []
+
+    def push(candidate: str) -> None:
+        cleaned = _software_compact_text(candidate).strip(".- ")
+        if not cleaned:
+            return
+        key = cleaned.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(cleaned)
+
+    for match in re.findall(r"\b\d+\.\d+(?:\.\d+){0,4}\b", str(name or "")):
+        push(match)
+    raw_version = _software_compact_text(version)
+    # Skip timestamp-like strings as primary CVE version key.
+    if raw_version and not (":" in raw_version and re.search(r"\d{4}-\d{2}-\d{2}", raw_version)):
+        push(raw_version)
+    return out[:3]
+
+
+def _software_should_query_osv(name: str) -> bool:
+    key = str(name or "").strip().lower()
+    if not key:
+        return False
+    if any(token in key for token in ("python", "pip", "npm", "node", "nuget", "maven", "gradle", "composer", "ruby", "gem", "cargo", "crate")):
+        return True
+    if ("/" in key or "@" in key) and " " not in key:
+        return True
+    return False
+
+
+def _cve_lookup_priority(name: str) -> int:
+    key = str(name or "").strip().lower()
+    if not key:
+        return 0
+    score = 50
+    if any(token in key for token in ("chrome", "edge", "firefox", "java", "adobe", "office", "outlook", "teams", "browser", "openssl", "veeam", "vmware", "sql server")):
+        score += 20
+    if any(token in key for token in ("setup", "support files", "common files", "connection info", "native client", "management objects", "scriptdom", "redistributable", "plug-in", "extension", "proxy")):
+        score -= 20
+    return max(1, score)
+
+
 def _software_text_value(value: Any, depth: int = 0) -> str:
     if depth > 4:
         return ""
@@ -5696,80 +5796,136 @@ def _fetch_tactical_rmm_software(
     return rows
 
 
-def _nvd_lookup(name: str, version: str) -> List[Dict[str, Any]]:
-    term = f"{name} {version}".strip()
-    if not term:
+def _nvd_lookup_term(term: str) -> List[Dict[str, Any]]:
+    normalized_term = _software_compact_text(term).lower()
+    if not normalized_term:
         return []
+    now_ms = int(time.time() * 1000)
+    with _nvd_lookup_lock:
+        cached = _nvd_lookup_cache.get(normalized_term)
+        if cached and now_ms - int(cached.get("cachedAt") or 0) < NVD_LOOKUP_CACHE_TTL_MS:
+            rows = cached.get("rows")
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
     url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    rows: List[Dict[str, Any]] = []
     try:
         res = requests.get(
             url,
-            params={"keywordSearch": term, "resultsPerPage": 5},
-            timeout=4,
+            params={"keywordSearch": term, "resultsPerPage": 8},
+            timeout=3,
         )
-        if not res.ok:
-            return []
-        data = res.json()
+        if res.ok:
+            data = res.json()
+            vulns = data.get("vulnerabilities")
+            if isinstance(vulns, list):
+                for row in vulns[:8]:
+                    cve = row.get("cve") if isinstance(row, dict) else {}
+                    if not isinstance(cve, dict):
+                        continue
+                    cve_id = str(cve.get("id") or "").strip()
+                    metrics = cve.get("metrics") if isinstance(cve.get("metrics"), dict) else {}
+                    score = None
+                    if metrics:
+                        for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+                            values = metrics.get(key)
+                            if isinstance(values, list) and values:
+                                cvss_data = values[0].get("cvssData") if isinstance(values[0], dict) else {}
+                                if isinstance(cvss_data, dict):
+                                    score = cvss_data.get("baseScore")
+                                break
+                    if cve_id:
+                        rows.append({"id": cve_id, "score": score})
     except Exception:
-        return []
-    vulns = data.get("vulnerabilities")
-    if not isinstance(vulns, list):
-        return []
-    rows: List[Dict[str, Any]] = []
-    for row in vulns[:5]:
-        cve = row.get("cve") if isinstance(row, dict) else {}
-        if not isinstance(cve, dict):
-            continue
-        cve_id = str(cve.get("id") or "").strip()
-        metrics = cve.get("metrics") if isinstance(cve.get("metrics"), dict) else {}
-        score = None
-        if metrics:
-            for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
-                values = metrics.get(key)
-                if isinstance(values, list) and values:
-                    cvss_data = values[0].get("cvssData") if isinstance(values[0], dict) else {}
-                    if isinstance(cvss_data, dict):
-                        score = cvss_data.get("baseScore")
-                    break
-        if cve_id:
-            rows.append({"id": cve_id, "score": score})
-    return rows
+        rows = []
+    with _nvd_lookup_lock:
+        _nvd_lookup_cache[normalized_term] = {
+            "cachedAt": now_ms,
+            "rows": rows[:8],
+        }
+    return rows[:8]
+
+
+def _nvd_lookup(name: str, version: str) -> List[Dict[str, Any]]:
+    name_candidates = _software_lookup_name_candidates(name) or [_software_compact_text(name)]
+    version_candidates = _software_lookup_version_candidates(name, version)
+    terms: List[str] = []
+    seen_terms: Set[str] = set()
+
+    def add_term(value: str) -> None:
+        term = _software_compact_text(value)
+        if len(term) < 3:
+            return
+        key = term.lower()
+        if key in seen_terms:
+            return
+        seen_terms.add(key)
+        terms.append(term)
+
+    for candidate_name in name_candidates[:3]:
+        if version_candidates:
+            for candidate_version in version_candidates[:2]:
+                add_term(f"{candidate_name} {candidate_version}")
+        add_term(candidate_name)
+
+    for term in terms[:8]:
+        rows = _nvd_lookup_term(term)
+        if rows:
+            return rows[:5]
+    return []
 
 
 def _osv_fixed_versions(name: str, version: str) -> List[str]:
+    clean_name = _software_compact_text(name)
+    clean_version = _software_compact_text(version)
+    if not clean_name or not clean_version:
+        return []
+    cache_key = f"{clean_name.lower()}|{clean_version.lower()}"
+    now_ms = int(time.time() * 1000)
+    with _osv_lookup_lock:
+        cached = _osv_lookup_cache.get(cache_key)
+        if cached and now_ms - int(cached.get("cachedAt") or 0) < OSV_LOOKUP_CACHE_TTL_MS:
+            rows = cached.get("fixedVersions")
+            if isinstance(rows, list):
+                return [str(entry or "").strip() for entry in rows if str(entry or "").strip()]
+
     payload = {
-        "version": str(version or ""),
-        "package": {"name": str(name or "")},
+        "version": clean_version,
+        "package": {"name": clean_name},
     }
-    try:
-        res = requests.post("https://api.osv.dev/v1/query", json=payload, timeout=4)
-        if not res.ok:
-            return []
-        data = res.json()
-    except Exception:
-        return []
-    vulns = data.get("vulns")
-    if not isinstance(vulns, list):
-        return []
     fixed: List[str] = []
-    for vuln in vulns:
-        affected = vuln.get("affected") if isinstance(vuln, dict) else []
-        if not isinstance(affected, list):
-            continue
-        for item in affected:
-            ranges = item.get("ranges") if isinstance(item, dict) else []
-            if not isinstance(ranges, list):
-                continue
-            for rng in ranges:
-                events = rng.get("events") if isinstance(rng, dict) else []
-                if not isinstance(events, list):
-                    continue
-                for event in events:
-                    fixed_version = str(event.get("fixed") or "").strip() if isinstance(event, dict) else ""
-                    if fixed_version:
-                        fixed.append(fixed_version)
+    try:
+        res = requests.post("https://api.osv.dev/v1/query", json=payload, timeout=3)
+        if res.ok:
+            data = res.json()
+            vulns = data.get("vulns")
+            if isinstance(vulns, list):
+                for vuln in vulns:
+                    affected = vuln.get("affected") if isinstance(vuln, dict) else []
+                    if not isinstance(affected, list):
+                        continue
+                    for item in affected:
+                        ranges = item.get("ranges") if isinstance(item, dict) else []
+                        if not isinstance(ranges, list):
+                            continue
+                        for rng in ranges:
+                            events = rng.get("events") if isinstance(rng, dict) else []
+                            if not isinstance(events, list):
+                                continue
+                            for event in events:
+                                fixed_version = str(event.get("fixed") or "").strip() if isinstance(event, dict) else ""
+                                if fixed_version:
+                                    fixed.append(fixed_version)
+    except Exception:
+        fixed = []
     unique = sorted(set(fixed), key=_safe_version_key)
-    return unique[-3:]
+    result = unique[-3:]
+    with _osv_lookup_lock:
+        _osv_lookup_cache[cache_key] = {
+            "cachedAt": now_ms,
+            "fixedVersions": result,
+        }
+    return result
 
 
 def _extract_customer_number_from_contact(contact: Dict[str, Any]) -> str:
@@ -7180,13 +7336,21 @@ def _build_customer_development_context(
         infra_risk += 35
         signals.append(f"Unmanaged Geräte erkannt ({unmanaged_count})")
         recommendations.append(
-            {"type": "security", "title": "Unmanaged Geräte inventarisieren", "why": "Erkannte Geräte sind nicht vollständig im RMM."}
+            {
+                "type": "security",
+                "title": "Unmanaged Geräte via SNMP inventarisieren",
+                "why": "Nicht alle Gerätetypen sind agentfähig. Unmanaged Geräte über SNMP/Discovery erfassen und überwachen.",
+            }
         )
     if discovered_base > 0 and coverage_ratio < 0.7:
         infra_risk += 25
-        signals.append(f"Niedrige RMM-Abdeckung ({int(coverage_ratio * 100)}%)")
+        signals.append(f"Niedrige Monitoring-Abdeckung ({int(coverage_ratio * 100)}%)")
         recommendations.append(
-            {"type": "lifecycle", "title": "RMM-Abdeckung erhöhen", "why": "Managed/Discovered Verhältnis ist niedrig."}
+            {
+                "type": "lifecycle",
+                "title": "SNMP-/Discovery-Abdeckung erhöhen",
+                "why": "Managed/Discovered Verhältnis ist niedrig; nicht-agentfähige Geräte per SNMP einbinden.",
+            }
         )
     if managed_count > 0 and offline_rate >= 0.3:
         infra_risk += 25
@@ -7220,7 +7384,7 @@ def _build_customer_development_context(
         recommendations.append(
             {
                 "type": "security",
-                "title": "Patch-Backlog abbauen",
+                "title": "3rd party software updates",
                 "why": (
                     f"Offene Updates: Windows {total_windows_updates}, "
                     f"3rd-Party {total_thirdparty_updates}, CVE-bezogen {total_open_cves}."
@@ -8095,7 +8259,7 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
     lookup_cache: Dict[Tuple[str, str], Tuple[List[Dict[str, Any]], List[str]]] = {}
     lookup_started_at = time.time()
     lookup_budget_seconds = 65.0
-    lookup_max_unique = 70
+    lookup_max_unique = 90
     lookup_unique_count = 0
     lookup_skipped = 0
     scanned = 0
@@ -8103,13 +8267,27 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
         meta = agent_meta.get(agent_key, {"agentId": "", "hostname": "", "site": "", "client": "", "online": None})
         agent_id = str(meta.get("agentId") or "").strip()
         software_map = per_agent_software.get(agent_id, {}) if agent_id else {}
-        software_list = list(software_map.values())[:40]
+        software_list = sorted(
+            list(software_map.values()),
+            key=lambda item: (
+                -_cve_lookup_priority(str(item.get("name") or "")),
+                str(item.get("name") or "").lower(),
+            ),
+        )[:40]
         agent_findings: List[Dict[str, Any]] = []
         for item in software_list:
             scanned += 1
             name = str(item.get("name") or "").strip()
             version = str(item.get("version") or "").strip()
-            lookup_key = (name.lower(), version.lower())
+            lookup_name_candidates = _software_lookup_name_candidates(name) or [name]
+            lookup_version_candidates = _software_lookup_version_candidates(name, version)
+            lookup_name = str(lookup_name_candidates[0] or name).strip() or name
+            lookup_version = (
+                str(lookup_version_candidates[0] or "").strip()
+                if lookup_version_candidates
+                else version
+            )
+            lookup_key = (lookup_name.lower(), lookup_version.lower())
             if lookup_key in lookup_cache:
                 cves, fixed_versions = lookup_cache[lookup_key]
             else:
@@ -8122,8 +8300,10 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
                     cves, fixed_versions = [], []
                 else:
                     lookup_unique_count += 1
-                    cves = _nvd_lookup(name, version)
-                    fixed_versions = _osv_fixed_versions(name, version)
+                    cves = _nvd_lookup(lookup_name, lookup_version)
+                    fixed_versions: List[str] = []
+                    if cves or _software_should_query_osv(lookup_name):
+                        fixed_versions = _osv_fixed_versions(lookup_name, lookup_version)
                 lookup_cache[lookup_key] = (cves[:5], fixed_versions)
             if not cves and not fixed_versions:
                 continue

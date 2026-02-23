@@ -231,7 +231,7 @@ const buildInfraActionHints = (item) => {
   if (effectiveOpenUpdates > 0) {
     hints.push({
       type: "security",
-      title: "Patch-Backlog abbauen",
+      title: "3rd party software updates",
       why: `Offene Updates: Windows ${windowsUpdates}, 3rd-Party ${thirdPartyUpdates}, CVE-bezogen ${openCves}.`,
     });
   }
@@ -997,14 +997,14 @@ export default function CustomerDevelopmentView() {
       );
       if (unmanaged > 0) {
         suggestions.push({
-          label: `Unmanaged Geräte prüfen (${unmanaged})`,
-          title: `Unmanaged Geräte inventarisieren (${unmanaged})`,
+          label: `Unmanaged via SNMP prüfen (${unmanaged})`,
+          title: `Unmanaged Geräte via SNMP inventarisieren (${unmanaged})`,
         });
       }
       if (coveragePct < 70) {
         suggestions.push({
-          label: `RMM-Abdeckung erhöhen (${coveragePct}%)`,
-          title: `RMM-Abdeckung erhöhen (aktuell ${coveragePct}%)`,
+          label: `SNMP-/Discovery-Abdeckung erhöhen (${coveragePct}%)`,
+          title: `SNMP-/Discovery-Abdeckung erhöhen (aktuell ${coveragePct}%)`,
         });
       }
       if (discovered > 0) {
@@ -1728,10 +1728,6 @@ export default function CustomerDevelopmentView() {
                     </p>
                   </div>
                 </div>
-                <div className="mt-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5 text-[10px] text-sky-800">
-                  Schnellansicht zeigt nur entscheidbare Kernsignale. Keine Daten gehen verloren: alle Rohdaten sind in den
-                  aufklappbaren Detailblöcken verfügbar.
-                </div>
               </div>
             ) : null}
             <div className="min-h-0 flex-1 overflow-auto bg-sand-50 p-5">
@@ -2289,9 +2285,6 @@ export default function CustomerDevelopmentView() {
                                             {device?.hostname || "Unbekannter Agent"}
                                           </span>
                                         </div>
-                                        <div className="text-[10px] text-sand-500">
-                                          {device?.agentId ? `ID ${String(device.agentId)}` : "ID n/a"}
-                                        </div>
                                       </td>
                                       <td className="max-w-[170px] truncate py-1.5 pr-3" title={device?.client || ""}>
                                         {device?.client || "n/a"}
@@ -2501,12 +2494,6 @@ export default function CustomerDevelopmentView() {
                                 </table>
                               </div>
                             </div>
-                          ) : null}
-                          {Number(cveScan.lookupSkipped || 0) > 0 ? (
-                            <p className="text-xs text-amber-700">
-                              Hinweis: Bei {Number(cveScan.lookupSkipped || 0)} Programmen wurde der externe CVE-Lookup wegen Zeitbudget
-                              {" "}(~{Number(cveScan.lookupBudgetSeconds || 0)}s) übersprungen. Für vollständige Tiefe ggf. erneut scannen.
-                            </p>
                           ) : null}
                           {Number(cveScan.matchedAgents || 0) === 0 ? (
                             <p className="text-sm text-sand-500">
