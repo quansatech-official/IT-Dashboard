@@ -1689,6 +1689,8 @@ class CustomerContractPreviewRequest(BaseModel):
     monthly_hours_included: Optional[float] = 0.0
     valid_from: Optional[str] = ""
     runtime_months: Optional[int] = 12
+    termination_notice_months: Optional[int] = 3
+    auto_extension_months: Optional[int] = 12
 
 
 class InfraDiscoveryItem(BaseModel):
@@ -4321,32 +4323,45 @@ def _render_prompt(template: str, values: Dict[str, str]) -> str:
 
 
 _CONTRACT_PLACEHOLDER_PATTERN = re.compile(r"\{([a-zA-Z0-9_]+)\}")
+_CONTRACT_FALLBACK_VALUES: Dict[str, str] = {
+    "service_hours": "Montag bis Freitag, 08:00-17:00 Uhr (werktags)",
+    "reaction_time": "innerhalb von 8 Arbeitsstunden",
+    "hourly_rate_extra": "120,00 EUR pro Stunde",
+    "billing_interval": "monatlich",
+    "additional_systems": "keine",
+    "monitoring_enabled": "ja",
+    "backup_monitoring": "nach Vereinbarung",
+    "patch_management": "ja (sicherheitsrelevant)",
+    "security_monitoring": "ja (Basis)",
+    "extension_period": "12",
+    "termination_notice": "3 Monate",
+    "liability_limit": "gemaess AGB",
+}
 
 
 def _render_contract_template(template: str, values: Dict[str, str]) -> str:
     rendered = _render_prompt(template or "", values)
-    fallback_values = {
-        "service_hours": "Montag bis Freitag, 08:00-17:00 Uhr (werktags)",
-        "reaction_time": "innerhalb von 8 Arbeitsstunden",
-        "hourly_rate_extra": "120,00 EUR pro Stunde",
-        "billing_interval": "monatlich",
-        "additional_systems": "keine",
-        "monitoring_enabled": "ja",
-        "backup_monitoring": "nach Vereinbarung",
-        "patch_management": "ja (sicherheitsrelevant)",
-        "security_monitoring": "ja (Basis)",
-        "extension_period": "12",
-        "termination_notice": "3 Monate",
-        "liability_limit": "gemaess AGB",
-    }
 
     def _replace_missing(match: re.Match[str]) -> str:
         key = str(match.group(1) or "").strip().lower()
         if not key:
             return ""
-        return escape(str(fallback_values.get(key, "—")))
+        return escape(str(_CONTRACT_FALLBACK_VALUES.get(key, "—")))
 
     return _CONTRACT_PLACEHOLDER_PATTERN.sub(_replace_missing, rendered)
+
+
+def _extract_contract_placeholders(*templates: str) -> List[str]:
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for template in templates:
+        for match in _CONTRACT_PLACEHOLDER_PATTERN.finditer(str(template or "")):
+            key = str(match.group(1) or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            ordered.append(key)
+    return ordered
 
 
 def _normalize_contract_liability_section(rendered_html: str) -> str:
@@ -7780,11 +7795,6 @@ def _customer_contract_time_budget(db, customer: Customer, now_ms: int) -> Dict[
     start_month_ms, next_month_ms = _month_bounds_ms(now_dt)
     month_label = f"{now_dt.month:02d}/{now_dt.year:04d}"
 
-    contract_flags = _parse_contract_flags(customer.contract_flags)
-    has_service_contract = bool(customer.maintenance_contract) or bool(
-        set(contract_flags) & {"wartung", "monitoring"}
-    )
-
     active_contract_docs = (
         db.query(CustomerContractDocument)
         .filter(CustomerContractDocument.customer_id == int(customer.id))
@@ -7809,6 +7819,7 @@ def _customer_contract_time_budget(db, customer: Customer, now_ms: int) -> Dict[
                 "createdAt": int(row.created_at or 0),
             }
         )
+    has_service_contract = len(budget_contracts) > 0
 
     task_filters = _customer_task_filter(customer)
     task_ms = 0
@@ -13584,6 +13595,10 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         generated_at = now.strftime("%d.%m.%Y")
         valid_from = str(data.valid_from or "").strip() or generated_at
         runtime_months = max(1, _safe_nonnegative_int(data.runtime_months or 12))
+        termination_notice_months = max(0, _safe_nonnegative_int(data.termination_notice_months or 3))
+        if termination_notice_months > runtime_months:
+            raise HTTPException(400, "termination_notice_months must not exceed runtime_months")
+        auto_extension_months = max(1, _safe_nonnegative_int(data.auto_extension_months or 12))
         monthly_hours_included = _safe_nonnegative_float(data.monthly_hours_included or 0.0)
         if not is_service_contract:
             monthly_hours_included = 0.0
@@ -13664,17 +13679,40 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         note_block = (
             f"Hinweis: {escape(note_raw).replace(chr(10), '<br/>')}" if note_raw else "Ohne Zusatzhinweise."
         )
-        extension_period_months = max(1, runtime_months)
+        extension_period_months = max(1, auto_extension_months)
+        customer_number = str(customer.creditor_number or "").strip()
+        customer_short_code = str(customer.short_code or "").strip()
+        customer_email = str(customer.email or "").strip()
+        customer_street = str(customer.street or "").strip()
+        customer_postal_code = str(customer.postal_code or "").strip()
+        customer_city = str(customer.city or "").strip()
+        customer_country = str(customer.country or "").strip()
+        customer_address = ", ".join(
+            [part for part in [customer_street, f"{customer_postal_code} {customer_city}".strip(), customer_country] if part]
+        )
+        termination_notice_label = (
+            f"{termination_notice_months} Monat" if termination_notice_months == 1 else f"{termination_notice_months} Monate"
+        )
         placeholder_values = {
             "provider_name": "QT Workbench Services",
             "customer_name": escape(str(customer.name or "").strip() or "Kunde"),
+            "customer_number": escape(customer_number),
+            "customer_short_code": escape(customer_short_code),
+            "customer_email": escape(customer_email),
+            "customer_street": escape(customer_street),
+            "customer_postal_code": escape(customer_postal_code),
+            "customer_city": escape(customer_city),
+            "customer_country": escape(customer_country),
+            "customer_address": escape(customer_address),
             "generated_at": generated_at,
             "valid_from": escape(valid_from),
             "contract_start": escape(valid_from),
             "runtime_months": str(runtime_months),
             "minimum_term_months": str(runtime_months),
             "extension_period": str(extension_period_months),
-            "termination_notice": "3 Monate",
+            "auto_extension_months": str(auto_extension_months),
+            "termination_notice_months": str(termination_notice_months),
+            "termination_notice": termination_notice_label,
             "servers": str(servers),
             "clients": str(clients),
             "network_devices": str(network_devices),
@@ -13703,6 +13741,16 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             if not key:
                 continue
             placeholder_values[key] = str(raw_value or "")
+        template_placeholder_keys = _extract_contract_placeholders(
+            template_header_html,
+            body_template,
+            template_footer_html,
+        )
+        unresolved_placeholder_keys = [
+            key
+            for key in template_placeholder_keys
+            if key not in placeholder_values and key not in _CONTRACT_FALLBACK_VALUES
+        ]
         html = _render_contract_html(
             customer=customer,
             title=title,
@@ -13724,6 +13772,8 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 "generated_at": generated_at,
                 "valid_from": valid_from,
                 "runtime_months": runtime_months,
+                "termination_notice_months": termination_notice_months,
+                "auto_extension_months": auto_extension_months,
                 "counts_source": counts_source,
                 "servers": servers,
                 "clients": clients,
@@ -13732,6 +13782,8 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 "monthly_total": round(float(monthly_total or 0.0), 2),
                 "yearly_total": round(float(yearly_total or 0.0), 2),
                 "monthly_hours_included": round(float(monthly_hours_included or 0.0), 2),
+                "placeholder_keys": template_placeholder_keys,
+                "unresolved_placeholders": unresolved_placeholder_keys,
                 "tariff": serialize_contract_tariff(tariff) if tariff else None,
             },
         }
@@ -13758,6 +13810,8 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
         runtime_months = max(1, int(_safe_nonnegative_int(data.runtime_months or 12)))
         termination_notice_months = max(0, int(_safe_nonnegative_int(data.termination_notice_months or 3)))
         auto_extension_months = max(1, int(_safe_nonnegative_int(data.auto_extension_months or 12)))
+        if termination_notice_months > runtime_months:
+            raise HTTPException(400, "termination_notice_months must not exceed runtime_months")
         valid_from = str(data.valid_from or "").strip()
         doc_type_value = _normalize_contract_doc_type(data.doc_type, default="wartung")
         template_key_value = _normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value)
@@ -13839,6 +13893,8 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
         runtime_months = max(1, int(_safe_nonnegative_int(data.runtime_months or 12)))
         termination_notice_months = max(0, int(_safe_nonnegative_int(data.termination_notice_months or 3)))
         auto_extension_months = max(1, int(_safe_nonnegative_int(data.auto_extension_months or 12)))
+        if termination_notice_months > runtime_months:
+            raise HTTPException(400, "termination_notice_months must not exceed runtime_months")
         valid_from = str(data.valid_from or "").strip()
         doc_type_value = _normalize_contract_doc_type(data.doc_type, default="wartung")
         template_key_value = _normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value)

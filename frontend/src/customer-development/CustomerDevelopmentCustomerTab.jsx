@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Shield, Sparkles } from "lucide-react";
+import { Plus, Shield, Sparkles, TrendingDown } from "lucide-react";
 
 const API = "/api";
 

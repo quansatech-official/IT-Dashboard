@@ -991,6 +991,20 @@ export default function CustomerDirectoryView() {
     () => (supportsHoursBudget ? parseHoursInput(contractDraft.monthlyHoursIncluded) : 0),
     [contractDraft.monthlyHoursIncluded, supportsHoursBudget]
   );
+  const runtimeMonthsValue = useMemo(() => {
+    const parsed = Number.parseInt(String(contractDraft.runtimeMonths || "12"), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+  }, [contractDraft.runtimeMonths]);
+  const terminationNoticeMonthsValue = useMemo(() => {
+    const parsed = Number.parseInt(String(contractDraft.terminationNoticeMonths || "3"), 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 3;
+  }, [contractDraft.terminationNoticeMonths]);
+  const autoExtensionMonthsValue = useMemo(() => {
+    const parsed = Number.parseInt(String(contractDraft.autoExtensionMonths || "12"), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+  }, [contractDraft.autoExtensionMonths]);
+  const contractRuntimeInvalid = terminationNoticeMonthsValue > runtimeMonthsValue;
+  const contractGenerationBlocked = tariffSelectionMissing || contractRuntimeInvalid;
 
   const contractPreview = useMemo(() => {
     const counts = {
@@ -1061,6 +1075,8 @@ export default function CustomerDirectoryView() {
     contractDraft.docType,
     contractDraft.validFrom,
     contractDraft.runtimeMonths,
+    contractDraft.terminationNoticeMonths,
+    contractDraft.autoExtensionMonths,
     contractDraft.monthlyHoursIncluded,
     contractDraft.monthlyTotalOverride,
     contractDraft.yearlyTotalOverride,
@@ -1166,6 +1182,10 @@ export default function CustomerDirectoryView() {
       setToast("Für Wartung/Monitoring muss ein Tarif gewählt werden.");
       return null;
     }
+    if (contractRuntimeInvalid) {
+      setToast("Kündigungsfrist darf die Laufzeit nicht überschreiten.");
+      return null;
+    }
     const selectedTariffId = tariffRequired ? selectedTariff?.id || null : null;
     setContractPreviewStatus("saving");
     try {
@@ -1174,7 +1194,9 @@ export default function CustomerDirectoryView() {
         doc_type: String(contractDraft.docType || "wartung"),
         note: "",
         valid_from: String(contractDraft.validFrom || ""),
-        runtime_months: Number(contractDraft.runtimeMonths || 12),
+        runtime_months: runtimeMonthsValue,
+        termination_notice_months: terminationNoticeMonthsValue,
+        auto_extension_months: autoExtensionMonthsValue,
         tariff_id: selectedTariffId,
         servers: contractPreview.counts.servers,
         clients: contractPreview.counts.clients,
@@ -1195,9 +1217,9 @@ export default function CustomerDirectoryView() {
       }
       setTimeout(() => setContractPreviewStatus("idle"), 1800);
       return preview;
-    } catch {
+    } catch (error) {
       setContractPreviewStatus("error");
-      setToast("Vorschau konnte nicht erstellt werden.");
+      setToast(error?.message ? String(error.message) : "Vorschau konnte nicht erstellt werden.");
       setTimeout(() => setContractPreviewStatus("idle"), 2200);
       return null;
     }
@@ -1225,6 +1247,10 @@ export default function CustomerDirectoryView() {
       setToast("Für Wartung/Monitoring muss ein Tarif gewählt werden.");
       return;
     }
+    if (contractRuntimeInvalid) {
+      setToast("Kündigungsfrist darf die Laufzeit nicht überschreiten.");
+      return;
+    }
     setContractSaveStatus("saving");
     try {
       const source = generatedContract || (await generateContractPreview(false));
@@ -1248,9 +1274,13 @@ export default function CustomerDirectoryView() {
         tariff_id: selectedTariffId,
         monthly_hours_included: Number(source?.meta?.monthly_hours_included ?? monthlyHoursIncluded),
         valid_from: String(source?.meta?.valid_from || contractDraft.validFrom || ""),
-        runtime_months: Number(source?.meta?.runtime_months || contractDraft.runtimeMonths || 12),
-        termination_notice_months: Number(contractDraft.terminationNoticeMonths || 3),
-        auto_extension_months: Number(contractDraft.autoExtensionMonths || 12),
+        runtime_months: Number(source?.meta?.runtime_months || runtimeMonthsValue),
+        termination_notice_months: Number(
+          source?.meta?.termination_notice_months ?? terminationNoticeMonthsValue
+        ),
+        auto_extension_months: Number(
+          source?.meta?.auto_extension_months ?? autoExtensionMonthsValue
+        ),
         note: "",
         status: "proposal"
       };
@@ -1264,8 +1294,9 @@ export default function CustomerDirectoryView() {
       setMetricsReloadTick((prev) => prev + 1);
       setContractSaveStatus("saved");
       setTimeout(() => setContractSaveStatus("idle"), 1800);
-    } catch {
+    } catch (error) {
       setContractSaveStatus("error");
+      setToast(error?.message ? String(error.message) : "Speichern fehlgeschlagen.");
       setTimeout(() => setContractSaveStatus("idle"), 2200);
     }
   };
@@ -1473,14 +1504,6 @@ export default function CustomerDirectoryView() {
 
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
   const editCustomer = customers.find((customer) => customer.id === editCustomerId) || null;
-  const editContractFlags = normalizeContractFlags(editCustomer?.contractFlags || []);
-  const editContractDocumentFlags = normalizeContractDocumentFlags(editCustomer?.contractDocumentFlags || []);
-  const editHasServiceContract =
-    Boolean(editCustomer?.maintenanceContract) ||
-    editContractFlags.includes("wartung") ||
-    editContractFlags.includes("monitoring") ||
-    editContractDocumentFlags.includes("wartung") ||
-    editContractDocumentFlags.includes("monitoring");
   const metricsCustomerId = Number(editCustomer?.id || activeCustomer?.id || 0);
   const selectedCustomerMetrics =
     metrics &&
@@ -1493,6 +1516,16 @@ export default function CustomerDirectoryView() {
     typeof selectedCustomerMetrics.contractTimeBudget === "object"
       ? selectedCustomerMetrics.contractTimeBudget
       : null;
+  const editHasServiceContract = useMemo(() => {
+    const fromMetrics = Number(contractTimeBudget?.activeBudgetContractsCount || 0) > 0;
+    if (fromMetrics) return true;
+    const contracts = Array.isArray(customerContracts) ? customerContracts : [];
+    return contracts.some((item) => {
+      const status = String(item?.status || "").trim().toLowerCase();
+      const type = normalizeContractDocumentType(item?.doc_type ?? item?.template_key);
+      return status === "active" && (type === "wartung" || type === "monitoring");
+    });
+  }, [contractTimeBudget?.activeBudgetContractsCount, customerContracts]);
   const monthlyTaskHours = Number(contractTimeBudget?.taskHours || 0);
   const monthlyTelephonyHours = Number(contractTimeBudget?.telephonyHours || 0);
   const monthlyConsumedHours = Number(contractTimeBudget?.consumedHours || 0);
@@ -2689,6 +2722,9 @@ export default function CustomerDirectoryView() {
           {tariffSelectionMissing ? (
             <p className="text-xs text-rose-600">Wartungs- und Monitoringverträge benötigen einen Tarif.</p>
           ) : null}
+          {contractRuntimeInvalid ? (
+            <p className="text-xs text-rose-600">Kündigungsfrist darf die Laufzeit nicht überschreiten.</p>
+          ) : null}
           {contractTariffsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Tarife…</p> : null}
           {contractTariffsStatus === "error" ? <p className="text-xs text-rose-600">Tarife konnten nicht geladen werden.</p> : null}
           <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
@@ -2930,7 +2966,7 @@ export default function CustomerDirectoryView() {
           <button
             type="button"
             onClick={() => generateContractPreview(true)}
-            disabled={tariffSelectionMissing}
+            disabled={contractGenerationBlocked}
             className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Eye size={12} />
@@ -2939,7 +2975,7 @@ export default function CustomerDirectoryView() {
           <button
             type="button"
             onClick={exportGeneratedContractPdf}
-            disabled={tariffSelectionMissing}
+            disabled={contractGenerationBlocked}
             className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <FileDown size={12} />
@@ -2948,7 +2984,7 @@ export default function CustomerDirectoryView() {
           <button
             type="button"
             onClick={() => saveGeneratedContract()}
-            disabled={tariffSelectionMissing}
+            disabled={contractGenerationBlocked}
             className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <BadgeCheck size={12} />
@@ -2962,6 +2998,12 @@ export default function CustomerDirectoryView() {
           {contractSaveStatus === "saving" ? <span className="text-xs text-sand-500">Speichere Vertrag…</span> : null}
           {contractSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Vertrag gespeichert</span> : null}
           {contractSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
+          {Array.isArray(generatedContract?.meta?.unresolved_placeholders) &&
+          generatedContract.meta.unresolved_placeholders.length ? (
+            <span className="text-xs text-amber-700">
+              Unbekannte Template-Variablen: {generatedContract.meta.unresolved_placeholders.join(", ")}
+            </span>
+          ) : null}
         </div>
       </div>
     </div>
