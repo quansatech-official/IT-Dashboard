@@ -5611,20 +5611,33 @@ export default function OffersView() {
 
   const handleClearOffer = () => {
     if (!activeOffer) return;
-    const ok = window.confirm("Angebot wirklich leeren?");
+    if (activeOffer.serverId) {
+      const ok = window.confirm(
+        "Dieses Angebot ist bereits gespeichert. Statt zu leeren wird ein neuer leerer Entwurf geöffnet. Fortfahren?"
+      );
+      if (!ok) return;
+      const freshDraft = createEmptyOffer(null, offerNumberFormat);
+      setOffers((prev) => [freshDraft, ...prev]);
+      setActiveId(freshDraft.id);
+      setDetailDraft("");
+      return;
+    }
+    const ok = window.confirm("Aktuellen Entwurf verwerfen?");
     if (!ok) return;
-    const base = createEmptyOffer(null, offerNumberFormat);
-    const cleared = {
-      ...base,
-      id: activeOffer.id,
-      reference: activeOffer.reference || "",
-      createdAt: activeOffer.createdAt || base.createdAt,
-      status: activeOffer.status || base.status,
-      serverId: activeOffer.serverId || null,
-      confirmGuid: activeOffer.confirmGuid || "",
-      handoverLocked: Boolean(activeOffer.handoverLocked)
-    };
-    updateOffer(activeOffer.id, () => cleared);
+    const freshDraft = createEmptyOffer(null, offerNumberFormat);
+    setOffers((prev) => {
+      const remaining = prev.filter((offer) => offer.id !== activeOffer.id);
+      return [freshDraft, ...remaining];
+    });
+    delete lastSavedOffersRef.current[activeOffer.id];
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(CRASH_RECOVERY_KEY);
+      } catch (error) {
+        // ignore storage errors
+      }
+    }
+    setActiveId(freshDraft.id);
     setDetailDraft("");
   };
 
@@ -6077,7 +6090,7 @@ export default function OffersView() {
                     : "border-sand-200 bg-sand-100 text-sand-400 cursor-not-allowed"
                 }`}
               >
-                <Trash2 size={12} /> Leeren
+                <Trash2 size={12} /> Verwerfen
               </button>
               {saveStatus === "saved" && (
                 <span className="text-xs text-emerald-600">Gespeichert</span>
