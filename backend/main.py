@@ -1695,6 +1695,7 @@ class CustomerContractPreviewRequest(BaseModel):
     runtime_months: Optional[int] = 12
     termination_notice_months: Optional[int] = 3
     auto_extension_months: Optional[int] = 12
+    contract_variable_values: Optional[Dict[str, str]] = None
 
 
 class InfraDiscoveryItem(BaseModel):
@@ -1844,6 +1845,7 @@ class AiPromptsUpdate(BaseModel):
     contract_footer_html: Optional[str] = None
     contract_templates: Optional[Dict[str, Dict[str, str]]] = None
     contract_variables: Optional[Dict[str, str]] = None
+    contract_variable_definitions: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 class OfferCustomerConfirm(BaseModel):
@@ -3917,15 +3919,15 @@ def _default_ai_prompts() -> Dict[str, Any]:
             "Bereits vorhandener Text:\n{current_text}\n"
         ),
         "offer_mode_instructions": {
-            "cover_intro": "Schreibe einen kurzen Deckblatt-Introtext (2-4 Saetze).",
-            "overview": "Schreibe einen kurzen Ueberblick fuer den Kunden (2-4 Saetze oder kurze Stichpunkte).",
-            "calculation": "Schreibe kurze Hinweise zur Kalkulation (1-3 Saetze).",
+            "cover_intro": "Schreibe einen kurzen Deckblatt-Introtext (2-4 Sätze).",
+            "overview": "Schreibe einen kurzen Überblick für den Kunden (2-4 Sätze oder kurze Stichpunkte).",
+            "calculation": "Schreibe kurze Hinweise zur Kalkulation (1-3 Sätze).",
             "position_text": (
                 "Erstelle einen sehr kurzen, professionellen Positionstext "
-                "(1-2 kurze Saetze). Integriere Aufgaben-Titel und Notiz "
+                "(1-2 kurze Sätze). Integriere Aufgaben-Titel und Notiz "
                 "klar und sachlich. Kein Aufsatz, keine Einleitung."
             ),
-            "device_description": "Schreibe eine kurze Produktbeschreibung fuer Material (3-6 Saetze).",
+            "device_description": "Schreibe eine kurze Produktbeschreibung für Material (3-6 Sätze).",
         },
         "contract_header_html": (
             "<div style=\"margin-bottom:10px; padding:10px 12px; border:1px solid #dbe4ef; border-radius:12px; "
@@ -3935,7 +3937,7 @@ def _default_ai_prompts() -> Dict[str, Any]:
             "</div>"
             "<div style=\"margin-top:4px; font-size:12px; color:#334155;\">"
             "Dieser Vertrag beschreibt klar, welche Leistungen enthalten sind und welche nicht. "
-            "Massgeblich sind ausschliesslich die schriftlich vereinbarten Regelungen in diesem Dokument."
+            "Maßgeblich sind ausschließlich die schriftlich vereinbarten Regelungen in diesem Dokument."
             "</div>"
             "</div>"
         ),
@@ -3944,12 +3946,12 @@ def _default_ai_prompts() -> Dict[str, Any]:
             "background:#f8fafc; color:#475569; font-size:11px;\">"
             "<p style=\"margin:0 0 6px;\">"
             "Hinweis: Die Leistungen werden als Dienstleistung nach bestem Wissen und Stand der Technik erbracht. "
-            "Die Haftung richtet sich - soweit gesetzlich zulaessig - auf Vorsatz und grobe Fahrlaessigkeit; "
+            "Die Haftung richtet sich - soweit gesetzlich zulässig - auf Vorsatz und grobe Fahrlässigkeit; "
             "weitere Haftungsregelungen ergeben sich aus den vereinbarten AGB."
             "</p>"
             "<p style=\"margin:0;\">"
-            "Aenderungen, Nebenabreden und Erweiterungen beduerfen der Textform. "
-            "Sollten einzelne Regelungen unwirksam sein, bleibt der Vertrag im Uebrigen wirksam "
+            "Änderungen, Nebenabreden und Erweiterungen bedürfen der Textform. "
+            "Sollten einzelne Regelungen unwirksam sein, bleibt der Vertrag im Übrigen wirksam "
             "(salvatorische Klausel)."
             "</p>"
             "</div>"
@@ -3965,74 +3967,74 @@ def _default_ai_prompts() -> Dict[str, Any]:
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">1) Enthaltene Leistungen</h3>"
                     "<p>Der IT-Dienstleister erbringt im Rahmen dieses Wartungsvertrages folgende Leistungen:</p>"
                     "<ul>"
-                    "<li>Regelmaessige Wartung und Funktionspruefung der betreuten Systeme.</li>"
-                    "<li>Proaktive Systemueberwachung (Monitoring).</li>"
-                    "<li>Fehleranalyse und Stoerungsbehebung im vertraglich vereinbarten Umfang.</li>"
+                    "<li>Regelmäßige Wartung und Funktionsprüfung der betreuten Systeme.</li>"
+                    "<li>Proaktive Systemüberwachung (Monitoring).</li>"
+                    "<li>Fehleranalyse und Störungsbehebung im vertraglich vereinbarten Umfang.</li>"
                     "<li>Remote-Support innerhalb der vereinbarten Servicezeiten.</li>"
                     "<li>Installation sicherheitsrelevanter Updates und Patches.</li>"
-                    "<li>Basis-IT-Security-Ueberwachung.</li>"
-                    "<li>Dokumentation der durchgefuehrten Arbeiten.</li>"
-                    "<li>Konkrete Handlungsempfehlungen zur Systemstabilitaet.</li>"
+                    "<li>Basis-IT-Security-Überwachung.</li>"
+                    "<li>Dokumentation der durchgeführten Arbeiten.</li>"
+                    "<li>Konkrete Handlungsempfehlungen zur Systemstabilität.</li>"
                     "</ul>"
                     "<p><strong>Servicezeiten:</strong><br>{service_hours}</p>"
                     "<p><strong>Reaktionszeit (Remote):</strong><br>{reaction_time}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Nicht enthaltene Leistungen</h3>"
-                    "<p>Folgende Leistungen sind ausdruecklich nicht Bestandteil dieses Vertrages:</p>"
+                    "<p>Folgende Leistungen sind ausdrücklich nicht Bestandteil dieses Vertrages:</p>"
                     "<ul>"
                     "<li>Projektleistungen, Migrationen, Neuinstallationen und grundlegende Umbauten.</li>"
                     "<li>Hardwarelieferungen und Softwarelizenzen.</li>"
                     "<li>Ersatzteile und Herstellerleistungen.</li>"
-                    "<li>Vor-Ort-Einsaetze ausserhalb inkludierter Stunden.</li>"
+                    "<li>Vor-Ort-Einsätze außerhalb inkludierter Stunden.</li>"
                     "<li>Reisekosten und Fremdleistungen.</li>"
-                    "<li>Notfalleinsaetze ausserhalb der Servicezeiten ohne gesonderte Beauftragung.</li>"
+                    "<li>Notfalleinsätze außerhalb der Servicezeiten ohne gesonderte Beauftragung.</li>"
                     "<li>Schulungen oder Anwendertrainings.</li>"
                     "</ul>"
-                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Verguetung und Zeitbudget</h3>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Vergütung und Zeitbudget</h3>"
                     "<p><strong>Monatliche Betreuungspauschale:</strong><br>{monthly_total}</p>"
-                    "<p><strong>Jaehrliche Gesamtverguetung:</strong><br>{yearly_total}</p>"
+                    "<p><strong>Jährliche Gesamtvergütung:</strong><br>{yearly_total}</p>"
                     "<p><strong>Inklusivstunden pro Monat:</strong><br>{monthly_hours_included}</p>"
                     "<p><strong>Regelungen:</strong><br>"
                     "Nicht verbrauchte Inklusivstunden verfallen am Monatsende, sofern nichts anderes "
                     "schriftlich vereinbart wurde. Mehrleistungen werden nach vorheriger Freigabe gesondert "
                     "verrechnet.</p>"
-                    "<p><strong>Stundensatz fuer Zusatzleistungen:</strong> {hourly_rate_extra}</p>"
+                    "<p><strong>Stundensatz für Zusatzleistungen:</strong> {hourly_rate_extra}</p>"
                     "<p><strong>Abrechnungseinheit:</strong> {billing_interval}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Betreute Umgebung</h3>"
                     "<p><strong>Server:</strong> {servers}<br>"
-                    "<strong>Clients / Arbeitsplaetze:</strong> {clients}<br>"
-                    "<strong>Netzwerkgeraete:</strong> {network_devices}<br>"
+                    "<strong>Clients / Arbeitsplätze:</strong> {clients}<br>"
+                    "<strong>Netzwerkgeräte:</strong> {network_devices}<br>"
                     "<strong>IoT / Peripherie:</strong> {iot_devices}<br>"
-                    "<strong>Zusaetzliche Systeme:</strong><br>{additional_systems}</p>"
+                    "<strong>Zusätzliche Systeme:</strong><br>{additional_systems}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Serviceumfang</h3>"
                     "<p><strong>Monitoring aktiviert:</strong> {monitoring_enabled}<br>"
-                    "<strong>Backupueberwachung:</strong> {backup_monitoring}<br>"
+                    "<strong>Backupüberwachung:</strong> {backup_monitoring}<br>"
                     "<strong>Patchmanagement:</strong> {patch_management}<br>"
-                    "<strong>Securityueberwachung:</strong> {security_monitoring}</p>"
+                    "<strong>Securityüberwachung:</strong> {security_monitoring}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">6) Laufzeit</h3>"
                     "<p><strong>Vertragsbeginn:</strong> {contract_start}<br>"
                     "<strong>Mindestlaufzeit:</strong><br>{minimum_term_months} Monate</p>"
-                    "<p><strong>Verlaengerung:</strong><br>"
-                    "Der Vertrag verlaengert sich automatisch um {extension_period} Monate, sofern keine "
-                    "schriftliche Kuendigung mindestens {termination_notice} vor Ablauf erfolgt.</p>"
+                    "<p><strong>Verlängerung:</strong><br>"
+                    "Der Vertrag verlängert sich automatisch um {extension_period} Monate, sofern keine "
+                    "schriftliche Kündigung mindestens {termination_notice} vor Ablauf erfolgt.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">7) Mitwirkungspflichten des Kunden</h3>"
                     "<p>Der Kunde verpflichtet sich:</p>"
                     "<ul>"
-                    "<li>notwendige Systemzugaenge bereitzustellen,</li>"
-                    "<li>administrative Aenderungen mitzuteilen,</li>"
-                    "<li>Datensicherungen gemaess Empfehlung umzusetzen,</li>"
+                    "<li>notwendige Systemzugänge bereitzustellen,</li>"
+                    "<li>administrative Änderungen mitzuteilen,</li>"
+                    "<li>Datensicherungen gemäß Empfehlung umzusetzen,</li>"
                     "<li>autorisierte Ansprechpartner zu benennen.</li>"
                     "</ul>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">8) Haftung</h3>"
-                    "<p>Der IT-Dienstleister haftet ausschliesslich fuer grobe Fahrlaessigkeit und Vorsatz im "
+                    "<p>Der IT-Dienstleister haftet ausschließlich für grobe Fahrlässigkeit und Vorsatz im "
                     "Rahmen der gesetzlichen Bestimmungen.</p>"
-                    "<p>Keine Haftung besteht fuer:</p>"
+                    "<p>Keine Haftung besteht für:</p>"
                     "<ul>"
                     "<li>Datenverlust ohne funktionierende Datensicherung,</li>"
-                    "<li>Drittanbieter-Ausfaelle,</li>"
-                    "<li>Internet- oder Cloud-Provider-Stoerungen,</li>"
-                    "<li>Cyberangriffe ausserhalb zumutbarer Schutzmassnahmen.</li>"
+                    "<li>Drittanbieter-Ausfälle,</li>"
+                    "<li>Internet- oder Cloud-Provider-Störungen,</li>"
+                    "<li>Cyberangriffe außerhalb zumutbarer Schutzmaßnahmen.</li>"
                     "</ul>"
-                    "<p><strong>Haftungshoechstgrenze pro Schadensfall:</strong><br>{liability_limit}</p>"
+                    "<p><strong>Haftungshöchstgrenze pro Schadensfall:</strong><br>{liability_limit}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">9) Vertraulichkeit und Datenschutz</h3>"
                     "<p>Beide Vertragsparteien verpflichten sich zur Einhaltung der DSGVO sowie zur vertraulichen "
                     "Behandlung aller im Rahmen der Betreuung erlangten Informationen.</p>"
@@ -4045,74 +4047,74 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "footer_html": "",
                 "body_template": (
                     "<p>Dieser Vertrag wird zwischen <strong>{provider_name}</strong> und "
-                    "<strong>{customer_name}</strong> geschlossen und betrifft die laufende Ueberwachung der "
+                    "<strong>{customer_name}</strong> geschlossen und betrifft die laufende Überwachung der "
                     "IT-Umgebung des Kunden.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">1) Enthaltene Leistungen</h3>"
                     "<p>Der IT-Dienstleister erbringt im Rahmen dieses Monitoringvertrages folgende Leistungen:</p>"
                     "<ul>"
                     "<li>Technisches Monitoring der vereinbarten Systeme und Dienste.</li>"
-                    "<li>Erkennung und Meldung definierter Schwellwertverletzungen und Stoerungen.</li>"
-                    "<li>Regelmaessige Monitoring-Berichte und transparente Betriebsdokumentation.</li>"
-                    "<li>Erstbewertung von Alarmen inklusive Priorisierung fuer die weitere Bearbeitung.</li>"
+                    "<li>Erkennung und Meldung definierter Schwellwertverletzungen und Störungen.</li>"
+                    "<li>Regelmäßige Monitoring-Berichte und transparente Betriebsdokumentation.</li>"
+                    "<li>Erstbewertung von Alarmen inklusive Priorisierung für die weitere Bearbeitung.</li>"
                     "<li>Benachrichtigung und Abstimmung mit dem Kunden bei Handlungsbedarf.</li>"
                     "</ul>"
                     "<p><strong>Servicezeiten:</strong><br>{service_hours}</p>"
                     "<p><strong>Reaktionszeit (Remote):</strong><br>{reaction_time}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Nicht enthaltene Leistungen</h3>"
-                    "<p>Folgende Leistungen sind ausdruecklich nicht Bestandteil dieses Vertrages:</p>"
+                    "<p>Folgende Leistungen sind ausdrücklich nicht Bestandteil dieses Vertrages:</p>"
                     "<ul>"
-                    "<li>Automatische Entstoerung ohne gesonderte Beauftragung.</li>"
+                    "<li>Automatische Entstörung ohne gesonderte Beauftragung.</li>"
                     "<li>Projektarbeiten, Migrationen, Neuinstallationen und grundlegende Umbauten.</li>"
                     "<li>Hardwarelieferungen, Softwarelizenzen sowie Herstellerleistungen Dritter.</li>"
-                    "<li>Vor-Ort-Einsaetze ausserhalb inkludierter Stunden.</li>"
-                    "<li>Notfalleinsaetze ausserhalb der Servicezeiten ohne gesonderte Beauftragung.</li>"
+                    "<li>Vor-Ort-Einsätze außerhalb inkludierter Stunden.</li>"
+                    "<li>Notfalleinsätze außerhalb der Servicezeiten ohne gesonderte Beauftragung.</li>"
                     "</ul>"
-                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Verguetung und Zeitbudget</h3>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Vergütung und Zeitbudget</h3>"
                     "<p><strong>Monatliche Monitoringpauschale:</strong><br>{monthly_total}</p>"
-                    "<p><strong>Jaehrliche Gesamtverguetung:</strong><br>{yearly_total}</p>"
+                    "<p><strong>Jährliche Gesamtvergütung:</strong><br>{yearly_total}</p>"
                     "<p><strong>Inklusivstunden pro Monat:</strong><br>{monthly_hours_included}</p>"
                     "<p><strong>Regelungen:</strong><br>"
                     "Nicht verbrauchte Inklusivstunden verfallen am Monatsende, sofern nichts anderes "
                     "schriftlich vereinbart wurde. Weitergehende Umsetzungen werden nach vorheriger Freigabe "
                     "gesondert verrechnet.</p>"
-                    "<p><strong>Stundensatz fuer Zusatzleistungen:</strong> {hourly_rate_extra}</p>"
+                    "<p><strong>Stundensatz für Zusatzleistungen:</strong> {hourly_rate_extra}</p>"
                     "<p><strong>Abrechnungseinheit:</strong> {billing_interval}</p>"
-                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Ueberwachte Umgebung</h3>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Überwachte Umgebung</h3>"
                     "<p><strong>Server:</strong> {servers}<br>"
-                    "<strong>Clients / Arbeitsplaetze:</strong> {clients}<br>"
-                    "<strong>Netzwerkgeraete:</strong> {network_devices}<br>"
+                    "<strong>Clients / Arbeitsplätze:</strong> {clients}<br>"
+                    "<strong>Netzwerkgeräte:</strong> {network_devices}<br>"
                     "<strong>IoT / Peripherie:</strong> {iot_devices}<br>"
-                    "<strong>Zusaetzliche Systeme:</strong><br>{additional_systems}</p>"
+                    "<strong>Zusätzliche Systeme:</strong><br>{additional_systems}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Serviceumfang</h3>"
                     "<p><strong>Monitoring aktiviert:</strong> {monitoring_enabled}<br>"
-                    "<strong>Backupueberwachung:</strong> {backup_monitoring}<br>"
+                    "<strong>Backupüberwachung:</strong> {backup_monitoring}<br>"
                     "<strong>Patchmanagement:</strong> {patch_management}<br>"
-                    "<strong>Securityueberwachung:</strong> {security_monitoring}</p>"
+                    "<strong>Securityüberwachung:</strong> {security_monitoring}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">6) Laufzeit</h3>"
                     "<p><strong>Vertragsbeginn:</strong> {contract_start}<br>"
                     "<strong>Mindestlaufzeit:</strong><br>{minimum_term_months} Monate</p>"
-                    "<p><strong>Verlaengerung:</strong><br>"
-                    "Der Vertrag verlaengert sich automatisch um {extension_period} Monate, sofern keine "
-                    "schriftliche Kuendigung mindestens {termination_notice} vor Ablauf erfolgt.</p>"
+                    "<p><strong>Verlängerung:</strong><br>"
+                    "Der Vertrag verlängert sich automatisch um {extension_period} Monate, sofern keine "
+                    "schriftliche Kündigung mindestens {termination_notice} vor Ablauf erfolgt.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">7) Mitwirkungspflichten des Kunden</h3>"
                     "<p>Der Kunde verpflichtet sich:</p>"
                     "<ul>"
-                    "<li>notwendige Zugaenge und Kontaktinformationen bereitzustellen,</li>"
-                    "<li>Aenderungen an ueberwachten Systemen unverzueglich mitzuteilen,</li>"
+                    "<li>notwendige Zugänge und Kontaktinformationen bereitzustellen,</li>"
+                    "<li>Änderungen an überwachten Systemen unverzüglich mitzuteilen,</li>"
                     "<li>Empfehlungen zur IT-Sicherheit angemessen umzusetzen,</li>"
-                    "<li>autorisierte Ansprechpartner fuer Stoerfaelle zu benennen.</li>"
+                    "<li>autorisierte Ansprechpartner für Störfälle zu benennen.</li>"
                     "</ul>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">8) Haftung</h3>"
-                    "<p>Der IT-Dienstleister haftet ausschliesslich fuer grobe Fahrlaessigkeit und Vorsatz im "
+                    "<p>Der IT-Dienstleister haftet ausschließlich für grobe Fahrlässigkeit und Vorsatz im "
                     "Rahmen der gesetzlichen Bestimmungen.</p>"
-                    "<p>Keine Haftung besteht fuer:</p>"
+                    "<p>Keine Haftung besteht für:</p>"
                     "<ul>"
                     "<li>Datenverlust ohne funktionierende Datensicherung,</li>"
-                    "<li>Ausfaelle von Drittanbietern,</li>"
-                    "<li>Internet- oder Cloud-Provider-Stoerungen,</li>"
-                    "<li>Cyberangriffe ausserhalb zumutbarer Schutzmassnahmen.</li>"
+                    "<li>Ausfälle von Drittanbietern,</li>"
+                    "<li>Internet- oder Cloud-Provider-Störungen,</li>"
+                    "<li>Cyberangriffe außerhalb zumutbarer Schutzmaßnahmen.</li>"
                     "</ul>"
-                    "<p><strong>Haftungshoechstgrenze pro Schadensfall:</strong><br>{liability_limit}</p>"
+                    "<p><strong>Haftungshöchstgrenze pro Schadensfall:</strong><br>{liability_limit}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">9) Vertraulichkeit und Datenschutz</h3>"
                     "<p>Beide Vertragsparteien verpflichten sich zur Einhaltung der DSGVO sowie zur vertraulichen "
                     "Behandlung aller im Rahmen der Betreuung erlangten Informationen.</p>"
@@ -4124,44 +4126,44 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "header_html": "",
                 "footer_html": "",
                 "body_template": (
-                    "<p>Dieser Vertrag zur Auftragsverarbeitung gemaess Art. 28 DSGVO wird zwischen "
+                    "<p>Dieser Vertrag zur Auftragsverarbeitung gemäß Art. 28 DSGVO wird zwischen "
                     "<strong>{provider_name}</strong> (Auftragsverarbeiter) und "
                     "<strong>{customer_name}</strong> (Verantwortlicher) geschlossen.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">1) Gegenstand und Zweck</h3>"
-                    "<p>Der Auftragsverarbeiter verarbeitet personenbezogene Daten ausschliesslich zur Erbringung "
-                    "der vereinbarten IT-Leistungen und ausschliesslich auf dokumentierte Weisung des "
+                    "<p>Der Auftragsverarbeiter verarbeitet personenbezogene Daten ausschließlich zur Erbringung "
+                    "der vereinbarten IT-Leistungen und ausschließlich auf dokumentierte Weisung des "
                     "Verantwortlichen.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Art der Daten und Kreis betroffener Personen</h3>"
-                    "<p>Verarbeitet werden nur die fuer die Leistungserbringung erforderlichen personenbezogenen "
-                    "Daten. Betroffene Personen koennen insbesondere Mitarbeitende, Ansprechpartner, Kunden oder "
+                    "<p>Verarbeitet werden nur die für die Leistungserbringung erforderlichen personenbezogenen "
+                    "Daten. Betroffene Personen können insbesondere Mitarbeitende, Ansprechpartner, Kunden oder "
                     "Dienstleister des Verantwortlichen sein.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Pflichten des Auftragsverarbeiters</h3>"
                     "<ul>"
                     "<li>Verarbeitung nur im Rahmen dokumentierter Weisungen des Verantwortlichen.</li>"
-                    "<li>Wahrung der Vertraulichkeit und Zugriff nur fuer berechtigte Personen.</li>"
-                    "<li>Umsetzung angemessener technischer und organisatorischer Massnahmen (TOM).</li>"
-                    "<li>Unterstuetzung bei Betroffenenrechten, Datenschutzvorfaellen und Nachweispflichten.</li>"
+                    "<li>Wahrung der Vertraulichkeit und Zugriff nur für berechtigte Personen.</li>"
+                    "<li>Umsetzung angemessener technischer und organisatorischer Maßnahmen (TOM).</li>"
+                    "<li>Unterstützung bei Betroffenenrechten, Datenschutzvorfällen und Nachweispflichten.</li>"
                     "<li>Dokumentation und Auskunftserteilung im rechtlich erforderlichen Umfang.</li>"
-                    "<li>Loeschung oder Rueckgabe personenbezogener Daten nach Vertragsende, soweit keine "
+                    "<li>Löschung oder Rückgabe personenbezogener Daten nach Vertragsende, soweit keine "
                     "gesetzliche Aufbewahrungspflicht entgegensteht.</li>"
                     "</ul>"
-                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Unterauftragsverhaeltnisse</h3>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Unterauftragsverhältnisse</h3>"
                     "<p>Der Einsatz von Unterauftragsverarbeitern erfolgt nur unter Beachtung der gesetzlichen "
                     "Vorgaben und vertraglichen Abstimmung mit dem Verantwortlichen.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Pflichten des Verantwortlichen</h3>"
-                    "<p>Der Verantwortliche bleibt fuer die Rechtmaessigkeit der Verarbeitung, die "
-                    "Zulaessigkeit der Datenweitergabe sowie fuer die Wahrung der Betroffenenrechte "
+                    "<p>Der Verantwortliche bleibt für die Rechtmäßigkeit der Verarbeitung, die "
+                    "Zulässigkeit der Datenweitergabe sowie für die Wahrung der Betroffenenrechte "
                     "verantwortlich.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">6) Nicht enthaltene Regelungen</h3>"
                     "<ul>"
-                    "<li>Keine Uebernahme der Rolle des Verantwortlichen durch den Auftragsverarbeiter.</li>"
-                    "<li>Keine Datenverarbeitung ausserhalb dokumentierter Weisungen.</li>"
-                    "<li>Keine eigenstaendige Rechtsberatung zur DSGVO-Compliance des Verantwortlichen.</li>"
+                    "<li>Keine Übernahme der Rolle des Verantwortlichen durch den Auftragsverarbeiter.</li>"
+                    "<li>Keine Datenverarbeitung außerhalb dokumentierter Weisungen.</li>"
+                    "<li>Keine eigenständige Rechtsberatung zur DSGVO-Compliance des Verantwortlichen.</li>"
                     "</ul>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">7) Laufzeit und Beendigung</h3>"
-                    "<p>Gueltig ab <strong>{valid_from}</strong>. Die Laufzeit richtet sich nach der Dauer "
+                    "<p>Gültig ab <strong>{valid_from}</strong>. Die Laufzeit richtet sich nach der Dauer "
                     "des zugrunde liegenden Hauptvertrags beziehungsweise der Leistungserbringung.</p>"
-                    "<p>Nach Beendigung erfolgt die Rueckgabe oder Loeschung personenbezogener Daten gemaess "
+                    "<p>Nach Beendigung erfolgt die Rückgabe oder Löschung personenbezogener Daten gemäß "
                     "gesetzlichen und vertraglichen Vorgaben.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">8) Vertraulichkeit und Datenschutz</h3>"
                     "<p>Beide Vertragsparteien verpflichten sich zur Einhaltung der DSGVO sowie zur vertraulichen "
@@ -4171,6 +4173,7 @@ def _default_ai_prompts() -> Dict[str, Any]:
             },
         },
         "contract_variables": {},
+        "contract_variable_definitions": {},
     }
 
 
@@ -4204,6 +4207,95 @@ def _normalize_contract_doc_type(value: Any, *, default: str = "wartung") -> str
         return default
     key = CONTRACT_DOC_TYPE_ALIASES.get(raw, raw)
     return key if key in ALLOWED_CONTRACT_DOC_TYPES else default
+
+
+def _normalize_contract_variable_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _to_bool_flag(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    raw = str(value or "").strip().lower()
+    if raw in {"1", "true", "yes", "ja", "on"}:
+        return True
+    if raw in {"0", "false", "no", "nein", "off"}:
+        return False
+    return default
+
+
+def _normalize_contract_variable_definitions(
+    raw_definitions: Any,
+    fallback_values: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    if isinstance(fallback_values, dict):
+        for raw_key, raw_value in fallback_values.items():
+            key = _normalize_contract_variable_key(raw_key)
+            if not key:
+                continue
+            merged[key] = {
+                "value": str(raw_value or ""),
+                "customer_editable": False,
+                "label": key,
+            }
+    if isinstance(raw_definitions, dict):
+        for raw_key, raw_value in raw_definitions.items():
+            key = _normalize_contract_variable_key(raw_key)
+            if not key:
+                continue
+            current = merged.get(key) or {
+                "value": "",
+                "customer_editable": False,
+                "label": key,
+            }
+            if isinstance(raw_value, dict):
+                raw_value_value = raw_value.get("value")
+                if raw_value_value is None:
+                    raw_value_value = raw_value.get("default")
+                if raw_value_value is None:
+                    raw_value_value = raw_value.get("suggested_value")
+                if raw_value_value is None:
+                    raw_value_value = current.get("value", "")
+                raw_label = str(raw_value.get("label") or "").strip() or str(current.get("label") or key).strip() or key
+                raw_customer_editable = raw_value.get("customer_editable")
+                if raw_customer_editable is None:
+                    raw_customer_editable = raw_value.get("customerEditable")
+                merged[key] = {
+                    "value": str(raw_value_value or ""),
+                    "customer_editable": _to_bool_flag(raw_customer_editable, default=False),
+                    "label": raw_label,
+                }
+            else:
+                merged[key] = {
+                    "value": str(raw_value or ""),
+                    "customer_editable": _to_bool_flag(current.get("customer_editable"), default=False),
+                    "label": str(current.get("label") or key).strip() or key,
+                }
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for key in sorted(merged.keys()):
+        entry = merged.get(key) or {}
+        normalized[key] = {
+            "value": str(entry.get("value") or ""),
+            "customer_editable": _to_bool_flag(entry.get("customer_editable"), default=False),
+            "label": str(entry.get("label") or key).strip() or key,
+        }
+    return normalized
+
+
+def _flatten_contract_variable_definitions(
+    definitions: Optional[Dict[str, Dict[str, Any]]],
+) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    if not isinstance(definitions, dict):
+        return out
+    for raw_key, raw_entry in definitions.items():
+        key = _normalize_contract_variable_key(raw_key)
+        if not key:
+            continue
+        entry = raw_entry if isinstance(raw_entry, dict) else {}
+        out[key] = str(entry.get("value") or "")
+    return out
 
 
 def _offer_iso_timestamp(ms: int) -> str:
@@ -4262,12 +4354,21 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
     current_contract_variables = (
         data.get("contract_variables") if isinstance(data.get("contract_variables"), dict) else {}
     )
-    merged_contract_variables: Dict[str, str] = {}
-    for raw_key, raw_value in {**defaults_contract_variables, **current_contract_variables}.items():
-        key = re.sub(r"[^a-z0-9_]+", "_", str(raw_key or "").strip().lower()).strip("_")
-        if not key:
-            continue
-        merged_contract_variables[key] = str(raw_value or "")
+    defaults_contract_variable_definitions = (
+        defaults.get("contract_variable_definitions")
+        if isinstance(defaults.get("contract_variable_definitions"), dict)
+        else {}
+    )
+    current_contract_variable_definitions = (
+        data.get("contract_variable_definitions")
+        if isinstance(data.get("contract_variable_definitions"), dict)
+        else {}
+    )
+    merged_contract_variable_definitions = _normalize_contract_variable_definitions(
+        {**defaults_contract_variable_definitions, **current_contract_variable_definitions},
+        fallback_values={**defaults_contract_variables, **current_contract_variables},
+    )
+    merged_contract_variables = _flatten_contract_variable_definitions(merged_contract_variable_definitions)
     return {
         "action_prompt": data.get("action_prompt", defaults["action_prompt"]),
         "offer_base_prompt": data.get("offer_base_prompt", defaults["offer_base_prompt"]),
@@ -4284,6 +4385,7 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
         ),
         "contract_templates": merged_contract_templates,
         "contract_variables": merged_contract_variables,
+        "contract_variable_definitions": merged_contract_variable_definitions,
         "updated_at": _offer_iso_timestamp(store.updated_at),
     }
 
@@ -4320,6 +4422,11 @@ def _migrate_contract_templates_to_supported_types() -> None:
             "contract_footer_html": defaults.get("contract_footer_html") or "",
             "contract_templates": default_templates,
             "contract_variables": payload.get("contract_variables") or defaults.get("contract_variables") or {},
+            "contract_variable_definitions": (
+                payload.get("contract_variable_definitions")
+                or defaults.get("contract_variable_definitions")
+                or {}
+            ),
         }
         store.data_json = json.dumps(updated_payload)
         store.updated_at = int(time.time() * 1000)
@@ -4352,7 +4459,7 @@ _CONTRACT_FALLBACK_VALUES: Dict[str, str] = {
     "security_monitoring": "ja (Basis)",
     "extension_period": "12",
     "termination_notice": "3 Monate",
-    "liability_limit": "gemaess AGB",
+    "liability_limit": "gemäß AGB",
 }
 
 
@@ -4385,12 +4492,12 @@ def _normalize_contract_liability_section(rendered_html: str) -> str:
     html = str(rendered_html or "")
     html = re.sub(
         r"(?is)<p[^>]*>\s*Keine\s+Haftung\s+besteht[^<:]*:\s*</p>\s*<ul[^>]*>.*?</ul>",
-        "<p>Weitere Haftungsregelungen und Ausschluesse richten sich nach den vereinbarten AGB.</p>",
+        "<p>Weitere Haftungsregelungen und Ausschlüsse richten sich nach den vereinbarten AGB.</p>",
         html,
     )
     html = re.sub(
         r"(?is)<p[^>]*>\s*Haftungsh[^<]*grenze[^<]*</p>",
-        "<p>Weitere Haftungsregelungen und Haftungshoechstgrenzen richten sich nach den vereinbarten AGB.</p>",
+        "<p>Weitere Haftungsregelungen und Haftungshöchstgrenzen richten sich nach den vereinbarten AGB.</p>",
         html,
     )
     return html
@@ -4415,6 +4522,28 @@ def _format_contract_hours(value: float) -> str:
         frac = 0
     sign = "-" if hours < 0 else ""
     return f"{sign}{whole},{frac:02d} h"
+
+
+def _normalize_contract_storage_date(value: Any, *, fallback_dt: Optional[datetime] = None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        if fallback_dt:
+            return fallback_dt.strftime("%Y-%m-%d")
+        return ""
+    parsed = _parse_sevdesk_date(raw)
+    if parsed:
+        return parsed.strftime("%Y-%m-%d")
+    return raw
+
+
+def _format_contract_display_date(value: Any, *, fallback: str = "") -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return str(fallback or "").strip()
+    parsed = _parse_sevdesk_date(raw)
+    if parsed:
+        return parsed.strftime("%d.%m.%Y")
+    return raw
 
 
 def _render_contract_html(
@@ -12010,6 +12139,96 @@ def update_integrations(data: IntegrationSettingsUpdate):
         return serialize_integration_settings(settings)
 
 
+@app.get("/api/meta_hub/status")
+def get_meta_hub_status(trigger_refresh: bool = False):
+    now_ms = int(time.time() * 1000)
+    meta_hub_url = str(CUSTOMER_META_HUB_URL or "").strip().rstrip("/")
+    base_payload: Dict[str, Any] = {
+        "enabled": bool(CUSTOMER_META_HUB_ENABLED),
+        "configured": bool(meta_hub_url),
+        "url": meta_hub_url,
+        "connected": False,
+        "checked_at": now_ms,
+        "triggered_refresh": False,
+        "error": "",
+        "health": {},
+        "snapshot": {},
+    }
+    if not CUSTOMER_META_HUB_ENABLED:
+        base_payload["error"] = "Customer Meta-Hub ist deaktiviert"
+        return base_payload
+    if not meta_hub_url:
+        base_payload["error"] = "Customer Meta-Hub URL ist nicht konfiguriert"
+        return base_payload
+    request_timeout = max(3, min(CUSTOMER_META_HUB_TIMEOUT_SECONDS, 12))
+    try:
+        if trigger_refresh:
+            refresh_response = requests.post(
+                f"{meta_hub_url}/refresh",
+                json={"force": True, "background": True},
+                timeout=request_timeout,
+            )
+            if refresh_response.ok:
+                base_payload["triggered_refresh"] = True
+            else:
+                base_payload["error"] = f"Refresh trigger fehlgeschlagen ({refresh_response.status_code})"
+        health_response = requests.get(
+            f"{meta_hub_url}/health",
+            timeout=request_timeout,
+        )
+        if not health_response.ok:
+            base_payload["error"] = (
+                base_payload["error"] or f"Health nicht erreichbar ({health_response.status_code})"
+            )
+            return base_payload
+        health_payload = health_response.json()
+        if not isinstance(health_payload, dict):
+            base_payload["error"] = "Ungueltige Health-Antwort"
+            return base_payload
+        base_payload["health"] = {
+            "refreshing": bool(health_payload.get("refreshing")),
+            "refresh_interval_seconds": int(health_payload.get("refreshIntervalSeconds") or 0),
+            "last_refresh_at": int(health_payload.get("lastRefreshAt") or 0),
+            "last_duration_ms": int(health_payload.get("lastDurationMs") or 0),
+            "last_error": str(health_payload.get("lastError") or ""),
+            "ai_preanalysis_enabled": bool(health_payload.get("aiPreanalysisEnabled")),
+            "ai_preanalysis_refreshing": bool(health_payload.get("aiPreanalysisRefreshing")),
+            "ai_preanalysis_last_refresh_at": int(health_payload.get("aiPreanalysisLastRefreshAt") or 0),
+            "ai_preanalysis_last_duration_ms": int(health_payload.get("aiPreanalysisLastDurationMs") or 0),
+            "ai_preanalysis_last_error": str(health_payload.get("aiPreanalysisLastError") or ""),
+            "ai_preanalysis_modes": list(health_payload.get("aiPreanalysisModes") or []),
+        }
+        base_payload["connected"] = True
+        try:
+            snapshot_response = requests.get(
+                f"{meta_hub_url}/snapshot",
+                params={"include_inactive": "1"},
+                timeout=request_timeout,
+            )
+            if snapshot_response.ok:
+                snapshot_payload = snapshot_response.json()
+                if isinstance(snapshot_payload, dict):
+                    base_payload["snapshot"] = {
+                        "cached_at": int(snapshot_payload.get("cachedAt") or 0),
+                        "generated_at": int(snapshot_payload.get("generatedAt") or 0),
+                        "count": int(snapshot_payload.get("count") or 0),
+                        "ai_preanalysis_generated_at": int(
+                            snapshot_payload.get("aiPreanalysisGeneratedAt") or 0
+                        ),
+                        "ai_preanalysis_entries": int(snapshot_payload.get("aiPreanalysisEntries") or 0),
+                        "ai_preanalysis_modes": list(snapshot_payload.get("aiPreanalysisModes") or []),
+                    }
+            elif not base_payload["error"]:
+                base_payload["error"] = f"Snapshot nicht erreichbar ({snapshot_response.status_code})"
+        except Exception as snapshot_exc:
+            if not base_payload["error"]:
+                base_payload["error"] = f"Snapshot-Status fehlgeschlagen: {snapshot_exc}"
+        return base_payload
+    except Exception as exc:
+        base_payload["error"] = f"Meta-Hub Status fehlgeschlagen: {exc}"
+        return base_payload
+
+
 @app.get("/api/integrations/icecat")
 def get_icecat_settings():
     with SessionLocal() as db:
@@ -13234,6 +13453,50 @@ def update_ai_prompts(data: AiPromptsUpdate):
     with SessionLocal() as db:
         store = _get_ai_prompt_settings(db)
         current = serialize_ai_prompts(store)
+        requested_contract_variables = (
+            data.contract_variables
+            if data.contract_variables is not None
+            else current.get("contract_variables", {})
+        )
+        requested_contract_variable_definitions = (
+            data.contract_variable_definitions
+            if data.contract_variable_definitions is not None
+            else current.get("contract_variable_definitions", {})
+        )
+        if data.contract_variable_definitions is None and data.contract_variables is not None:
+            requested_values_normalized: Dict[str, str] = {}
+            if isinstance(requested_contract_variables, dict):
+                for raw_key, raw_value in requested_contract_variables.items():
+                    key = _normalize_contract_variable_key(raw_key)
+                    if not key:
+                        continue
+                    requested_values_normalized[key] = str(raw_value or "")
+            overlay_definitions: Dict[str, Any] = {}
+            if isinstance(requested_contract_variable_definitions, dict):
+                for raw_key, raw_entry in requested_contract_variable_definitions.items():
+                    key = _normalize_contract_variable_key(raw_key)
+                    if not key:
+                        continue
+                    if isinstance(raw_entry, dict):
+                        next_entry = dict(raw_entry)
+                    else:
+                        next_entry = {"value": str(raw_entry or "")}
+                    if key in requested_values_normalized:
+                        next_entry["value"] = requested_values_normalized[key]
+                    overlay_definitions[key] = next_entry
+            for key, value in requested_values_normalized.items():
+                if key in overlay_definitions:
+                    continue
+                overlay_definitions[key] = {
+                    "value": value,
+                    "customer_editable": False,
+                    "label": key,
+                }
+            requested_contract_variable_definitions = overlay_definitions
+        normalized_contract_variable_definitions = _normalize_contract_variable_definitions(
+            requested_contract_variable_definitions,
+            fallback_values=requested_contract_variables,
+        )
         payload = {
             "action_prompt": data.action_prompt or current["action_prompt"],
             "offer_base_prompt": data.offer_base_prompt or current["offer_base_prompt"],
@@ -13241,7 +13504,8 @@ def update_ai_prompts(data: AiPromptsUpdate):
             "contract_header_html": data.contract_header_html if data.contract_header_html is not None else current.get("contract_header_html", ""),
             "contract_footer_html": data.contract_footer_html if data.contract_footer_html is not None else current.get("contract_footer_html", ""),
             "contract_templates": data.contract_templates or current["contract_templates"],
-            "contract_variables": data.contract_variables if data.contract_variables is not None else current.get("contract_variables", {}),
+            "contract_variables": _flatten_contract_variable_definitions(normalized_contract_variable_definitions),
+            "contract_variable_definitions": normalized_contract_variable_definitions,
         }
         store.data_json = json.dumps(payload)
         store.updated_at = int(time.time() * 1000)
@@ -13610,7 +13874,8 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
 
         now = datetime.now()
         generated_at = now.strftime("%d.%m.%Y")
-        valid_from = str(data.valid_from or "").strip() or generated_at
+        valid_from = _normalize_contract_storage_date(data.valid_from, fallback_dt=now)
+        valid_from_display = _format_contract_display_date(valid_from, fallback=generated_at)
         runtime_months = max(1, _safe_nonnegative_int(data.runtime_months or 12))
         termination_notice_months = max(0, _safe_nonnegative_int(data.termination_notice_months or 3))
         if termination_notice_months > runtime_months:
@@ -13722,8 +13987,8 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             "customer_country": escape(customer_country),
             "customer_address": escape(customer_address),
             "generated_at": generated_at,
-            "valid_from": escape(valid_from),
-            "contract_start": escape(valid_from),
+            "valid_from": escape(valid_from_display),
+            "contract_start": escape(valid_from_display),
             "runtime_months": str(runtime_months),
             "minimum_term_months": str(runtime_months),
             "extension_period": str(extension_period_months),
@@ -13747,17 +14012,60 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             "backup_monitoring": "nach Vereinbarung",
             "patch_management": "ja (sicherheitsrelevant)",
             "security_monitoring": "ja (Basis)",
-            "liability_limit": "gemaess AGB",
+            "liability_limit": "gemäß AGB",
             "note_block": note_block,
         }
         prompt_contract_variables = (
             prompts.get("contract_variables") if isinstance(prompts.get("contract_variables"), dict) else {}
         )
         for raw_key, raw_value in prompt_contract_variables.items():
-            key = re.sub(r"[^a-z0-9_]+", "_", str(raw_key or "").strip().lower()).strip("_")
+            key = _normalize_contract_variable_key(raw_key)
             if not key:
                 continue
             placeholder_values[key] = str(raw_value or "")
+        prompt_contract_variable_definitions = (
+            prompts.get("contract_variable_definitions")
+            if isinstance(prompts.get("contract_variable_definitions"), dict)
+            else {}
+        )
+        request_contract_variable_values = (
+            data.contract_variable_values if isinstance(data.contract_variable_values, dict) else {}
+        )
+        request_contract_variable_values_normalized: Dict[str, str] = {}
+        for raw_key, raw_value in request_contract_variable_values.items():
+            key = _normalize_contract_variable_key(raw_key)
+            if not key:
+                continue
+            request_contract_variable_values_normalized[key] = str(raw_value or "")
+        individual_variables: List[Dict[str, Any]] = []
+        applied_individual_values: Dict[str, str] = {}
+        for raw_key, raw_entry in prompt_contract_variable_definitions.items():
+            key = _normalize_contract_variable_key(raw_key)
+            if not key:
+                continue
+            entry = raw_entry if isinstance(raw_entry, dict) else {}
+            suggested_value = str(entry.get("value") or "")
+            customer_editable = _to_bool_flag(entry.get("customer_editable"), default=False)
+            label = str(entry.get("label") or key).strip() or key
+            value = suggested_value
+            if customer_editable and key in request_contract_variable_values_normalized:
+                value = request_contract_variable_values_normalized[key]
+            placeholder_values[key] = value
+            if customer_editable:
+                applied_individual_values[key] = value
+                individual_variables.append(
+                    {
+                        "key": key,
+                        "label": label,
+                        "suggested_value": suggested_value,
+                        "value": value,
+                        "customer_editable": True,
+                    }
+                )
+        individual_variables = sorted(
+            individual_variables,
+            key=lambda entry: str(entry.get("label") or entry.get("key") or "").lower(),
+        )
         template_placeholder_keys = _extract_contract_placeholders(
             template_header_html,
             body_template,
@@ -13802,6 +14110,8 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 "placeholder_keys": template_placeholder_keys,
                 "unresolved_placeholders": unresolved_placeholder_keys,
                 "tariff": serialize_contract_tariff(tariff) if tariff else None,
+                "individual_variables": individual_variables,
+                "contract_variable_values": applied_individual_values,
             },
         }
 
@@ -14734,3 +15044,35 @@ def clear_debug_table(data: DebugClearRequest):
         else:
             connection.execute(text(f'DELETE FROM "{table}"'))
     return {"status": "cleared", "table": table}
+
+
+@app.post("/api/debug/database_maintenance")
+def run_database_maintenance():
+    started_at = int(time.time() * 1000)
+    steps: List[str] = []
+    try:
+        dialect = str(engine.dialect.name or "").strip().lower()
+        autocommit_conn = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+        with autocommit_conn as connection:
+            if dialect == "postgresql":
+                connection.execute(text("VACUUM (ANALYZE)"))
+                steps.append("VACUUM (ANALYZE)")
+            elif dialect == "sqlite":
+                connection.execute(text("VACUUM"))
+                steps.append("VACUUM")
+                connection.execute(text("ANALYZE"))
+                steps.append("ANALYZE")
+            else:
+                connection.execute(text("ANALYZE"))
+                steps.append("ANALYZE")
+        finished_at = int(time.time() * 1000)
+        return {
+            "status": "ok",
+            "dialect": dialect or "unknown",
+            "steps": steps,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "duration_ms": max(0, finished_at - started_at),
+        }
+    except Exception as exc:
+        raise HTTPException(500, f"Database maintenance failed: {exc}") from exc

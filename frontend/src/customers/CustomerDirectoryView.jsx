@@ -47,6 +47,12 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
+  getAiPrompts: () =>
+    fetch(`${API}/ai_prompts`).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "ai_prompts_load_failed");
+      return data;
+    }),
   listContractTariffs: (activeOnly = true) =>
     fetch(`${API}/contract_tariffs?active_only=${activeOnly ? "1" : "0"}`).then((r) => r.json()),
   createContractTariff: (payload) =>
@@ -200,6 +206,81 @@ const normalizeContractDocumentType = (value) => {
     return "avv_dsgvo";
   }
   return key.replace(/[^a-z0-9_]+/g, "").replace(/^_+|_+$/g, "");
+};
+
+const normalizeContractVariableKey = (rawKey) =>
+  String(rawKey || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const parseBooleanFlag = (value, fallback = false) => {
+  if (typeof value === "boolean") return value;
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (["1", "true", "yes", "ja", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "nein", "off"].includes(raw)) return false;
+  return fallback;
+};
+
+const normalizeContractVariableDefinitions = (definitionsInput, variablesInput) => {
+  const merged = {};
+  if (variablesInput && typeof variablesInput === "object" && !Array.isArray(variablesInput)) {
+    Object.entries(variablesInput).forEach(([rawKey, rawValue]) => {
+      const key = normalizeContractVariableKey(rawKey);
+      if (!key) return;
+      merged[key] = {
+        value: String(rawValue || ""),
+        label: key,
+        customerEditable: false
+      };
+    });
+  }
+  if (definitionsInput && typeof definitionsInput === "object" && !Array.isArray(definitionsInput)) {
+    Object.entries(definitionsInput).forEach(([rawKey, rawValue]) => {
+      const key = normalizeContractVariableKey(rawKey);
+      if (!key) return;
+      const existing = merged[key] || { value: "", label: key, customerEditable: false };
+      if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) {
+        const value = rawValue.value ?? rawValue.default ?? rawValue.suggested_value ?? existing.value;
+        merged[key] = {
+          value: String(value || ""),
+          label: String(rawValue.label || existing.label || key).trim() || key,
+          customerEditable: parseBooleanFlag(
+            rawValue.customer_editable ?? rawValue.customerEditable,
+            false
+          )
+        };
+        return;
+      }
+      merged[key] = {
+        ...existing,
+        value: String(rawValue || "")
+      };
+    });
+  }
+  return Object.fromEntries(
+    Object.entries(merged).sort(([a], [b]) => String(a || "").localeCompare(String(b || ""), "de"))
+  );
+};
+
+const buildEditableContractVariableValues = (definitions, sourceValues = {}) => {
+  const normalizedSource = {};
+  if (sourceValues && typeof sourceValues === "object" && !Array.isArray(sourceValues)) {
+    Object.entries(sourceValues).forEach(([rawKey, rawValue]) => {
+      const key = normalizeContractVariableKey(rawKey);
+      if (!key) return;
+      normalizedSource[key] = String(rawValue || "");
+    });
+  }
+  const next = {};
+  Object.entries(definitions || {}).forEach(([key, entry]) => {
+    if (!entry?.customerEditable) return;
+    next[key] = String(normalizedSource[key] ?? entry.value ?? "");
+  });
+  return next;
 };
 
 const normalizeContractDocumentFlags = (flags) => {
@@ -773,6 +854,8 @@ export default function CustomerDirectoryView() {
   const [contractSaveStatus, setContractSaveStatus] = useState("idle");
   const [generatedContract, setGeneratedContract] = useState(null);
   const [editingContractId, setEditingContractId] = useState(null);
+  const [contractVariableDefinitions, setContractVariableDefinitions] = useState({});
+  const [contractVariableValues, setContractVariableValues] = useState({});
   const [contractDraft, setContractDraft] = useState({
     title: "",
     docType: "wartung",
@@ -920,6 +1003,27 @@ export default function CustomerDirectoryView() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    api
+      .getAiPrompts()
+      .then((data) => {
+        if (!active) return;
+        const nextDefinitions = normalizeContractVariableDefinitions(
+          data?.contract_variable_definitions,
+          data?.contract_variables
+        );
+        setContractVariableDefinitions(nextDefinitions);
+      })
+      .catch(() => {
+        if (!active) return;
+        setContractVariableDefinitions({});
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!activeId) {
       setCustomerContracts([]);
       return;
@@ -1005,6 +1109,23 @@ export default function CustomerDirectoryView() {
   }, [contractDraft.autoExtensionMonths]);
   const contractRuntimeInvalid = terminationNoticeMonthsValue > runtimeMonthsValue;
   const contractGenerationBlocked = tariffSelectionMissing || contractRuntimeInvalid;
+  const editableContractVariables = useMemo(
+    () =>
+      Object.entries(contractVariableDefinitions || {})
+        .filter(([, entry]) => Boolean(entry?.customerEditable))
+        .map(([key, entry]) => ({
+          key,
+          label: String(entry?.label || key),
+          suggestedValue: String(entry?.value || "")
+        })),
+    [contractVariableDefinitions]
+  );
+
+  useEffect(() => {
+    setContractVariableValues((prev) =>
+      buildEditableContractVariableValues(contractVariableDefinitions, prev)
+    );
+  }, [contractVariableDefinitions]);
 
   const contractPreview = useMemo(() => {
     const counts = {
@@ -1204,8 +1325,23 @@ export default function CustomerDirectoryView() {
         iot_devices: contractPreview.counts.iotDevices,
         monthly_total: contractTotals.monthly,
         yearly_total: contractTotals.yearly,
-        monthly_hours_included: monthlyHoursIncluded
+        monthly_hours_included: monthlyHoursIncluded,
+        contract_variable_values: contractVariableValues
       });
+      if (Array.isArray(preview?.meta?.individual_variables)) {
+        const previewValues = {};
+        preview.meta.individual_variables.forEach((entry) => {
+          const key = normalizeContractVariableKey(entry?.key);
+          if (!key) return;
+          previewValues[key] = String(entry?.value ?? entry?.suggested_value ?? "");
+        });
+        setContractVariableValues((prev) =>
+          buildEditableContractVariableValues(contractVariableDefinitions, {
+            ...prev,
+            ...previewValues
+          })
+        );
+      }
       setGeneratedContract(preview);
       setContractPreviewStatus("saved");
       if (openModal) {
@@ -1400,6 +1536,7 @@ export default function CustomerDirectoryView() {
         monthly_hours_included: Number(item?.monthly_hours_included || 0),
       }
     });
+    setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
     setContractCalcModalOpen(true);
   };
 
@@ -1432,6 +1569,7 @@ export default function CustomerDirectoryView() {
     });
     setEditingContractId(null);
     setGeneratedContract(null);
+    setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
     setContractCalcModalOpen(true);
   };
 
@@ -2925,6 +3063,45 @@ export default function CustomerDirectoryView() {
             </label>
           ) : null}
         </div>
+        {editableContractVariables.length ? (
+          <div className="mt-2.5 rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Individuelle Vertragsvariablen</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
+                  setGeneratedContract(null);
+                }}
+                className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+              >
+                Vorschläge laden
+              </button>
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              {editableContractVariables.map((item) => (
+                <label key={item.key} className="block">
+                  <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                    {item.label}
+                    <span className="ml-1 text-sand-400">({item.key})</span>
+                  </span>
+                  <input
+                    value={String(contractVariableValues[item.key] ?? "")}
+                    onChange={(event) => {
+                      setContractVariableValues((prev) => ({
+                        ...prev,
+                        [item.key]: event.target.value
+                      }));
+                      setGeneratedContract(null);
+                    }}
+                    placeholder={item.suggestedValue || "-"}
+                    className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-2.5 py-1.5 text-sm"
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div
           className={`mt-2.5 grid gap-2 ${
             supportsHoursBudget ? "md:grid-cols-3" : "md:grid-cols-2"

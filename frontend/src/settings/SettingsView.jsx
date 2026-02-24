@@ -179,9 +179,24 @@ const defaultContractVariables = {
   backup_monitoring: "nach Vereinbarung",
   patch_management: "ja (sicherheitsrelevant)",
   security_monitoring: "ja (Basis)",
-  liability_limit: "gemaess AGB",
+  liability_limit: "gemäß AGB",
   service_scope: "Wartung und Monitoring laut Tarif.",
   note_block: "Hinweis: Monatliche Leistungserbringung nach Vereinbarung."
+};
+const normalizeContractVariableKey = (rawKey) =>
+  String(rawKey || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+const parseBooleanFlag = (value, fallback = false) => {
+  if (typeof value === "boolean") return value;
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (["1", "true", "yes", "ja", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "nein", "off"].includes(raw)) return false;
+  return fallback;
 };
 
 const normalizeContractTemplates = (input) => {
@@ -200,19 +215,97 @@ const normalizeContractTemplates = (input) => {
 };
 
 const normalizeContractVariables = (input) => {
-  const merged = { ...defaultContractVariables };
+  const merged = {};
   if (input && typeof input === "object" && !Array.isArray(input)) {
     Object.entries(input).forEach(([rawKey, rawValue]) => {
-      const key = String(rawKey || "")
-        .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9_]+/g, "_")
-        .replace(/^_+|_+$/g, "");
+      const key = normalizeContractVariableKey(rawKey);
       if (!key) return;
       merged[key] = String(rawValue || "");
     });
   }
   return merged;
+};
+
+const normalizeContractVariableDefinitions = (definitionsInput, variablesInput) => {
+  const merged = {};
+  const fallbackVariables = normalizeContractVariables(variablesInput);
+  Object.entries(fallbackVariables).forEach(([key, value]) => {
+    merged[key] = {
+      value: String(value || ""),
+      customer_editable: false,
+      label: key
+    };
+  });
+  if (definitionsInput && typeof definitionsInput === "object" && !Array.isArray(definitionsInput)) {
+    Object.entries(definitionsInput).forEach(([rawKey, rawValue]) => {
+      const key = normalizeContractVariableKey(rawKey);
+      if (!key) return;
+      const existing = merged[key] || { value: "", customer_editable: false, label: key };
+      if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) {
+        const value = rawValue.value ?? rawValue.default ?? rawValue.suggested_value ?? existing.value;
+        merged[key] = {
+          value: String(value || ""),
+          customer_editable: parseBooleanFlag(
+            rawValue.customer_editable ?? rawValue.customerEditable,
+            false
+          ),
+          label: String(rawValue.label || existing.label || key).trim() || key
+        };
+        return;
+      }
+      merged[key] = {
+        ...existing,
+        value: String(rawValue || "")
+      };
+    });
+  }
+  return Object.fromEntries(
+    Object.entries(merged)
+      .map(([key, value]) => [
+        key,
+        {
+          value: String(value?.value || ""),
+          customer_editable: parseBooleanFlag(value?.customer_editable, false),
+          label: String(value?.label || key).trim() || key
+        }
+      ])
+      .sort(([a], [b]) => String(a || "").localeCompare(String(b || ""), "de"))
+  );
+};
+
+const flattenContractVariableDefinitions = (definitions) => {
+  if (!definitions || typeof definitions !== "object" || Array.isArray(definitions)) return {};
+  const out = {};
+  Object.entries(definitions).forEach(([rawKey, rawValue]) => {
+    const key = normalizeContractVariableKey(rawKey);
+    if (!key) return;
+    const entry = rawValue && typeof rawValue === "object" ? rawValue : {};
+    out[key] = String(entry.value || "");
+  });
+  return out;
+};
+
+const normalizeAiPromptsPayload = (data) => {
+  const contractVariableDefinitions = normalizeContractVariableDefinitions(
+    data?.contract_variable_definitions,
+    data?.contract_variables
+  );
+  return {
+    action_prompt: data?.action_prompt || "",
+    offer_base_prompt: data?.offer_base_prompt || "",
+    offer_mode_instructions: {
+      cover_intro: data?.offer_mode_instructions?.cover_intro || "",
+      overview: data?.offer_mode_instructions?.overview || "",
+      calculation: data?.offer_mode_instructions?.calculation || "",
+      position_text: data?.offer_mode_instructions?.position_text || "",
+      device_description: data?.offer_mode_instructions?.device_description || ""
+    },
+    contract_header_html: data?.contract_header_html || "",
+    contract_footer_html: data?.contract_footer_html || "",
+    contract_templates: normalizeContractTemplates(data?.contract_templates),
+    contract_variable_definitions: contractVariableDefinitions,
+    contract_variables: flattenContractVariableDefinitions(contractVariableDefinitions)
+  };
 };
 
 const formatEurPrecise = (value) => {
@@ -224,6 +317,19 @@ const formatEurPrecise = (value) => {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
+};
+
+const formatTimestampOrNa = (value) => {
+  const timestamp = Number(value || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "n/a";
+  return new Date(timestamp).toLocaleString("de-DE");
+};
+
+const formatDurationMs = (value) => {
+  const ms = Number(value || 0);
+  if (!Number.isFinite(ms) || ms <= 0) return "0 ms";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 })} s`;
 };
 
 
@@ -264,6 +370,18 @@ export default function SettingsView() {
   const [metaHub, setMetaHub] = useState(defaultMetaHub);
   const [metaHubOpen, setMetaHubOpen] = useState(false);
   const [metaHubStatus, setMetaHubStatus] = useState("idle");
+  const [metaHubRuntimeOpen, setMetaHubRuntimeOpen] = useState(false);
+  const [metaHubRuntimeStatus, setMetaHubRuntimeStatus] = useState({
+    status: "idle",
+    checked_at: 0,
+    configured: false,
+    enabled: false,
+    connected: false,
+    triggered_refresh: false,
+    error: "",
+    health: {},
+    snapshot: {}
+  });
   const [rmmHealthStatus, setRmmHealthStatus] = useState("idle");
   const [rmmHealth, setRmmHealth] = useState({
     connected: null,
@@ -351,6 +469,9 @@ export default function SettingsView() {
   });
   const [tables, setTables] = useState([]);
   const [debugStatus, setDebugStatus] = useState("idle");
+  const [debugMessage, setDebugMessage] = useState("");
+  const [dbMaintenanceStatus, setDbMaintenanceStatus] = useState("idle");
+  const [dbMaintenanceInfo, setDbMaintenanceInfo] = useState("");
   const [debugTablesOpen, setDebugTablesOpen] = useState(false);
   const [smtpOpen, setSmtpOpen] = useState(false);
   const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
@@ -381,10 +502,15 @@ export default function SettingsView() {
     contract_header_html: "",
     contract_footer_html: "",
     contract_templates: normalizeContractTemplates(null),
+    contract_variable_definitions: normalizeContractVariableDefinitions(null, null),
     contract_variables: normalizeContractVariables(null)
   });
   const [contractTemplateDraft, setContractTemplateDraft] = useState({ key: "", title: "" });
-  const [contractVariableDraft, setContractVariableDraft] = useState({ key: "", value: "" });
+  const [contractVariableDraft, setContractVariableDraft] = useState({
+    key: "",
+    value: "",
+    customerEditable: false
+  });
   const [selectedContractTemplateKey, setSelectedContractTemplateKey] = useState("wartung");
   const [contractTariffs, setContractTariffs] = useState([]);
   const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
@@ -603,6 +729,11 @@ export default function SettingsView() {
   }, [marketplaceOpen]);
 
   useEffect(() => {
+    if (!metaHubOpen) return;
+    refreshMetaHubRuntimeStatus(false);
+  }, [metaHubOpen]);
+
+  useEffect(() => {
     if (!contractTariffsOpen) return;
     setContractTariffsStatus("loading");
     fetch(`${API}/contract_tariffs?active_only=0`)
@@ -649,21 +780,7 @@ export default function SettingsView() {
       })
       .then((data) => {
         if (!active) return;
-        setAiPrompts({
-          action_prompt: data?.action_prompt || "",
-          offer_base_prompt: data?.offer_base_prompt || "",
-          offer_mode_instructions: {
-            cover_intro: data?.offer_mode_instructions?.cover_intro || "",
-            overview: data?.offer_mode_instructions?.overview || "",
-            calculation: data?.offer_mode_instructions?.calculation || "",
-            position_text: data?.offer_mode_instructions?.position_text || "",
-            device_description: data?.offer_mode_instructions?.device_description || ""
-          },
-          contract_header_html: data?.contract_header_html || "",
-          contract_footer_html: data?.contract_footer_html || "",
-          contract_templates: normalizeContractTemplates(data?.contract_templates),
-          contract_variables: normalizeContractVariables(data?.contract_variables)
-        });
+        setAiPrompts(normalizeAiPromptsPayload(data));
         const keys = Object.keys(normalizeContractTemplates(data?.contract_templates));
         if (keys.length) setSelectedContractTemplateKey(keys[0]);
         setAiPromptsLoadStatus("ready");
@@ -683,23 +800,83 @@ export default function SettingsView() {
     refreshCtiDebug();
   }, [ctiLoadStatus]);
 
+  const refreshMetaHubRuntimeStatus = async (triggerRefresh = false) => {
+    setMetaHubRuntimeStatus((prev) => ({
+      ...prev,
+      status: "loading",
+      error: triggerRefresh ? "Refresh wird angestoßen..." : ""
+    }));
+    try {
+      const params = new URLSearchParams();
+      if (triggerRefresh) params.set("trigger_refresh", "1");
+      const query = params.toString();
+      const res = await fetch(`${API}/meta_hub/status${query ? `?${query}` : ""}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "status_failed");
+      setMetaHubRuntimeStatus({
+        status: "ready",
+        checked_at: Number(data?.checked_at || Date.now()),
+        configured: Boolean(data?.configured),
+        enabled: Boolean(data?.enabled),
+        connected: Boolean(data?.connected),
+        triggered_refresh: Boolean(data?.triggered_refresh),
+        error: String(data?.error || ""),
+        health: data?.health && typeof data.health === "object" ? data.health : {},
+        snapshot: data?.snapshot && typeof data.snapshot === "object" ? data.snapshot : {}
+      });
+    } catch (error) {
+      setMetaHubRuntimeStatus((prev) => ({
+        ...prev,
+        status: "error",
+        connected: false,
+        error: error?.message ? String(error.message) : "Meta-Hub Status fehlgeschlagen",
+        checked_at: Date.now()
+      }));
+    }
+  };
+
   const clearTable = async (table) => {
     if (!window.confirm(`Tabelle "${table}" wirklich leeren?`)) return;
     setClearingTable(table);
     setDebugStatus("clearing");
+    setDebugMessage("");
     try {
       const res = await fetch(`${API}/debug/clear_table`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ table })
       });
-      if (!res.ok) throw new Error("clear_failed");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "clear_failed");
       setDebugStatus("cleared");
+      setDebugMessage(`Tabelle ${table} geleert.`);
     } catch (error) {
       setDebugStatus("error");
+      setDebugMessage(error?.message ? String(error.message) : "Leeren fehlgeschlagen.");
     }
     setClearingTable("");
     setTimeout(() => setDebugStatus("idle"), 2000);
+  };
+
+  const runDatabaseMaintenance = async () => {
+    setDbMaintenanceStatus("running");
+    setDbMaintenanceInfo("");
+    try {
+      const res = await fetch(`${API}/debug/database_maintenance`, {
+        method: "POST"
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "database_maintenance_failed");
+      const steps = Array.isArray(data?.steps) ? data.steps.join(", ") : "ANALYZE";
+      setDbMaintenanceStatus("done");
+      setDbMaintenanceInfo(
+        `Pflege abgeschlossen (${steps}) in ${formatDurationMs(data?.duration_ms || 0)}.`
+      );
+    } catch (error) {
+      setDbMaintenanceStatus("error");
+      setDbMaintenanceInfo(error?.message ? String(error.message) : "Datenbankpflege fehlgeschlagen.");
+    }
+    setTimeout(() => setDbMaintenanceStatus("idle"), 3000);
   };
 
   const save = async () => {
@@ -801,21 +978,7 @@ export default function SettingsView() {
       });
       if (!res.ok) throw new Error("save_failed");
       const data = await res.json();
-      setAiPrompts({
-        action_prompt: data?.action_prompt || "",
-        offer_base_prompt: data?.offer_base_prompt || "",
-        offer_mode_instructions: {
-          cover_intro: data?.offer_mode_instructions?.cover_intro || "",
-          overview: data?.offer_mode_instructions?.overview || "",
-          calculation: data?.offer_mode_instructions?.calculation || "",
-          position_text: data?.offer_mode_instructions?.position_text || "",
-          device_description: data?.offer_mode_instructions?.device_description || ""
-        },
-        contract_header_html: data?.contract_header_html || "",
-        contract_footer_html: data?.contract_footer_html || "",
-        contract_templates: normalizeContractTemplates(data?.contract_templates),
-        contract_variables: normalizeContractVariables(data?.contract_variables)
-      });
+      setAiPrompts(normalizeAiPromptsPayload(data));
       setAiPromptsStatus("saved");
     } catch (error) {
       setAiPromptsStatus("error");
@@ -833,17 +996,15 @@ export default function SettingsView() {
           contract_header_html: aiPrompts.contract_header_html || "",
           contract_footer_html: aiPrompts.contract_footer_html || "",
           contract_templates: aiPrompts.contract_templates,
-          contract_variables: aiPrompts.contract_variables
+          contract_variables: flattenContractVariableDefinitions(aiPrompts.contract_variable_definitions),
+          contract_variable_definitions: aiPrompts.contract_variable_definitions
         })
       });
       if (!res.ok) throw new Error("save_failed");
       const data = await res.json();
       setAiPrompts((prev) => ({
         ...prev,
-        contract_header_html: data?.contract_header_html || "",
-        contract_footer_html: data?.contract_footer_html || "",
-        contract_templates: normalizeContractTemplates(data?.contract_templates),
-        contract_variables: normalizeContractVariables(data?.contract_variables)
+        ...normalizeAiPromptsPayload(data)
       }));
       setContractTemplatesStatus("saved");
     } catch (error) {
@@ -887,33 +1048,49 @@ export default function SettingsView() {
     });
   };
 
+  const updateContractVariableDefinitions = (nextDefinitionsInput) => {
+    setAiPrompts((prev) => {
+      const nextDefinitions =
+        typeof nextDefinitionsInput === "function"
+          ? nextDefinitionsInput(prev.contract_variable_definitions || {})
+          : nextDefinitionsInput;
+      const normalizedDefinitions = normalizeContractVariableDefinitions(
+        nextDefinitions,
+        prev.contract_variables || {}
+      );
+      return {
+        ...prev,
+        contract_variable_definitions: normalizedDefinitions,
+        contract_variables: flattenContractVariableDefinitions(normalizedDefinitions)
+      };
+    });
+  };
+
   const addContractVariable = () => {
-    const key = String(contractVariableDraft.key || "")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_]+/g, "_")
-      .replace(/^_+|_+$/g, "");
+    const key = normalizeContractVariableKey(contractVariableDraft.key);
     if (!key) return;
-    setAiPrompts((prev) => ({
-      ...prev,
-      contract_variables: {
-        ...(prev.contract_variables || {}),
-        [key]: String(contractVariableDraft.value || "")
+    updateContractVariableDefinitions((prevDefinitions) => ({
+      ...(prevDefinitions || {}),
+      [key]: {
+        ...(prevDefinitions?.[key] || {}),
+        value: String(contractVariableDraft.value || ""),
+        customer_editable: Boolean(contractVariableDraft.customerEditable),
+        label: String(prevDefinitions?.[key]?.label || key)
       }
     }));
-    setContractVariableDraft({ key: "", value: "" });
+    setContractVariableDraft({ key: "", value: "", customerEditable: false });
   };
 
   const removeContractVariable = (key) => {
-    setAiPrompts((prev) => {
-      const next = { ...(prev.contract_variables || {}) };
+    updateContractVariableDefinitions((prevDefinitions) => {
+      const next = { ...(prevDefinitions || {}) };
       delete next[key];
-      return { ...prev, contract_variables: next };
+      return next;
     });
   };
 
   const contractTemplateEntries = Object.entries(aiPrompts.contract_templates || {});
-  const contractVariableEntries = Object.entries(aiPrompts.contract_variables || {}).sort(([a], [b]) =>
+  const contractVariableEntries = Object.entries(aiPrompts.contract_variable_definitions || {}).sort(([a], [b]) =>
     String(a || "").localeCompare(String(b || ""), "de")
   );
   const activeContractTemplateKey = contractTemplateEntries.some(([key]) => key === selectedContractTemplateKey)
@@ -926,7 +1103,7 @@ export default function SettingsView() {
   const baseContractPreviewVars = { ...defaultContractVariables };
   const contractPreviewVars = {
     ...baseContractPreviewVars,
-    ...(aiPrompts.contract_variables || {})
+    ...flattenContractVariableDefinitions(aiPrompts.contract_variable_definitions)
   };
   const renderTemplatePreview = (value) => {
     let html = String(value || "");
@@ -1378,6 +1555,7 @@ export default function SettingsView() {
           : []
       }));
       setMetaHubStatus("saved");
+      refreshMetaHubRuntimeStatus(false);
     } catch (error) {
       setMetaHubStatus("error");
     }
@@ -2109,7 +2287,7 @@ export default function SettingsView() {
                     <p className="mt-1 text-[11px] text-sand-500">
                       Eigene Platzhalter als <code>{"{variable_name}"}</code> definieren und im Template verwenden.
                     </p>
-                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[200px_1fr_auto]">
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[180px_1fr_auto_auto]">
                       <input
                         value={contractVariableDraft.key}
                         onChange={(event) =>
@@ -2126,6 +2304,19 @@ export default function SettingsView() {
                         placeholder="Beispielwert"
                         className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
                       />
+                      <label className="inline-flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(contractVariableDraft.customerEditable)}
+                          onChange={(event) =>
+                            setContractVariableDraft((prev) => ({
+                              ...prev,
+                              customerEditable: event.target.checked
+                            }))
+                          }
+                        />
+                        individuell
+                      </label>
                       <button
                         type="button"
                         onClick={addContractVariable}
@@ -2138,7 +2329,7 @@ export default function SettingsView() {
                       {contractVariableEntries.map(([key, value]) => (
                         <div
                           key={key}
-                          className="grid grid-cols-1 gap-2 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2 md:grid-cols-[200px_1fr_auto]"
+                          className="grid grid-cols-1 gap-2 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2 md:grid-cols-[180px_1fr_auto_auto]"
                         >
                           <input
                             value={key}
@@ -2146,18 +2337,34 @@ export default function SettingsView() {
                             className="rounded-xl border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-700"
                           />
                           <input
-                            value={String(value || "")}
+                            value={String(value?.value || "")}
                             onChange={(event) =>
-                              setAiPrompts((prev) => ({
-                                ...prev,
-                                contract_variables: {
-                                  ...(prev.contract_variables || {}),
-                                  [key]: event.target.value
+                              updateContractVariableDefinitions((prevDefinitions) => ({
+                                ...(prevDefinitions || {}),
+                                [key]: {
+                                  ...(prevDefinitions?.[key] || {}),
+                                  value: event.target.value
                                 }
                               }))
                             }
                             className="rounded-xl border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-800"
                           />
+                          <label className="inline-flex items-center gap-1 rounded-xl border border-sand-200 bg-white px-2 py-1 text-[10px] text-sand-700">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(value?.customer_editable)}
+                              onChange={(event) =>
+                                updateContractVariableDefinitions((prevDefinitions) => ({
+                                  ...(prevDefinitions || {}),
+                                  [key]: {
+                                    ...(prevDefinitions?.[key] || {}),
+                                    customer_editable: event.target.checked
+                                  }
+                                }))
+                              }
+                            />
+                            individuell
+                          </label>
                           <button
                             type="button"
                             onClick={() => removeContractVariable(key)}
@@ -2935,6 +3142,123 @@ export default function SettingsView() {
               <p className="mt-4 text-xs text-sand-500 mb-4">
                 Steuerung der Meta-Hub Datenquellen für Kundenentwicklung: RMM-Mapping und mehrere E-Mail-Postfächer (IMAP).
               </p>
+              <div className="mb-4 rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMetaHubRuntimeOpen((current) => !current);
+                    if (!metaHubRuntimeOpen) refreshMetaHubRuntimeStatus(false);
+                  }}
+                  className="flex w-full items-center justify-between gap-2 text-left"
+                >
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Meta-Hub Status</p>
+                    <p className="text-xs text-sand-600">
+                      KI-Preanalysis Läufe, Snapshot-Stand und letzte Fehler.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        metaHubRuntimeStatus.connected ? "bg-emerald-500" : "bg-rose-500"
+                      }`}
+                    />
+                    <span className="text-sand-600">
+                      {metaHubRuntimeStatus.connected ? "verbunden" : "offline"}
+                    </span>
+                    <span className="text-sm text-sand-500">{metaHubRuntimeOpen ? "–" : "+"}</span>
+                  </div>
+                </button>
+                {metaHubRuntimeOpen ? (
+                  <div className="mt-3 space-y-3 rounded-xl border border-sand-200 bg-white p-3">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => refreshMetaHubRuntimeStatus(false)}
+                        className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                      >
+                        Status aktualisieren
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => refreshMetaHubRuntimeStatus(true)}
+                        className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                      >
+                        Refresh triggern
+                      </button>
+                      {metaHubRuntimeStatus.status === "loading" ? (
+                        <span className="text-sand-500">Lade…</span>
+                      ) : null}
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 text-xs text-sand-700 md:grid-cols-2">
+                      <div>
+                        <span className="text-sand-500">Letzte Prüfung:</span>{" "}
+                        {formatTimestampOrNa(metaHubRuntimeStatus.checked_at)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">Intervall:</span>{" "}
+                        {Number(metaHubRuntimeStatus.health?.refresh_interval_seconds || 0) > 0
+                          ? `${Number(metaHubRuntimeStatus.health?.refresh_interval_seconds || 0)} s`
+                          : "n/a"}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">Snapshot Lauf:</span>{" "}
+                        {formatTimestampOrNa(metaHubRuntimeStatus.health?.last_refresh_at)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">Snapshot Dauer:</span>{" "}
+                        {formatDurationMs(metaHubRuntimeStatus.health?.last_duration_ms)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">KI Lauf:</span>{" "}
+                        {formatTimestampOrNa(metaHubRuntimeStatus.health?.ai_preanalysis_last_refresh_at)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">KI Dauer:</span>{" "}
+                        {formatDurationMs(metaHubRuntimeStatus.health?.ai_preanalysis_last_duration_ms)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">KI aktiv:</span>{" "}
+                        {metaHubRuntimeStatus.health?.ai_preanalysis_enabled ? "ja" : "nein"}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">KI läuft gerade:</span>{" "}
+                        {metaHubRuntimeStatus.health?.ai_preanalysis_refreshing ? "ja" : "nein"}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">KI Ergebnisse im Snapshot:</span>{" "}
+                        {Number(metaHubRuntimeStatus.snapshot?.ai_preanalysis_entries || 0)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">Letzte KI-Snapshot Aktualisierung:</span>{" "}
+                        {formatTimestampOrNa(metaHubRuntimeStatus.snapshot?.ai_preanalysis_generated_at)}
+                      </div>
+                    </div>
+                    <div className="text-xs text-sand-600">
+                      <span className="text-sand-500">KI Modi:</span>{" "}
+                      {(metaHubRuntimeStatus.health?.ai_preanalysis_modes || []).length
+                        ? metaHubRuntimeStatus.health.ai_preanalysis_modes.join(", ")
+                        : "n/a"}
+                    </div>
+                    {(metaHubRuntimeStatus.health?.last_error || metaHubRuntimeStatus.health?.ai_preanalysis_last_error || metaHubRuntimeStatus.error) ? (
+                      <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                        <div>
+                          <span className="font-semibold">Fehler Snapshot:</span>{" "}
+                          {metaHubRuntimeStatus.health?.last_error || "n/a"}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Fehler KI:</span>{" "}
+                          {metaHubRuntimeStatus.health?.ai_preanalysis_last_error || "n/a"}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Statusfehler:</span>{" "}
+                          {metaHubRuntimeStatus.error || "n/a"}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-700">
                   <input
@@ -4341,6 +4665,30 @@ export default function SettingsView() {
               <div className="mt-4 text-xs text-sand-500 mb-3">
                 Datenbanktabellen (nur freigegebene Tabellen koennen geleert werden).
               </div>
+              <div className="mb-3 rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={runDatabaseMaintenance}
+                    disabled={dbMaintenanceStatus === "running"}
+                    className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {dbMaintenanceStatus === "running" ? "Pflege läuft..." : "Datenbankpflege (ohne Datenverlust)"}
+                  </button>
+                  <span className="text-xs text-sand-500">
+                    Führt VACUUM/ANALYZE aus, ohne Datensätze zu löschen.
+                  </span>
+                </div>
+                {dbMaintenanceInfo ? (
+                  <div
+                    className={`mt-2 text-xs ${
+                      dbMaintenanceStatus === "error" ? "text-rose-600" : "text-emerald-600"
+                    }`}
+                  >
+                    {dbMaintenanceInfo}
+                  </div>
+                ) : null}
+              </div>
               <div className="space-y-2">
                 {tables.length ? (
                   tables.map((table) => (
@@ -4373,8 +4721,8 @@ export default function SettingsView() {
                 )}
               </div>
               <div className="mt-3 text-xs text-sand-500">
-                {debugStatus === "cleared" && "Tabelle geleert."}
-                {debugStatus === "error" && "Leeren fehlgeschlagen."}
+                {debugStatus === "cleared" && (debugMessage || "Tabelle geleert.")}
+                {debugStatus === "error" && (debugMessage || "Leeren fehlgeschlagen.")}
               </div>
             </>
           ) : null}
