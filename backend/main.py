@@ -671,9 +671,15 @@ class CustomerContractDocument(Base):
     html_content = Column(Text, default="")
     template_key = Column(String, default="")
     monthly_hours_included = Column(Float, default=0.0)
+    valid_from = Column(String, default="")
+    runtime_months = Column(Integer, default=12)
+    termination_notice_months = Column(Integer, default=3)
+    auto_extension_months = Column(Integer, default=12)
     note = Column(Text, default="")
     cancel_reason = Column(Text, default="")
     cancelled_at = Column(BigInteger, default=0)
+    cancelled_effective_at = Column(BigInteger, default=0)
+    stop_service_immediately = Column(Boolean, default=False)
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
@@ -1206,6 +1212,18 @@ def _ensure_customer_contract_documents_columns() -> None:
         statements.append("ALTER TABLE customer_contract_documents ADD COLUMN template_key VARCHAR DEFAULT ''")
     if "monthly_hours_included" not in columns:
         statements.append("ALTER TABLE customer_contract_documents ADD COLUMN monthly_hours_included DOUBLE PRECISION DEFAULT 0")
+    if "valid_from" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN valid_from VARCHAR DEFAULT ''")
+    if "runtime_months" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN runtime_months INTEGER DEFAULT 12")
+    if "termination_notice_months" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN termination_notice_months INTEGER DEFAULT 3")
+    if "auto_extension_months" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN auto_extension_months INTEGER DEFAULT 12")
+    if "cancelled_effective_at" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN cancelled_effective_at BIGINT DEFAULT 0")
+    if "stop_service_immediately" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN stop_service_immediately BOOLEAN DEFAULT FALSE")
     if not statements:
         return
     with engine.begin() as connection:
@@ -1642,12 +1660,18 @@ class CustomerContractDocumentCreate(BaseModel):
     template_key: Optional[str] = ""
     tariff_id: Optional[int] = None
     monthly_hours_included: Optional[float] = 0.0
+    valid_from: Optional[str] = ""
+    runtime_months: Optional[int] = 12
+    termination_notice_months: Optional[int] = 3
+    auto_extension_months: Optional[int] = 12
     note: Optional[str] = ""
     status: Optional[str] = "active"
 
 
 class CustomerContractStatusUpdate(BaseModel):
     reason: Optional[str] = ""
+    stop_service_immediately: Optional[bool] = False
+    effective_at: Optional[int] = 0
 
 
 class CustomerContractPreviewRequest(BaseModel):
@@ -2450,6 +2474,19 @@ def _extract_sevdesk_contact(invoice: Dict[str, Any]) -> Tuple[str, str]:
     return contact_id or contact_name, contact_name
 
 
+def _extract_sevdesk_customer_number(invoice: Dict[str, Any]) -> str:
+    contact = invoice.get("contact")
+    if isinstance(contact, dict):
+        number = _extract_customer_number_from_contact(contact)
+        if number:
+            return number
+    for key in ("customerNumber", "customer_number", "customernumber", "contactCustomerNumber"):
+        value = str(invoice.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def _resolve_sevdesk_contact_name(client: SevdeskClient, contact_id: str) -> str:
     key = str(contact_id or "").strip()
     if not key:
@@ -2810,11 +2847,13 @@ def _build_customer_payment_stats(
         if not invoice_date:
             continue
         contact_id, contact_name = _extract_sevdesk_contact(invoice)
+        customer_number = _extract_sevdesk_customer_number(invoice)
         entry = stats.get(contact_id)
         if not entry:
             entry = {
                 "name": contact_name,
                 "contactId": contact_id,
+                "customerNumber": customer_number,
                 "totalInvoices": 0,
                 "paidInvoices": 0,
                 "openInvoices": 0,
@@ -2835,6 +2874,8 @@ def _build_customer_payment_stats(
                 "earliestInvoiceDate": None,
                 "latestInvoiceDate": None,
             }
+        if customer_number and not str(entry.get("customerNumber") or "").strip():
+            entry["customerNumber"] = customer_number
         entry["totalInvoices"] += 1
         entry["totalAmount"] += amount
         reminder_count = _invoice_reminder_count(invoice)
@@ -2951,6 +2992,7 @@ def _build_customer_payment_stats(
             {
                 "name": item["name"],
                 "contactId": item.get("contactId", ""),
+                "customerNumber": str(item.get("customerNumber") or "").strip(),
                 "grade": grade,
                 "totalInvoices": item["totalInvoices"],
                 "paidInvoices": item["paidInvoices"],
@@ -4904,7 +4946,75 @@ def serialize_customer_contract_calculation(item: CustomerContractCalculation) -
     }
 
 
+def _days_in_month(year: int, month: int) -> int:
+    if month == 2:
+        leap = (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0)
+        return 29 if leap else 28
+    if month in {4, 6, 9, 11}:
+        return 30
+    return 31
+
+
+def _add_months_to_timestamp(timestamp_ms: int, months: int) -> int:
+    base = datetime.fromtimestamp(max(0, int(timestamp_ms)) / 1000)
+    total_month = int(base.month) - 1 + int(months or 0)
+    year = int(base.year) + total_month // 12
+    month = total_month % 12 + 1
+    day = min(int(base.day), _days_in_month(year, month))
+    shifted = base.replace(year=year, month=month, day=day)
+    return int(shifted.timestamp() * 1000)
+
+
+def _parse_contract_start_to_epoch_ms(value: Any) -> int:
+    text_value = str(value or "").strip()
+    if not text_value:
+        return 0
+    parsed = _parse_iso8601_to_epoch_ms(text_value)
+    if parsed > 0:
+        return parsed
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y"):
+        try:
+            dt = datetime.strptime(text_value, fmt)
+            return int(dt.timestamp() * 1000)
+        except ValueError:
+            continue
+    return 0
+
+
+def _build_contract_timeline(item: CustomerContractDocument) -> Dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    created_at = int(item.created_at or 0)
+    start_at = _parse_contract_start_to_epoch_ms(getattr(item, "valid_from", "") or "")
+    if start_at <= 0:
+        start_at = created_at
+    runtime_months = max(1, int(_safe_nonnegative_int(getattr(item, "runtime_months", 12) or 12)))
+    notice_months = max(0, int(_safe_nonnegative_int(getattr(item, "termination_notice_months", 3) or 3)))
+    extension_months = max(1, int(_safe_nonnegative_int(getattr(item, "auto_extension_months", 12) or 12)))
+    term_end_at = _add_months_to_timestamp(start_at, runtime_months)
+    cancellation_deadline_at = _add_months_to_timestamp(term_end_at, -notice_months) if notice_months > 0 else term_end_at
+    if now_ms <= cancellation_deadline_at:
+        next_renewal_at = term_end_at
+    else:
+        next_renewal_at = _add_months_to_timestamp(term_end_at, extension_months)
+    cancelled_effective_at = int(getattr(item, "cancelled_effective_at", 0) or 0)
+    return {
+        "start_at": int(start_at or 0),
+        "runtime_months": runtime_months,
+        "termination_notice_months": notice_months,
+        "auto_extension_months": extension_months,
+        "term_end_at": int(term_end_at or 0),
+        "cancellation_deadline_at": int(cancellation_deadline_at or 0),
+        "next_renewal_at": int(next_renewal_at or 0),
+        "days_to_cancellation_deadline": int(math.ceil((cancellation_deadline_at - now_ms) / 86400000)) if cancellation_deadline_at > 0 else None,
+        "days_to_next_renewal": int(math.ceil((next_renewal_at - now_ms) / 86400000)) if next_renewal_at > 0 else None,
+        "cancelled_effective_at": cancelled_effective_at,
+        "remaining_days_after_cancel": int(math.ceil((cancelled_effective_at - now_ms) / 86400000)) if cancelled_effective_at > 0 else None,
+        "stop_service_immediately": bool(getattr(item, "stop_service_immediately", False)),
+    }
+
+
 def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict[str, Any]:
+    timeline = _build_contract_timeline(item)
     return {
         "id": item.id,
         "customer_id": item.customer_id,
@@ -4915,12 +5025,19 @@ def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict
         "mime_type": item.mime_type or "application/pdf",
         "template_key": item.template_key or "",
         "monthly_hours_included": round(float(item.monthly_hours_included or 0.0), 2),
+        "valid_from": str(getattr(item, "valid_from", "") or ""),
+        "runtime_months": int(_safe_nonnegative_int(getattr(item, "runtime_months", 12) or 12)),
+        "termination_notice_months": int(_safe_nonnegative_int(getattr(item, "termination_notice_months", 3) or 3)),
+        "auto_extension_months": int(_safe_nonnegative_int(getattr(item, "auto_extension_months", 12) or 12)),
         "has_html": bool(str(item.html_content or "").strip()),
         "html_content": item.html_content or "",
         "note": item.note or "",
         "cancel_reason": item.cancel_reason or "",
         "cancelled_at": int(item.cancelled_at or 0),
+        "cancelled_effective_at": int(getattr(item, "cancelled_effective_at", 0) or 0),
+        "stop_service_immediately": bool(getattr(item, "stop_service_immediately", False)),
         "created_at": int(item.created_at or 0),
+        "timeline": timeline,
     }
 
 
@@ -7373,12 +7490,8 @@ def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
 
     for customer in customers:
         customer_id = int(customer.id or 0)
-        contract_flags = _parse_contract_flags(customer.contract_flags)
-        has_contract_flag = bool(customer.maintenance_contract) or bool(
-            set(contract_flags) & {"wartung", "monitoring"}
-        )
         customer_docs = docs_by_customer.get(customer_id, [])
-        if not customer_docs and not has_contract_flag:
+        if not customer_docs:
             continue
 
         contracts: List[Dict[str, Any]] = []
@@ -7420,33 +7533,7 @@ def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
                 customer_invoiced_contracts += 1
 
         if not contracts:
-            inferred_types: List[str] = []
-            if bool(customer.maintenance_contract) or "wartung" in contract_flags:
-                inferred_types.append("wartung")
-            if "monitoring" in contract_flags:
-                inferred_types.append("monitoring")
-            if not inferred_types:
-                inferred_types.append("wartung")
-            inferred_seen: Set[str] = set()
-            for inferred_type in inferred_types:
-                if inferred_type in inferred_seen:
-                    continue
-                inferred_seen.add(inferred_type)
-                if inferred_type in {"wartung", "monitoring"}:
-                    service_contract_counts[inferred_type] = int(service_contract_counts.get(inferred_type, 0)) + 1
-                contract_type_counts[inferred_type] = int(contract_type_counts.get(inferred_type, 0)) + 1
-                contracts.append(
-                    {
-                        "id": None,
-                        "status": "active",
-                        "type": inferred_type,
-                        "title": "Vertrag",
-                        "monthlyHoursIncluded": 0.0,
-                        "createdAt": 0,
-                        "inferred": True,
-                    }
-                )
-                customer_invoiced_contracts += 1
+            continue
 
         contract_hours_current = monthly_hours_soll
         contract_hours_previous = monthly_hours_soll
@@ -7617,6 +7704,75 @@ def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
         },
         "rows": rows,
     }
+
+
+def _sevdesk_row_has_unpaid_invoices(row: Dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    open_invoices = _parse_int(row.get("openInvoices")) or 0
+    open_overdue_invoices = _parse_int(row.get("openOverdueInvoices"))
+    if open_overdue_invoices is not None:
+        open_invoices = max(open_invoices, int(open_overdue_invoices))
+    open_amount = _parse_float(row.get("openAmountEur"), default=0.0)
+    open_overdue_amount = _parse_float(
+        row.get("openOverdueAmountEur", row.get("openAmountEur")),
+        default=0.0,
+    )
+    return open_invoices > 0 or open_amount > 0.009 or open_overdue_amount > 0.009
+
+
+def _apply_contract_payment_status(
+    contracts_stats: Dict[str, Any],
+    customer_payment_rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    rows = contracts_stats.get("rows")
+    if not isinstance(rows, list):
+        return contracts_stats
+
+    unpaid_by_number: Dict[str, bool] = {}
+    unpaid_by_name: Dict[str, bool] = {}
+    for payment_row in customer_payment_rows:
+        if not isinstance(payment_row, dict):
+            continue
+        has_unpaid = _sevdesk_row_has_unpaid_invoices(payment_row)
+        number_key = _normalize_customer_number(
+            payment_row.get("customerNumber") or payment_row.get("customer_number")
+        )
+        if number_key:
+            unpaid_by_number[number_key] = bool(unpaid_by_number.get(number_key) or has_unpaid)
+        name_key = _dev_normalize_text(payment_row.get("name"))
+        if name_key:
+            unpaid_by_name[name_key] = bool(unpaid_by_name.get(name_key) or has_unpaid)
+
+    total_unpaid_contracts = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        number_key = _normalize_customer_number(row.get("customerNumber"))
+        name_key = _dev_normalize_text(row.get("customerName"))
+        has_unpaid = False
+        if number_key:
+            has_unpaid = bool(unpaid_by_number.get(number_key, False))
+        if not has_unpaid and name_key:
+            has_unpaid = bool(unpaid_by_name.get(name_key, False))
+
+        row_unpaid_contracts = 0
+        contracts = row.get("contracts")
+        if isinstance(contracts, list):
+            for contract in contracts:
+                if not isinstance(contract, dict):
+                    continue
+                is_active = str(contract.get("status") or "").strip().lower() == "active"
+                contract_unpaid = bool(has_unpaid and is_active)
+                contract["unpaidPayment"] = contract_unpaid
+                if contract_unpaid:
+                    row_unpaid_contracts += 1
+        row["unpaidContractCount"] = int(row_unpaid_contracts)
+        row["hasUnpaidPayment"] = bool(row_unpaid_contracts > 0)
+        total_unpaid_contracts += row_unpaid_contracts
+
+    contracts_stats["unpaidContracts"] = int(total_unpaid_contracts)
+    return contracts_stats
 
 
 def _customer_contract_time_budget(db, customer: Customer, now_ms: int) -> Dict[str, Any]:
@@ -8801,12 +8957,19 @@ def _build_customer_development_context(
     signals: List[str] = []
     recommendations: List[Dict[str, str]] = []
 
+    def _add_recommendation(rec_type: str, title: str, why: str) -> None:
+        normalized_title = str(title or "").strip().lower()
+        if not normalized_title:
+            return
+        for existing in recommendations:
+            if str(existing.get("title") or "").strip().lower() == normalized_title:
+                return
+        recommendations.append({"type": rec_type, "title": title, "why": why})
+
     if not has_contract and not is_regie_customer:
         business_risk += 20
         signals.append("Kein Wartungs-/Monitoringvertrag hinterlegt")
-        recommendations.append(
-            {"type": "betreuung", "title": "Vertragslage prüfen", "why": "Kein Wartungs- oder Monitoringvertrag im Kundenstamm."}
-        )
+        _add_recommendation("betreuung", "Vertragslage prüfen", "Kein Wartungs- oder Monitoringvertrag im Kundenstamm.")
     elif is_regie_customer:
         signals.append("Regie-Kunde hinterlegt (kein Wartungsvertrag, intern niedriger Aktivierungsfokus)")
     # Engagement-Signale: viele kleine Anfragen und regelmäßige Kommunikation
@@ -8820,20 +8983,16 @@ def _build_customer_development_context(
     if is_engaged_customer and not contact_due and not invoice_activity_due:
         business_risk = max(0, business_risk - 12)
         if not has_contract and not is_regie_customer:
-            recommendations.append(
-                {
-                    "type": "betreuung",
-                    "title": "Aktive Betreuung vertraglich absichern",
-                    "why": "Der Kunde nutzt Leistungen regelmäßig, aber ohne Wartungs-/Monitoringvertrag.",
-                }
+            _add_recommendation(
+                "betreuung",
+                "Aktive Betreuung vertraglich absichern",
+                "Der Kunde nutzt Leistungen regelmäßig, aber ohne Wartungs-/Monitoringvertrag.",
             )
 
     if interaction_load >= 8:
         business_risk += 10
         signals.append("Viele offene Aufgaben")
-        recommendations.append(
-            {"type": "betreuung", "title": "Offene Aufgaben bündeln", "why": "Mehrere offene Punkte beim Kunden."}
-        )
+        _add_recommendation("betreuung", "Offene Aufgaben bündeln", "Mehrere offene Punkte beim Kunden.")
     if contact_due:
         if days_since_interaction is None or int(days_since_interaction or 0) >= 90:
             business_risk += 14
@@ -8846,22 +9005,18 @@ def _build_customer_development_context(
         else:
             inactivity_label = f"letzte Aktivität vor {days_since_interaction} Tagen"
         signals.append(f"Kontaktfällig ({inactivity_label})")
-        recommendations.append(
-            {
-                "type": "betreuung",
-                "title": "Proaktiven Kundenkontakt einplanen",
-                "why": f"Es besteht seit Längerem geringe Aktivität ({inactivity_label}).",
-            }
+        _add_recommendation(
+            "betreuung",
+            "Proaktiven Kundenkontakt einplanen",
+            f"Es besteht seit Längerem geringe Aktivität ({inactivity_label}).",
         )
     if days_since_last_invoice is not None and days_since_last_invoice >= 120:
         business_risk += 20
         signals.append(f"Lange ohne umgesetzte Leistung ({days_since_last_invoice} Tage seit letzter Rechnung)")
-        recommendations.append(
-            {
-                "type": "betreuung",
-                "title": "Leistungs-Review mit Reaktivierung anbieten",
-                "why": f"Seit {days_since_last_invoice} Tagen wurde keine neue Leistung fakturiert.",
-            }
+        _add_recommendation(
+            "betreuung",
+            "Leistungs-Review mit Reaktivierung anbieten",
+            f"Seit {days_since_last_invoice} Tagen wurde keine neue Leistung fakturiert.",
         )
     elif days_since_last_invoice is not None and days_since_last_invoice >= 75:
         business_risk += 12
@@ -8877,84 +9032,80 @@ def _build_customer_development_context(
         # Regie-Kunden sollen sichtbar bleiben, aber intern niedriger priorisiert werden.
         business_risk = max(0, business_risk - 18)
 
+    has_low_coverage = discovered_base > 0 and coverage_ratio < 0.7
     if unmanaged_count > 0:
         infra_risk += 35
         signals.append(f"Unmanaged Geräte erkannt ({unmanaged_count})")
-        recommendations.append(
-            {
-                "type": "security",
-                "title": "Unmanaged Geräte via SNMP inventarisieren",
-                "why": "Nicht alle Gerätetypen sind agentfähig. Unmanaged Geräte über SNMP/Discovery erfassen und überwachen.",
-            }
-        )
-    if discovered_base > 0 and coverage_ratio < 0.7:
+        if has_low_coverage:
+            _add_recommendation(
+                "security",
+                "SNMP-/Discovery-Abdeckung erhöhen",
+                (
+                    f"{unmanaged_count} unmanaged Geräte erkannt und geringe Monitoring-Abdeckung "
+                    f"({int(coverage_ratio * 100)}%). Nicht-agentfähige Geräte per SNMP/Discovery einbinden."
+                ),
+            )
+        else:
+            _add_recommendation(
+                "security",
+                "Unmanaged Geräte via SNMP inventarisieren",
+                "Nicht alle Gerätetypen sind agentfähig. Unmanaged Geräte über SNMP/Discovery erfassen und überwachen.",
+            )
+    if has_low_coverage:
         infra_risk += 25
         signals.append(f"Niedrige Monitoring-Abdeckung ({int(coverage_ratio * 100)}%)")
-        recommendations.append(
-            {
-                "type": "lifecycle",
-                "title": "SNMP-/Discovery-Abdeckung erhöhen",
-                "why": "Managed/Discovered Verhältnis ist niedrig; nicht-agentfähige Geräte per SNMP einbinden.",
-            }
-        )
+        if unmanaged_count <= 0:
+            _add_recommendation(
+                "lifecycle",
+                "SNMP-/Discovery-Abdeckung erhöhen",
+                "Managed/Discovered Verhältnis ist niedrig; nicht-agentfähige Geräte per SNMP einbinden.",
+            )
     if managed_count > 0 and offline_rate >= 0.3:
         infra_risk += 25
         signals.append(f"Viele Offline-Agents ({int(offline_rate * 100)}%)")
-        recommendations.append(
-            {"type": "security", "title": "Offline-Agents prüfen", "why": "Ein signifikanter Teil meldet sich nicht."}
-        )
+        _add_recommendation("security", "Offline-Agents prüfen", "Ein signifikanter Teil meldet sich nicht.")
     if total_agent_errors > 0:
         infra_risk += 20
         signals.append(f"RMM meldet Fehler auf Agents ({total_agent_errors})")
-        recommendations.append(
-            {
-                "type": "security",
-                "title": "Agent-Fehler priorisiert beheben",
-                "why": f"Es liegen {total_agent_errors} Fehlerhinweise auf den zugeordneten RMM-Agents vor.",
-            }
+        _add_recommendation(
+            "security",
+            "Agent-Fehler priorisiert beheben",
+            f"Es liegen {total_agent_errors} Fehlerhinweise auf den zugeordneten RMM-Agents vor.",
         )
     if total_agent_warnings > 0:
         infra_risk += 10
         signals.append(f"RMM meldet Warnungen ({total_agent_warnings})")
-        recommendations.append(
-            {
-                "type": "lifecycle",
-                "title": "Agent-Warnungen prüfen",
-                "why": f"Es liegen {total_agent_warnings} Warnhinweise auf den zugeordneten RMM-Agents vor.",
-            }
+        _add_recommendation(
+            "lifecycle",
+            "Agent-Warnungen prüfen",
+            f"Es liegen {total_agent_warnings} Warnhinweise auf den zugeordneten RMM-Agents vor.",
         )
     if total_open_updates > 0:
         infra_risk += 20
         signals.append(f"Offene Updates erkannt ({total_open_updates})")
-        recommendations.append(
-            {
-                "type": "security",
-                "title": "3rd party software updates",
-                "why": (
-                    f"Offene Updates: Windows {total_windows_updates}, "
-                    f"3rd-Party {total_thirdparty_updates}, CVE-bezogen {total_open_cves}."
-                ),
-            }
+        _add_recommendation(
+            "security",
+            "3rd party software updates",
+            (
+                f"Offene Updates: Windows {total_windows_updates}, "
+                f"3rd-Party {total_thirdparty_updates}, CVE-bezogen {total_open_cves}."
+            ),
         )
     if lifecycle_expired > 0:
         infra_risk += 25
         signals.append(f"Veraltete Betriebssysteme erkannt ({lifecycle_expired})")
-        recommendations.append(
-            {
-                "type": "lifecycle",
-                "title": "OS-Migration sofort planen",
-                "why": f"{lifecycle_expired} Systeme sind außerhalb des Supports (EOL überschritten).",
-            }
+        _add_recommendation(
+            "lifecycle",
+            "OS-Migration sofort planen",
+            f"{lifecycle_expired} Systeme sind außerhalb des Supports (EOL überschritten).",
         )
     elif lifecycle_soon > 0:
         infra_risk += 12
         signals.append(f"Betriebssysteme kurz vor EOL ({lifecycle_soon})")
-        recommendations.append(
-            {
-                "type": "lifecycle",
-                "title": "OS-Upgrade-Roadmap festlegen",
-                "why": f"{lifecycle_soon} Systeme erreichen innerhalb von 12 Monaten das Supportende.",
-            }
+        _add_recommendation(
+            "lifecycle",
+            "OS-Upgrade-Roadmap festlegen",
+            f"{lifecycle_soon} Systeme erreichen innerhalb von 12 Monaten das Supportende.",
         )
 
     total_risk = min(100, business_risk + infra_risk)
@@ -13604,6 +13755,10 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
         status_value = str(data.status or "active").strip().lower()
         if status_value not in {"active", "proposal"}:
             status_value = "active"
+        runtime_months = max(1, int(_safe_nonnegative_int(data.runtime_months or 12)))
+        termination_notice_months = max(0, int(_safe_nonnegative_int(data.termination_notice_months or 3)))
+        auto_extension_months = max(1, int(_safe_nonnegative_int(data.auto_extension_months or 12)))
+        valid_from = str(data.valid_from or "").strip()
         doc_type_value = _normalize_contract_doc_type(data.doc_type, default="wartung")
         template_key_value = _normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value)
         if not str(data.doc_type or "").strip():
@@ -13637,6 +13792,10 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             html_content=str(data.html_content or ""),
             template_key=template_key_value,
             monthly_hours_included=monthly_hours_included,
+            valid_from=valid_from,
+            runtime_months=runtime_months,
+            termination_notice_months=termination_notice_months,
+            auto_extension_months=auto_extension_months,
             note=str(data.note or "").strip(),
             created_at=int(time.time() * 1000),
         )
@@ -13677,6 +13836,10 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
         status_value = str(data.status or "proposal").strip().lower()
         if status_value not in {"active", "proposal"}:
             status_value = "proposal"
+        runtime_months = max(1, int(_safe_nonnegative_int(data.runtime_months or 12)))
+        termination_notice_months = max(0, int(_safe_nonnegative_int(data.termination_notice_months or 3)))
+        auto_extension_months = max(1, int(_safe_nonnegative_int(data.auto_extension_months or 12)))
+        valid_from = str(data.valid_from or "").strip()
         doc_type_value = _normalize_contract_doc_type(data.doc_type, default="wartung")
         template_key_value = _normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value)
         if not str(data.doc_type or "").strip():
@@ -13708,9 +13871,15 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
         row.html_content = str(data.html_content or "")
         row.template_key = template_key_value
         row.monthly_hours_included = monthly_hours_included
+        row.valid_from = valid_from
+        row.runtime_months = runtime_months
+        row.termination_notice_months = termination_notice_months
+        row.auto_extension_months = auto_extension_months
         row.note = str(data.note or "").strip()
         row.cancel_reason = ""
         row.cancelled_at = 0
+        row.cancelled_effective_at = 0
+        row.stop_service_immediately = False
         db.commit()
         db.refresh(row)
         return serialize_customer_contract_document(row)
@@ -13732,9 +13901,24 @@ def cancel_customer_contract_document(customer_id: int, contract_id: int, data: 
         )
         if not row:
             raise HTTPException(404, "Contract document not found")
+        timeline = _build_contract_timeline(row)
+        immediate_stop = bool(data.stop_service_immediately)
+        requested_effective_at = int(_safe_nonnegative_int(data.effective_at or 0))
+        now_ms = int(time.time() * 1000)
+        if immediate_stop:
+            effective_at = now_ms
+        elif requested_effective_at > 0:
+            effective_at = requested_effective_at
+        else:
+            effective_at = int(timeline.get("term_end_at") or 0)
+            if effective_at <= 0:
+                effective_at = now_ms
+            effective_at = max(now_ms, effective_at)
         row.status = "cancelled"
         row.cancel_reason = str(data.reason or "").strip()
-        row.cancelled_at = int(time.time() * 1000)
+        row.cancelled_at = now_ms
+        row.cancelled_effective_at = int(effective_at)
+        row.stop_service_immediately = immediate_stop
         db.commit()
         db.refresh(row)
         return serialize_customer_contract_document(row)
@@ -13759,6 +13943,8 @@ def reactivate_customer_contract_document(customer_id: int, contract_id: int):
         row.status = "active"
         row.cancel_reason = ""
         row.cancelled_at = 0
+        row.cancelled_effective_at = 0
+        row.stop_service_immediately = False
         db.commit()
         db.refresh(row)
         return serialize_customer_contract_document(row)
@@ -13783,6 +13969,8 @@ def mark_customer_contract_document_proposal(customer_id: int, contract_id: int)
         row.status = "proposal"
         row.cancel_reason = ""
         row.cancelled_at = 0
+        row.cancelled_effective_at = 0
+        row.stop_service_immediately = False
         db.commit()
         db.refresh(row)
         return serialize_customer_contract_document(row)
@@ -13864,7 +14052,7 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
     load_billing = load_all or section_key == "billing"
     load_customers = load_all or section_key == "customers"
     load_contracts = load_all or section_key == "contracts"
-    load_sevdesk = load_billing or load_customers
+    load_sevdesk = load_billing or load_customers or load_contracts
 
     start_of_day = datetime(now_dt.year, now_dt.month, now_dt.day)
     start_of_week = start_of_day - timedelta(days=start_of_day.weekday())
@@ -14078,7 +14266,7 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
     sevdesk_stats: Dict[str, Any] = {"connected": False}
     if load_sevdesk and sevdesk_config and sevdesk_config.api_token:
         try:
-            if load_customers and not load_billing:
+            if (load_customers or load_contracts) and not load_billing:
                 sevdesk_stats = _build_sevdesk_stats(
                     SevdeskClient(sevdesk_config, timeout=25),
                     now_dt,
@@ -14093,7 +14281,7 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                 )
         except SevdeskError as exc:
             sevdesk_stats = {"connected": False, "error": str(exc)}
-    if load_customers and isinstance(sevdesk_stats, dict):
+    if (load_customers or load_contracts) and isinstance(sevdesk_stats, dict):
         customer_rows = sevdesk_stats.get("customerPaymentStats")
         if isinstance(customer_rows, list):
             filtered_rows = _filter_inactive_customer_payment_rows(
@@ -14105,6 +14293,12 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
             )
             sevdesk_stats["customerPaymentStats"] = filtered_rows
             sevdesk_stats["customerPaymentSummary"] = _summarize_customer_payment_rows(filtered_rows)
+    if load_contracts and contracts_stats:
+        payment_rows = sevdesk_stats.get("customerPaymentStats") if isinstance(sevdesk_stats, dict) else []
+        contracts_stats = _apply_contract_payment_status(
+            contracts_stats,
+            payment_rows if isinstance(payment_rows, list) else [],
+        )
 
     response: Dict[str, Any] = {}
     if load_general:

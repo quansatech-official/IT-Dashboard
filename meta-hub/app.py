@@ -1628,7 +1628,10 @@ def _refresh_ai_preanalysis() -> bool:
                 _state["aiLastError"] = ""
             return True
         results: List[Tuple[int, str, Dict[str, Any]]] = []
-        for customer_id, mode in jobs:
+        failed_jobs = 0
+        last_job_error = ""
+        backend_unreachable = False
+        for idx, (customer_id, mode) in enumerate(jobs):
             try:
                 data = _request_backend_post_json(
                     "/api/customer_development/ai_assist",
@@ -1653,12 +1656,25 @@ def _refresh_ai_preanalysis() -> bool:
                     )
                 )
             except Exception as exc:
+                failed_jobs += 1
+                last_job_error = str(exc)
+                if isinstance(exc, requests.RequestException):
+                    if not backend_unreachable:
+                        logger.warning(
+                            "AI preanalysis skipped: backend unreachable (%s). pending_jobs=%s",
+                            exc,
+                            max(0, len(jobs) - idx),
+                        )
+                    backend_unreachable = True
+                    break
                 logger.warning("AI preanalysis failed for customer=%s mode=%s: %s", customer_id, mode, exc)
         _apply_ai_preanalysis_results(results)
         with _state_lock:
             _state["aiLastRefreshAt"] = int(time.time() * 1000)
             _state["aiLastDurationMs"] = max(0, int(time.time() * 1000) - start_ms)
-            _state["aiLastError"] = ""
+            _state["aiLastError"] = (
+                f"{failed_jobs} jobs failed: {last_job_error}" if failed_jobs > 0 else ""
+            )
         return True
     except Exception as exc:
         with _state_lock:

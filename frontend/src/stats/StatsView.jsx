@@ -797,25 +797,20 @@ export default function StatsView() {
                             </td>
                             <td className="px-3 py-2 text-sand-700">
                               {(() => {
-                                const rowContracts =
-                                  Array.isArray(item?.contracts) && item.contracts.length
-                                    ? item.contracts
-                                    : [
-                                        {
-                                          id: null,
-                                          status: item.contractStatus || "active",
-                                          type: item.contractType || "wartung",
-                                          title: item.contractTitle || "Vertrag",
-                                          monthlyHoursIncluded: Number(item.contractHoursSoll || 0),
-                                          inferred: true
-                                        }
-                                      ];
+                                const rowContracts = Array.isArray(item?.contracts) ? item.contracts : [];
+                                if (!rowContracts.length) {
+                                  return (
+                                    <div className="text-[10px] text-sand-400">
+                                      Keine hinterlegten Verträge
+                                    </div>
+                                  );
+                                }
                                 return (
                                   <div className="space-y-1.5">
                                     {rowContracts.map((contract, contractIndex) => (
                                       <div
                                         key={`contract-row-${item.customerId || "c"}-${
-                                          contract.id || `virtual-${contractIndex}`
+                                          contract.id || `contract-${contractIndex}`
                                         }`}
                                         className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1"
                                       >
@@ -830,6 +825,11 @@ export default function StatsView() {
                                           <span className="inline-flex rounded-full border border-sand-300 bg-white px-2 py-0.5 font-semibold text-sand-600">
                                             {contractTypeLabel(contract.type)}
                                           </span>
+                                          {contract.unpaidPayment ? (
+                                            <span className="inline-flex rounded-full border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+                                              !
+                                            </span>
+                                          ) : null}
                                         </div>
                                         <div className="mt-1 text-[10px] text-sand-700">
                                           {contract.title || "Vertrag"}

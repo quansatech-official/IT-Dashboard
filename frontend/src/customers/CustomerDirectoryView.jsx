@@ -109,11 +109,15 @@ const api = {
       if (!r.ok) throw new Error(data?.detail || "contract_update_failed");
       return data;
     }),
-  cancelCustomerContract: (customerId, contractId, reason = "") =>
+  cancelCustomerContract: (
+    customerId,
+    contractId,
+    payload = { reason: "", stop_service_immediately: false, effective_at: 0 }
+  ) =>
     fetch(`${API}/customers/${customerId}/contracts/${contractId}/cancel`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason })
+      body: JSON.stringify(payload || {})
     }).then(async (r) => {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.detail || "contract_cancel_failed");
@@ -460,6 +464,58 @@ const daysUntilTimestamp = (timestampMs) => {
   return Math.ceil(diffMs / (24 * 60 * 60 * 1000));
 };
 
+const addMonthsToTimestamp = (timestampMs, months) => {
+  const base = new Date(Number(timestampMs || 0));
+  if (!Number.isFinite(base.getTime()) || base.getTime() <= 0) return 0;
+  const totalMonths = base.getMonth() + Number(months || 0);
+  const year = base.getFullYear() + Math.floor(totalMonths / 12);
+  const month = ((totalMonths % 12) + 12) % 12;
+  const day = base.getDate();
+  const maxDay = new Date(year, month + 1, 0).getDate();
+  const shifted = new Date(base);
+  shifted.setFullYear(year, month, Math.min(day, maxDay));
+  return shifted.getTime();
+};
+
+const contractTimelineFromItem = (item) => {
+  const timeline = item?.timeline && typeof item.timeline === "object" ? item.timeline : {};
+  if (Number(timeline?.next_renewal_at || 0) > 0) {
+    return {
+      nextRenewalAt: Number(timeline.next_renewal_at || 0),
+      cancellationDeadlineAt: Number(timeline.cancellation_deadline_at || 0),
+      termEndAt: Number(timeline.term_end_at || 0),
+      cancelledEffectiveAt: Number(item?.cancelled_effective_at || timeline.cancelled_effective_at || 0),
+      remainingAfterCancelDays: Number(timeline.remaining_days_after_cancel),
+      stopServiceImmediately: Boolean(item?.stop_service_immediately ?? timeline.stop_service_immediately),
+    };
+  }
+  const createdAt = Number(item?.created_at || 0);
+  if (!createdAt) {
+    return {
+      nextRenewalAt: 0,
+      cancellationDeadlineAt: 0,
+      termEndAt: 0,
+      cancelledEffectiveAt: Number(item?.cancelled_effective_at || 0),
+      remainingAfterCancelDays: null,
+      stopServiceImmediately: Boolean(item?.stop_service_immediately),
+    };
+  }
+  const runtimeMonths = Math.max(1, Number(item?.runtime_months || 12) || 12);
+  const noticeMonths = Math.max(0, Number(item?.termination_notice_months || 3) || 3);
+  const extensionMonths = Math.max(1, Number(item?.auto_extension_months || 12) || 12);
+  const termEndAt = addMonthsToTimestamp(createdAt, runtimeMonths);
+  const cancellationDeadlineAt = noticeMonths > 0 ? addMonthsToTimestamp(termEndAt, -noticeMonths) : termEndAt;
+  const nextRenewalAt = Date.now() <= cancellationDeadlineAt ? termEndAt : addMonthsToTimestamp(termEndAt, extensionMonths);
+  return {
+    nextRenewalAt,
+    cancellationDeadlineAt,
+    termEndAt,
+    cancelledEffectiveAt: Number(item?.cancelled_effective_at || 0),
+    remainingAfterCancelDays: null,
+    stopServiceImmediately: Boolean(item?.stop_service_immediately),
+  };
+};
+
 const formatCallDuration = (value) => {
   const seconds = Number.parseInt(String(value || "0"), 10);
   if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
@@ -722,6 +778,8 @@ export default function CustomerDirectoryView() {
     docType: "wartung",
     validFrom: "",
     runtimeMonths: "12",
+    terminationNoticeMonths: "3",
+    autoExtensionMonths: "12",
     monthlyHoursIncluded: "0",
     monthlyTotalOverride: "",
     yearlyTotalOverride: ""
@@ -1189,6 +1247,10 @@ export default function CustomerDirectoryView() {
         template_key: String(source.template_key || contractDraft.docType || "wartung"),
         tariff_id: selectedTariffId,
         monthly_hours_included: Number(source?.meta?.monthly_hours_included ?? monthlyHoursIncluded),
+        valid_from: String(source?.meta?.valid_from || contractDraft.validFrom || ""),
+        runtime_months: Number(source?.meta?.runtime_months || contractDraft.runtimeMonths || 12),
+        termination_notice_months: Number(contractDraft.terminationNoticeMonths || 3),
+        auto_extension_months: Number(contractDraft.autoExtensionMonths || 12),
         note: "",
         status: "proposal"
       };
@@ -1230,8 +1292,13 @@ export default function CustomerDirectoryView() {
   const cancelContractDocument = async (contractId) => {
     if (!activeId || !contractId) return;
     const reason = window.prompt("Stornogrund (optional):", "") || "";
+    const stopImmediately = window.confirm("Leistung sofort stoppen?");
     try {
-      const updated = await api.cancelCustomerContract(activeId, contractId, reason);
+      const updated = await api.cancelCustomerContract(activeId, contractId, {
+        reason,
+        stop_service_immediately: Boolean(stopImmediately),
+        effective_at: 0,
+      });
       setCustomerContracts((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
       setMetricsReloadTick((prev) => prev + 1);
     } catch {
@@ -1284,8 +1351,10 @@ export default function CustomerDirectoryView() {
     setContractDraft({
       title: String(item?.title || "").trim(),
       docType,
-      validFrom: "",
-      runtimeMonths: "12",
+      validFrom: String(item?.valid_from || "").trim(),
+      runtimeMonths: String(Number(item?.runtime_months || 12) || 12),
+      terminationNoticeMonths: String(Number(item?.termination_notice_months || 3) || 3),
+      autoExtensionMonths: String(Number(item?.auto_extension_months || 12) || 12),
       monthlyHoursIncluded: String(Number(item?.monthly_hours_included || 0)),
       monthlyTotalOverride: "",
       yearlyTotalOverride: ""
@@ -1324,6 +1393,8 @@ export default function CustomerDirectoryView() {
       docType: "wartung",
       validFrom: "",
       runtimeMonths: "12",
+      terminationNoticeMonths: "3",
+      autoExtensionMonths: "12",
       monthlyHoursIncluded: "0",
       monthlyTotalOverride: "",
       yearlyTotalOverride: ""
@@ -1447,13 +1518,24 @@ export default function CustomerDirectoryView() {
     const activeContracts = contracts.filter((item) => String(item?.status || "").toLowerCase() === "active");
     const proposalContracts = contracts.filter((item) => String(item?.status || "").toLowerCase() === "proposal");
     let nextRenewalAt = 0;
+    let nextCancellationDeadlineAt = 0;
     let renewalsDueSoon = 0;
     contracts.forEach((item) => {
-      const createdAt = Number(item?.created_at || 0);
-      if (!createdAt) return;
-      const renewalAt = createdAt + 365 * 24 * 60 * 60 * 1000;
-      if (!nextRenewalAt || renewalAt < nextRenewalAt) nextRenewalAt = renewalAt;
-      if (renewalAt <= nowMs + 45 * 24 * 60 * 60 * 1000) renewalsDueSoon += 1;
+      const status = String(item?.status || "").toLowerCase();
+      if (status !== "active" && status !== "proposal") return;
+      const timeline = contractTimelineFromItem(item);
+      if (timeline.nextRenewalAt > 0) {
+        if (!nextRenewalAt || timeline.nextRenewalAt < nextRenewalAt) nextRenewalAt = timeline.nextRenewalAt;
+        if (timeline.nextRenewalAt <= nowMs + 45 * 24 * 60 * 60 * 1000) renewalsDueSoon += 1;
+      }
+      if (timeline.cancellationDeadlineAt > 0) {
+        if (
+          !nextCancellationDeadlineAt ||
+          timeline.cancellationDeadlineAt < nextCancellationDeadlineAt
+        ) {
+          nextCancellationDeadlineAt = timeline.cancellationDeadlineAt;
+        }
+      }
     });
     const missingIncludedHours = serviceContracts.filter(
       (item) => Number(item?.monthly_hours_included || 0) <= 0
@@ -1476,11 +1558,14 @@ export default function CustomerDirectoryView() {
       renewalsDueSoon,
       nextRenewalAt,
       nextRenewalDays: daysUntilTimestamp(nextRenewalAt),
+      nextCancellationDeadlineAt,
+      nextCancellationDeadlineDays: daysUntilTimestamp(nextCancellationDeadlineAt),
       runtimeDaysAvg
     };
   }, [customerContracts]);
   const customerSteering = useMemo(() => {
     const revenueYtd = Number(selectedCustomerMetrics?.revenueCurrentYearEur || 0);
+    const hasServiceContract = Boolean(contractTimeBudget?.hasServiceContract);
     const monthlyBudget = Number(contractTimeBudget?.includedHours || 0);
     const monthlyConsumed = Number(contractTimeBudget?.consumedHours || 0);
     const overrun = Number(contractTimeBudget?.overrunHours || 0);
@@ -1497,22 +1582,28 @@ export default function CustomerDirectoryView() {
         : revenueYtd > 0
           ? `Kein SLA-Budget, YTD ${formatEur(revenueYtd)}`
           : "Keine Profitabilitätsbasis";
-    const slaLabel = contractTimeBudget?.isOverrun
-      ? `SLA-Verstoß: ${formatHours(overrun)} über Soll`
-      : "SLA im Rahmen";
+    const slaLabel = !hasServiceContract
+      ? "Kein Servicevertrag, kein SLA-Soll"
+      : contractTimeBudget?.isOverrun
+        ? `SLA-Verstoß: ${formatHours(overrun)} über Soll`
+        : "SLA im Rahmen";
     const renewalLabel =
-      contractControlStats.nextRenewalDays === null
+      contractControlStats.nextRenewalDays === null && contractControlStats.nextCancellationDeadlineDays === null
         ? "Keine Vertragsfälligkeit verfügbar"
-        : contractControlStats.nextRenewalDays <= 0
-          ? `Verlängerung fällig seit ${formatDate(contractControlStats.nextRenewalAt)}`
-          : `Nächste Verlängerung in ${contractControlStats.nextRenewalDays} Tagen (${formatDate(
-              contractControlStats.nextRenewalAt
-            )})`;
+        : contractControlStats.nextCancellationDeadlineDays !== null &&
+          contractControlStats.nextCancellationDeadlineDays <= 0
+          ? `Kündigungsfrist überschritten seit ${formatDate(contractControlStats.nextCancellationDeadlineAt)}. Bei Fristversäumnis automatische Verlängerung.`
+          : contractControlStats.nextCancellationDeadlineDays !== null
+            ? `Kündigungsfrist bis ${formatDate(contractControlStats.nextCancellationDeadlineAt)}${contractControlStats.nextRenewalAt ? ` · nächste Verlängerung ${formatDate(contractControlStats.nextRenewalAt)}` : ""}`
+            : `Nächste Verlängerung in ${contractControlStats.nextRenewalDays} Tagen (${formatDate(contractControlStats.nextRenewalAt)})`;
     const nextAction =
       contractControlStats.missingIncludedHours > 0
         ? "Inklusivstunden in Serviceverträgen nachziehen."
-        : contractTimeBudget?.isOverrun
+        : hasServiceContract && contractTimeBudget?.isOverrun
           ? "SLA-Überzug mit Kunde abstimmen und Nachtrag anbieten."
+          : contractControlStats.nextCancellationDeadlineDays !== null &&
+            contractControlStats.nextCancellationDeadlineDays <= 30
+            ? "Kündigungs-/Verlängerungsentscheidung mit Kunde terminieren."
           : contractControlStats.renewalsDueSoon > 0
             ? "Verlängerungsgespräch terminieren."
             : communicationGap
@@ -1607,13 +1698,18 @@ export default function CustomerDirectoryView() {
   const renderContractListItem = (item) => {
     const status = String(item?.status || "active").toLowerCase();
     const monthlyHoursIncluded = Number(item?.monthly_hours_included || 0);
+    const timeline = contractTimelineFromItem(item);
+    const cancellationDeadlineDays = daysUntilTimestamp(timeline.cancellationDeadlineAt);
+    const renewalDays = daysUntilTimestamp(timeline.nextRenewalAt);
+    const cancelledEffectiveDays = daysUntilTimestamp(timeline.cancelledEffectiveAt);
+    const isCancelled = status === "cancelled";
     const badgeClass =
-      status === "cancelled"
+      isCancelled
         ? "border-rose-200 bg-rose-50 text-rose-700"
         : status === "proposal"
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : "border-emerald-200 bg-emerald-50 text-emerald-700";
-    const label = status === "cancelled" ? "Storniert" : status === "proposal" ? "Vorschlag" : "Aktiv";
+    const label = isCancelled ? "Gekündigt" : status === "proposal" ? "Vorschlag" : "Aktiv";
     return (
       <div key={item.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
         <div className="flex items-center justify-between gap-2">
@@ -1622,6 +1718,23 @@ export default function CustomerDirectoryView() {
         </div>
         {monthlyHoursIncluded > 0 ? (
           <p className="mt-1 text-[11px] text-sand-600">Inklusivstunden: {formatHours(monthlyHoursIncluded)}</p>
+        ) : null}
+        {cancellationDeadlineDays !== null && !isCancelled ? (
+          <p className={`mt-1 text-[11px] ${cancellationDeadlineDays <= 14 ? "text-amber-700" : "text-sand-600"}`}>
+            Kündigungsfrist: {formatDate(timeline.cancellationDeadlineAt)}{cancellationDeadlineDays <= 0 ? " (überschritten)" : ""}
+          </p>
+        ) : null}
+        {renewalDays !== null && !isCancelled ? (
+          <p className="mt-1 text-[11px] text-sand-600">
+            Nächste Verlängerung: {formatDate(timeline.nextRenewalAt)} ({renewalDays} Tage)
+          </p>
+        ) : null}
+        {isCancelled ? (
+          <p className="mt-1 text-[11px] text-rose-700">
+            Ende: {timeline.cancelledEffectiveAt ? formatDate(timeline.cancelledEffectiveAt) : "sofort"}
+            {timeline.stopServiceImmediately ? " · Leistungsstopp sofort" : ""}
+            {cancelledEffectiveDays !== null && cancelledEffectiveDays > 0 ? ` · Restlaufzeit ${cancelledEffectiveDays} Tage` : ""}
+          </p>
         ) : null}
         {status === "proposal" ? (
           <p className="mt-1 text-[11px] text-amber-700">Kunde hat noch nicht eingewilligt. Als Vorschlag geführt.</p>
@@ -2738,6 +2851,30 @@ export default function CustomerDirectoryView() {
               className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             />
           </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Kündigungsfrist (Monate)</span>
+            <input
+              type="number"
+              min="0"
+              value={contractDraft.terminationNoticeMonths}
+              onChange={(event) =>
+                setContractDraft((prev) => ({ ...prev, terminationNoticeMonths: event.target.value }))
+              }
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">Auto-Verlängerung (Monate)</span>
+            <input
+              type="number"
+              min="1"
+              value={contractDraft.autoExtensionMonths}
+              onChange={(event) =>
+                setContractDraft((prev) => ({ ...prev, autoExtensionMonths: event.target.value }))
+              }
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+            />
+          </label>
           {supportsHoursBudget ? (
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Inklusivstunden pro Monat</span>
@@ -3131,7 +3268,7 @@ export default function CustomerDirectoryView() {
                         <p className={`text-[11px] ${customerSteering.communicationGap ? "text-amber-700" : "text-sand-700"}`}>
                           <span className="text-sand-500">Kommunikationslücke:</span> {customerSteering.communicationLabel}
                         </p>
-                        <p className={`text-[11px] ${contractTimeBudget?.isOverrun ? "text-rose-700" : "text-sand-700"}`}>
+                        <p className={`text-[11px] ${contractTimeBudget?.hasServiceContract && contractTimeBudget?.isOverrun ? "text-rose-700" : "text-sand-700"}`}>
                           <span className="text-sand-500">SLA:</span> {customerSteering.slaLabel}
                         </p>
                         <p className={`text-[11px] ${contractControlStats.renewalsDueSoon ? "text-amber-700" : "text-sand-700"}`}>
