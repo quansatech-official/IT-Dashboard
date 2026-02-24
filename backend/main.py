@@ -55,7 +55,7 @@ OLLAMA_STREAM_ENABLED = str(os.environ.get("OLLAMA_STREAM_ENABLED") or "").strip
     "yes",
     "on",
 }
-OLLAMA_NUM_CTX = max(256, int(os.environ.get("OLLAMA_NUM_CTX") or "1024"))
+OLLAMA_NUM_CTX = max(256, int(os.environ.get("OLLAMA_NUM_CTX") or "2048"))
 OLLAMA_NUM_THREAD = max(
     1,
     int(
@@ -86,6 +86,10 @@ OLLAMA_RESPONSE_CACHE_MAX_ENTRIES = max(
 OLLAMA_MISSING_MODEL_TTL_SECONDS = max(
     0,
     int(os.environ.get("OLLAMA_MISSING_MODEL_TTL_SECONDS") or "600"),
+)
+OLLAMA_PROMPT_TOKEN_MARGIN = max(
+    64,
+    int(os.environ.get("OLLAMA_PROMPT_TOKEN_MARGIN") or "96"),
 )
 DB_STARTUP_RETRY_ATTEMPTS = max(
     1,
@@ -2191,6 +2195,19 @@ def _ollama_generate(
             resolved_max_tokens = max(1, min(int(max_tokens), OLLAMA_MAX_TOKENS_HARD_LIMIT))
         except (TypeError, ValueError):
             resolved_max_tokens = None
+    target_predict = int(resolved_max_tokens or OLLAMA_MAX_TOKENS_HARD_LIMIT or 0)
+    prompt_ctx_budget = max(128, int(OLLAMA_NUM_CTX) - target_predict - int(OLLAMA_PROMPT_TOKEN_MARGIN))
+    approx_prompt_tokens = max(1, int(math.ceil(len(prompt_text) / 4.0)))
+    if approx_prompt_tokens > prompt_ctx_budget:
+        allowed_chars = max(800, int(prompt_ctx_budget * 4))
+        if len(prompt_text) > allowed_chars:
+            prompt_text = prompt_text[:allowed_chars]
+            logger.info(
+                "Ollama prompt trimmed before request approx_tokens=%s budget=%s chars=%s",
+                approx_prompt_tokens,
+                prompt_ctx_budget,
+                len(prompt_text),
+            )
 
     for model in normalized_models:
         if _ollama_model_temporarily_missing(model):
