@@ -3398,14 +3398,7 @@ export default function CustomerDirectoryView() {
                     </div>
                   </div>
                   <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
-                    <div className="grid gap-2 md:grid-cols-4">
-                      <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Pipeline</p>
-                        <p className="text-sm font-semibold text-sand-900">
-                          {contractControlStats.proposal} {"->"} {contractControlStats.active}
-                        </p>
-                        <p className="text-[11px] text-sand-600">Vorschlag {"->"} Aktiv</p>
-                      </div>
+                    <div className="grid gap-2 md:grid-cols-3">
                       <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Verlängerung</p>
                         <p className="text-sm font-semibold text-sand-900">{contractControlStats.renewalsDueSoon}</p>
@@ -3662,13 +3655,13 @@ export default function CustomerDirectoryView() {
                       <td className="px-3 py-2 align-top">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <p className="font-semibold text-sand-900">{customer.name?.trim() || "Unbenannter Kunde"}</p>
-                          <span className="inline-flex rounded-full border border-sand-300 bg-sand-50 px-2 py-0.5 text-[10px] text-sand-700">
-                            {customer.creditorNumber || "Ohne Nr."}
+                          <span className="text-[11px] text-sand-500">
+                            Nr. {customer.creditorNumber || "ohne"}
                           </span>
+                          {customer.shortCode ? (
+                            <span className="text-[11px] text-sand-500">· {customer.shortCode}</span>
+                          ) : null}
                         </div>
-                        <p className="text-[11px] text-sand-500">
-                          {customer.shortCode ? `Kürzel ${customer.shortCode}` : "Kein Kürzel"}
-                        </p>
                         {(() => {
                           const context = developmentByCustomerId[customer.id];
                           if (!context) {

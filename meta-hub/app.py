@@ -81,6 +81,31 @@ MAC_VENDOR_CACHE_TTL_MS = _to_positive_int(
     default=30 * 24 * 60 * 60,
     minimum=60,
 ) * 1000
+AI_PREANALYSIS_ENABLED = _to_bool(os.environ.get("META_HUB_AI_PREANALYSIS_ENABLED"), default=True)
+AI_PREANALYSIS_TIMEOUT_SECONDS = float(os.environ.get("META_HUB_AI_TIMEOUT_SECONDS") or "150")
+AI_PREANALYSIS_MAX_CUSTOMERS = _to_positive_int(
+    os.environ.get("META_HUB_AI_MAX_CUSTOMERS"),
+    default=40,
+    minimum=1,
+)
+AI_PREANALYSIS_MAX_JOBS_PER_RUN = _to_positive_int(
+    os.environ.get("META_HUB_AI_MAX_JOBS_PER_RUN"),
+    default=40,
+    minimum=1,
+)
+AI_PREANALYSIS_TTL_MS = _to_positive_int(
+    os.environ.get("META_HUB_AI_TTL_SECONDS"),
+    default=6 * 60 * 60,
+    minimum=120,
+) * 1000
+AI_PREANALYSIS_MODES = [
+    mode.strip().lower()
+    for mode in str(
+        os.environ.get("META_HUB_AI_MODES")
+        or "summary,analyse,angebot,kundenbericht,mail,leitfaden,aktivierung_mail,aktivierung_call"
+    ).split(",")
+    if mode.strip()
+]
 
 if not logging.getLogger().handlers:
     logging.basicConfig(
@@ -92,6 +117,7 @@ logger = logging.getLogger("meta_hub")
 app = FastAPI(title="Customer Meta Hub", version="1.1.0")
 _state_lock = threading.Lock()
 _refresh_lock = threading.Lock()
+_ai_refresh_lock = threading.Lock()
 _stop_event = threading.Event()
 
 _state: Dict[str, Any] = {
@@ -102,6 +128,10 @@ _state: Dict[str, Any] = {
     "lastDurationMs": 0,
     "lastError": "",
     "refreshIntervalSeconds": REFRESH_INTERVAL_SECONDS,
+    "aiRefreshing": False,
+    "aiLastRefreshAt": 0,
+    "aiLastDurationMs": 0,
+    "aiLastError": "",
 }
 _mac_vendor_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -140,6 +170,25 @@ def _request_backend_json(
     data = response.json()
     if not isinstance(data, dict):
         raise ValueError(f"Invalid backend payload for {path}")
+    return data
+
+
+def _request_backend_post_json(
+    path: str,
+    *,
+    body: Optional[Dict[str, Any]] = None,
+    timeout_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
+    response = requests.post(
+        f"{BACKEND_URL}{path}",
+        json=body or {},
+        headers={**_backend_headers(), "Content-Type": "application/json"},
+        timeout=timeout_seconds or REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid backend payload for POST {path}")
     return data
 
 
@@ -1452,6 +1501,182 @@ def _prepare_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     return prepared
 
 
+def _copy_existing_ai_preanalysis(target_payload: Dict[str, Any], previous_payload: Optional[Dict[str, Any]]) -> None:
+    previous_contexts = previous_payload.get("contexts") if isinstance(previous_payload, dict) else []
+    previous_map: Dict[int, Dict[str, Any]] = {}
+    for row in previous_contexts or []:
+        if not isinstance(row, dict):
+            continue
+        customer_id = _safe_int(row.get("customerId"))
+        if customer_id <= 0:
+            continue
+        cached = row.get("aiPreanalysis")
+        if isinstance(cached, dict) and cached:
+            previous_map[customer_id] = dict(cached)
+    if not previous_map:
+        return
+    for row in target_payload.get("contexts") or []:
+        if not isinstance(row, dict):
+            continue
+        customer_id = _safe_int(row.get("customerId"))
+        if customer_id <= 0:
+            continue
+        if customer_id in previous_map and not isinstance(row.get("aiPreanalysis"), dict):
+            row["aiPreanalysis"] = dict(previous_map[customer_id])
+
+
+def _context_priority(context: Dict[str, Any]) -> Tuple[float, float, str]:
+    return (
+        -float(context.get("priority") or 0),
+        -float(context.get("riskScore") or 0),
+        str(context.get("customerName") or ""),
+    )
+
+
+def _queue_ai_preanalysis_jobs(payload: Dict[str, Any]) -> List[Tuple[int, str]]:
+    if not AI_PREANALYSIS_ENABLED or not AI_PREANALYSIS_MODES:
+        return []
+    contexts = payload.get("contexts") if isinstance(payload, dict) else []
+    ranked = [row for row in (contexts or []) if isinstance(row, dict)]
+    ranked.sort(key=_context_priority)
+    ranked = ranked[:AI_PREANALYSIS_MAX_CUSTOMERS]
+
+    now_ms = int(time.time() * 1000)
+    jobs: List[Tuple[int, str]] = []
+    for row in ranked:
+        customer_id = _safe_int(row.get("customerId"))
+        if customer_id <= 0:
+            continue
+        per_customer = row.get("aiPreanalysis") if isinstance(row.get("aiPreanalysis"), dict) else {}
+        for mode in AI_PREANALYSIS_MODES:
+            cached_entry = per_customer.get(mode) if isinstance(per_customer, dict) else None
+            cached_at = _safe_int((cached_entry or {}).get("generatedAt"))
+            if cached_at > 0 and now_ms - cached_at <= AI_PREANALYSIS_TTL_MS:
+                continue
+            jobs.append((customer_id, mode))
+            if len(jobs) >= AI_PREANALYSIS_MAX_JOBS_PER_RUN:
+                return jobs
+    return jobs
+
+
+def _apply_ai_preanalysis_results(results: List[Tuple[int, str, Dict[str, Any]]]) -> None:
+    if not results:
+        return
+    payload_to_save: Optional[Dict[str, Any]] = None
+    with _state_lock:
+        payload = _state.get("payload")
+        if not isinstance(payload, dict):
+            return
+        contexts = payload.get("contexts") if isinstance(payload.get("contexts"), list) else []
+        index_map: Dict[int, Dict[str, Any]] = {}
+        for row in contexts:
+            if not isinstance(row, dict):
+                continue
+            customer_id = _safe_int(row.get("customerId"))
+            if customer_id > 0:
+                index_map[customer_id] = row
+        changed = False
+        for customer_id, mode, entry in results:
+            target = index_map.get(customer_id)
+            if not isinstance(target, dict):
+                continue
+            current = target.get("aiPreanalysis")
+            if not isinstance(current, dict):
+                current = {}
+            next_map = dict(current)
+            next_map[mode] = entry
+            target["aiPreanalysis"] = next_map
+            changed = True
+        if not changed:
+            return
+        meta_hub = payload.get("metaHub") if isinstance(payload.get("metaHub"), dict) else {}
+        generated_entries = 0
+        for row in contexts:
+            if not isinstance(row, dict):
+                continue
+            cached = row.get("aiPreanalysis")
+            if isinstance(cached, dict):
+                generated_entries += len(cached)
+        payload["metaHub"] = {
+            **meta_hub,
+            "aiPreanalysisGeneratedAt": int(time.time() * 1000),
+            "aiPreanalysisEntries": int(generated_entries),
+            "aiPreanalysisModes": list(AI_PREANALYSIS_MODES),
+        }
+        _state["payload"] = payload
+        payload_to_save = payload
+    if payload_to_save is not None:
+        _save_snapshot(payload_to_save)
+
+
+def _refresh_ai_preanalysis() -> bool:
+    if not AI_PREANALYSIS_ENABLED or not AI_PREANALYSIS_MODES:
+        return False
+    if not _ai_refresh_lock.acquire(blocking=False):
+        return False
+    start_ms = int(time.time() * 1000)
+    with _state_lock:
+        _state["aiRefreshing"] = True
+    try:
+        with _state_lock:
+            payload = _state.get("payload")
+            jobs = _queue_ai_preanalysis_jobs(payload if isinstance(payload, dict) else {})
+        if not jobs:
+            with _state_lock:
+                _state["aiLastRefreshAt"] = int(time.time() * 1000)
+                _state["aiLastDurationMs"] = max(0, int(time.time() * 1000) - start_ms)
+                _state["aiLastError"] = ""
+            return True
+        results: List[Tuple[int, str, Dict[str, Any]]] = []
+        for customer_id, mode in jobs:
+            try:
+                data = _request_backend_post_json(
+                    "/api/customer_development/ai_assist",
+                    body={"customer_id": int(customer_id), "mode": str(mode)},
+                    timeout_seconds=AI_PREANALYSIS_TIMEOUT_SECONDS,
+                )
+                text = str(data.get("text") or "").strip()
+                if not text:
+                    continue
+                sources = data.get("sources") if isinstance(data.get("sources"), dict) else {}
+                generated_at = _safe_int(data.get("generated_at"), default=int(time.time() * 1000))
+                results.append(
+                    (
+                        int(customer_id),
+                        str(mode),
+                        {
+                            "text": text,
+                            "sources": sources,
+                            "generatedAt": generated_at,
+                            "tone": str(data.get("tone") or "sachlich"),
+                        },
+                    )
+                )
+            except Exception as exc:
+                logger.warning("AI preanalysis failed for customer=%s mode=%s: %s", customer_id, mode, exc)
+        _apply_ai_preanalysis_results(results)
+        with _state_lock:
+            _state["aiLastRefreshAt"] = int(time.time() * 1000)
+            _state["aiLastDurationMs"] = max(0, int(time.time() * 1000) - start_ms)
+            _state["aiLastError"] = ""
+        return True
+    except Exception as exc:
+        with _state_lock:
+            _state["aiLastRefreshAt"] = int(time.time() * 1000)
+            _state["aiLastDurationMs"] = max(0, int(time.time() * 1000) - start_ms)
+            _state["aiLastError"] = str(exc)
+        logger.warning("Meta-hub AI preanalysis refresh failed: %s", exc)
+        return False
+    finally:
+        with _state_lock:
+            _state["aiRefreshing"] = False
+        _ai_refresh_lock.release()
+
+
+def _refresh_ai_in_background() -> None:
+    threading.Thread(target=_refresh_ai_preanalysis, daemon=True).start()
+
+
 def _save_snapshot(payload: Dict[str, Any]) -> None:
     target = str(CACHE_FILE or "").strip()
     if not target:
@@ -1499,6 +1724,9 @@ def _refresh_snapshot(force: bool = True) -> bool:
     try:
         raw = _fetch_from_backend(force_refresh=force)
         prepared = _prepare_payload(raw)
+        with _state_lock:
+            previous_payload = _state.get("payload")
+        _copy_existing_ai_preanalysis(prepared, previous_payload if isinstance(previous_payload, dict) else None)
         now_ms = int(time.time() * 1000)
         with _state_lock:
             _state["payload"] = prepared
@@ -1507,6 +1735,7 @@ def _refresh_snapshot(force: bool = True) -> bool:
             _state["lastDurationMs"] = max(0, now_ms - start_ms)
             _state["lastError"] = ""
         _save_snapshot(prepared)
+        _refresh_ai_in_background()
         return True
     except Exception as exc:
         with _state_lock:
@@ -1562,6 +1791,7 @@ def _filter_payload(payload: Dict[str, Any], include_inactive: bool, customer_id
 def startup_event() -> None:
     _load_snapshot()
     _refresh_in_background(force=True)
+    _refresh_ai_in_background()
     if AUTO_REFRESH:
         threading.Thread(target=_background_loop, daemon=True).start()
 
@@ -1589,6 +1819,12 @@ def get_health() -> Dict[str, Any]:
             "lastRefreshAt": int(_state.get("lastRefreshAt") or 0),
             "lastDurationMs": int(_state.get("lastDurationMs") or 0),
             "lastError": str(_state.get("lastError") or ""),
+            "aiPreanalysisEnabled": bool(AI_PREANALYSIS_ENABLED),
+            "aiPreanalysisRefreshing": bool(_state.get("aiRefreshing")),
+            "aiPreanalysisLastRefreshAt": int(_state.get("aiLastRefreshAt") or 0),
+            "aiPreanalysisLastDurationMs": int(_state.get("aiLastDurationMs") or 0),
+            "aiPreanalysisLastError": str(_state.get("aiLastError") or ""),
+            "aiPreanalysisModes": list(AI_PREANALYSIS_MODES),
             "count": int((payload or {}).get("count") or 0) if isinstance(payload, dict) else 0,
         }
 

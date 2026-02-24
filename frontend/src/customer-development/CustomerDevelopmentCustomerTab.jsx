@@ -72,6 +72,20 @@ const derivePrimaryActivity = (context) => {
   };
 };
 
+const readAiPreanalysis = (context, mode) => {
+  if (!context || typeof context !== "object") return null;
+  const normalizedMode = String(mode || "summary").trim().toLowerCase();
+  const preanalysis = context.aiPreanalysis && typeof context.aiPreanalysis === "object" ? context.aiPreanalysis : {};
+  const entry = preanalysis[normalizedMode];
+  if (!entry || typeof entry !== "object") return null;
+  const text = String(entry.text || "").trim();
+  if (!text) return null;
+  return {
+    mode: normalizedMode,
+    text,
+  };
+};
+
 export default function CustomerDevelopmentCustomerTab({ customerId, customerName, customerNumber }) {
   const [context, setContext] = useState(null);
   const [status, setStatus] = useState("idle");
@@ -99,6 +113,10 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
       if (!response.ok) throw new Error("load_failed");
       const data = await response.json();
       setContext(data || null);
+      const cached = readAiPreanalysis(data || {}, aiMode);
+      setAiText(cached?.text || "");
+      setAiError("");
+      setAiStatus(cached?.text ? "KI-Voranalyse geladen." : "");
       setStatus("ready");
     } catch {
       setStatus("error");
@@ -158,6 +176,15 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
       setAiActionKey("");
       setTimeout(() => setAiStatus(""), 1500);
     }
+  };
+
+  const selectAiMode = (mode = "summary") => {
+    const selected = String(mode || "summary").toLowerCase();
+    setAiMode(selected);
+    setAiError("");
+    const cached = readAiPreanalysis(context || {}, selected);
+    setAiText(cached?.text || "");
+    setAiStatus(cached?.text ? "KI-Voranalyse geladen." : "");
   };
 
   const isAiActionRunning = (mode) =>
@@ -320,7 +347,7 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
                 <button
                   key={entry.mode}
                   type="button"
-                  onClick={() => runAiAssist(entry.mode)}
+                  onClick={() => selectAiMode(entry.mode)}
                   disabled={aiBusy}
                   className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
                 >
@@ -329,6 +356,15 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
                 </button>
               );
             })}
+            <button
+              type="button"
+              onClick={() => runAiAssist(aiMode)}
+              disabled={aiBusy}
+              className="inline-flex items-center gap-1 rounded-full border border-sand-900 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white hover:bg-sand-800 disabled:cursor-wait disabled:opacity-70"
+            >
+              {aiBusy ? <InlineSpinner /> : <Sparkles size={12} />}
+              {aiBusy ? "Generiert..." : "Jetzt neu generieren"}
+            </button>
           </div>
         </div>
         {aiBusy ? <p className="mt-2 text-sm text-sand-500">KI generiert Vorschlag…</p> : null}

@@ -53,6 +53,22 @@ const ratioToPercent = (ratio) => {
   return clampPercent(n <= 1 ? n * 100 : n);
 };
 
+const readAiPreanalysis = (context, mode) => {
+  if (!context || typeof context !== "object") return null;
+  const normalizedMode = String(mode || "summary").trim().toLowerCase();
+  const preanalysis = context.aiPreanalysis && typeof context.aiPreanalysis === "object" ? context.aiPreanalysis : {};
+  const entry = preanalysis[normalizedMode];
+  if (!entry || typeof entry !== "object") return null;
+  const text = String(entry.text || "").trim();
+  if (!text) return null;
+  return {
+    mode: normalizedMode,
+    text,
+    sources: entry.sources && typeof entry.sources === "object" ? entry.sources : {},
+    generatedAt: Number(entry.generatedAt || 0),
+  };
+};
+
 const getPriorityTier = (item) => {
   const flags = normalizeContractFlags(item);
   const isRegieCustomer = flags.includes("regie") && !Boolean(item?.hasMaintenanceContract);
@@ -963,6 +979,17 @@ export default function CustomerDevelopmentView() {
         if (data === null) return;
         setDetailProgress(100);
         setDetailData(data || null);
+        setDetailAi((prev) => {
+          const selectedMode = String(prev?.mode || "angebot").toLowerCase();
+          const cached = readAiPreanalysis(data, selectedMode);
+          return {
+            ...prev,
+            mode: selectedMode,
+            text: cached?.text || "",
+            error: "",
+            sources: cached?.sources || {},
+          };
+        });
         const managedCount = Array.isArray(data?.managedInfrastructureDevices)
           ? data.managedInfrastructureDevices.length
           : 0;
@@ -1073,7 +1100,7 @@ export default function CustomerDevelopmentView() {
 
   const startAiContactFlow = (mode) => {
     setDetailTab("ki");
-    runAiAssist(mode);
+    applyCachedDetailAi(mode);
   };
 
   const actionSuggestions = useMemo(() => {
@@ -1240,6 +1267,22 @@ export default function CustomerDevelopmentView() {
       setAiBusy(false);
       setAiActionKey("");
     }
+  };
+
+  const applyCachedDetailAi = (mode, contextData = null) => {
+    const source = contextData && typeof contextData === "object" ? contextData : detailData;
+    const selectedMode = String(mode || detailAi.mode || "summary").toLowerCase();
+    const cached = readAiPreanalysis(source, selectedMode);
+    setDetailAi((prev) => ({
+      ...prev,
+      open: true,
+      customerId: Number(detailModal.customerId || prev.customerId || 0) || null,
+      customerName: detailModal.customerName || prev.customerName || "",
+      mode: selectedMode,
+      text: cached?.text || "",
+      error: "",
+      sources: cached?.sources || {},
+    }));
   };
 
   const isAiActionRunning = (customerId, mode) =>
@@ -1845,24 +1888,8 @@ export default function CustomerDevelopmentView() {
                           className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
                         >
                           {detailStatus === "loading" ? <InlineSpinner /> : <RefreshCw size={11} />}
-                          KI-Preanalyse aktualisieren
+                          KI-Preanalyse neu laden
                         </button>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {(() => {
-                          const running = isAiActionRunning(detailModal.customerId, "aktivierung_call");
-                          return (
-                        <button
-                          type="button"
-                          onClick={() => runAiAssist("aktivierung_call")}
-                          disabled={aiBusy}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-sand-900 px-2.5 py-1 text-[10px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-70"
-                        >
-                          {running ? <InlineSpinner /> : <Sparkles size={11} />}
-                          {running ? "Lädt..." : "Telefonleitfaden jetzt"}
-                        </button>
-                          );
-                        })()}
                       </div>
                       <div className="mt-3 space-y-2">
                         <div className="flex flex-wrap gap-1">
@@ -1872,7 +1899,7 @@ export default function CustomerDevelopmentView() {
                               <button
                                 key={item.value}
                                 type="button"
-                                onClick={() => runAiAssist(item.value)}
+                                onClick={() => applyCachedDetailAi(item.value)}
                                 disabled={aiBusy}
                                 className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide disabled:cursor-wait disabled:opacity-70 ${
                                   detailAi.mode === item.value
@@ -1885,6 +1912,15 @@ export default function CustomerDevelopmentView() {
                               </button>
                             );
                           })}
+                          <button
+                            type="button"
+                            onClick={() => runAiAssist(detailAi.mode || "summary")}
+                            disabled={aiBusy}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-900 bg-sand-900 px-2.5 py-1 text-[10px] uppercase tracking-wide text-white hover:bg-sand-800 disabled:cursor-wait disabled:opacity-70"
+                          >
+                            {aiBusy ? <InlineSpinner /> : <RefreshCw size={11} />}
+                            {aiBusy ? "Generiert..." : "Jetzt neu generieren"}
+                          </button>
                         </div>
                         {aiBusy ? <LoadingProgress label="KI generiert Vorschlag" progress={aiProgress} /> : null}
                         {detailAi.error ? <p className="text-sm text-rose-600">{detailAi.error}</p> : null}

@@ -106,8 +106,8 @@ const contractStatusBadgeClass = (status) => {
   return "border-emerald-200 bg-emerald-50 text-emerald-700";
 };
 const contractStatusLabel = (status) => {
-  if (status === "proposal") return "Unbezahlt";
-  if (status === "active") return "Fakturiert";
+  if (status === "proposal") return "Vorschlag";
+  if (status === "active") return "Aktiv";
   return "Unbekannt";
 };
 const contractTypeLabel = (type) => {
@@ -346,9 +346,6 @@ export default function StatsView() {
     if (Number(contractsHours.deltaCurrentMonth || 0) > 0) {
       alerts.push(`SLA: ${formatHours(contractsHours.deltaCurrentMonth)} Überzug in laufenden Verträgen.`);
     }
-    if (Number(contractPipelineStats.proposal || 0) > 0) {
-      alerts.push(`Pipeline: ${formatNumber(contractPipelineStats.proposal)} Vertragsvorschläge offen.`);
-    }
     if (Number(reports.unread || 0) > 0) {
       alerts.push(`Kommunikation: ${formatNumber(reports.unread)} Berichte sind noch ungelesen.`);
     }
@@ -357,9 +354,7 @@ export default function StatsView() {
         ? "SLA-Überzug mit den 3 größten Delta-Kunden klären."
         : Number(sevdesk?.overdue?.count || 0) > 0
           ? "Überfällige Rechnungen priorisiert nachfassen."
-          : Number(contractPipelineStats.proposal || 0) > 0
-            ? "Vertragsvorschläge in aktive Verträge überführen."
-            : "Keine kritische Abweichung. Fokus auf Forecast-Verbesserung.";
+          : "Keine kritische Abweichung. Fokus auf Forecast-Verbesserung.";
     return {
       cards: [
         {
@@ -396,11 +391,6 @@ export default function StatsView() {
           title: "Berichte ungelesen",
           value: formatNumber(reports.unread || 0),
           subtitle: `Gesamt Berichte: ${formatNumber(reports.total || 0)}`
-        },
-        {
-          title: "Pipeline Vorschlag -> Aktiv",
-          value: `${formatNumber(contractPipelineStats.proposal)} -> ${formatNumber(contractPipelineStats.active)}`,
-          subtitle: "Owner: Verträge"
         }
       ],
       alerts,
@@ -755,7 +745,7 @@ export default function StatsView() {
                     subtitle="Status Vorschlag"
                   />
                   <StatCard
-                    title="Fakturierte Verträge"
+                    title="Aktive Verträge"
                     value={formatNumber(filteredContractSummary.invoicedContracts)}
                     subtitle="Status Aktiv"
                   />
@@ -768,11 +758,6 @@ export default function StatsView() {
                     title="Vertragsumsatz pro Monat"
                     value={formatEur(filteredContractSummary.revenueMonthly)}
                     subtitle={`Aktive Verträge: ${formatEur(filteredContractSummary.revenueMonthlyActive)}`}
-                  />
-                  <StatCard
-                    title="Pipeline Vorschlag -> Aktiv"
-                    value={`${formatNumber(contractPipelineStats.proposal)} -> ${formatNumber(contractPipelineStats.active)}`}
-                    subtitle="Owner: Verträge"
                   />
                   <StatCard
                     title="Verlängerung <= 45 Tage"

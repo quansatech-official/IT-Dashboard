@@ -153,7 +153,36 @@ const defaultContractTemplates = {
   monitoring: { title: "Monitoringvertrag", body_template: "" },
   avv_dsgvo: { title: "Auftragsverarbeitungsvertrag (DSGVO)", body_template: "" }
 };
-const defaultContractVariables = {};
+const defaultContractVariables = {
+  provider_name: "QT Workbench Services",
+  customer_name: "Musterkunde GmbH",
+  generated_at: "22.02.2026",
+  valid_from: "01.03.2026",
+  contract_start: "01.03.2026",
+  runtime_months: "12",
+  minimum_term_months: "12",
+  extension_period: "12",
+  termination_notice: "3 Monate",
+  servers: "3",
+  clients: "24",
+  network_devices: "14",
+  iot_devices: "6",
+  monthly_total: "1.250,00 EUR",
+  yearly_total: "15.000,00 EUR",
+  monthly_hours_included: "4,00 h",
+  service_hours: "Montag bis Freitag, 08:00-17:00 Uhr (werktags)",
+  reaction_time: "innerhalb von 8 Arbeitsstunden",
+  hourly_rate_extra: "120,00 EUR pro Stunde",
+  billing_interval: "monatlich",
+  additional_systems: "keine",
+  monitoring_enabled: "ja",
+  backup_monitoring: "nach Vereinbarung",
+  patch_management: "ja (sicherheitsrelevant)",
+  security_monitoring: "ja (Basis)",
+  liability_limit: "gemaess AGB",
+  service_scope: "Wartung und Monitoring laut Tarif.",
+  note_block: "Hinweis: Monatliche Leistungserbringung nach Vereinbarung."
+};
 
 const normalizeContractTemplates = (input) => {
   const merged = { ...defaultContractTemplates };
@@ -359,6 +388,7 @@ export default function SettingsView() {
   const [selectedContractTemplateKey, setSelectedContractTemplateKey] = useState("wartung");
   const [contractTariffs, setContractTariffs] = useState([]);
   const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
+  const [contractTemplatePreviewOpen, setContractTemplatePreviewOpen] = useState(false);
   const [tariffDraft, setTariffDraft] = useState({
     name: "",
     category: "wartung",
@@ -893,36 +923,7 @@ export default function SettingsView() {
     title: "",
     body_template: "",
   };
-  const baseContractPreviewVars = {
-    provider_name: "QT Workbench Services",
-    customer_name: "Musterkunde GmbH",
-    generated_at: "22.02.2026",
-    valid_from: "01.03.2026",
-    contract_start: "01.03.2026",
-    runtime_months: "12",
-    minimum_term_months: "12",
-    extension_period: "12",
-    termination_notice: "3 Monate",
-    servers: "3",
-    clients: "24",
-    network_devices: "14",
-    iot_devices: "6",
-    monthly_total: "1.250,00 EUR",
-    yearly_total: "15.000,00 EUR",
-    monthly_hours_included: "4,00 h",
-    service_hours: "Montag bis Freitag, 08:00-17:00 Uhr (werktags)",
-    reaction_time: "innerhalb von 8 Arbeitsstunden",
-    hourly_rate_extra: "120,00 EUR pro Stunde",
-    billing_interval: "monatlich",
-    additional_systems: "keine",
-    monitoring_enabled: "ja",
-    backup_monitoring: "nach Vereinbarung",
-    patch_management: "ja (sicherheitsrelevant)",
-    security_monitoring: "ja (Basis)",
-    liability_limit: "gemaess AGB",
-    service_scope: "Wartung und Monitoring laut Tarif.",
-    note_block: "Hinweis: Monatliche Leistungserbringung nach Vereinbarung."
-  };
+  const baseContractPreviewVars = { ...defaultContractVariables };
   const contractPreviewVars = {
     ...baseContractPreviewVars,
     ...(aiPrompts.contract_variables || {})
@@ -934,6 +935,42 @@ export default function SettingsView() {
     });
     return html;
   };
+  const contractTemplatePreviewHtml = `<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vertrag Template Vorschau</title>
+    <style>
+      body {
+        font-family: "Manrope", "Helvetica Neue", Arial, sans-serif;
+        margin: 0;
+        padding: 24px;
+        color: #1f2937;
+        background: #ffffff;
+      }
+      img {
+        max-width: 100%;
+        height: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .contract-preview-shell {
+        max-width: 960px;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="contract-preview-shell">
+      ${renderTemplatePreview(aiPrompts.contract_header_html || "")}
+      ${renderTemplatePreview(activeContractTemplate?.body_template || "")}
+      ${renderTemplatePreview(aiPrompts.contract_footer_html || "")}
+    </div>
+  </body>
+</html>`;
 
   const resetTariffDraft = () => {
     setTariffDraft({
@@ -2152,16 +2189,16 @@ export default function SettingsView() {
 
                   <div className="rounded-xl border border-sand-200 bg-white p-3">
                     <p className="text-[11px] uppercase tracking-wide text-sand-500">Vorschau</p>
-                    <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-800">
-                      <div
-                        dangerouslySetInnerHTML={{
-                          __html:
-                            renderTemplatePreview(aiPrompts.contract_header_html || "") +
-                            renderTemplatePreview(activeContractTemplate?.body_template || "") +
-                            renderTemplatePreview(aiPrompts.contract_footer_html || "")
-                        }}
-                      />
-                    </div>
+                    <p className="mt-1 text-[11px] text-sand-500">
+                      Öffnet die gerenderte HTML-Vorschau als Popup.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setContractTemplatePreviewOpen(true)}
+                      className="mt-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                    >
+                      Vorschau öffnen
+                    </button>
                   </div>
                 </div>
               </div>
@@ -4343,6 +4380,30 @@ export default function SettingsView() {
           ) : null}
         </div>
       </main>
+      {contractTemplatePreviewOpen ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-sand-900/50 px-4 py-6">
+          <div className="h-[85vh] w-full max-w-6xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="flex items-center justify-between border-b border-sand-200 px-5 py-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Vertrags-Templates</p>
+                <h3 className="text-base font-display text-sand-900">HTML Vorschau</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setContractTemplatePreviewOpen(false)}
+                className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              >
+                Schließen
+              </button>
+            </div>
+            <iframe
+              title="Vertrag Template Vorschau"
+              className="h-[calc(85vh-58px)] w-full bg-white"
+              srcDoc={contractTemplatePreviewHtml}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
