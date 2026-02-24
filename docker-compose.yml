@@ -73,7 +73,7 @@ services:
     restart: unless-stopped
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started
     environment:
       META_HUB_BACKEND_URL: ${META_HUB_BACKEND_URL:-http://backend:8000}
       META_HUB_REFRESH_SECONDS: ${META_HUB_REFRESH_SECONDS:-300}
