@@ -444,6 +444,21 @@ const formatDateTime = (value) => {
     minute: "2-digit"
   });
 };
+const formatDate = (value) => {
+  const timestamp = toTimestampMs(value);
+  if (!timestamp) return "n/a";
+  return new Date(timestamp).toLocaleDateString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  });
+};
+const daysUntilTimestamp = (timestampMs) => {
+  const target = Number(timestampMs || 0);
+  if (!Number.isFinite(target) || target <= 0) return null;
+  const diffMs = target - Date.now();
+  return Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+};
 
 const formatCallDuration = (value) => {
   const seconds = Number.parseInt(String(value || "0"), 10);
@@ -1422,6 +1437,98 @@ export default function CustomerDirectoryView() {
       : EMPTY_CUSTOMER_COMMUNICATION;
   const communicationEmailEntries = communicationDataForEditCustomer.emails || [];
   const communicationCallEntries = communicationDataForEditCustomer.calls || [];
+  const contractControlStats = useMemo(() => {
+    const contracts = Array.isArray(customerContracts) ? customerContracts : [];
+    const nowMs = Date.now();
+    const serviceContracts = contracts.filter((item) => {
+      const type = String(item?.doc_type || item?.template_key || "").toLowerCase();
+      return type === "wartung" || type === "monitoring";
+    });
+    const activeContracts = contracts.filter((item) => String(item?.status || "").toLowerCase() === "active");
+    const proposalContracts = contracts.filter((item) => String(item?.status || "").toLowerCase() === "proposal");
+    let nextRenewalAt = 0;
+    let renewalsDueSoon = 0;
+    contracts.forEach((item) => {
+      const createdAt = Number(item?.created_at || 0);
+      if (!createdAt) return;
+      const renewalAt = createdAt + 365 * 24 * 60 * 60 * 1000;
+      if (!nextRenewalAt || renewalAt < nextRenewalAt) nextRenewalAt = renewalAt;
+      if (renewalAt <= nowMs + 45 * 24 * 60 * 60 * 1000) renewalsDueSoon += 1;
+    });
+    const missingIncludedHours = serviceContracts.filter(
+      (item) => Number(item?.monthly_hours_included || 0) <= 0
+    ).length;
+    const runtimeDaysAvg = contracts.length
+      ? Math.round(
+          contracts.reduce((sum, item) => {
+            const createdAt = Number(item?.created_at || 0);
+            if (!createdAt) return sum;
+            return sum + Math.max(0, Math.round((nowMs - createdAt) / (24 * 60 * 60 * 1000)));
+          }, 0) / contracts.length
+        )
+      : 0;
+    return {
+      total: contracts.length,
+      active: activeContracts.length,
+      proposal: proposalContracts.length,
+      service: serviceContracts.length,
+      missingIncludedHours,
+      renewalsDueSoon,
+      nextRenewalAt,
+      nextRenewalDays: daysUntilTimestamp(nextRenewalAt),
+      runtimeDaysAvg
+    };
+  }, [customerContracts]);
+  const customerSteering = useMemo(() => {
+    const revenueYtd = Number(selectedCustomerMetrics?.revenueCurrentYearEur || 0);
+    const monthlyBudget = Number(contractTimeBudget?.includedHours || 0);
+    const monthlyConsumed = Number(contractTimeBudget?.consumedHours || 0);
+    const overrun = Number(contractTimeBudget?.overrunHours || 0);
+    const missedCalls = Number(selectedCustomerMetrics?.missedCalls || 0);
+    const totalCalls = Number(selectedCustomerMetrics?.totalCalls || 0);
+    const openTasks = Number(selectedCustomerMetrics?.openTasks || 0);
+    const callMissRate = totalCalls > 0 ? (missedCalls / totalCalls) * 100 : 0;
+    const communicationGap = (totalCalls === 0 && openTasks > 0) || callMissRate >= 35;
+    const profitabilityLabel =
+      monthlyBudget > 0
+        ? monthlyConsumed > monthlyBudget
+          ? `Negativ: ${formatHours(overrun)} Überzug`
+          : `Stabil: ${formatHours(monthlyBudget - monthlyConsumed)} Rest`
+        : revenueYtd > 0
+          ? `Kein SLA-Budget, YTD ${formatEur(revenueYtd)}`
+          : "Keine Profitabilitätsbasis";
+    const slaLabel = contractTimeBudget?.isOverrun
+      ? `SLA-Verstoß: ${formatHours(overrun)} über Soll`
+      : "SLA im Rahmen";
+    const renewalLabel =
+      contractControlStats.nextRenewalDays === null
+        ? "Keine Vertragsfälligkeit verfügbar"
+        : contractControlStats.nextRenewalDays <= 0
+          ? `Verlängerung fällig seit ${formatDate(contractControlStats.nextRenewalAt)}`
+          : `Nächste Verlängerung in ${contractControlStats.nextRenewalDays} Tagen (${formatDate(
+              contractControlStats.nextRenewalAt
+            )})`;
+    const nextAction =
+      contractControlStats.missingIncludedHours > 0
+        ? "Inklusivstunden in Serviceverträgen nachziehen."
+        : contractTimeBudget?.isOverrun
+          ? "SLA-Überzug mit Kunde abstimmen und Nachtrag anbieten."
+          : contractControlStats.renewalsDueSoon > 0
+            ? "Verlängerungsgespräch terminieren."
+            : communicationGap
+              ? "Kommunikationslücke schließen (Call + E-Mail Follow-up)."
+              : contractControlStats.proposal > 0
+                ? "Offene Vertragsvorschläge in aktiv überführen."
+                : "Keine akute Eskalation.";
+    return {
+      profitabilityLabel,
+      communicationLabel: `${missedCalls}/${totalCalls} verpasste Calls · ${openTasks} offene Aufgaben`,
+      communicationGap,
+      slaLabel,
+      renewalLabel,
+      nextAction
+    };
+  }, [selectedCustomerMetrics, contractTimeBudget, contractControlStats]);
 
   const fetchCustomerCommunication = async (customer, refresh = false) => {
     const customerId = Number(customer?.id || 0);
@@ -2971,7 +3078,7 @@ export default function CustomerDirectoryView() {
               <div className="mt-2 rounded-xl border border-sand-200 bg-white p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-[10px] uppercase tracking-wide text-sand-500">Kundenkennzahlen</p>
-                  <span className="text-[11px] text-sand-500">Umsatz · Aufwand · Kommunikation</span>
+                  <span className="text-[11px] text-sand-500">Aufwand · Kommunikation</span>
                 </div>
                 {metricsStatus === "loading" ? (
                   <p className="mt-1.5 text-xs text-sand-500">Lade Kennzahlen…</p>
@@ -2982,14 +3089,6 @@ export default function CustomerDirectoryView() {
                 {metricsStatus === "ready" && selectedCustomerMetrics ? (
                   <>
                     <div className="mt-2 grid gap-2 md:grid-cols-5">
-                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Umsatz gesamt</p>
-                        <p className="text-sm font-semibold text-sand-900">{formatEur(selectedCustomerMetrics.revenueTotalEur)}</p>
-                      </div>
-                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Umsatz laufend</p>
-                        <p className="text-sm font-semibold text-sand-900">{formatEur(selectedCustomerMetrics.revenueCurrentYearEur)}</p>
-                      </div>
                       <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufwand Monat</p>
                         <p className="text-sm font-semibold text-sand-900">{formatHours(monthlyConsumedHours)}</p>
@@ -3020,6 +3119,29 @@ export default function CustomerDirectoryView() {
                       {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst ·{" "}
                       {Number(selectedCustomerMetrics.openTasks || 0)} offene Aufgaben.
                     </p>
+                    <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Steuerung (kundenbezogen)</p>
+                        <span className="text-[10px] text-sand-500">Owner-Detail: Kundenstamm</span>
+                      </div>
+                      <div className="mt-1.5 grid gap-1.5 md:grid-cols-2">
+                        <p className="text-[11px] text-sand-700">
+                          <span className="text-sand-500">Profitabilität:</span> {customerSteering.profitabilityLabel}
+                        </p>
+                        <p className={`text-[11px] ${customerSteering.communicationGap ? "text-amber-700" : "text-sand-700"}`}>
+                          <span className="text-sand-500">Kommunikationslücke:</span> {customerSteering.communicationLabel}
+                        </p>
+                        <p className={`text-[11px] ${contractTimeBudget?.isOverrun ? "text-rose-700" : "text-sand-700"}`}>
+                          <span className="text-sand-500">SLA:</span> {customerSteering.slaLabel}
+                        </p>
+                        <p className={`text-[11px] ${contractControlStats.renewalsDueSoon ? "text-amber-700" : "text-sand-700"}`}>
+                          <span className="text-sand-500">Vertragsfälligkeit:</span> {customerSteering.renewalLabel}
+                        </p>
+                      </div>
+                      <p className="mt-1.5 text-[11px] font-semibold text-sand-900">
+                        Nächste konkrete Aktion: {customerSteering.nextAction}
+                      </p>
+                    </div>
                   </>
                 ) : null}
               </div>
@@ -3275,6 +3397,38 @@ export default function CustomerDirectoryView() {
                       </button>
                     </div>
                   </div>
+                  <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+                    <div className="grid gap-2 md:grid-cols-4">
+                      <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Pipeline</p>
+                        <p className="text-sm font-semibold text-sand-900">
+                          {contractControlStats.proposal} {"->"} {contractControlStats.active}
+                        </p>
+                        <p className="text-[11px] text-sand-600">Vorschlag {"->"} Aktiv</p>
+                      </div>
+                      <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Verlängerung</p>
+                        <p className="text-sm font-semibold text-sand-900">{contractControlStats.renewalsDueSoon}</p>
+                        <p className="text-[11px] text-sand-600">{"<= 45 Tage fällig"}</p>
+                      </div>
+                      <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Laufzeit</p>
+                        <p className="text-sm font-semibold text-sand-900">{contractControlStats.runtimeDaysAvg} Tage</p>
+                        <p className="text-[11px] text-sand-600">Ø Vertragsalter</p>
+                      </div>
+                      <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Tarifabweichung</p>
+                        <p className="text-sm font-semibold text-sand-900">{contractControlStats.missingIncludedHours}</p>
+                        <p className="text-[11px] text-sand-600">Servicevertrag ohne Inklusivstunden</p>
+                      </div>
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-sand-600">
+                      Nächste Verlängerung:{" "}
+                      {contractControlStats.nextRenewalAt
+                        ? `${formatDate(contractControlStats.nextRenewalAt)} (${contractControlStats.nextRenewalDays} Tage)`
+                        : "n/a"}
+                    </p>
+                  </div>
                   {editHasServiceContract ? (
                     <div className="rounded-xl border border-sand-200 bg-white p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3506,10 +3660,14 @@ export default function CustomerDirectoryView() {
                       onClick={() => setActiveId(customer.id)}
                     >
                       <td className="px-3 py-2 align-top">
-                        <p className="font-semibold text-sand-900">{customer.name?.trim() || "Unbenannter Kunde"}</p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="font-semibold text-sand-900">{customer.name?.trim() || "Unbenannter Kunde"}</p>
+                          <span className="inline-flex rounded-full border border-sand-300 bg-sand-50 px-2 py-0.5 text-[10px] text-sand-700">
+                            {customer.creditorNumber || "Ohne Nr."}
+                          </span>
+                        </div>
                         <p className="text-[11px] text-sand-500">
-                          {customer.creditorNumber || "Ohne Nr."}
-                          {customer.shortCode ? ` · ${customer.shortCode}` : ""}
+                          {customer.shortCode ? `Kürzel ${customer.shortCode}` : "Kein Kürzel"}
                         </p>
                         {(() => {
                           const context = developmentByCustomerId[customer.id];

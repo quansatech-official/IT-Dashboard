@@ -658,8 +658,8 @@ export default function PurchasingView() {
         )}
 
         {renderSectionTable(
-          "Container",
           "Bestellt",
+          "Container",
           orderedItems,
           "ordered",
           <Truck size={16} />

@@ -1797,6 +1797,7 @@ class OfferSaveResponse(BaseModel):
     id: int
     guid: str
     confirm_url: str
+    reference: Optional[str] = ""
 
 
 class OfferBlocksUpdate(BaseModel):
@@ -4494,16 +4495,53 @@ def _offer_make_reference(number_format: str, index: int) -> str:
     return f"{template[:start]}{number}{template[end:]}"
 
 
-def _normalize_offer_references(db) -> int:
+def _offer_parse_reference_index(reference: str, template: str) -> Optional[int]:
+    template_value = (template or "AN-XXXX").strip() or "AN-XXXX"
+    match = re.search(r"X+", template_value)
+    if not match:
+        return None
+    prefix = template_value[: match.start()]
+    suffix = template_value[match.end() :]
+    value = str(reference or "")
+    if not value.startswith(prefix) or not value.endswith(suffix):
+        return None
+    number_part = value[len(prefix) : len(value) - len(suffix)]
+    if not number_part or not number_part.isdigit():
+        return None
+    try:
+        return int(number_part)
+    except Exception:
+        return None
+
+
+def _offer_next_reference(db, number_format: str) -> str:
+    template = (number_format or "AN-XXXX").strip() or "AN-XXXX"
+    offers = db.query(Offer.reference).all()
+    max_index = 0
+    for row in offers:
+        reference = str(row[0] or "").strip()
+        idx = _offer_parse_reference_index(reference, template)
+        if isinstance(idx, int) and idx > max_index:
+            max_index = idx
+    return _offer_make_reference(template, max_index + 1)
+
+
+def _ensure_offer_references(db) -> int:
     settings = _get_offer_settings(db)
     number_format = (settings.offer_number_format or "AN-XXXX").strip() or "AN-XXXX"
     offers = db.query(Offer).order_by(Offer.created_at.asc(), Offer.id.asc()).all()
     if not offers:
         return 0
+    max_index = 0
+    for offer in offers:
+        idx = _offer_parse_reference_index(str(offer.reference or ""), number_format)
+        if isinstance(idx, int) and idx > max_index:
+            max_index = idx
     changed = 0
     now_ms = int(time.time() * 1000)
-    for idx, offer in enumerate(offers, start=1):
-        expected = _offer_make_reference(number_format, idx)
+    for offer in offers:
+        if str(offer.reference or "").strip():
+            continue
         payload: Dict[str, Any] = {}
         if offer.data_json:
             try:
@@ -4513,10 +4551,12 @@ def _normalize_offer_references(db) -> int:
             except Exception:
                 payload = {}
         data_reference = str(payload.get("reference") or "").strip()
-        if offer.reference == expected and data_reference == expected:
-            continue
-        offer.reference = expected
-        payload["reference"] = expected
+        if data_reference:
+            offer.reference = data_reference
+        else:
+            max_index += 1
+            offer.reference = _offer_make_reference(number_format, max_index)
+            payload["reference"] = offer.reference
         offer.data_json = json.dumps(payload)
         offer.updated_at = now_ms
         changed += 1
@@ -13034,7 +13074,7 @@ def update_ai_prompts(data: AiPromptsUpdate):
 @app.get("/api/offers")
 def list_offers():
     with SessionLocal() as db:
-        _normalize_offer_references(db)
+        _ensure_offer_references(db)
         offers = db.query(Offer).order_by(Offer.created_at.desc()).all()
         return [serialize_offer(offer) for offer in offers]
 
@@ -13044,9 +13084,16 @@ def create_offer(data: OfferSaveRequest, request: Request):
     with SessionLocal() as db:
         now_ms = int(time.time() * 1000)
         payload = data.data or {}
+        settings = _get_offer_settings(db)
+        number_format = (settings.offer_number_format or "AN-XXXX").strip() or "AN-XXXX"
+        reference_value = str(data.reference or "").strip()
+        if not reference_value:
+            reference_value = _offer_next_reference(db, number_format)
+        if not payload.get("reference"):
+            payload["reference"] = reference_value
         offer = Offer(
             guid=str(uuid.uuid4()),
-            reference=data.reference or "",
+            reference=reference_value,
             customer=data.customer or "",
             status=data.status or "offen",
             data_json=json.dumps(payload),
@@ -13060,6 +13107,7 @@ def create_offer(data: OfferSaveRequest, request: Request):
             id=offer.id,
             guid=offer.guid,
             confirm_url=_build_offer_confirm_url(request, offer.guid),
+            reference=offer.reference or "",
         )
 
 
@@ -13070,7 +13118,15 @@ def update_offer(offer_id: int, data: OfferSaveRequest, request: Request):
         if not offer:
             raise HTTPException(404, "Offer not found")
         payload = data.data or {}
-        offer.reference = data.reference or offer.reference
+        reference_value = str(data.reference or "").strip()
+        if not reference_value and not str(offer.reference or "").strip():
+            settings = _get_offer_settings(db)
+            number_format = (settings.offer_number_format or "AN-XXXX").strip() or "AN-XXXX"
+            reference_value = _offer_next_reference(db, number_format)
+        if reference_value:
+            offer.reference = reference_value
+        if not payload.get("reference") and str(offer.reference or "").strip():
+            payload["reference"] = offer.reference
         offer.customer = data.customer or offer.customer
         if data.status is not None:
             offer.status = data.status or offer.status
@@ -13082,6 +13138,7 @@ def update_offer(offer_id: int, data: OfferSaveRequest, request: Request):
             id=offer.id,
             guid=offer.guid,
             confirm_url=_build_offer_confirm_url(request, offer.guid),
+            reference=offer.reference or "",
         )
 
 

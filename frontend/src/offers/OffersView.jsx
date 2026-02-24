@@ -658,6 +658,8 @@ const isOfferEmpty = (offer) => {
 
 const isOfferAccepted = (offer) =>
   (offer?.status || "").toString().trim().toLowerCase() === "angenommen";
+const getOfferReferenceLabel = (offer) =>
+  (offer?.reference || "").toString().trim() || "Entwurf (ohne Nr.)";
 
 const getDeviceProduct = (item) =>
   item.product ||
@@ -1027,7 +1029,7 @@ const getNextOfferIndex = (offers, format, lastIndex = 0) => {
 
 const createEmptyOffer = (index, format) => ({
   id: uid(),
-  reference: makeReference(format, index),
+  reference: index ? makeReference(format, index) : "",
   customer: "",
   customerAutoFill: "",
   senderLine: "Quansatech GmbH - Steyrtalstraße 88 - 4523 Neuzeug",
@@ -3723,6 +3725,7 @@ export default function OffersView() {
   const lastSavedOffersRef = useRef({});
   const offersFetchedRef = useRef(false);
   const lastOfferIndexRef = useRef(0);
+  const draftInitializedRef = useRef(false);
   const [previewScale, setPreviewScale] = useState(0.7);
   const [previewMaxHeight, setPreviewMaxHeight] = useState("70vh");
   const crashRecoveryTimer = useRef(null);
@@ -3755,8 +3758,8 @@ export default function OffersView() {
   const emailOffer = offers.find((offer) => offer.id === emailOfferId) || null;
   const activeSevdeskKey = activeOffer ? activeOffer.serverId || activeOffer.id : null;
   const activeSevdeskState = activeSevdeskKey ? sevdeskStatus[activeSevdeskKey] : null;
-  const offerDefaultSubject = `Angebot ${activeOffer?.reference || ""}`.trim();
-  const emailDefaultSubject = `Angebot ${emailOffer?.reference || ""}`.trim();
+  const offerDefaultSubject = `Angebot${activeOffer?.reference ? ` ${activeOffer.reference}` : ""}`.trim();
+  const emailDefaultSubject = `Angebot${emailOffer?.reference ? ` ${emailOffer.reference}` : ""}`.trim();
   const handoverOffer = offers.find((item) => item.id === handoverModal.offerId) || null;
   const handoverSummary = getHandoverSummary(
     handoverOffer,
@@ -4014,7 +4017,7 @@ export default function OffersView() {
         setActiveId((current) =>
           merged.some((offer) => offer.id === current || offer.serverId === current)
             ? current
-            : merged[0]?.id || ""
+            : current
         );
       })
       .catch(() => {})
@@ -4107,6 +4110,18 @@ export default function OffersView() {
       });
     }
   }, [offers, offerNumberFormat]);
+
+  useEffect(() => {
+    if (!offersLoaded || draftInitializedRef.current) return;
+    if (!activeId) {
+      setOffers((prev) => {
+        const draft = createEmptyOffer(null, offerNumberFormat);
+        setActiveId(draft.id);
+        return [draft, ...prev];
+      });
+    }
+    draftInitializedRef.current = true;
+  }, [offersLoaded, activeId, offerNumberFormat]);
 
   useEffect(() => {
     let active = true;
@@ -4519,17 +4534,22 @@ export default function OffersView() {
   const offerBuckets = useMemo(() => {
     const open = [];
     const accepted = [];
+    const invoiced = [];
     const declined = [];
     offers.forEach((offer) => {
       if (offer.status === "angenommen") {
-        accepted.push(offer);
+        if (offer.handoverLocked) {
+          invoiced.push(offer);
+        } else {
+          accepted.push(offer);
+        }
       } else if (offer.status === "abgelehnt") {
         declined.push(offer);
       } else {
         open.push(offer);
       }
     });
-    return { open, accepted, declined };
+    return { open, accepted, invoiced, declined };
   }, [offers]);
 
   const cloneOffer = (offer) => JSON.parse(JSON.stringify(offer));
@@ -4931,13 +4951,7 @@ export default function OffersView() {
 
   const addOffer = () => {
     setOffers((prev) => {
-      const nextIndex = getNextOfferIndex(prev, offerNumberFormat, lastOfferIndexRef.current);
-      const next = createEmptyOffer(nextIndex, offerNumberFormat);
-      setLastOfferIndex((current) => {
-        const nextValue = Math.max(current || 0, nextIndex);
-        lastOfferIndexRef.current = nextValue;
-        return nextValue;
-      });
+      const next = createEmptyOffer(null, offerNumberFormat);
       setActiveId(next.id);
       return [next, ...prev];
     });
@@ -4952,22 +4966,15 @@ export default function OffersView() {
     if (!offer) return;
     const newId = uid();
     setOffers((prev) => {
-      const nextIndex = getNextOfferIndex(prev, offerNumberFormat, lastOfferIndexRef.current);
-      const reference = makeReference(offerNumberFormat, nextIndex);
       const copy = {
         ...offer,
         id: newId,
-        reference,
+        reference: "",
         status: "Entwurf",
         createdAt: new Date().toISOString(),
         serverId: null,
         confirmGuid: ""
       };
-      setLastOfferIndex((current) => {
-        const nextValue = Math.max(current || 0, nextIndex);
-        lastOfferIndexRef.current = nextValue;
-        return nextValue;
-      });
       return [copy, ...prev];
     });
     setActiveId(newId);
@@ -5114,7 +5121,8 @@ export default function OffersView() {
     updateOffer(offer.id, (current) => ({
       ...current,
       serverId: saved.id,
-      confirmGuid: saved.guid
+      confirmGuid: saved.guid,
+      reference: saved.reference || current.reference || ""
     }));
     return saved;
   };
@@ -5605,16 +5613,11 @@ export default function OffersView() {
     if (!activeOffer) return;
     const ok = window.confirm("Angebot wirklich leeren?");
     if (!ok) return;
-    const referenceIndex =
-      getOfferIndexFromReference(activeOffer.reference, offerNumberFormat) || null;
-    const base = createEmptyOffer(
-      referenceIndex || getNextOfferIndex(offers, offerNumberFormat, lastOfferIndexRef.current),
-      offerNumberFormat
-    );
+    const base = createEmptyOffer(null, offerNumberFormat);
     const cleared = {
       ...base,
       id: activeOffer.id,
-      reference: activeOffer.reference || base.reference,
+      reference: activeOffer.reference || "",
       createdAt: activeOffer.createdAt || base.createdAt,
       status: activeOffer.status || base.status,
       serverId: activeOffer.serverId || null,
@@ -6157,7 +6160,7 @@ export default function OffersView() {
                             Referenz
                           </p>
                           <p className="mt-1 text-sm font-semibold text-sand-900">
-                            {activeOffer.reference}
+                            {getOfferReferenceLabel(activeOffer)}
                           </p>
                           <p className="mt-1 text-[11px] text-sand-500">
                             Erstellt {formatDate(activeOffer.createdAt)}
@@ -7024,7 +7027,7 @@ export default function OffersView() {
                       <div className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
                         <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
                           <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                            {offer.reference}
+                            {getOfferReferenceLabel(offer)}
                           </p>
                           <p className="text-sm font-semibold">
                             {offer.customer || "Neues Angebot"}
@@ -7235,7 +7238,7 @@ export default function OffersView() {
                       <div className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
                         <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
                           <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
-                            {offer.reference}
+                            {getOfferReferenceLabel(offer)}
                           </p>
                           <p className="text-sm font-semibold">
                             {offer.customer || "Angebot"}
@@ -7474,6 +7477,145 @@ export default function OffersView() {
             </div>
           </div>
 
+          <div className="rounded-2xl border border-sand-200 bg-sand-50/60 p-3">
+            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+              Archiv (fakturiert)
+            </p>
+            <div className="mt-3 space-y-2">
+              {offerBuckets.invoiced.length ? (
+                offerBuckets.invoiced.map((offer) => {
+                  const netTotal = getOfferTotal(offer);
+                  const vatTotal = calcVat(netTotal, offer);
+                  const grossTotal = netTotal + vatTotal;
+                  const keywords = getOfferKeywords(offer);
+                  const overviewText = String(offer.overviewText || "").trim();
+                  const calculationText = String(offer.calculationText || "").trim();
+                  const detailText = stripHtml(offer.detailHtml || "");
+                  const showDetails = Boolean(expandedOfferDetails[offer.id]);
+                  const detailPreview = detailText
+                    ? showDetails
+                      ? detailText
+                      : shorten(detailText, 220)
+                    : "";
+                  const hasMoreDetails =
+                    detailText.length > 220 || overviewText || calculationText;
+                  return (
+                    <div key={offer.id}>
+                      <div className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
+                        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                            {getOfferReferenceLabel(offer)}
+                          </p>
+                          <p className="text-sm font-semibold">
+                            {offer.customer || "Angebot"}
+                          </p>
+                        </button>
+                        <div className="flex items-center gap-2">
+                          {getOfferSentAt(offer) ? (
+                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
+                              Versendet
+                            </span>
+                          ) : null}
+                          {renderOfferReadBadge(offer)}
+                          <button
+                            type="button"
+                            onClick={() => toggleOfferExpanded(offer.id)}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="Details"
+                          >
+                            {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => duplicateOffer(offer)}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="Duplizieren"
+                          >
+                            <Copy size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPreviewMode("offer");
+                              setPreviewOfferId(offer.id);
+                            }}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="Vorschau"
+                          >
+                            <Eye size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => exportOfferPdf(offer)}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="PDF exportieren"
+                          >
+                            <FileDown size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteArchivedOffer(offer)}
+                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
+                            title="Löschen"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      {expandedOffers[offer.id] &&
+                      (keywords.length || detailPreview || overviewText || calculationText) ? (
+                        <div className="mt-2 rounded-xl border border-sand-200 bg-white/70 px-3 py-2 text-xs text-sand-600">
+                          {keywords.length ? (
+                            <div className="flex flex-wrap gap-2">
+                              {keywords.map((keyword) => (
+                                <span
+                                  key={keyword}
+                                  className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500"
+                                >
+                                  {keyword}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {overviewText ? (
+                            <p className="mt-2 whitespace-pre-line text-sand-700">
+                              {overviewText}
+                            </p>
+                          ) : null}
+                          {calculationText ? (
+                            <p className="mt-2 whitespace-pre-line text-sand-600">
+                              {calculationText}
+                            </p>
+                          ) : null}
+                          {detailPreview ? (
+                            <p className="mt-2 whitespace-pre-line text-sand-600">
+                              {detailPreview}
+                            </p>
+                          ) : null}
+                          {hasMoreDetails ? (
+                            <button
+                              type="button"
+                              onClick={() => toggleOfferDetails(offer.id)}
+                              className="mt-2 text-[10px] uppercase tracking-[0.3em] text-sand-500 hover:text-sand-700"
+                            >
+                              {showDetails ? "Weniger" : "Mehr"} Details
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                        <span>Status: Fakturiert</span>
+                        <span>{formatMoney(grossTotal)}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-xs text-sand-500">Keine fakturierten Angebote.</p>
+              )}
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-3">
             <p className="text-[10px] uppercase tracking-[0.3em] text-rose-500">
               Abgelehnt / Abgelaufen
@@ -7501,7 +7643,7 @@ export default function OffersView() {
                       <div className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
                         <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
                           <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
-                            {offer.reference}
+                            {getOfferReferenceLabel(offer)}
                           </p>
                           <p className="text-sm font-semibold">
                             {offer.customer || "Angebot"}

@@ -1836,7 +1836,18 @@ export default function CustomerDevelopmentView() {
                 <div className="space-y-4">
                   {detailTab === "ki" ? (
                     <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">KI Unterstützung</p>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs uppercase tracking-[0.2em] text-sand-500">KI Unterstützung</p>
+                        <button
+                          type="button"
+                          onClick={() => loadDetail(true)}
+                          disabled={detailStatus === "loading" || aiBusy}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
+                        >
+                          {detailStatus === "loading" ? <InlineSpinner /> : <RefreshCw size={11} />}
+                          KI-Preanalyse aktualisieren
+                        </button>
+                      </div>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {(() => {
                           const running = isAiActionRunning(detailModal.customerId, "aktivierung_call");

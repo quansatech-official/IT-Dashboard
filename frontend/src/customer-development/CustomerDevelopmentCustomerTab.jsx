@@ -80,6 +80,7 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
   const [aiMode, setAiMode] = useState("summary");
   const [aiText, setAiText] = useState("");
   const [aiError, setAiError] = useState("");
+  const [aiStatus, setAiStatus] = useState("");
   const aiActions = [
     { mode: "summary", label: "Summary" },
     { mode: "mail", label: "Mail" },
@@ -90,11 +91,11 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
     { mode: "newsletter", label: "Newsletter" },
   ];
 
-  const load = async () => {
+  const load = async (forceRefresh = false) => {
     if (!customerId) return;
     setStatus("loading");
     try {
-      const response = await fetch(`${API}/customers/${customerId}/development`);
+      const response = await fetch(`${API}/customers/${customerId}/development?refresh=${forceRefresh ? "1" : "0"}`);
       if (!response.ok) throw new Error("load_failed");
       const data = await response.json();
       setContext(data || null);
@@ -133,6 +134,7 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
     setAiMode(mode);
     setAiBusy(true);
     setAiError("");
+    setAiStatus("KI wird angefragt …");
     setAiText("");
     try {
       const response = await fetch(`${API}/customer_development/ai_assist`, {
@@ -143,14 +145,18 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
           mode
         })
       });
+      setAiStatus("Antwort wird verarbeitet …");
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data?.detail || "KI Vorschlag fehlgeschlagen");
       setAiText(data?.text || "");
+      setAiStatus("KI abgeschlossen.");
     } catch (error) {
       setAiError(error?.message ? String(error.message) : "KI Vorschlag fehlgeschlagen");
+      setAiStatus("");
     } finally {
       setAiBusy(false);
       setAiActionKey("");
+      setTimeout(() => setAiStatus(""), 1500);
     }
   };
 
@@ -298,6 +304,15 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
       <div className="rounded-2xl border border-sand-200 bg-white p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm uppercase tracking-[0.2em] text-sand-500">KI Assist</p>
+          <button
+            type="button"
+            onClick={() => load(true)}
+            disabled={status === "loading" || aiBusy}
+            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
+          >
+            {status === "loading" ? <InlineSpinner /> : <Sparkles size={12} />}
+            KI-Preanalyse aktualisieren
+          </button>
           <div className="flex flex-wrap gap-2">
             {aiActions.map((entry) => {
               const running = isAiActionRunning(entry.mode);
@@ -317,6 +332,7 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
           </div>
         </div>
         {aiBusy ? <p className="mt-2 text-sm text-sand-500">KI generiert Vorschlag…</p> : null}
+        {aiStatus && !aiError ? <p className="mt-1 text-xs text-sand-500">{aiStatus}</p> : null}
         {aiError ? <p className="mt-2 text-sm text-rose-600">{aiError}</p> : null}
         {aiText ? (
           <textarea

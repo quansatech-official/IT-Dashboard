@@ -15,6 +15,10 @@ const formatHours = (value) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   })} h`;
+const formatDate = (value) => {
+  if (!value) return "-";
+  return new Date(Number(value)).toLocaleDateString("de-DE");
+};
 const formatMonthLabel = (year, month) =>
   new Date(year, month - 1, 1).toLocaleDateString("de-DE", {
     month: "short",
@@ -138,7 +142,8 @@ export default function StatsView() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
     setTabStatus((prev) => ({ ...prev, [activeTab]: "loading" }));
-    fetch(`${API}/company_stats?days=${days}&section=${encodeURIComponent(activeTab)}`, {
+    const sectionParam = activeTab === "general" ? "" : `&section=${encodeURIComponent(activeTab)}`;
+    fetch(`${API}/company_stats?days=${days}${sectionParam}`, {
       signal: controller.signal
     })
       .then((res) => {
@@ -292,6 +297,116 @@ export default function StatsView() {
       deltaPreviousMonth: round2(summary.deltaPreviousMonth)
     };
   }, [filteredContractRows]);
+  const contractDocumentRows = useMemo(
+    () =>
+      filteredContractRows.flatMap((item) =>
+        Array.isArray(item?.contracts) ? item.contracts.filter((entry) => !entry?.inferred) : []
+      ),
+    [filteredContractRows]
+  );
+  const contractPipelineStats = useMemo(() => {
+    const nowMs = Date.now();
+    const renewalThresholdMs = nowMs + 45 * 24 * 60 * 60 * 1000;
+    let proposal = 0;
+    let active = 0;
+    let dueSoon = 0;
+    let missingHours = 0;
+    contractDocumentRows.forEach((contract) => {
+      const status = String(contract?.status || "").toLowerCase();
+      if (status === "proposal") proposal += 1;
+      if (status === "active") active += 1;
+      const createdAt = Number(contract?.createdAt || 0);
+      if (createdAt > 0) {
+        const renewalAt = createdAt + 365 * 24 * 60 * 60 * 1000;
+        if (renewalAt <= renewalThresholdMs) dueSoon += 1;
+      }
+      const type = String(contract?.type || "").toLowerCase();
+      if ((type === "wartung" || type === "monitoring") && Number(contract?.monthlyHoursIncluded || 0) <= 0) {
+        missingHours += 1;
+      }
+    });
+    return { proposal, active, dueSoon, missingHours };
+  }, [contractDocumentRows]);
+  const leadershipKpis = useMemo(() => {
+    const sevdesk = stats?.sevdesk || {};
+    const customerSummary = sevdesk?.customerPaymentSummary || {};
+    const reports = stats?.reports || {};
+    const contractsRevenue = contracts?.revenue || {};
+    const contractsHours = contracts?.hours || {};
+    const customerPaymentRows = Array.isArray(sevdesk?.customerPaymentStats) ? sevdesk.customerPaymentStats : [];
+    const churnRiskCustomers = customerPaymentRows.filter((entry) => String(entry?.grade || "").toUpperCase() === "C").length;
+    const trendRevenueYear = Number(customerSummary.revenueCurrentYearEur || 0) - Number(customerSummary.revenueLastYearEur || 0);
+    const trendSla = Number(contractsHours.deltaCurrentMonth || 0) - Number(contractsHours.deltaPreviousMonth || 0);
+    const forecastMonthly =
+      Number(contractsRevenue.monthlyActiveTotal || 0) + Number(stats?.revenueEstimateWeekEur || 0) * 4;
+    const alerts = [];
+    if (Number(sevdesk?.overdue?.count || 0) > 0) {
+      alerts.push(`Faktura: ${formatNumber(sevdesk.overdue.count)} überfällige Rechnungen (${formatEur(sevdesk?.overdue?.sumEur || 0)}).`);
+    }
+    if (Number(contractsHours.deltaCurrentMonth || 0) > 0) {
+      alerts.push(`SLA: ${formatHours(contractsHours.deltaCurrentMonth)} Überzug in laufenden Verträgen.`);
+    }
+    if (Number(contractPipelineStats.proposal || 0) > 0) {
+      alerts.push(`Pipeline: ${formatNumber(contractPipelineStats.proposal)} Vertragsvorschläge offen.`);
+    }
+    if (Number(reports.unread || 0) > 0) {
+      alerts.push(`Kommunikation: ${formatNumber(reports.unread)} Berichte sind noch ungelesen.`);
+    }
+    const nextAction =
+      Number(contractsHours.deltaCurrentMonth || 0) > 0
+        ? "SLA-Überzug mit den 3 größten Delta-Kunden klären."
+        : Number(sevdesk?.overdue?.count || 0) > 0
+          ? "Überfällige Rechnungen priorisiert nachfassen."
+          : Number(contractPipelineStats.proposal || 0) > 0
+            ? "Vertragsvorschläge in aktive Verträge überführen."
+            : "Keine kritische Abweichung. Fokus auf Forecast-Verbesserung.";
+    return {
+      cards: [
+        {
+          title: "Umsatz YTD (bezahlt)",
+          value: formatEur(sevdesk?.paidCurrentYear?.sumEur || 0),
+          subtitle: `Trend ggü. Vorjahr: ${formatEur(trendRevenueYear)}`
+        },
+        {
+          title: "MRR (aktive Verträge)",
+          value: formatEur(contractsRevenue.monthlyActiveTotal || 0),
+          subtitle: "Owner: Stats"
+        },
+        {
+          title: "Forecast Monatsumsatz",
+          value: formatEur(forecastMonthly),
+          subtitle: "MRR + Wochenhochrechnung"
+        },
+        {
+          title: "Überfällige Rechnungen",
+          value: formatNumber(sevdesk?.overdue?.count || 0),
+          subtitle: formatEur(sevdesk?.overdue?.sumEur || 0)
+        },
+        {
+          title: "SLA-Risiko (Monat)",
+          value: formatHours(contractsHours.deltaCurrentMonth || 0),
+          subtitle: `Trend: ${formatHoursDelta(trendSla)}`
+        },
+        {
+          title: "Churn-Risiko Kunden",
+          value: formatNumber(churnRiskCustomers),
+          subtitle: "Klasse C (Zahlungsmoral)"
+        },
+        {
+          title: "Berichte ungelesen",
+          value: formatNumber(reports.unread || 0),
+          subtitle: `Gesamt Berichte: ${formatNumber(reports.total || 0)}`
+        },
+        {
+          title: "Pipeline Vorschlag -> Aktiv",
+          value: `${formatNumber(contractPipelineStats.proposal)} -> ${formatNumber(contractPipelineStats.active)}`,
+          subtitle: "Owner: Verträge"
+        }
+      ],
+      alerts,
+      nextAction
+    };
+  }, [stats, contracts, contractPipelineStats]);
   const customerGradeCounts = useMemo(() => {
     const base = { A: 0, B: 0, C: 0 };
     customerPaymentStats.forEach((item) => {
@@ -420,55 +535,36 @@ export default function StatsView() {
               <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
                 <div className="flex items-center gap-2 mb-3 text-sand-700">
                   <ClipboardList size={16} />
-                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Aufgaben & Zeit</p>
+                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Führungs-Cockpit</p>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <StatCard
-                    title="Offen (Tagesplan)"
-                    value={formatNumber(stats.dayTasks?.open ?? 0)}
-                    subtitle={`Erledigt gesamt: ${formatNumber(stats.dayTasks?.done ?? 0)}`}
-                  />
-                  <StatCard
-                    title="Erledigt heute"
-                    value={formatNumber(stats.dayTasks?.doneToday ?? 0)}
-                    subtitle="Abschlusszeit heute"
-                  />
-                  <StatCard
-                    title="Erledigt diese Woche"
-                    value={formatNumber(stats.dayTasks?.doneWeek ?? 0)}
-                    subtitle="Seit Wochenstart"
-                  />
-                  <StatCard
-                    title="Gesamt (Tagesplan)"
-                    value={formatNumber(stats.dayTasks?.total ?? 0)}
-                    subtitle="Alle Einträge"
-                  />
-                  <StatCard
-                    title="Erfasste Zeit heute"
-                    value={`${formatNumber(stats.timeTracking?.doneTodayHours ?? 0, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2
-                    })} h`}
-                    subtitle="Basis: erledigte Aufgaben"
-                  />
-                  <StatCard
-                    title="Erfasste Zeit Woche"
-                    value={`${formatNumber(stats.timeTracking?.doneWeekHours ?? 0, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2
-                    })} h`}
-                    subtitle="Basis: erledigte Aufgaben"
-                  />
-                  <StatCard
-                    title="Umsatzschätzung heute"
-                    value={formatEur(stats.revenueEstimateTodayEur ?? 0)}
-                    subtitle="Basis: erfasste Zeit erledigter Aufgaben"
-                  />
-                  <StatCard
-                    title="Umsatzschätzung Woche"
-                    value={formatEur(stats.revenueEstimateWeekEur ?? 0)}
-                    subtitle="Basis: erfasste Zeit erledigter Aufgaben"
-                  />
+                  {leadershipKpis.cards.map((card) => (
+                    <StatCard key={card.title} title={card.title} value={card.value} subtitle={card.subtitle} />
+                  ))}
+                </div>
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                    <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Trends</p>
+                    <div className="mt-2 space-y-1.5 text-[11px] text-sand-700">
+                      <p>Umsatzschätzung heute: {formatEur(stats.revenueEstimateTodayEur ?? 0)}</p>
+                      <p>Umsatzschätzung Woche: {formatEur(stats.revenueEstimateWeekEur ?? 0)}</p>
+                      <p>
+                        Vertragsdelta {contractMonthLabels.current}: {formatHoursDelta(filteredContractSummary.deltaCurrentMonth)}{" "}
+                        ({contractMonthLabels.previous}: {formatHoursDelta(filteredContractSummary.deltaPreviousMonth)})
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                    <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Alerts & Nächste Aktion</p>
+                    <div className="mt-2 space-y-1.5 text-[11px] text-sand-700">
+                      {leadershipKpis.alerts.length ? (
+                        leadershipKpis.alerts.map((entry, index) => <p key={`alert-${index}`}>• {entry}</p>)
+                      ) : (
+                        <p>• Keine kritischen Alerts.</p>
+                      )}
+                      <p className="pt-1 font-semibold text-sand-900">Nächste Aktion: {leadershipKpis.nextAction}</p>
+                    </div>
+                  </div>
                 </div>
               </section>
             ) : null}
@@ -673,6 +769,21 @@ export default function StatsView() {
                     value={formatEur(filteredContractSummary.revenueMonthly)}
                     subtitle={`Aktive Verträge: ${formatEur(filteredContractSummary.revenueMonthlyActive)}`}
                   />
+                  <StatCard
+                    title="Pipeline Vorschlag -> Aktiv"
+                    value={`${formatNumber(contractPipelineStats.proposal)} -> ${formatNumber(contractPipelineStats.active)}`}
+                    subtitle="Owner: Verträge"
+                  />
+                  <StatCard
+                    title="Verlängerung <= 45 Tage"
+                    value={formatNumber(contractPipelineStats.dueSoon)}
+                    subtitle="Referenz im Kundenstamm"
+                  />
+                  <StatCard
+                    title="Tarifabweichung"
+                    value={formatNumber(contractPipelineStats.missingHours)}
+                    subtitle="Servicevertrag ohne Inklusivstunden"
+                  />
                 </div>
 
                 <div className="mt-4 overflow-x-auto rounded-2xl border border-sand-200">
@@ -743,6 +854,12 @@ export default function StatsView() {
                                         </div>
                                         <div className="text-[10px] text-sand-400">
                                           Wert/Monat: {formatEur(contract.monthlyValue || 0)}
+                                        </div>
+                                        <div className="text-[10px] text-sand-400">
+                                          Verlängerung:{" "}
+                                          {contract.createdAt
+                                            ? formatDate(Number(contract.createdAt) + 365 * 24 * 60 * 60 * 1000)
+                                            : "-"}
                                         </div>
                                       </div>
                                     ))}
@@ -861,21 +978,6 @@ export default function StatsView() {
                         subtitle="Soweit vom Backend gemeldet"
                       />
                       <StatCard
-                        title="Umsatz gesamt"
-                        value={formatEur(customerPaymentSummary.revenueTotalEur || 0)}
-                        subtitle="Alle Jahre"
-                      />
-                      <StatCard
-                        title="Umsatz lfd. Jahr"
-                        value={formatEur(customerPaymentSummary.revenueCurrentYearEur || 0)}
-                        subtitle="Aktuelles Jahr"
-                      />
-                      <StatCard
-                        title="Umsatz Vorjahr"
-                        value={formatEur(customerPaymentSummary.revenueLastYearEur || 0)}
-                        subtitle="Vorjahr"
-                      />
-                      <StatCard
                         title="Offen / überfällig"
                         value={formatNumber(customerPaymentSummary.openOverdueInvoices || 0)}
                         subtitle={formatEur(customerPaymentSummary.openOverdueAmountEur || 0)}
@@ -893,21 +995,6 @@ export default function StatsView() {
                             <th className="px-3 py-2">
                               <button type="button" onClick={() => toggleCustomerSort("grade")} className="inline-flex items-center gap-1">
                                 Klasse <span>{sortIndicator("grade")}</span>
-                              </button>
-                            </th>
-                            <th className="px-3 py-2">
-                              <button type="button" onClick={() => toggleCustomerSort("totalAmountEur")} className="inline-flex items-center gap-1">
-                                Umsatz gesamt <span>{sortIndicator("totalAmountEur")}</span>
-                              </button>
-                            </th>
-                            <th className="px-3 py-2">
-                              <button type="button" onClick={() => toggleCustomerSort("revenueCurrentYearEur")} className="inline-flex items-center gap-1">
-                                Umsatz lfd. <span>{sortIndicator("revenueCurrentYearEur")}</span>
-                              </button>
-                            </th>
-                            <th className="px-3 py-2">
-                              <button type="button" onClick={() => toggleCustomerSort("revenueLastYearEur")} className="inline-flex items-center gap-1">
-                                Umsatz Vorjahr <span>{sortIndicator("revenueLastYearEur")}</span>
                               </button>
                             </th>
                             <th className="px-3 py-2">
@@ -937,9 +1024,6 @@ export default function StatsView() {
                                     {String(item.grade || "-")}
                                   </span>
                                 </td>
-                                <td className="px-3 py-2 text-sand-700">{formatEur(item.totalAmountEur || 0)}</td>
-                                <td className="px-3 py-2 text-sand-700">{formatEur(item.revenueCurrentYearEur || 0)}</td>
-                                <td className="px-3 py-2 text-sand-700">{formatEur(item.revenueLastYearEur || 0)}</td>
                                 <td className="px-3 py-2 text-sand-700">
                                   Ø Zahlung: {formatDays(item.avgPaymentDays)}
                                   <div className="text-[10px] text-sand-400">

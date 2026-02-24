@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import random
 import threading
 import time
 import unicodedata
@@ -32,6 +33,13 @@ def _to_positive_int(value: Any, default: int, minimum: int) -> int:
     return max(minimum, parsed)
 
 
+def _to_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -42,6 +50,13 @@ def _safe_int(value: Any, default: int = 0) -> int:
 BACKEND_URL = str(os.environ.get("META_HUB_BACKEND_URL") or "http://backend:8000").rstrip("/")
 REQUEST_TIMEOUT_SECONDS = float(os.environ.get("META_HUB_TIMEOUT_SECONDS") or "120")
 REFRESH_INTERVAL_SECONDS = _to_positive_int(os.environ.get("META_HUB_REFRESH_SECONDS"), default=300, minimum=30)
+REFRESH_JITTER_RATIO = max(
+    0.0,
+    min(
+        0.9,
+        _to_float(os.environ.get("META_HUB_REFRESH_JITTER_RATIO"), 0.35),
+    ),
+)
 CACHE_FILE = str(os.environ.get("META_HUB_CACHE_FILE") or "/data/customer_development_snapshot.json")
 AUTO_REFRESH = _to_bool(os.environ.get("META_HUB_AUTO_REFRESH"), default=True)
 SOURCE_INCLUDE_INACTIVE = _to_bool(os.environ.get("META_HUB_SOURCE_INCLUDE_INACTIVE"), default=True)
@@ -132,6 +147,17 @@ def _runtime_refresh_interval_seconds() -> int:
     with _state_lock:
         current = _state.get("refreshIntervalSeconds")
     return _to_positive_int(current, default=REFRESH_INTERVAL_SECONDS, minimum=30)
+
+
+def _next_refresh_delay_seconds() -> int:
+    base = _runtime_refresh_interval_seconds()
+    if REFRESH_JITTER_RATIO <= 0:
+        return base
+    jitter = int(round(base * REFRESH_JITTER_RATIO))
+    if jitter <= 0:
+        return base
+    randomized = base + random.randint(-jitter, jitter)
+    return max(15, randomized)
 
 
 def _apply_runtime_config(meta_hub_config: Dict[str, Any]) -> None:
@@ -1501,7 +1527,7 @@ def _refresh_in_background(force: bool = True) -> None:
 
 def _background_loop() -> None:
     while True:
-        if _stop_event.wait(_runtime_refresh_interval_seconds()):
+        if _stop_event.wait(_next_refresh_delay_seconds()):
             return
         _refresh_snapshot(force=True)
 
@@ -1558,6 +1584,7 @@ def get_health() -> Dict[str, Any]:
                 default=REFRESH_INTERVAL_SECONDS,
                 minimum=30,
             ),
+            "refreshJitterRatio": float(REFRESH_JITTER_RATIO),
             "updatedAt": int(_state.get("updatedAt") or 0),
             "lastRefreshAt": int(_state.get("lastRefreshAt") or 0),
             "lastDurationMs": int(_state.get("lastDurationMs") or 0),
