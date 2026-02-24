@@ -3814,6 +3814,12 @@ def _normalize_contract_doc_type(value: Any, *, default: str = "wartung") -> str
     return key if key in ALLOWED_CONTRACT_DOC_TYPES else default
 
 
+def _offer_iso_timestamp(ms: int) -> str:
+    if not ms:
+        return ""
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
     data: Dict[str, Any] = {}
     if store.data_json:
@@ -4050,12 +4056,6 @@ def serialize_offer_blocks(store: OfferBlockStore) -> Dict[str, Any]:
         "calcBlocks": data.get("calcBlocks", []),
         "updatedAt": _offer_iso_timestamp(store.updated_at),
     }
-
-
-def _offer_iso_timestamp(ms: int) -> str:
-    if not ms:
-        return ""
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _offer_make_reference(number_format: str, index: int) -> str:
