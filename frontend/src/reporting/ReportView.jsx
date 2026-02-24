@@ -1413,7 +1413,7 @@ export default function ReportView() {
     if (!data) return;
     const normalized = normalizeReport(data);
     const subject = `IT-Kundenbericht – ${normalized.customer} (${normalized.period || "ohne Zeitraum"})`;
-    const baseHtml = await inlineReportLogo(renderReportHTML(normalized, { mode: "email" }));
+    const baseHtml = renderReportHTML(normalized, { mode: "email" });
     const pdfHtml = renderReportHTML(normalized, { mode: "pdf" }).replace(
       /src="\/QTLogo\.jpg"/g,
       `src="${window.location.origin}/QTLogo.jpg"`
@@ -1478,11 +1478,32 @@ export default function ReportView() {
             }
           ]
         : [];
-      const htmlWithInlineLogo = await inlineReportLogo(html);
+      let htmlForSend = String(html || "").replace(
+        /src="\/QTLogo\.jpg"/g,
+        'src="cid:qtlogo"'
+      );
+      try {
+        const logoRes = await fetch("/QTLogo.jpg");
+        if (logoRes.ok) {
+          const logoBlob = await logoRes.blob();
+          const logoBase64 = String(await blobToBase64(logoBlob)).split(",")[1] || "";
+          if (logoBase64) {
+            attachments.push({
+              filename: "QTLogo.jpg",
+              content_base64: logoBase64,
+              content_type: "image/jpeg",
+              content_id: "qtlogo",
+              inline: true
+            });
+          }
+        }
+      } catch (error) {
+        htmlForSend = await inlineReportLogo(htmlForSend);
+      }
       const res = await fetch(`/api/reports/${reportId}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, subject, html: htmlWithInlineLogo, attachments })
+        body: JSON.stringify({ to, subject, html: htmlForSend, attachments })
       });
       if (!res.ok) {
         const text = await res.text();

@@ -153,6 +153,7 @@ const defaultContractTemplates = {
   monitoring: { title: "Monitoringvertrag", body_template: "" },
   avv_dsgvo: { title: "Auftragsverarbeitungsvertrag (DSGVO)", body_template: "" }
 };
+const defaultContractVariables = {};
 
 const normalizeContractTemplates = (input) => {
   const merged = { ...defaultContractTemplates };
@@ -164,6 +165,22 @@ const normalizeContractTemplates = (input) => {
         title: String(row.title || merged[key]?.title || "").trim(),
         body_template: String(row.body_template || "")
       };
+    });
+  }
+  return merged;
+};
+
+const normalizeContractVariables = (input) => {
+  const merged = { ...defaultContractVariables };
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    Object.entries(input).forEach(([rawKey, rawValue]) => {
+      const key = String(rawKey || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      if (!key) return;
+      merged[key] = String(rawValue || "");
     });
   }
   return merged;
@@ -334,9 +351,11 @@ export default function SettingsView() {
     },
     contract_header_html: "",
     contract_footer_html: "",
-    contract_templates: normalizeContractTemplates(null)
+    contract_templates: normalizeContractTemplates(null),
+    contract_variables: normalizeContractVariables(null)
   });
   const [contractTemplateDraft, setContractTemplateDraft] = useState({ key: "", title: "" });
+  const [contractVariableDraft, setContractVariableDraft] = useState({ key: "", value: "" });
   const [selectedContractTemplateKey, setSelectedContractTemplateKey] = useState("wartung");
   const [contractTariffs, setContractTariffs] = useState([]);
   const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
@@ -612,7 +631,8 @@ export default function SettingsView() {
           },
           contract_header_html: data?.contract_header_html || "",
           contract_footer_html: data?.contract_footer_html || "",
-          contract_templates: normalizeContractTemplates(data?.contract_templates)
+          contract_templates: normalizeContractTemplates(data?.contract_templates),
+          contract_variables: normalizeContractVariables(data?.contract_variables)
         });
         const keys = Object.keys(normalizeContractTemplates(data?.contract_templates));
         if (keys.length) setSelectedContractTemplateKey(keys[0]);
@@ -763,7 +783,8 @@ export default function SettingsView() {
         },
         contract_header_html: data?.contract_header_html || "",
         contract_footer_html: data?.contract_footer_html || "",
-        contract_templates: normalizeContractTemplates(data?.contract_templates)
+        contract_templates: normalizeContractTemplates(data?.contract_templates),
+        contract_variables: normalizeContractVariables(data?.contract_variables)
       });
       setAiPromptsStatus("saved");
     } catch (error) {
@@ -781,7 +802,8 @@ export default function SettingsView() {
         body: JSON.stringify({
           contract_header_html: aiPrompts.contract_header_html || "",
           contract_footer_html: aiPrompts.contract_footer_html || "",
-          contract_templates: aiPrompts.contract_templates
+          contract_templates: aiPrompts.contract_templates,
+          contract_variables: aiPrompts.contract_variables
         })
       });
       if (!res.ok) throw new Error("save_failed");
@@ -790,7 +812,8 @@ export default function SettingsView() {
         ...prev,
         contract_header_html: data?.contract_header_html || "",
         contract_footer_html: data?.contract_footer_html || "",
-        contract_templates: normalizeContractTemplates(data?.contract_templates)
+        contract_templates: normalizeContractTemplates(data?.contract_templates),
+        contract_variables: normalizeContractVariables(data?.contract_variables)
       }));
       setContractTemplatesStatus("saved");
     } catch (error) {
@@ -834,7 +857,35 @@ export default function SettingsView() {
     });
   };
 
+  const addContractVariable = () => {
+    const key = String(contractVariableDraft.key || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    if (!key) return;
+    setAiPrompts((prev) => ({
+      ...prev,
+      contract_variables: {
+        ...(prev.contract_variables || {}),
+        [key]: String(contractVariableDraft.value || "")
+      }
+    }));
+    setContractVariableDraft({ key: "", value: "" });
+  };
+
+  const removeContractVariable = (key) => {
+    setAiPrompts((prev) => {
+      const next = { ...(prev.contract_variables || {}) };
+      delete next[key];
+      return { ...prev, contract_variables: next };
+    });
+  };
+
   const contractTemplateEntries = Object.entries(aiPrompts.contract_templates || {});
+  const contractVariableEntries = Object.entries(aiPrompts.contract_variables || {}).sort(([a], [b]) =>
+    String(a || "").localeCompare(String(b || ""), "de")
+  );
   const activeContractTemplateKey = contractTemplateEntries.some(([key]) => key === selectedContractTemplateKey)
     ? selectedContractTemplateKey
     : (contractTemplateEntries[0]?.[0] || "");
@@ -842,7 +893,7 @@ export default function SettingsView() {
     title: "",
     body_template: "",
   };
-  const contractPreviewVars = {
+  const baseContractPreviewVars = {
     provider_name: "QT Workbench Services",
     customer_name: "Musterkunde GmbH",
     generated_at: "22.02.2026",
@@ -871,6 +922,10 @@ export default function SettingsView() {
     liability_limit: "gemaess AGB",
     service_scope: "Wartung und Monitoring laut Tarif.",
     note_block: "Hinweis: Monatliche Leistungserbringung nach Vereinbarung."
+  };
+  const contractPreviewVars = {
+    ...baseContractPreviewVars,
+    ...(aiPrompts.contract_variables || {})
   };
   const renderTemplatePreview = (value) => {
     let html = String(value || "");
@@ -978,6 +1033,24 @@ export default function SettingsView() {
       const message = String(error?.message || "").trim();
       showTariffActionMessage(
         message && message !== "deactivate_failed" ? message : "Deaktivieren fehlgeschlagen.",
+        "error"
+      );
+    }
+  };
+
+  const activateTariff = async (tariffId) => {
+    try {
+      const res = await fetch(`${API}/contract_tariffs/${tariffId}/activate`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.detail || "activate_failed");
+      }
+      await refreshTariffs();
+      showTariffActionMessage("Tarif aktiviert.", "success");
+    } catch (error) {
+      const message = String(error?.message || "").trim();
+      showTariffActionMessage(
+        message && message !== "activate_failed" ? message : "Aktivieren fehlgeschlagen.",
         "error"
       );
     }
@@ -1995,6 +2068,76 @@ export default function SettingsView() {
                   </div>
 
                   <div className="rounded-xl border border-sand-200 bg-white p-3">
+                    <p className="text-[11px] uppercase tracking-wide text-sand-500">Template-Variablen</p>
+                    <p className="mt-1 text-[11px] text-sand-500">
+                      Eigene Platzhalter als <code>{"{variable_name}"}</code> definieren und im Template verwenden.
+                    </p>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[200px_1fr_auto]">
+                      <input
+                        value={contractVariableDraft.key}
+                        onChange={(event) =>
+                          setContractVariableDraft((prev) => ({ ...prev, key: event.target.value }))
+                        }
+                        placeholder="variable_name"
+                        className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                      />
+                      <input
+                        value={contractVariableDraft.value}
+                        onChange={(event) =>
+                          setContractVariableDraft((prev) => ({ ...prev, value: event.target.value }))
+                        }
+                        placeholder="Beispielwert"
+                        className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={addContractVariable}
+                        className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        Hinzufügen
+                      </button>
+                    </div>
+                    <div className="mt-3 space-y-2 max-h-56 overflow-auto pr-1">
+                      {contractVariableEntries.map(([key, value]) => (
+                        <div
+                          key={key}
+                          className="grid grid-cols-1 gap-2 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2 md:grid-cols-[200px_1fr_auto]"
+                        >
+                          <input
+                            value={key}
+                            readOnly
+                            className="rounded-xl border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-700"
+                          />
+                          <input
+                            value={String(value || "")}
+                            onChange={(event) =>
+                              setAiPrompts((prev) => ({
+                                ...prev,
+                                contract_variables: {
+                                  ...(prev.contract_variables || {}),
+                                  [key]: event.target.value
+                                }
+                              }))
+                            }
+                            className="rounded-xl border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-800"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeContractVariable(key)}
+                            className="inline-flex items-center justify-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                          >
+                            <Trash2 size={10} />
+                            Löschen
+                          </button>
+                        </div>
+                      ))}
+                      {!contractVariableEntries.length ? (
+                        <p className="text-xs text-sand-500">Noch keine eigenen Variablen hinterlegt.</p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-sand-200 bg-white p-3">
                     <p className="text-[11px] uppercase tracking-wide text-sand-500">Globaler Footer (für alle Verträge)</p>
                     <div className="mt-2">
                       <NotesRichTextEditor
@@ -2191,7 +2334,15 @@ export default function SettingsView() {
                             >
                               Deaktivieren
                             </button>
-                          ) : null}
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => activateTariff(tariff.id)}
+                              className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
+                            >
+                              Aktivieren
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => deleteTariff(tariff.id)}
@@ -2225,7 +2376,7 @@ export default function SettingsView() {
             <div className="flex items-center gap-2">
               <Users2 size={18} />
               <div>
-                <h3 className="text-lg font-display text-sand-900">Unternehmensstamm</h3>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Unternehmensstamm</p>
               </div>
             </div>
             <span className="text-sm text-sand-500">{employeeOpen ? "–" : "+"}</span>

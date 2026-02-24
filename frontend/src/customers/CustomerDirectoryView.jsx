@@ -99,6 +99,16 @@ const api = {
       if (!r.ok) throw new Error(data?.detail || "contract_create_failed");
       return data;
     }),
+  updateCustomerContract: (customerId, contractId, payload) =>
+    fetch(`${API}/customers/${customerId}/contracts/${contractId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "contract_update_failed");
+      return data;
+    }),
   cancelCustomerContract: (customerId, contractId, reason = "") =>
     fetch(`${API}/customers/${customerId}/contracts/${contractId}/cancel`, {
       method: "POST",
@@ -691,6 +701,7 @@ export default function CustomerDirectoryView() {
   const [contractPreviewStatus, setContractPreviewStatus] = useState("idle");
   const [contractSaveStatus, setContractSaveStatus] = useState("idle");
   const [generatedContract, setGeneratedContract] = useState(null);
+  const [editingContractId, setEditingContractId] = useState(null);
   const [contractDraft, setContractDraft] = useState({
     title: "",
     docType: "wartung",
@@ -1153,7 +1164,7 @@ export default function CustomerDirectoryView() {
       const selectedTariffId = tariffRequired
         ? Number(source?.meta?.tariff?.id || selectedTariff?.id || 0) || null
         : null;
-      const saved = await api.createCustomerContract(activeId, {
+      const payload = {
         title: String(source.title || contractDraft.title || "Vertrag").trim(),
         doc_type: String(source.doc_type || contractDraft.docType || "wartung"),
         file_name: String(source.file_name || "vertrag.pdf"),
@@ -1165,8 +1176,13 @@ export default function CustomerDirectoryView() {
         monthly_hours_included: Number(source?.meta?.monthly_hours_included ?? monthlyHoursIncluded),
         note: "",
         status: "proposal"
-      });
-      setCustomerContracts((prev) => [saved, ...prev]);
+      };
+      const saved = editingContractId
+        ? await api.updateCustomerContract(activeId, editingContractId, payload)
+        : await api.createCustomerContract(activeId, payload);
+      setCustomerContracts((prev) =>
+        editingContractId ? prev.map((item) => (item.id === saved.id ? saved : item)) : [saved, ...prev]
+      );
       setGeneratedContract(source);
       setMetricsReloadTick((prev) => prev + 1);
       setContractSaveStatus("saved");
@@ -1230,6 +1246,48 @@ export default function CustomerDirectoryView() {
     }
   };
 
+  const closeContractCreator = () => {
+    setContractCalcModalOpen(false);
+    setEditingContractId(null);
+  };
+
+  const openContractProposalEditor = (item) => {
+    if (!item) return;
+    const docType = String(item?.doc_type || item?.template_key || "wartung").trim().toLowerCase() || "wartung";
+    const preferredTariffCategory = docType === "monitoring" ? "monitoring" : docType === "wartung" ? "wartung" : "";
+    const matchingTariff = preferredTariffCategory
+      ? (contractTariffs || []).find(
+          (tariff) =>
+            Boolean(tariff?.is_active) &&
+            String(tariff?.category || "").trim().toLowerCase() === preferredTariffCategory
+        )
+      : null;
+    if (matchingTariff?.id) {
+      setCalcInput((prev) => ({ ...prev, tariffId: matchingTariff.id }));
+    }
+    setEditingContractId(Number(item.id || 0) || null);
+    setContractDraft({
+      title: String(item?.title || "").trim(),
+      docType,
+      validFrom: "",
+      runtimeMonths: "12",
+      monthlyHoursIncluded: String(Number(item?.monthly_hours_included || 0)),
+      monthlyTotalOverride: "",
+      yearlyTotalOverride: ""
+    });
+    setGeneratedContract({
+      title: String(item?.title || "").trim() || "Vertrag",
+      doc_type: docType,
+      template_key: String(item?.template_key || docType || "wartung"),
+      file_name: String(item?.file_name || "vertrag.pdf"),
+      html: String(item?.html_content || ""),
+      meta: {
+        monthly_hours_included: Number(item?.monthly_hours_included || 0),
+      }
+    });
+    setContractCalcModalOpen(true);
+  };
+
   const openContractCreator = () => {
     if (!activeCustomer) return;
     const customerLabel = String(activeCustomer.name || "").trim();
@@ -1255,6 +1313,7 @@ export default function CustomerDirectoryView() {
       monthlyTotalOverride: "",
       yearlyTotalOverride: ""
     });
+    setEditingContractId(null);
     setGeneratedContract(null);
     setContractCalcModalOpen(true);
   };
@@ -1491,6 +1550,13 @@ export default function CustomerDirectoryView() {
             </button>
           ) : status === "proposal" ? (
             <>
+              <button
+                type="button"
+                onClick={() => openContractProposalEditor(item)}
+                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+              >
+                <Pencil size={11} /> Bearbeiten
+              </button>
               <button
                 type="button"
                 onClick={() => reactivateContractDocument(item.id)}
@@ -2642,7 +2708,7 @@ export default function CustomerDirectoryView() {
             className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <BadgeCheck size={12} />
-            Als Vorschlag speichern
+            {editingContractId ? "Vorschlag aktualisieren" : "Als Vorschlag speichern"}
           </button>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -2957,73 +3023,6 @@ export default function CustomerDirectoryView() {
                   </>
                 ) : null}
               </div>
-              {editHasServiceContract ? (
-                <div className="mt-2 rounded-xl border border-sand-200 bg-white p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Stundenbudget (aktueller Monat)</p>
-                    <span className="text-[11px] text-sand-500">{contractTimeBudget?.monthLabel || "Aktueller Monat"}</span>
-                  </div>
-                  {metricsStatus === "loading" ? (
-                    <p className="mt-1.5 text-xs text-sand-500">Berechne Vertragsstunden…</p>
-                  ) : null}
-                  {metricsStatus === "error" ? (
-                    <p className="mt-1.5 text-xs text-rose-600">Stundenbilanz konnte nicht geladen werden.</p>
-                  ) : null}
-                  {metricsStatus === "ready" && contractTimeBudget ? (
-                    <>
-                      <div className="mt-2 grid gap-2 md:grid-cols-4">
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Inkludiert</p>
-                          <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.includedHours)}</p>
-                        </div>
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Verbraucht</p>
-                          <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.consumedHours)}</p>
-                        </div>
-                        <div
-                          className={`rounded-lg border px-2.5 py-1.5 ${
-                            contractTimeBudget.isOverrun
-                              ? "border-rose-200 bg-rose-50"
-                              : "border-emerald-200 bg-emerald-50"
-                          }`}
-                        >
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">
-                            {contractTimeBudget.isOverrun ? "Überzug" : "Rest"}
-                          </p>
-                          <p
-                            className={`text-sm font-semibold ${
-                              contractTimeBudget.isOverrun ? "text-rose-700" : "text-emerald-700"
-                            }`}
-                          >
-                            {formatHours(
-                              contractTimeBudget.isOverrun
-                                ? contractTimeBudget.overrunHours
-                                : contractTimeBudget.remainingHours
-                            )}
-                          </p>
-                        </div>
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufteilung</p>
-                          <p className="text-sm font-semibold text-sand-900">
-                            Aufgabe {formatHours(contractTimeBudget.taskHours, 1)}
-                          </p>
-                          <p className="text-[11px] text-sand-600">
-                            Telefon {formatHours(contractTimeBudget.telephonyHours, 1)}
-                          </p>
-                        </div>
-                      </div>
-                      <p className="mt-2 text-[11px] text-sand-600">
-                        Verbrauch aus {contractTimeBudget.taskCount || 0} Zeitaufgaben und {contractTimeBudget.callCount || 0} Telefonaten.
-                      </p>
-                      {contractTimeBudget.missingIncludedHours ? (
-                        <p className="mt-1 text-[11px] text-amber-700">
-                          Vertrag vorhanden, aber keine Inklusivstunden hinterlegt. Bitte im Vertragsdetail setzen.
-                        </p>
-                      ) : null}
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
               <div className="mt-2 grid gap-2 md:grid-cols-2">
                 <label className="block md:col-span-2">
                   <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
@@ -3276,6 +3275,73 @@ export default function CustomerDirectoryView() {
                       </button>
                     </div>
                   </div>
+                  {editHasServiceContract ? (
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Stundenbudget (aktueller Monat)</p>
+                        <span className="text-[11px] text-sand-500">{contractTimeBudget?.monthLabel || "Aktueller Monat"}</span>
+                      </div>
+                      {metricsStatus === "loading" ? (
+                        <p className="mt-1.5 text-xs text-sand-500">Berechne Vertragsstunden…</p>
+                      ) : null}
+                      {metricsStatus === "error" ? (
+                        <p className="mt-1.5 text-xs text-rose-600">Stundenbilanz konnte nicht geladen werden.</p>
+                      ) : null}
+                      {metricsStatus === "ready" && contractTimeBudget ? (
+                        <>
+                          <div className="mt-2 grid gap-2 md:grid-cols-4">
+                            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Inkludiert</p>
+                              <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.includedHours)}</p>
+                            </div>
+                            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Verbraucht</p>
+                              <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.consumedHours)}</p>
+                            </div>
+                            <div
+                              className={`rounded-lg border px-2.5 py-1.5 ${
+                                contractTimeBudget.isOverrun
+                                  ? "border-rose-200 bg-rose-50"
+                                  : "border-emerald-200 bg-emerald-50"
+                              }`}
+                            >
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">
+                                {contractTimeBudget.isOverrun ? "Überzug" : "Rest"}
+                              </p>
+                              <p
+                                className={`text-sm font-semibold ${
+                                  contractTimeBudget.isOverrun ? "text-rose-700" : "text-emerald-700"
+                                }`}
+                              >
+                                {formatHours(
+                                  contractTimeBudget.isOverrun
+                                    ? contractTimeBudget.overrunHours
+                                    : contractTimeBudget.remainingHours
+                                )}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufteilung</p>
+                              <p className="text-sm font-semibold text-sand-900">
+                                Aufgabe {formatHours(contractTimeBudget.taskHours, 1)}
+                              </p>
+                              <p className="text-[11px] text-sand-600">
+                                Telefon {formatHours(contractTimeBudget.telephonyHours, 1)}
+                              </p>
+                            </div>
+                          </div>
+                          <p className="mt-2 text-[11px] text-sand-600">
+                            Verbrauch aus {contractTimeBudget.taskCount || 0} Zeitaufgaben und {contractTimeBudget.callCount || 0} Telefonaten.
+                          </p>
+                          {contractTimeBudget.missingIncludedHours ? (
+                            <p className="mt-1 text-[11px] text-amber-700">
+                              Vertrag vorhanden, aber keine Inklusivstunden hinterlegt. Bitte im Vertragsdetail setzen.
+                            </p>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
                   {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
                   <div className="space-y-2 max-h-64 overflow-auto pr-1">
@@ -3304,7 +3370,7 @@ export default function CustomerDirectoryView() {
                 <h3 className="text-lg font-display text-sand-900">Vertragskalkulation</h3>
               </div>
               <button
-                onClick={() => setContractCalcModalOpen(false)}
+                onClick={closeContractCreator}
                 className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
               >
                 Schließen

@@ -1726,6 +1726,8 @@ class EmailAttachment(BaseModel):
     filename: str
     content_base64: str
     content_type: Optional[str] = None
+    content_id: Optional[str] = None
+    inline: Optional[bool] = False
 
 
 class OfferSendRequest(BaseModel):
@@ -1738,6 +1740,50 @@ class OfferSendRequest(BaseModel):
 
 
 ReportSendRequest.update_forward_refs()
+
+
+def _attach_email_attachments(
+    msg,
+    attachments: Optional[List["EmailAttachment"]],
+) -> None:
+    html_part = None
+    try:
+        payload = msg.get_payload()
+        if isinstance(payload, list):
+            for part in payload:
+                if str(part.get_content_type() or "").lower() == "text/html":
+                    html_part = part
+                    break
+    except Exception:
+        html_part = None
+
+    for attachment in attachments or []:
+        try:
+            content = base64.b64decode(attachment.content_base64 or "")
+        except Exception:  # noqa: BLE001
+            continue
+        content_type = attachment.content_type or "application/octet-stream"
+        if "/" in content_type:
+            maintype, subtype = content_type.split("/", 1)
+        else:
+            maintype, subtype = "application", "octet-stream"
+        content_id = str(attachment.content_id or "").strip().strip("<>")
+        if attachment.inline and content_id and html_part is not None:
+            html_part.add_related(
+                content,
+                maintype=maintype,
+                subtype=subtype,
+                cid=f"<{content_id}>",
+                filename=attachment.filename or "inline",
+                disposition="inline",
+            )
+            continue
+        msg.add_attachment(
+            content,
+            maintype=maintype,
+            subtype=subtype,
+            filename=attachment.filename or "attachment",
+        )
 
 
 class OfferSaveRequest(BaseModel):
@@ -1766,6 +1812,7 @@ class AiPromptsUpdate(BaseModel):
     contract_header_html: Optional[str] = None
     contract_footer_html: Optional[str] = None
     contract_templates: Optional[Dict[str, Dict[str, str]]] = None
+    contract_variables: Optional[Dict[str, str]] = None
 
 
 class OfferCustomerConfirm(BaseModel):
@@ -3851,33 +3898,82 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "header_html": "",
                 "footer_html": "",
                 "body_template": (
-                    "<p>Dieser Wartungsvertrag zwischen <strong>{provider_name}</strong> und "
-                    "<strong>{customer_name}</strong> regelt die laufende technische Betreuung der "
-                    "vereinbarten IT-Umgebung.</p>"
+                    "<p>Dieser Vertrag wird zwischen <strong>{provider_name}</strong> und "
+                    "<strong>{customer_name}</strong> geschlossen und betrifft die IT-Umgebung des Kunden.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">1) Enthaltene Leistungen</h3>"
+                    "<p>Der IT-Dienstleister erbringt im Rahmen dieses Wartungsvertrages folgende Leistungen:</p>"
                     "<ul>"
                     "<li>Regelmaessige Wartung und Funktionspruefung der betreuten Systeme.</li>"
+                    "<li>Proaktive Systemueberwachung (Monitoring).</li>"
                     "<li>Fehleranalyse und Stoerungsbehebung im vertraglich vereinbarten Umfang.</li>"
                     "<li>Remote-Support innerhalb der vereinbarten Servicezeiten.</li>"
-                    "<li>Dokumentation der durchgefuehrten Arbeiten und konkreter Handlungsempfehlungen.</li>"
+                    "<li>Installation sicherheitsrelevanter Updates und Patches.</li>"
+                    "<li>Basis-IT-Security-Ueberwachung.</li>"
+                    "<li>Dokumentation der durchgefuehrten Arbeiten.</li>"
+                    "<li>Konkrete Handlungsempfehlungen zur Systemstabilitaet.</li>"
                     "</ul>"
+                    "<p><strong>Servicezeiten:</strong><br>{service_hours}</p>"
+                    "<p><strong>Reaktionszeit (Remote):</strong><br>{reaction_time}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Nicht enthaltene Leistungen</h3>"
+                    "<p>Folgende Leistungen sind ausdruecklich nicht Bestandteil dieses Vertrages:</p>"
                     "<ul>"
                     "<li>Projektleistungen, Migrationen, Neuinstallationen und grundlegende Umbauten.</li>"
-                    "<li>Hardware, Softwarelizenzen, Ersatzteile, Reisekosten und Fremdleistungen.</li>"
+                    "<li>Hardwarelieferungen und Softwarelizenzen.</li>"
+                    "<li>Ersatzteile und Herstellerleistungen.</li>"
+                    "<li>Vor-Ort-Einsaetze ausserhalb inkludierter Stunden.</li>"
+                    "<li>Reisekosten und Fremdleistungen.</li>"
                     "<li>Notfalleinsaetze ausserhalb der Servicezeiten ohne gesonderte Beauftragung.</li>"
+                    "<li>Schulungen oder Anwendertrainings.</li>"
                     "</ul>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Verguetung und Zeitbudget</h3>"
-                    "<p>Monatliche Betreuungspauschale: <strong>{monthly_total}</strong> "
-                    "(jaehrlich <strong>{yearly_total}</strong>). "
-                    "Inklusivstunden pro Monat: <strong>{monthly_hours_included}</strong>. "
-                    "Nicht verbrauchte Inklusivstunden verfallen am Monatsende, sofern nichts anderes schriftlich "
-                    "vereinbart ist. Mehrleistungen werden nach vorheriger Freigabe gesondert berechnet.</p>"
+                    "<p><strong>Monatliche Betreuungspauschale:</strong><br>{monthly_total}</p>"
+                    "<p><strong>Jaehrliche Gesamtverguetung:</strong><br>{yearly_total}</p>"
+                    "<p><strong>Inklusivstunden pro Monat:</strong><br>{monthly_hours_included}</p>"
+                    "<p><strong>Regelungen:</strong><br>"
+                    "Nicht verbrauchte Inklusivstunden verfallen am Monatsende, sofern nichts anderes "
+                    "schriftlich vereinbart wurde. Mehrleistungen werden nach vorheriger Freigabe gesondert "
+                    "verrechnet.</p>"
+                    "<p><strong>Stundensatz fuer Zusatzleistungen:</strong> {hourly_rate_extra}</p>"
+                    "<p><strong>Abrechnungseinheit:</strong> {billing_interval}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Betreute Umgebung</h3>"
-                    "<p>Server: {servers} | Clients: {clients} | Netzwerkgeraete: {network_devices} | "
-                    "IoT/Peripherie: {iot_devices}</p>"
-                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Laufzeit</h3>"
-                    "<p>Gueltig ab <strong>{valid_from}</strong>, Mindestlaufzeit <strong>{runtime_months}</strong> Monate.</p>"
+                    "<p><strong>Server:</strong> {servers}<br>"
+                    "<strong>Clients / Arbeitsplaetze:</strong> {clients}<br>"
+                    "<strong>Netzwerkgeraete:</strong> {network_devices}<br>"
+                    "<strong>IoT / Peripherie:</strong> {iot_devices}<br>"
+                    "<strong>Zusaetzliche Systeme:</strong><br>{additional_systems}</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Serviceumfang</h3>"
+                    "<p><strong>Monitoring aktiviert:</strong> {monitoring_enabled}<br>"
+                    "<strong>Backupueberwachung:</strong> {backup_monitoring}<br>"
+                    "<strong>Patchmanagement:</strong> {patch_management}<br>"
+                    "<strong>Securityueberwachung:</strong> {security_monitoring}</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">6) Laufzeit</h3>"
+                    "<p><strong>Vertragsbeginn:</strong> {contract_start}<br>"
+                    "<strong>Mindestlaufzeit:</strong><br>{minimum_term_months} Monate</p>"
+                    "<p><strong>Verlaengerung:</strong><br>"
+                    "Der Vertrag verlaengert sich automatisch um {extension_period} Monate, sofern keine "
+                    "schriftliche Kuendigung mindestens {termination_notice} vor Ablauf erfolgt.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">7) Mitwirkungspflichten des Kunden</h3>"
+                    "<p>Der Kunde verpflichtet sich:</p>"
+                    "<ul>"
+                    "<li>notwendige Systemzugaenge bereitzustellen,</li>"
+                    "<li>administrative Aenderungen mitzuteilen,</li>"
+                    "<li>Datensicherungen gemaess Empfehlung umzusetzen,</li>"
+                    "<li>autorisierte Ansprechpartner zu benennen.</li>"
+                    "</ul>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">8) Haftung</h3>"
+                    "<p>Der IT-Dienstleister haftet ausschliesslich fuer grobe Fahrlaessigkeit und Vorsatz im "
+                    "Rahmen der gesetzlichen Bestimmungen.</p>"
+                    "<p>Keine Haftung besteht fuer:</p>"
+                    "<ul>"
+                    "<li>Datenverlust ohne funktionierende Datensicherung,</li>"
+                    "<li>Drittanbieter-Ausfaelle,</li>"
+                    "<li>Internet- oder Cloud-Provider-Stoerungen,</li>"
+                    "<li>Cyberangriffe ausserhalb zumutbarer Schutzmassnahmen.</li>"
+                    "</ul>"
+                    "<p><strong>Haftungshoechstgrenze pro Schadensfall:</strong><br>{liability_limit}</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">9) Vertraulichkeit und Datenschutz</h3>"
+                    "<p>Beide Vertragsparteien verpflichten sich zur Einhaltung der DSGVO sowie zur vertraulichen "
+                    "Behandlung aller im Rahmen der Betreuung erlangten Informationen.</p>"
                     "<p>{note_block}</p>"
                 ),
             },
@@ -3886,33 +3982,78 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "header_html": "",
                 "footer_html": "",
                 "body_template": (
-                    "<p>Dieser Monitoringvertrag zwischen <strong>{provider_name}</strong> und "
-                    "<strong>{customer_name}</strong> regelt die technische Ueberwachung der vereinbarten "
-                    "Systeme sowie die strukturierte Alarmierung.</p>"
+                    "<p>Dieser Vertrag wird zwischen <strong>{provider_name}</strong> und "
+                    "<strong>{customer_name}</strong> geschlossen und betrifft die laufende Ueberwachung der "
+                    "IT-Umgebung des Kunden.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">1) Enthaltene Leistungen</h3>"
+                    "<p>Der IT-Dienstleister erbringt im Rahmen dieses Monitoringvertrages folgende Leistungen:</p>"
                     "<ul>"
                     "<li>Technisches Monitoring der vereinbarten Systeme und Dienste.</li>"
-                    "<li>Erkennung und Meldung von definierten Schwellwertverletzungen und Stoerungen.</li>"
+                    "<li>Erkennung und Meldung definierter Schwellwertverletzungen und Stoerungen.</li>"
                     "<li>Regelmaessige Monitoring-Berichte und transparente Betriebsdokumentation.</li>"
                     "<li>Erstbewertung von Alarmen inklusive Priorisierung fuer die weitere Bearbeitung.</li>"
+                    "<li>Benachrichtigung und Abstimmung mit dem Kunden bei Handlungsbedarf.</li>"
                     "</ul>"
+                    "<p><strong>Servicezeiten:</strong><br>{service_hours}</p>"
+                    "<p><strong>Reaktionszeit (Remote):</strong><br>{reaction_time}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Nicht enthaltene Leistungen</h3>"
+                    "<p>Folgende Leistungen sind ausdruecklich nicht Bestandteil dieses Vertrages:</p>"
                     "<ul>"
                     "<li>Automatische Entstoerung ohne gesonderte Beauftragung.</li>"
-                    "<li>Projektarbeiten, Migrationen, Hardwaretausch und Vor-Ort-Einsaetze.</li>"
-                    "<li>Hersteller-/Provider-Leistungen Dritter sowie Lizenz- und Hardwarekosten.</li>"
+                    "<li>Projektarbeiten, Migrationen, Neuinstallationen und grundlegende Umbauten.</li>"
+                    "<li>Hardwarelieferungen, Softwarelizenzen sowie Herstellerleistungen Dritter.</li>"
+                    "<li>Vor-Ort-Einsaetze ausserhalb inkludierter Stunden.</li>"
+                    "<li>Notfalleinsaetze ausserhalb der Servicezeiten ohne gesonderte Beauftragung.</li>"
                     "</ul>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Verguetung und Zeitbudget</h3>"
-                    "<p>Monatliche Monitoringpauschale: <strong>{monthly_total}</strong> "
-                    "(jaehrlich <strong>{yearly_total}</strong>). "
-                    "Inklusivstunden pro Monat: <strong>{monthly_hours_included}</strong>. "
-                    "Nicht verbrauchte Inklusivstunden verfallen am Monatsende, sofern nichts anderes schriftlich "
-                    "vereinbart ist. Weitergehende Umsetzungen werden nach Freigabe gesondert berechnet.</p>"
+                    "<p><strong>Monatliche Monitoringpauschale:</strong><br>{monthly_total}</p>"
+                    "<p><strong>Jaehrliche Gesamtverguetung:</strong><br>{yearly_total}</p>"
+                    "<p><strong>Inklusivstunden pro Monat:</strong><br>{monthly_hours_included}</p>"
+                    "<p><strong>Regelungen:</strong><br>"
+                    "Nicht verbrauchte Inklusivstunden verfallen am Monatsende, sofern nichts anderes "
+                    "schriftlich vereinbart wurde. Weitergehende Umsetzungen werden nach vorheriger Freigabe "
+                    "gesondert verrechnet.</p>"
+                    "<p><strong>Stundensatz fuer Zusatzleistungen:</strong> {hourly_rate_extra}</p>"
+                    "<p><strong>Abrechnungseinheit:</strong> {billing_interval}</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Ueberwachte Umgebung</h3>"
-                    "<p>Server: {servers} | Clients: {clients} | Netzwerkgeraete: {network_devices} | "
-                    "IoT/Peripherie: {iot_devices}</p>"
-                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Laufzeit</h3>"
-                    "<p>Gueltig ab <strong>{valid_from}</strong>, Mindestlaufzeit <strong>{runtime_months}</strong> Monate.</p>"
+                    "<p><strong>Server:</strong> {servers}<br>"
+                    "<strong>Clients / Arbeitsplaetze:</strong> {clients}<br>"
+                    "<strong>Netzwerkgeraete:</strong> {network_devices}<br>"
+                    "<strong>IoT / Peripherie:</strong> {iot_devices}<br>"
+                    "<strong>Zusaetzliche Systeme:</strong><br>{additional_systems}</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Serviceumfang</h3>"
+                    "<p><strong>Monitoring aktiviert:</strong> {monitoring_enabled}<br>"
+                    "<strong>Backupueberwachung:</strong> {backup_monitoring}<br>"
+                    "<strong>Patchmanagement:</strong> {patch_management}<br>"
+                    "<strong>Securityueberwachung:</strong> {security_monitoring}</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">6) Laufzeit</h3>"
+                    "<p><strong>Vertragsbeginn:</strong> {contract_start}<br>"
+                    "<strong>Mindestlaufzeit:</strong><br>{minimum_term_months} Monate</p>"
+                    "<p><strong>Verlaengerung:</strong><br>"
+                    "Der Vertrag verlaengert sich automatisch um {extension_period} Monate, sofern keine "
+                    "schriftliche Kuendigung mindestens {termination_notice} vor Ablauf erfolgt.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">7) Mitwirkungspflichten des Kunden</h3>"
+                    "<p>Der Kunde verpflichtet sich:</p>"
+                    "<ul>"
+                    "<li>notwendige Zugaenge und Kontaktinformationen bereitzustellen,</li>"
+                    "<li>Aenderungen an ueberwachten Systemen unverzueglich mitzuteilen,</li>"
+                    "<li>Empfehlungen zur IT-Sicherheit angemessen umzusetzen,</li>"
+                    "<li>autorisierte Ansprechpartner fuer Stoerfaelle zu benennen.</li>"
+                    "</ul>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">8) Haftung</h3>"
+                    "<p>Der IT-Dienstleister haftet ausschliesslich fuer grobe Fahrlaessigkeit und Vorsatz im "
+                    "Rahmen der gesetzlichen Bestimmungen.</p>"
+                    "<p>Keine Haftung besteht fuer:</p>"
+                    "<ul>"
+                    "<li>Datenverlust ohne funktionierende Datensicherung,</li>"
+                    "<li>Ausfaelle von Drittanbietern,</li>"
+                    "<li>Internet- oder Cloud-Provider-Stoerungen,</li>"
+                    "<li>Cyberangriffe ausserhalb zumutbarer Schutzmassnahmen.</li>"
+                    "</ul>"
+                    "<p><strong>Haftungshoechstgrenze pro Schadensfall:</strong><br>{liability_limit}</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">9) Vertraulichkeit und Datenschutz</h3>"
+                    "<p>Beide Vertragsparteien verpflichten sich zur Einhaltung der DSGVO sowie zur vertraulichen "
+                    "Behandlung aller im Rahmen der Betreuung erlangten Informationen.</p>"
                     "<p>{note_block}</p>"
                 ),
             },
@@ -3925,30 +4066,49 @@ def _default_ai_prompts() -> Dict[str, Any]:
                     "<strong>{provider_name}</strong> (Auftragsverarbeiter) und "
                     "<strong>{customer_name}</strong> (Verantwortlicher) geschlossen.</p>"
                     "<h3 style=\"margin:14px 0 6px; font-size:14px;\">1) Gegenstand und Zweck</h3>"
-                    "<p>Der Auftragsverarbeiter verarbeitet personenbezogene Daten ausschliesslich zur "
-                    "Erbringung der vereinbarten IT-Leistungen (z. B. Betrieb, Support, Wartung, Monitoring, "
-                    "Fehleranalyse) und nur auf dokumentierte Weisung des Verantwortlichen.</p>"
-                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Enthaltene Verpflichtungen des Auftragsverarbeiters</h3>"
+                    "<p>Der Auftragsverarbeiter verarbeitet personenbezogene Daten ausschliesslich zur Erbringung "
+                    "der vereinbarten IT-Leistungen und ausschliesslich auf dokumentierte Weisung des "
+                    "Verantwortlichen.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">2) Art der Daten und Kreis betroffener Personen</h3>"
+                    "<p>Verarbeitet werden nur die fuer die Leistungserbringung erforderlichen personenbezogenen "
+                    "Daten. Betroffene Personen koennen insbesondere Mitarbeitende, Ansprechpartner, Kunden oder "
+                    "Dienstleister des Verantwortlichen sein.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Pflichten des Auftragsverarbeiters</h3>"
                     "<ul>"
-                    "<li>Vertraulichkeit und Zugriff nur fuer berechtigte Personen.</li>"
+                    "<li>Verarbeitung nur im Rahmen dokumentierter Weisungen des Verantwortlichen.</li>"
+                    "<li>Wahrung der Vertraulichkeit und Zugriff nur fuer berechtigte Personen.</li>"
                     "<li>Umsetzung angemessener technischer und organisatorischer Massnahmen (TOM).</li>"
-                    "<li>Unterstuetzung bei Betroffenenrechten, Sicherheitsvorfaellen und Nachweispflichten.</li>"
+                    "<li>Unterstuetzung bei Betroffenenrechten, Datenschutzvorfaellen und Nachweispflichten.</li>"
+                    "<li>Dokumentation und Auskunftserteilung im rechtlich erforderlichen Umfang.</li>"
                     "<li>Loeschung oder Rueckgabe personenbezogener Daten nach Vertragsende, soweit keine "
-                    "gesetzliche Aufbewahrungspflicht besteht.</li>"
+                    "gesetzliche Aufbewahrungspflicht entgegensteht.</li>"
                     "</ul>"
-                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">3) Nicht enthaltene Regelungen</h3>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Unterauftragsverhaeltnisse</h3>"
+                    "<p>Der Einsatz von Unterauftragsverarbeitern erfolgt nur unter Beachtung der gesetzlichen "
+                    "Vorgaben und vertraglichen Abstimmung mit dem Verantwortlichen.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">5) Pflichten des Verantwortlichen</h3>"
+                    "<p>Der Verantwortliche bleibt fuer die Rechtmaessigkeit der Verarbeitung, die "
+                    "Zulaessigkeit der Datenweitergabe sowie fuer die Wahrung der Betroffenenrechte "
+                    "verantwortlich.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">6) Nicht enthaltene Regelungen</h3>"
                     "<ul>"
                     "<li>Keine Uebernahme der Rolle des Verantwortlichen durch den Auftragsverarbeiter.</li>"
-                    "<li>Keine Datenverarbeitung ausserhalb der dokumentierten Weisungen.</li>"
+                    "<li>Keine Datenverarbeitung ausserhalb dokumentierter Weisungen.</li>"
                     "<li>Keine eigenstaendige Rechtsberatung zur DSGVO-Compliance des Verantwortlichen.</li>"
                     "</ul>"
-                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">4) Laufzeit</h3>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">7) Laufzeit und Beendigung</h3>"
                     "<p>Gueltig ab <strong>{valid_from}</strong>. Die Laufzeit richtet sich nach der Dauer "
                     "des zugrunde liegenden Hauptvertrags beziehungsweise der Leistungserbringung.</p>"
+                    "<p>Nach Beendigung erfolgt die Rueckgabe oder Loeschung personenbezogener Daten gemaess "
+                    "gesetzlichen und vertraglichen Vorgaben.</p>"
+                    "<h3 style=\"margin:14px 0 6px; font-size:14px;\">8) Vertraulichkeit und Datenschutz</h3>"
+                    "<p>Beide Vertragsparteien verpflichten sich zur Einhaltung der DSGVO sowie zur vertraulichen "
+                    "Behandlung aller im Rahmen der Zusammenarbeit erlangten Informationen.</p>"
                     "<p>{note_block}</p>"
                 ),
             },
         },
+        "contract_variables": {},
     }
 
 
@@ -4034,6 +4194,18 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
             ),
             "footer_html": str(current_entry.get("footer_html") or default_entry.get("footer_html") or ""),
         }
+    defaults_contract_variables = (
+        defaults.get("contract_variables") if isinstance(defaults.get("contract_variables"), dict) else {}
+    )
+    current_contract_variables = (
+        data.get("contract_variables") if isinstance(data.get("contract_variables"), dict) else {}
+    )
+    merged_contract_variables: Dict[str, str] = {}
+    for raw_key, raw_value in {**defaults_contract_variables, **current_contract_variables}.items():
+        key = re.sub(r"[^a-z0-9_]+", "_", str(raw_key or "").strip().lower()).strip("_")
+        if not key:
+            continue
+        merged_contract_variables[key] = str(raw_value or "")
     return {
         "action_prompt": data.get("action_prompt", defaults["action_prompt"]),
         "offer_base_prompt": data.get("offer_base_prompt", defaults["offer_base_prompt"]),
@@ -4049,6 +4221,7 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
             or ""
         ),
         "contract_templates": merged_contract_templates,
+        "contract_variables": merged_contract_variables,
         "updated_at": _offer_iso_timestamp(store.updated_at),
     }
 
@@ -4084,6 +4257,7 @@ def _migrate_contract_templates_to_supported_types() -> None:
             "contract_header_html": defaults.get("contract_header_html") or "",
             "contract_footer_html": defaults.get("contract_footer_html") or "",
             "contract_templates": default_templates,
+            "contract_variables": payload.get("contract_variables") or defaults.get("contract_variables") or {},
         }
         store.data_json = json.dumps(updated_payload)
         store.updated_at = int(time.time() * 1000)
@@ -12848,6 +13022,7 @@ def update_ai_prompts(data: AiPromptsUpdate):
             "contract_header_html": data.contract_header_html if data.contract_header_html is not None else current.get("contract_header_html", ""),
             "contract_footer_html": data.contract_footer_html if data.contract_footer_html is not None else current.get("contract_footer_html", ""),
             "contract_templates": data.contract_templates or current["contract_templates"],
+            "contract_variables": data.contract_variables if data.contract_variables is not None else current.get("contract_variables", {}),
         }
         store.data_json = json.dumps(payload)
         store.updated_at = int(time.time() * 1000)
@@ -13041,6 +13216,18 @@ def deactivate_contract_tariff(tariff_id: int):
         if not row:
             raise HTTPException(404, "Tariff not found")
         row.is_active = False
+        db.commit()
+        db.refresh(row)
+        return serialize_contract_tariff(row)
+
+
+@app.post("/api/contract_tariffs/{tariff_id}/activate")
+def activate_contract_tariff(tariff_id: int):
+    with SessionLocal() as db:
+        row = db.query(ContractTariff).get(tariff_id)
+        if not row:
+            raise HTTPException(404, "Tariff not found")
+        row.is_active = True
         db.commit()
         db.refresh(row)
         return serialize_contract_tariff(row)
@@ -13300,6 +13487,14 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             "liability_limit": "gemaess AGB",
             "note_block": note_block,
         }
+        prompt_contract_variables = (
+            prompts.get("contract_variables") if isinstance(prompts.get("contract_variables"), dict) else {}
+        )
+        for raw_key, raw_value in prompt_contract_variables.items():
+            key = re.sub(r"[^a-z0-9_]+", "_", str(raw_key or "").strip().lower()).strip("_")
+            if not key:
+                continue
+            placeholder_values[key] = str(raw_value or "")
         html = _render_contract_html(
             customer=customer,
             title=title,
@@ -13389,6 +13584,76 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             created_at=int(time.time() * 1000),
         )
         db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_contract_document(row)
+
+
+@app.put("/api/customers/{customer_id}/contracts/{contract_id}")
+def update_customer_contract_document(customer_id: int, contract_id: int, data: CustomerContractDocumentCreate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerContractDocument)
+            .filter(
+                CustomerContractDocument.id == contract_id,
+                CustomerContractDocument.customer_id == customer.id,
+            )
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Contract document not found")
+        if str(row.status or "").strip().lower() != "proposal":
+            raise HTTPException(400, "Only proposal contracts can be edited")
+
+        title = str(data.title or "").strip()
+        file_name = str(data.file_name or "").strip()
+        content_base64 = str(data.content_base64 or "").strip()
+        if not title:
+            raise HTTPException(400, "title is required")
+        if not file_name:
+            file_name = f"{re.sub(r'[^a-zA-Z0-9_-]+', '_', title).strip('_') or 'vertrag'}.pdf"
+        if not content_base64:
+            raise HTTPException(400, "content_base64 is required")
+        status_value = str(data.status or "proposal").strip().lower()
+        if status_value not in {"active", "proposal"}:
+            status_value = "proposal"
+        doc_type_value = _normalize_contract_doc_type(data.doc_type, default="wartung")
+        template_key_value = _normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value)
+        if not str(data.doc_type or "").strip():
+            doc_type_value = template_key_value
+        is_service_contract = template_key_value in {"wartung", "monitoring"}
+        monthly_hours_included = _safe_nonnegative_float(data.monthly_hours_included or 0.0)
+        if not is_service_contract:
+            monthly_hours_included = 0.0
+        if is_service_contract:
+            if not data.tariff_id:
+                raise HTTPException(400, "tariff_id is required for wartung/monitoring contracts")
+            tariff = db.query(ContractTariff).get(int(data.tariff_id))
+            if not tariff:
+                raise HTTPException(404, "Tariff not found")
+            tariff_category = str(tariff.category or "").strip().lower()
+            if tariff_category and tariff_category != template_key_value:
+                raise HTTPException(400, "tariff category does not match contract type")
+        try:
+            base64.b64decode(content_base64, validate=True)
+        except Exception:
+            raise HTTPException(400, "Invalid base64 content")
+
+        row.title = title
+        row.doc_type = doc_type_value
+        row.status = status_value
+        row.file_name = file_name
+        row.mime_type = str(data.mime_type or "application/pdf").strip() or "application/pdf"
+        row.content_base64 = content_base64
+        row.html_content = str(data.html_content or "")
+        row.template_key = template_key_value
+        row.monthly_hours_included = monthly_hours_included
+        row.note = str(data.note or "").strip()
+        row.cancel_reason = ""
+        row.cancelled_at = 0
         db.commit()
         db.refresh(row)
         return serialize_customer_contract_document(row)
@@ -13853,7 +14118,6 @@ def send_report(report_id: int, data: ReportSendRequest):
             from_addr = f"{settings.sender_name} <{settings.sender_email}>"
 
         import smtplib
-        import base64
         from email.message import EmailMessage
 
         msg = EmailMessage()
@@ -13863,22 +14127,7 @@ def send_report(report_id: int, data: ReportSendRequest):
         fallback_text = "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung."
         msg.set_content(data.text or fallback_text)
         msg.add_alternative(data.html, subtype="html")
-        for attachment in data.attachments or []:
-            try:
-                content = base64.b64decode(attachment.content_base64 or "")
-            except Exception:  # noqa: BLE001
-                continue
-            content_type = attachment.content_type or "application/octet-stream"
-            if "/" in content_type:
-                maintype, subtype = content_type.split("/", 1)
-            else:
-                maintype, subtype = "application", "octet-stream"
-            msg.add_attachment(
-                content,
-                maintype=maintype,
-                subtype=subtype,
-                filename=attachment.filename or "attachment",
-            )
+        _attach_email_attachments(msg, data.attachments)
 
         if settings.use_ssl:
             server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
@@ -13938,7 +14187,6 @@ def send_offer(data: OfferSendRequest):
         html = data.html or ""
 
         import smtplib
-        import base64
         from email.message import EmailMessage
 
         msg = EmailMessage()
@@ -13947,22 +14195,7 @@ def send_offer(data: OfferSendRequest):
         msg["To"] = data.to
         msg.set_content(data.text or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung.")
         msg.add_alternative(html, subtype="html")
-        for attachment in data.attachments or []:
-            try:
-                content = base64.b64decode(attachment.content_base64 or "")
-            except Exception:  # noqa: BLE001
-                continue
-            content_type = attachment.content_type or "application/octet-stream"
-            if "/" in content_type:
-                maintype, subtype = content_type.split("/", 1)
-            else:
-                maintype, subtype = "application", "octet-stream"
-            msg.add_attachment(
-                content,
-                maintype=maintype,
-                subtype=subtype,
-                filename=attachment.filename or "attachment",
-            )
+        _attach_email_attachments(msg, data.attachments)
 
         if settings.use_ssl:
             server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)

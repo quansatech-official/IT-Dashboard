@@ -669,29 +669,9 @@ export default function StatsView() {
                     subtitle="Monatlich gesamt"
                   />
                   <StatCard
-                    title={`Im Vertrag ${contractMonthLabels?.current || "Aktuell"}`}
-                    value={formatHours(filteredContractSummary.consumedCurrentMonth)}
-                    subtitle={`Delta: ${formatHoursDelta(filteredContractSummary.deltaCurrentMonth)}`}
-                  />
-                  <StatCard
-                    title={`Außerhalb Vertrag ${contractMonthLabels?.current || "Aktuell"}`}
-                    value={formatHours(filteredContractSummary.outsideCurrentMonth)}
-                    subtitle={`Vormonat: ${formatHours(filteredContractSummary.outsidePreviousMonth)}`}
-                  />
-                  <StatCard
-                    title={`Im Vertrag ${contractMonthLabels?.previous || "Vormonat"}`}
-                    value={formatHours(filteredContractSummary.consumedPreviousMonth)}
-                    subtitle={`Delta: ${formatHoursDelta(filteredContractSummary.deltaPreviousMonth)}`}
-                  />
-                  <StatCard
                     title="Vertragsumsatz pro Monat"
                     value={formatEur(filteredContractSummary.revenueMonthly)}
                     subtitle={`Aktive Verträge: ${formatEur(filteredContractSummary.revenueMonthlyActive)}`}
-                  />
-                  <StatCard
-                    title="Wert je Vertrag / Monat"
-                    value={formatEur(filteredContractSummary.revenuePerContractMonthly)}
-                    subtitle="Durchschnitt über alle Verträge"
                   />
                 </div>
 
@@ -702,8 +682,8 @@ export default function StatsView() {
                         <th className="px-3 py-2">Kunde</th>
                         <th className="px-3 py-2">Verträge</th>
                         <th className="px-3 py-2">Soll</th>
-                        <th className="px-3 py-2">{contractMonthLabels?.current || "Aktuell"}</th>
-                        <th className="px-3 py-2">{contractMonthLabels?.previous || "Vormonat"}</th>
+                        <th className="px-3 py-2">Akt. Monat</th>
+                        <th className="px-3 py-2">Vormonat</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -792,14 +772,14 @@ export default function StatsView() {
                                   value={formatHours(item.consumedHoursCurrentMonth ?? 0)}
                                 />
                                 <ContractMetricLine
-                                  icon={Sigma}
-                                  label="Delta"
-                                  value={formatHoursDelta(item.deltaHoursCurrentMonth ?? 0)}
-                                />
-                                <ContractMetricLine
                                   icon={Wrench}
                                   label="Aufgaben · Telefonie"
                                   value={`${formatHours(item.taskHoursCurrentMonth ?? 0)} · ${formatHours(item.telephonyHoursCurrentMonth ?? 0)}`}
+                                />
+                                <ContractMetricLine
+                                  icon={Sigma}
+                                  label="Delta"
+                                  value={formatHoursDelta(item.deltaHoursCurrentMonth ?? 0)}
                                 />
                               </div>
                             </td>
@@ -816,16 +796,16 @@ export default function StatsView() {
                                   value={formatHours(item.consumedHoursPreviousMonth ?? 0)}
                                 />
                                 <ContractMetricLine
-                                  icon={Sigma}
-                                  label="Delta"
-                                  value={formatHoursDelta(item.deltaHoursPreviousMonth ?? 0)}
-                                />
-                                <ContractMetricLine
                                   icon={Wrench}
                                   label="Aufgaben · Telefonie"
                                   value={`${formatHours(item.taskHoursPreviousMonth ?? 0)} · ${formatHours(
                                     item.telephonyHoursPreviousMonth ?? 0
                                   )}`}
+                                />
+                                <ContractMetricLine
+                                  icon={Sigma}
+                                  label="Delta"
+                                  value={formatHoursDelta(item.deltaHoursPreviousMonth ?? 0)}
                                 />
                               </div>
                             </td>
