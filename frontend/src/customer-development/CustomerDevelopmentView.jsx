@@ -297,6 +297,89 @@ const compactWorkSnippet = (value, maxLength = 220) => {
   return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 };
 
+const normalizeActivityTitle = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^3rd party software updates$/i.test(raw)) return "Software-Updates priorisieren";
+  if (/^os-migration sofort planen$/i.test(raw)) return "OS-Migration starten";
+  if (/^os-upgrade-roadmap festlegen$/i.test(raw)) return "OS-Upgrade-Roadmap festlegen";
+  return raw;
+};
+
+const derivePrimaryActivity = (item) => {
+  const recommendations = (Array.isArray(item?.topRecommendations) && item.topRecommendations.length
+    ? item.topRecommendations
+    : Array.isArray(item?.recommendations)
+      ? item.recommendations
+      : [])
+    .filter((entry) => entry && typeof entry === "object");
+  const firstRecommendation = recommendations.find((entry) => String(entry?.title || "").trim());
+  if (firstRecommendation) {
+    const title = normalizeActivityTitle(firstRecommendation.title);
+    const reason = compactWorkSnippet(firstRecommendation.why || "Empfehlung aus Kundenentwicklung.", 140);
+    const type = String(firstRecommendation.type || "hinweis").trim().toLowerCase() || "hinweis";
+    return {
+      title,
+      reason,
+      type,
+      taskTitle: `Empfehlung umsetzen: ${title}`,
+    };
+  }
+
+  if (Boolean(item?.contactDue)) {
+    const days = Number(item?.daysSinceInteraction);
+    return {
+      title: "Proaktiven Kundenkontakt durchführen",
+      reason:
+        Number.isFinite(days) && days >= 0
+          ? `Letzter dokumentierter Kontakt vor ${Math.round(days)} Tagen.`
+          : "Kein aktueller Kundenkontakt dokumentiert.",
+      type: "betreuung",
+      taskTitle: "Proaktiver Kundenkontakt",
+    };
+  }
+
+  if (Boolean(item?.invoiceActivityDue)) {
+    const days = Number(item?.daysSinceLastInvoice);
+    return {
+      title: "Leistungs-Review mit Kunde abstimmen",
+      reason:
+        Number.isFinite(days) && days >= 0
+          ? `Seit ${Math.round(days)} Tagen keine neue fakturierte Leistung.`
+          : "Längere Pause bei fakturierten Leistungen.",
+      type: "betreuung",
+      taskTitle: "Leistungs-Review durchführen",
+    };
+  }
+
+  const openUpdates = Number(item?.infra?.openUpdates || 0);
+  if (openUpdates > 0) {
+    return {
+      title: "Update-Fenster planen und umsetzen",
+      reason: `${openUpdates} offene Updates im aktuellen Infrastrukturstand.`,
+      type: "security",
+      taskTitle: "Update-Fenster planen",
+    };
+  }
+
+  const osExpired = Number(item?.infra?.osExpiredCount || 0);
+  if (osExpired > 0) {
+    return {
+      title: "EOL-Systeme priorisiert migrieren",
+      reason: `${osExpired} Systeme sind außerhalb des Supports.`,
+      type: "lifecycle",
+      taskTitle: "EOL-Migration planen",
+    };
+  }
+
+  return {
+    title: "Regelmäßigen Kunden-Check durchführen",
+    reason: "Aktuell keine kritische Empfehlung offen; Status und Planung kurz validieren.",
+    type: "hinweis",
+    taskTitle: "Regelmäßiger Kunden-Check",
+  };
+};
+
 const deriveWorkHighlights = (summary, items, maxItems = 5) => {
   const out = [];
   const seen = new Set();
@@ -925,6 +1008,26 @@ export default function CustomerDevelopmentView() {
     });
   }, [contexts, filters]);
 
+  const createTaskForCustomer = async ({ customerName, customerNumber, prefillTitle }) => {
+    const suggestionTitle = String(prefillTitle || "").trim() || "Follow-up Kundenentwicklung";
+    const title = window.prompt("Aufgabentitel", `${customerName || "Kunde"}: ${suggestionTitle}`);
+    if (!title || !title.trim()) return false;
+    const response = await fetch(`${API}/day_tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: title.trim(),
+        customer: customerName || "",
+        customer_number: customerNumber || "",
+        status: "todo"
+      })
+    });
+    if (!response.ok) {
+      throw new Error("task_create_failed");
+    }
+    return true;
+  };
+
   const createTask = async (prefillTitle) => {
     if (!detailModal.customerId) return;
     const suggestionTitle =
@@ -932,21 +1035,15 @@ export default function CustomerDevelopmentView() {
       detailData?.topRecommendations?.[0]?.title ||
       detailData?.recommendations?.[0]?.title ||
       "Follow-up Kundenentwicklung";
-    const title = window.prompt(
-      "Aufgabentitel",
-      `${detailModal.customerName || "Kunde"}: ${suggestionTitle}`
-    );
-    if (!title || !title.trim()) return;
-    await fetch(`${API}/day_tasks`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: title.trim(),
-        customer: detailModal.customerName || "",
-        customer_number: detailData?.customerNumber || "",
-        status: "todo"
-      })
-    });
+    try {
+      await createTaskForCustomer({
+        customerName: detailModal.customerName || detailData?.customerName || "",
+        customerNumber: detailData?.customerNumber || "",
+        prefillTitle: suggestionTitle,
+      });
+    } catch {
+      window.alert("Aufgabe konnte nicht angelegt werden.");
+    }
   };
 
   const openCustomerMail = () => {
@@ -1450,6 +1547,21 @@ export default function CustomerDevelopmentView() {
     return groups;
   }, [filteredContexts]);
 
+  const activityQueue = useMemo(() => {
+    return filteredContexts
+      .map((item) => ({
+        item,
+        score: neglectScore(item),
+        activity: derivePrimaryActivity(item),
+      }))
+      .sort((left, right) => {
+        if (right.score !== left.score) return right.score - left.score;
+        return String(left.item?.customerName || "").localeCompare(String(right.item?.customerName || ""), "de", {
+          sensitivity: "base",
+        });
+      });
+  }, [filteredContexts]);
+
   const neglectedCustomers = useMemo(() => {
     return filteredContexts
       .map((item) => {
@@ -1490,112 +1602,115 @@ export default function CustomerDevelopmentView() {
     [detailData?.workSummary?.summary, detailData?.workSummary?.items]
   );
   const detailSignals = useMemo(() => deriveDisplaySignals(detailData || {}, 5), [detailData]);
-  const infraActionHints = useMemo(() => buildInfraActionHints(detailData || {}), [detailData]);
-  const sourceReadiness = useMemo(() => {
+  const quickNeedKpis = useMemo(() => {
     const source = detailData?.source && typeof detailData.source === "object" ? detailData.source : {};
     const infra = detailData?.infra && typeof detailData.infra === "object" ? detailData.infra : {};
-    const daysSinceInvoice = detailData?.daysSinceLastInvoice;
-    const communicationCount = Number(detailData?.communicationFrequency || 0);
-    const hasMail = Boolean(String(detailData?.customerEmail || "").trim());
-    const discoveredAssets = Number(infra?.discoveredAssets || 0);
     const managedAssets = Number(infra?.managedAssets || 0);
+    const nameOnlyCandidates = Number(infra?.nameOnlyCandidateCount || 0);
+    const hasRmmConnectivity = Boolean(source?.tacticalRmm) || managedAssets > 0 || nameOnlyCandidates > 0;
+
+    let rmmValue = "Nicht verbunden";
+    let rmmDetail = "Keine Agent-Zuordnung";
+    let rmmBadgeClass = "border-rose-200 bg-rose-50 text-rose-700";
+    if (managedAssets > 0) {
+      rmmValue = "Verbunden";
+      rmmDetail = `${managedAssets} Agents zugeordnet`;
+      rmmBadgeClass = "border-emerald-200 bg-emerald-50 text-emerald-700";
+    } else if (hasRmmConnectivity) {
+      rmmValue = "Mapping prüfen";
+      rmmDetail =
+        nameOnlyCandidates > 0
+          ? `${nameOnlyCandidates} Name-Matches ohne Zuordnung`
+          : "Verbindung vorhanden, aber keine Agenten zugeordnet";
+      rmmBadgeClass = "border-amber-200 bg-amber-50 text-amber-700";
+    }
+
+    const cveCount =
+      cveScan.status === "ready"
+        ? Number(cveOverview?.totalCves || 0)
+        : Number(infra?.openCves || 0);
+    let cveValue = "Scan ausstehend";
+    let cveDetail = "CVE-Tab für Live-Scan öffnen";
+    let cveBadgeClass = "border-amber-200 bg-amber-50 text-amber-700";
+    if (cveScan.status === "loading") {
+      cveValue = "Scan läuft";
+      cveDetail = "CVE-Daten werden geladen";
+      cveBadgeClass = "border-sky-200 bg-sky-50 text-sky-700";
+    } else if (cveScan.status === "error") {
+      cveValue = "Scan Fehler";
+      cveDetail = "Bitte CVE-Scan erneut starten";
+      cveBadgeClass = "border-rose-200 bg-rose-50 text-rose-700";
+    } else if (cveCount > 0) {
+      cveValue = `${cveCount} offen`;
+      cveDetail =
+        cveScan.status === "ready"
+          ? "Akuter Update-/Patchbedarf"
+          : "Letzter bekannter Stand aus RMM";
+      cveBadgeClass = "border-rose-200 bg-rose-50 text-rose-700";
+    } else if (cveScan.status === "ready") {
+      cveValue = "Kein Fund";
+      cveDetail = "Aktueller Scan ohne offene CVEs";
+      cveBadgeClass = "border-emerald-200 bg-emerald-50 text-emerald-700";
+    }
+
+    const heuristicSignals = detailSignals.length;
+    const heuristicCandidates = detailSignals.filter((signal) => {
+      const text = String(signal || "").toLowerCase();
+      if (!text) return false;
+      if (/(cve|update)/i.test(text)) return false;
+      if (/(rmm|agent|monitoring-abdeckung|offline|unmanaged)/i.test(text)) return false;
+      return true;
+    });
+    const heuristicTopSignal =
+      heuristicCandidates[0] || detailSignals[0] || "Keine kritischen Signale";
+    const heuristicBadgeClass =
+      heuristicSignals >= 3
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : heuristicSignals > 0
+          ? "border-sky-200 bg-sky-50 text-sky-700"
+          : "border-emerald-200 bg-emerald-50 text-emerald-700";
+
+    const aiSignalCount = String(detailAi.text || "")
+      .split(/\n+/g)
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
+      .slice(0, 8).length;
+    const aiBadgeClass =
+      aiSignalCount > 0
+        ? "border-sky-200 bg-sky-50 text-sky-700"
+        : "border-amber-200 bg-amber-50 text-amber-700";
+
     return [
       {
-        key: "sevdesk",
-        label: "Faktura",
-        active: Boolean(source?.sevdesk) || typeof daysSinceInvoice === "number",
-        detail: typeof daysSinceInvoice === "number" ? `${daysSinceInvoice} Tage` : "keine Rechnungsdaten",
-      },
-      {
         key: "rmm",
-        label: "RMM",
-        active: Boolean(source?.tacticalRmm) || managedAssets > 0,
-        detail: managedAssets > 0 ? `${managedAssets} Agents` : "keine Agent-Zuordnung",
+        label: "RMM-Status",
+        value: rmmValue,
+        detail: rmmDetail,
+        badgeClass: rmmBadgeClass,
       },
       {
-        key: "discovery",
-        label: "Discovery",
-        active: Number(source?.discovery || 0) > 0 || discoveredAssets > 0,
-        detail: discoveredAssets > 0 ? `${discoveredAssets} Geräte` : "kein Inventar-Snapshot",
+        key: "cve",
+        label: "CVE-Status",
+        value: cveValue,
+        detail: cveDetail,
+        badgeClass: cveBadgeClass,
       },
       {
-        key: "kontakt",
-        label: "Kontakt",
-        active: communicationCount > 0 || hasMail,
-        detail: hasMail ? "E-Mail vorhanden" : `${communicationCount} Calls (30T)`,
+        key: "heuristic-signals",
+        label: "Signale heuristisch",
+        value: String(heuristicSignals),
+        detail: heuristicTopSignal,
+        badgeClass: heuristicBadgeClass,
+      },
+      {
+        key: "ai-signals",
+        label: "Signale KI",
+        value: String(aiSignalCount),
+        detail: aiSignalCount > 0 ? "Aus letztem KI-Vorschlag" : "Noch kein KI-Vorschlag erstellt",
+        badgeClass: aiBadgeClass,
       },
     ];
-  }, [detailData]);
-  const actionableItems = useMemo(() => {
-    if (!detailData) return [];
-    const rawRecommendations = Array.isArray(detailData?.recommendations)
-      ? detailData.recommendations
-      : Array.isArray(detailData?.topRecommendations)
-        ? detailData.topRecommendations
-        : [];
-    const candidates = [...rawRecommendations, ...infraActionHints];
-    const items = [];
-    const seen = new Set();
-    const pushItem = (entry, fallbackType = "hinweis", fallbackWhy = "") => {
-      const title = String(entry?.title || "").trim();
-      if (!title) return;
-      const why = String(entry?.why || fallbackWhy || "").trim();
-      const key = `${title.toLowerCase()}|${why.toLowerCase()}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      const meta = actionTypeMeta(entry?.type || fallbackType);
-      const text = `${title} ${why}`.toLowerCase();
-      let score = Number(meta.baseScore || 65);
-      if (detailData?.contactDue && (meta.key === "betreuung" || /(kontakt|mail|anruf|reaktivierung|betreuung)/i.test(text))) {
-        score += 14;
-      }
-      if (detailData?.invoiceActivityDue && /(rechnung|leistung|reaktivierung|review)/i.test(text)) {
-        score += 12;
-      }
-      if (meta.key === "security" && Number(detailData?.infra?.errorCount || 0) > 0) {
-        score += 12;
-      }
-      if (meta.key === "security" && Number(detailData?.infra?.openUpdates || 0) > 0) {
-        score += 8;
-      }
-      if (meta.key === "lifecycle" && Number(detailData?.infra?.osExpiredCount || 0) > 0) {
-        score += 10;
-      }
-      if (/(sofort|priorisiert|abgelaufen|offline|fehler|unmanaged|kritisch|eol)/i.test(text)) {
-        score += 10;
-      }
-      score = Math.max(0, Math.min(99, score));
-      const priorityLabel = score >= 88 ? "Sofort" : score >= 74 ? "Diese Woche" : "Einplanen";
-      const priorityClass =
-        score >= 88
-          ? "border-rose-200 bg-rose-50 text-rose-700"
-          : score >= 74
-            ? "border-amber-200 bg-amber-50 text-amber-700"
-            : "border-sky-200 bg-sky-50 text-sky-700";
-      items.push({
-        key,
-        title,
-        why: why || "Aus den Kundendaten wurde ein konkreter Handlungsbedarf erkannt.",
-        taskTitle: `Kundenentwicklung: ${title}`,
-        score,
-        priorityLabel,
-        priorityClass,
-        ...meta,
-      });
-    };
-    candidates.forEach((entry) => pushItem(entry));
-    if (!items.length) {
-      detailSignals.forEach((signal) =>
-        pushItem(
-          { title: signal, why: "Signal aus den aktuellen Datenquellen.", type: "betreuung" },
-          "betreuung",
-          "Signal aus den aktuellen Datenquellen."
-        )
-      );
-    }
-    return items.sort((a, b) => b.score - a.score).slice(0, 6);
-  }, [detailData, detailSignals, infraActionHints]);
-  const primaryAction = actionableItems[0] || null;
+  }, [detailData, detailSignals, cveOverview?.totalCves, cveScan.status, detailAi.text]);
   const hasCustomerMail = Boolean(String(detailData?.customerEmail || "").trim());
   const runningCallGuide = isAiActionRunning(detailModal.customerId, "aktivierung_call");
   const runningMailGuide = isAiActionRunning(detailModal.customerId, "aktivierung_mail");
@@ -1678,7 +1793,7 @@ export default function CustomerDevelopmentView() {
             </div>
             {detailData ? (
               <div className="border-b border-sand-200 bg-sand-50 px-5 py-2">
-                <div className="grid gap-1.5 md:grid-cols-5 text-[11px]">
+                <div className="grid gap-1.5 md:grid-cols-4 text-[11px]">
                   <div className="rounded-lg border border-sand-200 bg-white px-2 py-1">
                     <p className="text-[10px] uppercase tracking-wide text-sand-500">Status</p>
                     <span className={`mt-0.5 inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${stateBadgeClass(detailData.developmentState)}`}>
@@ -1696,19 +1811,16 @@ export default function CustomerDevelopmentView() {
                     </span>
                   </div>
                   <div className="rounded-lg border border-sand-200 bg-white px-2 py-1">
-                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Kontakt</p>
-                    <p className="text-sm text-sand-800">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Aktivität</p>
+                    <p className="text-xs text-sand-800">
                       {typeof detailData.daysSinceInteraction === "number"
-                        ? `vor ${detailData.daysSinceInteraction} Tagen`
-                        : "n/a"}
+                        ? `Kontakt: vor ${detailData.daysSinceInteraction} Tagen`
+                        : "Kontakt: n/a"}
                     </p>
-                  </div>
-                  <div className="rounded-lg border border-sand-200 bg-white px-2 py-1">
-                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Letzte Rechnung</p>
-                    <p className="text-sm text-sand-800">
+                    <p className="text-xs text-sand-600">
                       {typeof detailData.daysSinceLastInvoice === "number"
-                        ? `vor ${detailData.daysSinceLastInvoice} Tagen`
-                        : "n/a"}
+                        ? `Rechnung: vor ${detailData.daysSinceLastInvoice} Tagen`
+                        : "Rechnung: n/a"}
                     </p>
                   </div>
                 </div>
@@ -1776,111 +1888,27 @@ export default function CustomerDevelopmentView() {
 
                   {detailTab === "overview" ? (
                   <>
-                  <div className="grid gap-2">
-                    <div className="rounded-2xl border border-sand-200 bg-white p-2.5">
-                      <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Kernsignale Technik</p>
-                      <div className="mt-1.5 grid gap-1.5 sm:grid-cols-2">
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Updates</p>
-                          <p className={`text-sm font-semibold ${Number(detailData?.infra?.openUpdates || 0) > 0 ? "text-rose-700" : "text-emerald-700"}`}>
-                            {Number(detailData?.infra?.openUpdates || 0)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">OS EOL erreicht</p>
-                          <p className={`text-sm font-semibold ${Number(detailData?.infra?.osExpiredCount || 0) > 0 ? "text-rose-700" : "text-emerald-700"}`}>
-                            {Number(detailData?.infra?.osExpiredCount || 0)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">OS EOL bald</p>
-                          <p className={`text-sm font-semibold ${Number(detailData?.infra?.osEolSoonCount || 0) > 0 ? "text-amber-700" : "text-emerald-700"}`}>
-                            {Number(detailData?.infra?.osEolSoonCount || 0)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene CVEs</p>
-                          <p className={`text-sm font-semibold ${Number(detailData?.infra?.openCves || 0) > 0 ? "text-rose-700" : "text-emerald-700"}`}>
-                            {Number(detailData?.infra?.openCves || 0)}
-                          </p>
-                        </div>
-                      </div>
-                      <p className="mt-2 text-[10px] text-sand-600">
-                        Fokus: nur direkte Handlungshebel auf einen Blick.
-                      </p>
-                      <details className="mt-2 rounded-lg border border-sand-200 bg-sand-50 p-2">
-                        <summary className="cursor-pointer text-[10px] uppercase tracking-[0.18em] text-sand-600">
-                          Detaildaten anzeigen (Risiko, Quellen, Signale)
-                        </summary>
-                        <div className="mt-2 space-y-2">
-                          <div className="space-y-1.5">
-                            <div>
-                              <div className="flex items-center justify-between text-[10px] text-sand-600">
-                                <span>Business</span>
-                                <span>{detailData.businessRisk ?? 0}</span>
-                              </div>
-                              <div className="h-1.5 rounded-full bg-sand-100">
-                                <div className="h-1.5 rounded-full bg-amber-400" style={{ width: `${clampPercent(detailData.businessRisk)}%` }} />
-                              </div>
-                            </div>
-                            <div>
-                              <div className="flex items-center justify-between text-[10px] text-sand-600">
-                                <span>Infrastruktur</span>
-                                <span>{detailData.infrastructureRisk ?? 0}</span>
-                              </div>
-                              <div className="h-1.5 rounded-full bg-sand-100">
-                                <div className="h-1.5 rounded-full bg-rose-400" style={{ width: `${clampPercent(detailData.infrastructureRisk)}%` }} />
-                              </div>
-                            </div>
-                          </div>
-                          <div>
-                            <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Datenquellen</p>
-                            <div className="mt-1 flex flex-wrap gap-1">
-                              {sourceReadiness.map((entry) => (
-                                <span
-                                  key={`source-${entry.key}`}
-                                  className={`rounded-full border px-2 py-0.5 text-[10px] ${
-                                    entry.active
-                                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                      : "border-amber-200 bg-amber-50 text-amber-700"
-                                  }`}
-                                >
-                                  {entry.label}: {entry.detail}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                          <div>
-                            <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Top-Signale</p>
-                            <div className="mt-1 space-y-1">
-                              {detailSignals.slice(0, 4).map((signal, idx) => (
-                                <p key={`top-signal-${idx}`} className="text-[11px] text-sand-700">
-                                  - {signal}
-                                </p>
-                              ))}
-                              {!detailSignals.length ? (
-                                <p className="text-[10px] text-sand-500">Keine besonderen Signale erkannt.</p>
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                      </details>
-                    </div>
-	                  </div>
-	
 	                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
 	                    <div className="flex flex-wrap items-start justify-between gap-2">
 	                      <div>
 	                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Handlungsbedarf auf einen Blick</p>
 	                        <p className="mt-0.5 text-[11px] text-sand-600">
-	                          Priorisierte Maßnahmen aus Faktura, Kommunikation, RMM und Discovery.
+	                          Kompaktansicht mit 4 KPIs: RMM, CVE, heuristische Signale, KI-Signale.
 	                        </p>
 	                      </div>
-	                      {primaryAction ? (
-	                        <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${primaryAction.priorityClass}`}>
-	                          Nächster Schritt: {primaryAction.priorityLabel}
-	                        </span>
-	                      ) : null}
+	                    </div>
+	                    <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+	                      {quickNeedKpis.map((kpi) => (
+	                        <div key={kpi.key} className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+	                          <p className="text-[10px] uppercase tracking-wide text-sand-500">{kpi.label}</p>
+	                          <div className="mt-1 flex items-center gap-1.5">
+	                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${kpi.badgeClass}`}>
+	                              {kpi.value}
+	                            </span>
+	                          </div>
+	                          <p className="mt-1.5 text-[11px] leading-5 text-sand-700">{kpi.detail}</p>
+	                        </div>
+	                      ))}
 	                    </div>
 	                    <div className="mt-2 flex flex-wrap gap-1.5">
 	                      <button
@@ -1903,7 +1931,7 @@ export default function CustomerDevelopmentView() {
 	                      </button>
 	                      <button
 	                        type="button"
-	                        onClick={() => createTask(primaryAction?.taskTitle || "Follow-up Kundenentwicklung")}
+	                        onClick={() => createTask("Kundenentwicklung Follow-up")}
 	                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
 	                      >
 	                        <Plus size={11} />
@@ -1922,60 +1950,6 @@ export default function CustomerDevelopmentView() {
 	                        <Mail size={11} />
 	                        E-Mail öffnen
 	                      </button>
-	                    </div>
-	                    <div className="mt-2 grid gap-2 md:grid-cols-2">
-	                      {actionableItems.length ? (
-	                        actionableItems.map((item) => {
-	                          const ActionIcon = item.Icon;
-	                          return (
-	                            <div key={item.key} className={`rounded-xl border p-2.5 ${item.cardClass}`}>
-	                              <div className="flex flex-wrap items-start justify-between gap-2">
-	                                <div className="flex min-w-0 items-start gap-2">
-	                                  <div className={`mt-0.5 rounded-lg border p-1 ${item.badgeClass}`}>
-	                                    <ActionIcon size={13} />
-	                                  </div>
-	                                  <div className="min-w-0">
-	                                    <p className="text-xs font-semibold leading-5 text-sand-900">
-	                                      {item.title}
-	                                    </p>
-	                                    <p className="text-[10px] text-sand-500">{item.sourceHint}</p>
-	                                  </div>
-	                                </div>
-	                                <div className="flex flex-wrap items-center gap-1">
-	                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${item.badgeClass}`}>
-	                                    {item.label}
-	                                  </span>
-	                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${item.priorityClass}`}>
-	                                    {item.priorityLabel}
-	                                  </span>
-	                                </div>
-	                              </div>
-	                              <p className="mt-1.5 text-[11px] leading-5 text-sand-700">{item.why}</p>
-	                              <div className="mt-2 flex flex-wrap gap-1.5">
-	                                <button
-	                                  type="button"
-	                                  onClick={() => createTask(item.taskTitle)}
-	                                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-	                                >
-	                                  <Plus size={10} />
-	                                  Aufgabe
-	                                </button>
-	                                <button
-	                                  type="button"
-	                                  onClick={() => startAiContactFlow("aktivierung_call")}
-	                                  disabled={aiBusy}
-	                                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-60"
-	                                >
-	                                  {runningCallGuide ? <InlineSpinner /> : <Sparkles size={10} />}
-	                                  Leitfaden
-	                                </button>
-	                              </div>
-	                            </div>
-	                          );
-	                        })
-	                      ) : (
-	                        <p className="text-xs text-sand-500">Kein akuter Handlungsbedarf erkannt.</p>
-	                      )}
 	                    </div>
 	                  </div>
 
@@ -2062,30 +2036,6 @@ export default function CustomerDevelopmentView() {
                     ) : null}
                   </div>
 
-                  <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Kundenbriefing</p>
-                      <button
-                        type="button"
-                        onClick={() => setDetailTab("ki")}
-                        className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-sand-50 p-1.5 text-sand-600 hover:bg-sand-100"
-                        title="KI Unterstützung"
-                        aria-label="KI Unterstützung"
-                      >
-                        <Sparkles size={12} />
-                      </button>
-                    </div>
-                    <ul className="mt-2 space-y-1">
-                      {callFocusPoints(detailData || {}).map((line, idx) => (
-                        <li key={`call-brief-${idx}`} className="text-sm text-sand-700">
-                          - {line}
-                        </li>
-                      ))}
-                    </ul>
-                    {!callFocusPoints(detailData || {}).length ? (
-                      <p className="mt-1 text-xs text-sand-500">Keine akuten Gesprächspunkte erkannt.</p>
-                    ) : null}
-                  </div>
                   </>
                   ) : null}
 
@@ -2792,6 +2742,77 @@ export default function CustomerDevelopmentView() {
           </div>
         ) : null}
 
+        <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Ableitung aus Entwicklung</p>
+              <p className="text-sm font-semibold text-sand-900">Nächste Tätigkeit je Kunde</p>
+              <p className="text-[11px] text-sand-600">Konkrete Maßnahme mit Grund und direkter Task-Erfassung.</p>
+            </div>
+            <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600">
+              {activityQueue.length} Kunden
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {activityQueue.slice(0, 8).map(({ item, activity, score }) => {
+              const meta = actionTypeMeta(activity.type);
+              const ActivityIcon = meta.Icon;
+              return (
+                <article key={`activity-${item.customerId}`} className="rounded-2xl border border-sand-200 bg-sand-50 p-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-sand-900">{item.customerName || "Unbekannt"}</p>
+                      <p className="text-[11px] text-sand-500">{item.customerNumber || "ohne Nr."}</p>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${meta.badgeClass}`}>
+                      <ActivityIcon size={10} />
+                      {meta.label}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-xs font-semibold text-sand-900">{activity.title}</p>
+                  <p className="mt-1 text-[11px] leading-5 text-sand-700">{activity.reason}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
+                      Aktivierungs-Score {score}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await createTaskForCustomer({
+                            customerName: item.customerName || "",
+                            customerNumber: item.customerNumber || "",
+                            prefillTitle: activity.taskTitle || activity.title,
+                          });
+                        } catch {
+                          window.alert("Aufgabe konnte nicht angelegt werden.");
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                    >
+                      <Plus size={11} />
+                      Aufgabe
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openDetail(item)}
+                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                    >
+                      <Eye size={11} />
+                      Details
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+            {!activityQueue.length ? (
+              <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-4 text-sm text-sand-500">
+                Keine Kunden in der aktuellen Filterung.
+              </div>
+            ) : null}
+          </div>
+        </section>
+
         {viewMode === "list" ? (
           <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft overflow-auto">
             <table className="min-w-full text-left text-xs">
@@ -2801,6 +2822,7 @@ export default function CustomerDevelopmentView() {
                   <th className="py-2 pr-3">Vertrag & Inventar</th>
                   <th className="py-2 pr-3">Priorität</th>
                   <th className="py-2 pr-3">Kontakt</th>
+                  <th className="py-2 pr-3">Nächste Tätigkeit</th>
                   <th className="py-2 pr-3">Aktion</th>
                 </tr>
               </thead>
@@ -2808,6 +2830,8 @@ export default function CustomerDevelopmentView() {
                 {filteredContexts.map((item, index) => {
                   const inventory = inventorySummary(item);
                   const score = neglectScore(item);
+                  const primaryActivity = derivePrimaryActivity(item);
+                  const activityMeta = actionTypeMeta(primaryActivity.type);
                   return (
                   <tr
                     key={item.customerId}
@@ -2852,9 +2876,9 @@ export default function CustomerDevelopmentView() {
                     <td className="py-2 pr-3">
                       <PriorityBar item={item} />
                       <p className="mt-1 text-[10px] text-sand-500">Aktivierungs-Score: {score}</p>
-                      <p className="text-[10px] text-sand-500">
-                        Thema: {item.topRecommendations?.[0]?.title || "Kein Top-Thema"}
-                      </p>
+                      <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${activityMeta.badgeClass}`}>
+                        {activityMeta.label}
+                      </span>
                     </td>
                     <td className="py-2 pr-3">
                       <p className="text-[11px] text-sand-700">
@@ -2876,10 +2900,35 @@ export default function CustomerDevelopmentView() {
                       ) : null}
                     </td>
                     <td className="py-2 pr-3">
+                      <p className="text-[11px] font-semibold text-sand-900">{primaryActivity.title}</p>
+                      <p className="mt-1 text-[10px] leading-5 text-sand-600">{primaryActivity.reason}</p>
+                    </td>
+                    <td className="py-2 pr-3">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => openDetail(item)}
+                          onClick={async (event) => {
+                            event.stopPropagation();
+                            try {
+                              await createTaskForCustomer({
+                                customerName: item.customerName || "",
+                                customerNumber: item.customerNumber || "",
+                                prefillTitle: primaryActivity.taskTitle || primaryActivity.title,
+                              });
+                            } catch {
+                              window.alert("Aufgabe konnte nicht angelegt werden.");
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
+                        >
+                          <Plus size={12} /> Aufgabe
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openDetail(item);
+                          }}
                           className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
                         >
                           <Eye size={12} /> Details
@@ -2906,29 +2955,54 @@ export default function CustomerDevelopmentView() {
                   <span className="text-[11px] text-sand-500">{items.length}</span>
                 </div>
                 <div className="space-y-2">
-                  {items.map((item) => (
-                    <div key={item.customerId} className="rounded-2xl border border-sand-200 bg-sand-50 p-2">
-                      <p className="text-xs font-semibold text-sand-800">{item.customerName}</p>
-                      <div className="mt-1">
-                        <PriorityBar item={item} />
+                  {items.map((item) => {
+                    const primaryActivity = derivePrimaryActivity(item);
+                    const activityMeta = actionTypeMeta(primaryActivity.type);
+                    return (
+                      <div key={item.customerId} className="rounded-2xl border border-sand-200 bg-sand-50 p-2">
+                        <p className="text-xs font-semibold text-sand-800">{item.customerName}</p>
+                        <div className="mt-1">
+                          <PriorityBar item={item} />
+                        </div>
+                        {Boolean(item.contactDue) ? (
+                          <p className="mt-1 text-[10px] uppercase tracking-wide text-amber-700">
+                            Kontakt fällig{typeof item.daysSinceInteraction === "number" ? ` · ${item.daysSinceInteraction} Tage` : ""}
+                          </p>
+                        ) : null}
+                        <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${activityMeta.badgeClass}`}>
+                          {activityMeta.label}
+                        </span>
+                        <div className="mt-1 text-[11px] font-semibold text-sand-800">{primaryActivity.title}</div>
+                        <div className="mt-1 text-[10px] leading-5 text-sand-600">{primaryActivity.reason}</div>
+                        <div className="mt-2 flex flex-wrap items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await createTaskForCustomer({
+                                  customerName: item.customerName || "",
+                                  customerNumber: item.customerNumber || "",
+                                  prefillTitle: primaryActivity.taskTitle || primaryActivity.title,
+                                });
+                              } catch {
+                                window.alert("Aufgabe konnte nicht angelegt werden.");
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                          >
+                            <Plus size={11} /> Aufgabe
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openDetail(item)}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                          >
+                            <Eye size={11} /> Details
+                          </button>
+                        </div>
                       </div>
-                      {Boolean(item.contactDue) ? (
-                        <p className="mt-1 text-[10px] uppercase tracking-wide text-amber-700">
-                          Kontakt fällig{typeof item.daysSinceInteraction === "number" ? ` · ${item.daysSinceInteraction} Tage` : ""}
-                        </p>
-                      ) : null}
-                      <div className="mt-1 text-[11px] text-sand-600">{item.topRecommendations?.[0]?.title || "-"}</div>
-                      <div className="mt-2 flex flex-wrap items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => openDetail(item)}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                        >
-                          <Eye size={11} /> Details
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {!items.length ? <p className="text-[11px] text-sand-400">Keine Kunden</p> : null}
                 </div>
               </div>

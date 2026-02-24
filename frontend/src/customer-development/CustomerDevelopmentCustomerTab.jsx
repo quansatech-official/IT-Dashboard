@@ -15,6 +15,63 @@ const InlineSpinner = () => (
   <span className="inline-block h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
 );
 
+const normalizeActivityTitle = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^3rd party software updates$/i.test(raw)) return "Software-Updates priorisieren";
+  if (/^os-migration sofort planen$/i.test(raw)) return "OS-Migration starten";
+  if (/^os-upgrade-roadmap festlegen$/i.test(raw)) return "OS-Upgrade-Roadmap festlegen";
+  return raw;
+};
+
+const actionTypeMeta = (value) => {
+  const type = String(value || "").trim().toLowerCase();
+  if (type === "security") return { label: "Security", badgeClass: "border-rose-200 bg-rose-50 text-rose-700" };
+  if (type === "lifecycle") return { label: "Lifecycle", badgeClass: "border-amber-200 bg-amber-50 text-amber-700" };
+  if (type === "betreuung") return { label: "Kundenkontakt", badgeClass: "border-sky-200 bg-sky-50 text-sky-700" };
+  return { label: "Hinweis", badgeClass: "border-sand-200 bg-sand-100 text-sand-700" };
+};
+
+const derivePrimaryActivity = (context) => {
+  const recommendations = (context?.recommendations || context?.topRecommendations || []).filter((entry) => entry && typeof entry === "object");
+  const top = recommendations.find((entry) => String(entry?.title || "").trim());
+  if (top) {
+    const title = normalizeActivityTitle(top.title);
+    return {
+      title,
+      reason: String(top?.why || "Empfehlung aus Kundenentwicklung."),
+      type: String(top?.type || "hinweis").toLowerCase(),
+      taskTitle: `Empfehlung umsetzen: ${title}`,
+    };
+  }
+  if (Boolean(context?.contactDue)) {
+    const days = Number(context?.daysSinceInteraction);
+    return {
+      title: "Proaktiven Kundenkontakt durchführen",
+      reason:
+        Number.isFinite(days) && days >= 0
+          ? `Letzter Kontakt vor ${Math.round(days)} Tagen.`
+          : "Kein aktueller Kundenkontakt dokumentiert.",
+      type: "betreuung",
+      taskTitle: "Proaktiver Kundenkontakt",
+    };
+  }
+  if (Boolean(context?.invoiceActivityDue)) {
+    return {
+      title: "Leistungs-Review mit Kunde abstimmen",
+      reason: "Längere Umsetzungspause laut Faktura-Signalen.",
+      type: "betreuung",
+      taskTitle: "Leistungs-Review durchführen",
+    };
+  }
+  return {
+    title: "Regelmäßigen Kunden-Check durchführen",
+    reason: "Aktuell keine kritische Empfehlung offen.",
+    type: "hinweis",
+    taskTitle: "Regelmäßiger Kunden-Check",
+  };
+};
+
 export default function CustomerDevelopmentCustomerTab({ customerId, customerName, customerNumber }) {
   const [context, setContext] = useState(null);
   const [status, setStatus] = useState("idle");
@@ -104,6 +161,8 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
   const hasInteractionDays = Number.isFinite(interactionDaysRaw) && interactionDaysRaw >= 0;
   const interactionDays = hasInteractionDays ? Math.round(interactionDaysRaw) : null;
   const contactNeedsAction = Boolean(context?.contactDue);
+  const primaryActivity = derivePrimaryActivity(context || {});
+  const primaryMeta = actionTypeMeta(primaryActivity.type);
 
   if (!customerId) {
     return <p className="text-sm text-sand-500">Kein Kunde ausgewählt.</p>;
@@ -162,6 +221,29 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
           <p className="text-sm text-sand-700">
             {(context?.infra?.unmanagedCount || 0)} unmanaged · {Math.round((context?.infra?.coverageRatio || 0) * 100)}% Coverage
           </p>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-sand-200 bg-white p-4">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-sand-500">Nächste Tätigkeit</p>
+            <p className="mt-1 text-sm font-semibold text-sand-900">{primaryActivity.title}</p>
+            <p className="mt-1 text-xs leading-5 text-sand-700">{primaryActivity.reason}</p>
+          </div>
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${primaryMeta.badgeClass}`}>
+            {primaryMeta.label}
+          </span>
+        </div>
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => createTask({ title: primaryActivity.taskTitle })}
+            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+          >
+            <Plus size={12} />
+            Als Aufgabe anlegen
+          </button>
         </div>
       </div>
 

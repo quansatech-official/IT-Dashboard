@@ -234,7 +234,7 @@ const CONTRACT_PRICING_MODE_ORDER = ["tarif", "tarif_plus_h", "entgeltlos"];
 
 const CONTRACT_PRICING_MODE_LABELS = {
   tarif: "Tarif",
-  tarif_plus_h: "Tarif + H",
+  tarif_plus_h: "Tarif+Stunden",
   entgeltlos: "Entgeltlos (ohne Preis)"
 };
 
@@ -301,6 +301,15 @@ const parseMoneyInput = (value) => {
   return parsed;
 };
 
+const parseOptionalMoneyInput = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const normalized = raw.replace(",", ".");
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return parsed;
+};
+
 const formatHours = (value, fractionDigits = 2) => {
   const hours = Number(value || 0);
   if (!Number.isFinite(hours)) return "0,00 h";
@@ -336,6 +345,16 @@ const deriveContractCountsFromDevelopment = (context) => {
     managed: toCount(infra.managedAssets),
     discovered: toCount(infra.discoveredAssets)
   };
+};
+
+const customerInitials = (name) => {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/g)
+    .filter(Boolean);
+  if (!parts.length) return "KD";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
 };
 
 export default function CustomerDirectoryView() {
@@ -404,7 +423,8 @@ export default function CustomerDirectoryView() {
     validFrom: "",
     runtimeMonths: "12",
     monthlyHoursIncluded: "0",
-    markAsProposal: true
+    monthlyTotalOverride: "",
+    yearlyTotalOverride: ""
   });
   const saveTimers = useRef({});
   const importInputRef = useRef(null);
@@ -650,14 +670,39 @@ export default function CustomerDirectoryView() {
     const pricingMode = normalizePricingMode(contractDraft.pricingMode);
     const tariffMonthly = Number(contractPreview.tariffMonthly || 0);
     const hourlyMonthly = monthlyHoursIncluded * hourlyRateForContracts;
-    let monthly = tariffMonthly;
-    if (pricingMode === "tarif_plus_h") monthly = tariffMonthly + hourlyMonthly;
-    if (pricingMode === "entgeltlos") monthly = 0;
-    const monthlyRounded = Number(monthly.toFixed(2));
-    const yearlyRounded = Number((monthlyRounded * 12).toFixed(2));
+    let monthlyAuto = tariffMonthly;
+    if (pricingMode === "tarif_plus_h") monthlyAuto = tariffMonthly + hourlyMonthly;
+    if (pricingMode === "entgeltlos") monthlyAuto = 0;
+    const monthlyAutoRounded = Number(monthlyAuto.toFixed(2));
+    const yearlyAutoRounded = Number((monthlyAutoRounded * 12).toFixed(2));
+
+    const monthlyOverride = parseOptionalMoneyInput(contractDraft.monthlyTotalOverride);
+    const yearlyOverride = parseOptionalMoneyInput(contractDraft.yearlyTotalOverride);
+
+    const monthlyFinal =
+      pricingMode === "entgeltlos"
+        ? 0
+        : Number((monthlyOverride !== null ? monthlyOverride : monthlyAutoRounded).toFixed(2));
+    const yearlyFinal =
+      pricingMode === "entgeltlos"
+        ? 0
+        : Number(
+            (
+              yearlyOverride !== null
+                ? yearlyOverride
+                : monthlyOverride !== null
+                ? monthlyFinal * 12
+                : yearlyAutoRounded
+            ).toFixed(2)
+          );
+
     return {
-      monthly: monthlyRounded,
-      yearly: yearlyRounded,
+      monthly: monthlyFinal,
+      yearly: yearlyFinal,
+      monthlyAuto: monthlyAutoRounded,
+      yearlyAuto: yearlyAutoRounded,
+      monthlyOverridden: monthlyOverride !== null && pricingMode !== "entgeltlos",
+      yearlyOverridden: yearlyOverride !== null && pricingMode !== "entgeltlos",
       tariffMonthly: Number(tariffMonthly.toFixed(2)),
       hourlyMonthly: Number(hourlyMonthly.toFixed(2)),
       pricingMode,
@@ -665,6 +710,8 @@ export default function CustomerDirectoryView() {
     };
   }, [
     contractDraft.pricingMode,
+    contractDraft.monthlyTotalOverride,
+    contractDraft.yearlyTotalOverride,
     contractPreview.tariffMonthly,
     monthlyHoursIncluded,
     hourlyRateForContracts
@@ -680,6 +727,8 @@ export default function CustomerDirectoryView() {
     contractDraft.validFrom,
     contractDraft.runtimeMonths,
     contractDraft.monthlyHoursIncluded,
+    contractDraft.monthlyTotalOverride,
+    contractDraft.yearlyTotalOverride,
     selectedTariff?.id,
     contractTotals.monthly,
     contractTotals.yearly,
@@ -853,7 +902,7 @@ export default function CustomerDirectoryView() {
         template_key: String(source.template_key || contractDraft.docType || "wartung"),
         monthly_hours_included: Number(source?.meta?.monthly_hours_included ?? monthlyHoursIncluded),
         note: "",
-        status: contractDraft.markAsProposal ? "proposal" : "active"
+        status: "proposal"
       });
       setCustomerContracts((prev) => [saved, ...prev]);
       setGeneratedContract(source);
@@ -942,7 +991,8 @@ export default function CustomerDirectoryView() {
       validFrom: "",
       runtimeMonths: "12",
       monthlyHoursIncluded: "0",
-      markAsProposal: true
+      monthlyTotalOverride: "",
+      yearlyTotalOverride: ""
     });
     setGeneratedContract(null);
     setContractCalcModalOpen(true);
@@ -2092,6 +2142,53 @@ export default function CustomerDirectoryView() {
             <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractTotals.yearly)}</p>
           </div>
         </div>
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">5) Endpreis pro Monat (optional)</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={contractDraft.monthlyTotalOverride}
+              onChange={(event) =>
+                setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: event.target.value }))
+              }
+              disabled={contractTotals.pricingMode === "entgeltlos"}
+              placeholder={`Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}`}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm disabled:bg-sand-100"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">6) Endpreis pro Jahr (optional)</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={contractDraft.yearlyTotalOverride}
+              onChange={(event) =>
+                setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }))
+              }
+              disabled={contractTotals.pricingMode === "entgeltlos"}
+              placeholder={`Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}`}
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm disabled:bg-sand-100"
+            />
+          </label>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: "", yearlyTotalOverride: "" }))
+            }
+            disabled={!contractDraft.monthlyTotalOverride && !contractDraft.yearlyTotalOverride}
+            className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Endpreis zurücksetzen
+          </button>
+          {contractTotals.pricingMode === "entgeltlos" ? (
+            <span className="text-xs text-sand-500">Entgeltlos erzwingt 0,00 EUR.</span>
+          ) : null}
+        </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {calcImportStatus === "loading" ? <span className="text-xs text-sand-500">Importiere aus Meta-Hub…</span> : null}
           {calcImportStatus === "done" ? <span className="text-xs text-emerald-600">Werte übernommen</span> : null}
@@ -2169,12 +2266,22 @@ export default function CustomerDirectoryView() {
           }`}
         >
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5">
-            <p className="text-[10px] uppercase tracking-wide text-emerald-700">Monatspreis übernommen</p>
+            <p className="text-[10px] uppercase tracking-wide text-emerald-700">Monatspreis final</p>
             <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.monthly)}</p>
+            <p className="mt-1 text-[11px] text-emerald-800">
+              {contractTotals.monthlyOverridden
+                ? `Manuell überschrieben (Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}).`
+                : "Automatisch aus Tarifkalkulation übernommen."}
+            </p>
           </div>
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5">
-            <p className="text-[10px] uppercase tracking-wide text-emerald-700">Jahrespreis übernommen</p>
+            <p className="text-[10px] uppercase tracking-wide text-emerald-700">Jahrespreis final</p>
             <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.yearly)}</p>
+            <p className="mt-1 text-[11px] text-emerald-800">
+              {contractTotals.yearlyOverridden
+                ? `Manuell überschrieben (Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}).`
+                : "Automatisch aus Tarifkalkulation übernommen."}
+            </p>
           </div>
           {supportsHoursBudget ? (
             <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-1.5">
@@ -2185,20 +2292,11 @@ export default function CustomerDirectoryView() {
         </div>
         <p className="mt-2 text-[11px] text-sand-500">
           {contractTotals.pricingMode === "tarif_plus_h"
-            ? `Gesamtpreis = Tarif + Stundenbudget (${formatHours(monthlyHoursIncluded)}) x Stundensatz (${formatEurPrecise(contractTotals.hourlyRate)}).`
+            ? `Gesamtpreis = Tarif+Stundenbudget (${formatHours(monthlyHoursIncluded)}) x Stundensatz (${formatEurPrecise(contractTotals.hourlyRate)}).`
             : contractTotals.pricingMode === "entgeltlos"
             ? "Entgeltloser Vertrag: Gesamtpreis wird auf 0 gesetzt."
             : "Gesamtpreis entspricht dem ausgewählten Tarif."}
         </p>
-        <label className="mt-2 inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">
-          <input
-            type="checkbox"
-            checked={Boolean(contractDraft.markAsProposal)}
-            onChange={(event) => setContractDraft((prev) => ({ ...prev, markAsProposal: event.target.checked }))}
-            className="h-4 w-4"
-          />
-          Als Vorschlag markieren, solange der Kunde noch nicht eingewilligt hat
-        </label>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -2222,7 +2320,7 @@ export default function CustomerDirectoryView() {
             className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90"
           >
             <BadgeCheck size={12} />
-            {contractDraft.markAsProposal ? "Als Vorschlag speichern" : "Als aktiv speichern"}
+            Als Vorschlag speichern
           </button>
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -2896,147 +2994,200 @@ export default function CustomerDirectoryView() {
               Inaktive Kunden einblenden
             </label>
           </div>
-          <div className="overflow-auto rounded-2xl border border-sand-200">
-            <table className="min-w-full text-xs">
-              <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
+          <div className="overflow-x-auto rounded-2xl border border-sand-200 bg-white">
+            <table className="min-w-[980px] w-full text-xs">
+              <thead className="bg-sand-50 text-sand-500 uppercase tracking-[0.2em] text-[10px]">
                 <tr>
-                  <th className="px-3 py-2 text-left">Kunde</th>
-                  <th className="px-3 py-2 text-left">Kommunikation</th>
-                  <th className="px-3 py-2 text-left">Kundenstatus</th>
-                  <th className="px-3 py-2 text-left">Vertragsstatus</th>
-                  <th className="px-3 py-2 text-right">Aktion</th>
+                  <th className="px-3 py-2 text-left font-medium">Kunde</th>
+                  <th className="px-3 py-2 text-left font-medium">Kommunikation</th>
+                  <th className="px-3 py-2 text-left font-medium">Status & Vertrag</th>
+                  <th className="px-3 py-2 text-right font-medium">Aktion</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-sand-200/70">
+              <tbody className="divide-y divide-sand-100">
                 {sortedCustomers.length ? (
-                  sortedCustomers.map((customer, index) => (
-                    <tr
-                      key={customer.id}
-                      className={`${
-                        customer.id === activeId
-                          ? "bg-sand-200/70"
-                          : index % 2 === 0
-                          ? "bg-white"
-                          : "bg-slate-100"
-                      } hover:bg-sand-100`}
-                      onClick={() => setActiveId(customer.id)}
-                    >
-                      <td className="px-3 py-2 align-top">
-                        <p className="font-semibold text-sand-900">{customer.name?.trim() || "Unbenannter Kunde"}</p>
-                        <p className="text-[11px] text-sand-500">
-                          {customer.creditorNumber || "Ohne Nr."}
-                          {customer.shortCode ? ` · ${customer.shortCode}` : ""}
-                        </p>
-                        {(() => {
-                          const context = developmentByCustomerId[customer.id];
-                          if (!context) {
-                            return (
-                              <p className="mt-1 text-[10px] text-sand-400">
-                                {developmentListStatus === "loading" ? "Meta-Hub lädt…" : "Keine Meta-Hub Daten"}
-                              </p>
-                            );
-                          }
-                          const infra = context?.infra || {};
-                          const managedAssets = Number(infra?.managedAssets || 0);
-                          const openUpdates = Number(infra?.openUpdates || 0);
-                          const errorCount = Number(infra?.errorCount || 0);
-                          const warningCount = Number(infra?.warningCount || 0);
-                          if (managedAssets === 0 && openUpdates === 0 && errorCount === 0 && warningCount === 0) {
-                            return null;
-                          }
-                          return (
-                            <p className="mt-1 text-[10px] text-sand-600">
-                              {managedAssets} Agents · Updates {openUpdates} · Fehler {errorCount} · Warnungen {warningCount}
-                            </p>
-                          );
-                        })()}
-                      </td>
-                      <td className="px-3 py-2 align-top">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <label className="inline-flex items-center gap-1">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(customer.customerReport)}
-                              onChange={(event) =>
-                                updateCustomer(customer.id, { customerReport: event.target.checked })
-                              }
-                              className="h-3.5 w-3.5"
-                            />
-                            Bericht
-                          </label>
-                          <label className="inline-flex items-center gap-1">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(customer.newsletter)}
-                              onChange={(event) =>
-                                updateCustomer(customer.id, { newsletter: event.target.checked })
-                              }
-                              className="h-3.5 w-3.5"
-                            />
-                            Newsletter
-                          </label>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 align-top">
-                        <select
-                          value={String(customer.status || "active")}
-                          onChange={(event) => updateCustomer(customer.id, { status: event.target.value })}
-                          className="rounded-lg border border-sand-200 px-2 py-1 text-xs"
-                        >
-                          <option value="active">Aktiv</option>
-                          <option value="inactive">Inaktiv</option>
-                        </select>
-                      </td>
-                      <td className="px-3 py-2 align-top">
-                        <div className="flex flex-wrap items-center gap-2">
-                          {[
-                            { id: "wartung", label: "Wartung" },
-                            { id: "monitoring", label: "Monitoring" },
-                            { id: "regie", label: "Regie" }
-                          ].map((contract) => (
-                            <label key={contract.id} className="inline-flex items-center gap-1">
-                              <input
-                                type="checkbox"
-                                checked={Boolean((customer.contractFlags || []).includes(contract.id))}
-                                onChange={(event) => {
-                                  const nextFlags = applyContractFlagChange(
-                                    customer.contractFlags || [],
-                                    contract.id,
-                                    event.target.checked
-                                  );
-                                  updateCustomer(customer.id, {
-                                    contractFlags: nextFlags,
-                                    maintenanceContract: nextFlags.includes("wartung")
-                                  });
-                                }}
-                                className="h-3.5 w-3.5"
-                              />
-                              {contract.label}
-                            </label>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 align-top text-right">
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
+                  sortedCustomers.map((customer) => {
+                    const isActiveCustomer = customer.id === activeId;
+                    const context = developmentByCustomerId[customer.id];
+                    const infra = context?.infra || {};
+                    const managedAssets = Number(infra?.managedAssets || 0);
+                    const openUpdates = Number(infra?.openUpdates || 0);
+                    const errorCount = Number(infra?.errorCount || 0);
+                    const warningCount = Number(infra?.warningCount || 0);
+                    const contractFlags = normalizeContractFlags(customer.contractFlags || []);
+                    const customerStatus =
+                      String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active";
+
+                    return (
+                      <tr
+                        key={customer.id}
+                        onClick={() => setActiveId(customer.id)}
+                        className={`cursor-pointer transition ${
+                          isActiveCustomer ? "bg-sand-100" : "bg-white hover:bg-sand-50"
+                        }`}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
                             setActiveId(customer.id);
-                            setSettingsTab("details");
-                            setEditCustomerId(customer.id);
-                          }}
-                          className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
-                          title="Bearbeiten"
-                          aria-label="Bearbeiten"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                          }
+                        }}
+                      >
+                        <td className="px-3 py-2 align-top">
+                          <div className="flex items-start gap-2.5">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-sand-200 bg-white text-[11px] font-semibold uppercase tracking-wide text-sand-700">
+                              {customerInitials(customer.name)}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-sand-900">
+                                {customer.name?.trim() || "Unbenannter Kunde"}
+                              </p>
+                              <p className="text-[11px] text-sand-500">
+                                {customer.creditorNumber || "Ohne Nr."}
+                                {customer.shortCode ? ` · ${customer.shortCode}` : ""}
+                              </p>
+                              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                {managedAssets > 0 ? (
+                                  <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] text-sky-700">
+                                    {managedAssets} Agents
+                                  </span>
+                                ) : null}
+                                {openUpdates > 0 ? (
+                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">
+                                    Updates {openUpdates}
+                                  </span>
+                                ) : null}
+                                {errorCount > 0 ? (
+                                  <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] text-rose-700">
+                                    Fehler {errorCount}
+                                  </span>
+                                ) : null}
+                                {warningCount > 0 ? (
+                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">
+                                    Warnungen {warningCount}
+                                  </span>
+                                ) : null}
+                                {!context ? (
+                                  <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-500">
+                                    {developmentListStatus === "loading" ? "Meta-Hub lädt…" : "Keine Meta-Hub Daten"}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 align-top">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateCustomer(customer.id, { customerReport: !Boolean(customer.customerReport) })
+                              }
+                              className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide transition ${
+                                customer.customerReport
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                  : "border-sand-200 bg-white text-sand-500"
+                              }`}
+                              aria-pressed={Boolean(customer.customerReport)}
+                            >
+                              Bericht
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateCustomer(customer.id, { newsletter: !Boolean(customer.newsletter) })
+                              }
+                              className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide transition ${
+                                customer.newsletter
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                  : "border-sand-200 bg-white text-sand-500"
+                              }`}
+                              aria-pressed={Boolean(customer.newsletter)}
+                            >
+                              Newsletter
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 align-top">
+                          <div className="inline-flex rounded-full border border-sand-200 bg-white p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => updateCustomer(customer.id, { status: "active" })}
+                              className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-wide ${
+                                customerStatus === "active" ? "bg-emerald-600 text-white" : "text-sand-500"
+                              }`}
+                            >
+                              Aktiv
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateCustomer(customer.id, { status: "inactive" })}
+                              className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-wide ${
+                                customerStatus === "inactive" ? "bg-slate-600 text-white" : "text-sand-500"
+                              }`}
+                            >
+                              Inaktiv
+                            </button>
+                          </div>
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            {[
+                              { id: "wartung", label: "Wartung" },
+                              { id: "monitoring", label: "Monitoring" },
+                              { id: "regie", label: "Regie" }
+                            ].map((contract) => {
+                              const enabled = contractFlags.includes(contract.id);
+                              return (
+                                <button
+                                  key={contract.id}
+                                  type="button"
+                                  onClick={() => {
+                                    const nextFlags = applyContractFlagChange(
+                                      contractFlags,
+                                      contract.id,
+                                      !enabled
+                                    );
+                                    updateCustomer(customer.id, {
+                                      contractFlags: nextFlags,
+                                      maintenanceContract: nextFlags.includes("wartung")
+                                    });
+                                  }}
+                                  className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide transition ${
+                                    enabled
+                                      ? "border-sand-900 bg-sand-900 text-white"
+                                      : "border-sand-200 bg-white text-sand-500"
+                                  }`}
+                                  aria-pressed={enabled}
+                                >
+                                  {contract.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 align-top text-right">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setActiveId(customer.id);
+                              setSettingsTab("details");
+                              setEditCustomerId(customer.id);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                            title="Bearbeiten"
+                            aria-label="Bearbeiten"
+                          >
+                            <Pencil size={12} />
+                            Bearbeiten
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-sand-500">
+                    <td colSpan={4} className="px-3 py-6 text-center text-sand-500">
                       Keine Treffer.
                     </td>
                   </tr>
