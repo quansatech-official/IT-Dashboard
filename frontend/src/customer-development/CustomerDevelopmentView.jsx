@@ -623,6 +623,22 @@ const formatDiscoveryTypeLabel = (value) => {
   return type.replaceAll("_", " ");
 };
 
+const rmmStatusHasIssue = (value) => {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return false;
+  return /(fail|error|krit|critical|warn|alert|problem|down|offline|unhealthy)/i.test(text);
+};
+
+const formatRmmSignalLabel = (entry) => {
+  const title = String(entry?.title || "").trim();
+  const status = String(entry?.status || "").trim();
+  const detail = String(entry?.detail || "").trim();
+  if (title && status) return `${title} (${status})`;
+  if (title) return title;
+  if (detail) return detail;
+  return "";
+};
+
 const normalizeTextKey = (value) => String(value || "").trim().toLowerCase();
 
 const versionParts = (value) => {
@@ -1547,21 +1563,6 @@ export default function CustomerDevelopmentView() {
     return groups;
   }, [filteredContexts]);
 
-  const activityQueue = useMemo(() => {
-    return filteredContexts
-      .map((item) => ({
-        item,
-        score: neglectScore(item),
-        activity: derivePrimaryActivity(item),
-      }))
-      .sort((left, right) => {
-        if (right.score !== left.score) return right.score - left.score;
-        return String(left.item?.customerName || "").localeCompare(String(right.item?.customerName || ""), "de", {
-          sensitivity: "base",
-        });
-      });
-  }, [filteredContexts]);
-
   const neglectedCustomers = useMemo(() => {
     return filteredContexts
       .map((item) => {
@@ -2071,15 +2072,34 @@ export default function CustomerDevelopmentView() {
                       {discoveryRun.message ? <p className="text-sm text-emerald-700">{discoveryRun.message}</p> : null}
                       {discoveryRun.error ? <p className="text-sm text-rose-600">{discoveryRun.error}</p> : null}
                       {(() => {
+                        const managedDevices = detailData?.managedInfrastructureDevices || [];
                         const activeDiscoveryDevices = (detailData?.discoveredInfrastructureDevices || []).filter(
                           (device) => device?.active !== false
+                        );
+                        const alarmsFromAgents = managedDevices.reduce(
+                          (sum, device) => sum + Number(device?.alarmCount || 0),
+                          0
+                        );
+                        const checksFromAgents = managedDevices.reduce(
+                          (sum, device) => sum + Number(device?.checkCount || 0),
+                          0
+                        );
+                        const failingChecksFromAgents = managedDevices.reduce(
+                          (sum, device) => sum + Number(device?.failingCheckCount || 0),
+                          0
+                        );
+                        const alarmCount = Math.max(Number(detailData?.infra?.alarmCount || 0), alarmsFromAgents);
+                        const checkCount = Math.max(Number(detailData?.infra?.checkCount || 0), checksFromAgents);
+                        const failingCheckCount = Math.max(
+                          Number(detailData?.infra?.failingCheckCount || 0),
+                          failingChecksFromAgents
                         );
                         return (
                           <>
                       <div className="grid gap-2 sm:grid-cols-3">
                         <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
                           <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Agents</p>
-                          <p className="text-xs font-semibold text-sand-800">{(detailData.managedInfrastructureDevices || []).length}</p>
+                          <p className="text-xs font-semibold text-sand-800">{managedDevices.length}</p>
                         </div>
                         <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
                           <p className="text-[10px] uppercase tracking-wide text-sand-500">Discovery Geräte</p>
@@ -2109,6 +2129,19 @@ export default function CustomerDevelopmentView() {
                             {Number(detailData?.infra?.unmanagedCount || 0)}
                           </p>
                         </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">RMM Alarme</p>
+                          <p className={`text-xs font-semibold ${alarmCount > 0 ? "text-rose-700" : "text-emerald-700"}`}>
+                            {alarmCount}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Checks fehlerhaft</p>
+                          <p className={`text-xs font-semibold ${failingCheckCount > 0 ? "text-amber-700" : "text-emerald-700"}`}>
+                            {failingCheckCount}
+                            <span className="text-sand-500"> / {checkCount}</span>
+                          </p>
+                        </div>
                       </div>
                       <p className="text-[10px] text-sand-600">
                         Schnellansicht für Entscheidungen. Vollständige Agent-/Discovery-Listen bleiben darunter aufklappbar.
@@ -2135,6 +2168,8 @@ export default function CustomerDevelopmentView() {
                                   <th className="py-1.5 pr-3 font-medium">OS</th>
                                   <th className="py-1.5 pr-3 font-medium">Status</th>
                                   <th className="py-1.5 pr-3 font-medium">E/W/U</th>
+                                  <th className="py-1.5 pr-3 font-medium">Alarme</th>
+                                  <th className="py-1.5 pr-3 font-medium">Checks</th>
                                   <th className="py-1.5 pr-3 font-medium">EOL</th>
                                   <th className="py-1.5 font-medium">Last Seen</th>
                                 </tr>
@@ -2144,6 +2179,11 @@ export default function CustomerDevelopmentView() {
                                   const errorCount = Number(device?.errorCount || 0);
                                   const warningCount = Number(device?.warningCount || 0);
                                   const updatesCount = Number(device?.openUpdates || 0);
+                                  const alarmCount = Number(device?.alarmCount || 0);
+                                  const checkCount = Number(device?.checkCount || 0);
+                                  const failingCheckCount = Number(device?.failingCheckCount || 0);
+                                  const alertItems = Array.isArray(device?.alertItems) ? device.alertItems : [];
+                                  const checkItems = Array.isArray(device?.checkItems) ? device.checkItems : [];
                                   const lifecycle = resolveAgentLifecycle(device);
                                   const lifecycleStatus = String(lifecycle?.status || "").toLowerCase();
                                   const lifecycleLabel =
@@ -2168,23 +2208,47 @@ export default function CustomerDevelopmentView() {
                                         ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                                         : "border-rose-200 bg-rose-50 text-rose-700"
                                       : "border-sand-200 bg-white text-sand-600";
+                                  const hasAlarmSignals = alarmCount > 0 || alertItems.length > 0;
+                                  const hasCheckSignals = failingCheckCount > 0 || checkItems.length > 0;
                                   const AgentIcon = getAgentIcon(device);
                                   return (
                                     <tr key={`${device?.agentId || idx}`} className="align-top">
                                       <td className="w-[150px] max-w-[150px] py-1.5 pr-2">
                                         <div className="flex min-w-0 items-start gap-1.5">
                                           <AgentIcon size={12} className="mt-0.5 shrink-0 text-sand-500" />
-                                          <span
-                                            className="min-w-0 text-sand-900 font-semibold leading-4"
-                                            style={{
-                                              display: "-webkit-box",
-                                              WebkitLineClamp: 2,
-                                              WebkitBoxOrient: "vertical",
-                                              overflow: "hidden",
-                                            }}
-                                          >
-                                            {device?.hostname || "Unbekannter Agent"}
-                                          </span>
+                                          <div className="min-w-0">
+                                            <span
+                                              className="min-w-0 text-sand-900 font-semibold leading-4"
+                                              style={{
+                                                display: "-webkit-box",
+                                                WebkitLineClamp: 2,
+                                                WebkitBoxOrient: "vertical",
+                                                overflow: "hidden",
+                                              }}
+                                            >
+                                              {device?.hostname || "Unbekannter Agent"}
+                                            </span>
+                                            {alertItems.slice(0, 2).map((entry, signalIdx) => (
+                                              <div
+                                                key={`alert-${device?.agentId || idx}-${signalIdx}`}
+                                                className="mt-0.5 truncate text-[10px] text-rose-700"
+                                                title={formatRmmSignalLabel(entry)}
+                                              >
+                                                Alarm: {formatRmmSignalLabel(entry)}
+                                              </div>
+                                            ))}
+                                            {checkItems.slice(0, 2).map((entry, signalIdx) => (
+                                              <div
+                                                key={`check-${device?.agentId || idx}-${signalIdx}`}
+                                                className={`mt-0.5 truncate text-[10px] ${
+                                                  rmmStatusHasIssue(entry?.status) ? "text-amber-700" : "text-sand-600"
+                                                }`}
+                                                title={formatRmmSignalLabel(entry)}
+                                              >
+                                                Check: {formatRmmSignalLabel(entry)}
+                                              </div>
+                                            ))}
+                                          </div>
                                         </div>
                                       </td>
                                       <td className="max-w-[170px] truncate py-1.5 pr-3" title={device?.client || ""}>
@@ -2207,6 +2271,28 @@ export default function CustomerDevelopmentView() {
                                         <span className="text-amber-700">{warningCount}</span>
                                         <span className="text-sand-500">/</span>
                                         <span className="text-sky-700">{updatesCount}</span>
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3">
+                                        <span
+                                          className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                            hasAlarmSignals
+                                              ? "border-rose-200 bg-rose-50 text-rose-700"
+                                              : "border-sand-200 bg-white text-sand-500"
+                                          }`}
+                                        >
+                                          {alarmCount}
+                                        </span>
+                                      </td>
+                                      <td className="whitespace-nowrap py-1.5 pr-3">
+                                        <span
+                                          className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                            hasCheckSignals
+                                              ? "border-amber-200 bg-amber-50 text-amber-700"
+                                              : "border-sand-200 bg-white text-sand-500"
+                                          }`}
+                                        >
+                                          {failingCheckCount} / {checkCount}
+                                        </span>
                                       </td>
                                       <td className="whitespace-nowrap py-1.5 pr-3">
                                         {lifecycle?.eol_date || "n/a"}
@@ -2742,77 +2828,6 @@ export default function CustomerDevelopmentView() {
           </div>
         ) : null}
 
-        <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Ableitung aus Entwicklung</p>
-              <p className="text-sm font-semibold text-sand-900">Nächste Tätigkeit je Kunde</p>
-              <p className="text-[11px] text-sand-600">Konkrete Maßnahme mit Grund und direkter Task-Erfassung.</p>
-            </div>
-            <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600">
-              {activityQueue.length} Kunden
-            </span>
-          </div>
-          <div className="mt-3 grid gap-2 md:grid-cols-2">
-            {activityQueue.slice(0, 8).map(({ item, activity, score }) => {
-              const meta = actionTypeMeta(activity.type);
-              const ActivityIcon = meta.Icon;
-              return (
-                <article key={`activity-${item.customerId}`} className="rounded-2xl border border-sand-200 bg-sand-50 p-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-sand-900">{item.customerName || "Unbekannt"}</p>
-                      <p className="text-[11px] text-sand-500">{item.customerNumber || "ohne Nr."}</p>
-                    </div>
-                    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${meta.badgeClass}`}>
-                      <ActivityIcon size={10} />
-                      {meta.label}
-                    </span>
-                  </div>
-                  <p className="mt-1.5 text-xs font-semibold text-sand-900">{activity.title}</p>
-                  <p className="mt-1 text-[11px] leading-5 text-sand-700">{activity.reason}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
-                      Aktivierungs-Score {score}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await createTaskForCustomer({
-                            customerName: item.customerName || "",
-                            customerNumber: item.customerNumber || "",
-                            prefillTitle: activity.taskTitle || activity.title,
-                          });
-                        } catch {
-                          window.alert("Aufgabe konnte nicht angelegt werden.");
-                        }
-                      }}
-                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                    >
-                      <Plus size={11} />
-                      Aufgabe
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openDetail(item)}
-                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                    >
-                      <Eye size={11} />
-                      Details
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-            {!activityQueue.length ? (
-              <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-4 text-sm text-sand-500">
-                Keine Kunden in der aktuellen Filterung.
-              </div>
-            ) : null}
-          </div>
-        </section>
-
         {viewMode === "list" ? (
           <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft overflow-auto">
             <table className="min-w-full text-left text-xs">
@@ -2907,24 +2922,6 @@ export default function CustomerDevelopmentView() {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={async (event) => {
-                            event.stopPropagation();
-                            try {
-                              await createTaskForCustomer({
-                                customerName: item.customerName || "",
-                                customerNumber: item.customerNumber || "",
-                                prefillTitle: primaryActivity.taskTitle || primaryActivity.title,
-                              });
-                            } catch {
-                              window.alert("Aufgabe konnte nicht angelegt werden.");
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 hover:bg-sand-100"
-                        >
-                          <Plus size={12} /> Aufgabe
-                        </button>
-                        <button
-                          type="button"
                           onClick={(event) => {
                             event.stopPropagation();
                             openDetail(item);
@@ -2975,23 +2972,6 @@ export default function CustomerDevelopmentView() {
                         <div className="mt-1 text-[11px] font-semibold text-sand-800">{primaryActivity.title}</div>
                         <div className="mt-1 text-[10px] leading-5 text-sand-600">{primaryActivity.reason}</div>
                         <div className="mt-2 flex flex-wrap items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                await createTaskForCustomer({
-                                  customerName: item.customerName || "",
-                                  customerNumber: item.customerNumber || "",
-                                  prefillTitle: primaryActivity.taskTitle || primaryActivity.title,
-                                });
-                              } catch {
-                                window.alert("Aufgabe konnte nicht angelegt werden.");
-                              }
-                            }}
-                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                          >
-                            <Plus size={11} /> Aufgabe
-                          </button>
                           <button
                             type="button"
                             onClick={() => openDetail(item)}

@@ -347,16 +347,6 @@ const deriveContractCountsFromDevelopment = (context) => {
   };
 };
 
-const customerInitials = (name) => {
-  const parts = String(name || "")
-    .trim()
-    .split(/\s+/g)
-    .filter(Boolean);
-  if (!parts.length) return "KD";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
-};
-
 export default function CustomerDirectoryView() {
   const [customers, setCustomers] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -2994,200 +2984,147 @@ export default function CustomerDirectoryView() {
               Inaktive Kunden einblenden
             </label>
           </div>
-          <div className="overflow-x-auto rounded-2xl border border-sand-200 bg-white">
-            <table className="min-w-[980px] w-full text-xs">
-              <thead className="bg-sand-50 text-sand-500 uppercase tracking-[0.2em] text-[10px]">
+          <div className="overflow-auto rounded-2xl border border-sand-200">
+            <table className="min-w-full text-xs">
+              <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium">Kunde</th>
-                  <th className="px-3 py-2 text-left font-medium">Kommunikation</th>
-                  <th className="px-3 py-2 text-left font-medium">Status & Vertrag</th>
-                  <th className="px-3 py-2 text-right font-medium">Aktion</th>
+                  <th className="px-3 py-2 text-left">Kunde</th>
+                  <th className="px-3 py-2 text-left">Kommunikation</th>
+                  <th className="px-3 py-2 text-left">Kundenstatus</th>
+                  <th className="px-3 py-2 text-left">Vertragsstatus</th>
+                  <th className="px-3 py-2 text-right">Aktion</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-sand-100">
+              <tbody className="divide-y divide-sand-200/70">
                 {sortedCustomers.length ? (
-                  sortedCustomers.map((customer) => {
-                    const isActiveCustomer = customer.id === activeId;
-                    const context = developmentByCustomerId[customer.id];
-                    const infra = context?.infra || {};
-                    const managedAssets = Number(infra?.managedAssets || 0);
-                    const openUpdates = Number(infra?.openUpdates || 0);
-                    const errorCount = Number(infra?.errorCount || 0);
-                    const warningCount = Number(infra?.warningCount || 0);
-                    const contractFlags = normalizeContractFlags(customer.contractFlags || []);
-                    const customerStatus =
-                      String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active";
-
-                    return (
-                      <tr
-                        key={customer.id}
-                        onClick={() => setActiveId(customer.id)}
-                        className={`cursor-pointer transition ${
-                          isActiveCustomer ? "bg-sand-100" : "bg-white hover:bg-sand-50"
-                        }`}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            setActiveId(customer.id);
+                  sortedCustomers.map((customer, index) => (
+                    <tr
+                      key={customer.id}
+                      className={`${
+                        customer.id === activeId
+                          ? "bg-sand-200/70"
+                          : index % 2 === 0
+                          ? "bg-white"
+                          : "bg-slate-100"
+                      } hover:bg-sand-100`}
+                      onClick={() => setActiveId(customer.id)}
+                    >
+                      <td className="px-3 py-2 align-top">
+                        <p className="font-semibold text-sand-900">{customer.name?.trim() || "Unbenannter Kunde"}</p>
+                        <p className="text-[11px] text-sand-500">
+                          {customer.creditorNumber || "Ohne Nr."}
+                          {customer.shortCode ? ` · ${customer.shortCode}` : ""}
+                        </p>
+                        {(() => {
+                          const context = developmentByCustomerId[customer.id];
+                          if (!context) {
+                            return (
+                              <p className="mt-1 text-[10px] text-sand-400">
+                                {developmentListStatus === "loading" ? "Meta-Hub lädt…" : "Keine Meta-Hub Daten"}
+                              </p>
+                            );
                           }
-                        }}
-                      >
-                        <td className="px-3 py-2 align-top">
-                          <div className="flex items-start gap-2.5">
-                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-sand-200 bg-white text-[11px] font-semibold uppercase tracking-wide text-sand-700">
-                              {customerInitials(customer.name)}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-sand-900">
-                                {customer.name?.trim() || "Unbenannter Kunde"}
-                              </p>
-                              <p className="text-[11px] text-sand-500">
-                                {customer.creditorNumber || "Ohne Nr."}
-                                {customer.shortCode ? ` · ${customer.shortCode}` : ""}
-                              </p>
-                              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                                {managedAssets > 0 ? (
-                                  <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] text-sky-700">
-                                    {managedAssets} Agents
-                                  </span>
-                                ) : null}
-                                {openUpdates > 0 ? (
-                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">
-                                    Updates {openUpdates}
-                                  </span>
-                                ) : null}
-                                {errorCount > 0 ? (
-                                  <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] text-rose-700">
-                                    Fehler {errorCount}
-                                  </span>
-                                ) : null}
-                                {warningCount > 0 ? (
-                                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">
-                                    Warnungen {warningCount}
-                                  </span>
-                                ) : null}
-                                {!context ? (
-                                  <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-500">
-                                    {developmentListStatus === "loading" ? "Meta-Hub lädt…" : "Keine Meta-Hub Daten"}
-                                  </span>
-                                ) : null}
-                              </div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 align-top">
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateCustomer(customer.id, { customerReport: !Boolean(customer.customerReport) })
+                          const infra = context?.infra || {};
+                          const managedAssets = Number(infra?.managedAssets || 0);
+                          const openUpdates = Number(infra?.openUpdates || 0);
+                          const errorCount = Number(infra?.errorCount || 0);
+                          const warningCount = Number(infra?.warningCount || 0);
+                          if (managedAssets === 0 && openUpdates === 0 && errorCount === 0 && warningCount === 0) {
+                            return null;
+                          }
+                          return (
+                            <p className="mt-1 text-[10px] text-sand-600">
+                              {managedAssets} Agents · Updates {openUpdates} · Fehler {errorCount} · Warnungen {warningCount}
+                            </p>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(customer.customerReport)}
+                              onChange={(event) =>
+                                updateCustomer(customer.id, { customerReport: event.target.checked })
                               }
-                              className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide transition ${
-                                customer.customerReport
-                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                  : "border-sand-200 bg-white text-sand-500"
-                              }`}
-                              aria-pressed={Boolean(customer.customerReport)}
-                            >
-                              Bericht
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateCustomer(customer.id, { newsletter: !Boolean(customer.newsletter) })
+                              className="h-3.5 w-3.5"
+                            />
+                            Bericht
+                          </label>
+                          <label className="inline-flex items-center gap-1">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(customer.newsletter)}
+                              onChange={(event) =>
+                                updateCustomer(customer.id, { newsletter: event.target.checked })
                               }
-                              className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide transition ${
-                                customer.newsletter
-                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                  : "border-sand-200 bg-white text-sand-500"
-                              }`}
-                              aria-pressed={Boolean(customer.newsletter)}
-                            >
-                              Newsletter
-                            </button>
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 align-top">
-                          <div className="inline-flex rounded-full border border-sand-200 bg-white p-0.5">
-                            <button
-                              type="button"
-                              onClick={() => updateCustomer(customer.id, { status: "active" })}
-                              className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-wide ${
-                                customerStatus === "active" ? "bg-emerald-600 text-white" : "text-sand-500"
-                              }`}
-                            >
-                              Aktiv
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => updateCustomer(customer.id, { status: "inactive" })}
-                              className={`rounded-full px-2 py-1 text-[10px] uppercase tracking-wide ${
-                                customerStatus === "inactive" ? "bg-slate-600 text-white" : "text-sand-500"
-                              }`}
-                            >
-                              Inaktiv
-                            </button>
-                          </div>
-                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                            {[
-                              { id: "wartung", label: "Wartung" },
-                              { id: "monitoring", label: "Monitoring" },
-                              { id: "regie", label: "Regie" }
-                            ].map((contract) => {
-                              const enabled = contractFlags.includes(contract.id);
-                              return (
-                                <button
-                                  key={contract.id}
-                                  type="button"
-                                  onClick={() => {
-                                    const nextFlags = applyContractFlagChange(
-                                      contractFlags,
-                                      contract.id,
-                                      !enabled
-                                    );
-                                    updateCustomer(customer.id, {
-                                      contractFlags: nextFlags,
-                                      maintenanceContract: nextFlags.includes("wartung")
-                                    });
-                                  }}
-                                  className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide transition ${
-                                    enabled
-                                      ? "border-sand-900 bg-sand-900 text-white"
-                                      : "border-sand-200 bg-white text-sand-500"
-                                  }`}
-                                  aria-pressed={enabled}
-                                >
-                                  {contract.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 align-top text-right">
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setActiveId(customer.id);
-                              setSettingsTab("details");
-                              setEditCustomerId(customer.id);
-                            }}
-                            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                            title="Bearbeiten"
-                            aria-label="Bearbeiten"
-                          >
-                            <Pencil size={12} />
-                            Bearbeiten
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })
+                              className="h-3.5 w-3.5"
+                            />
+                            Newsletter
+                          </label>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <select
+                          value={String(customer.status || "active")}
+                          onChange={(event) => updateCustomer(customer.id, { status: event.target.value })}
+                          className="rounded-lg border border-sand-200 px-2 py-1 text-xs"
+                        >
+                          <option value="active">Aktiv</option>
+                          <option value="inactive">Inaktiv</option>
+                        </select>
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {[
+                            { id: "wartung", label: "Wartung" },
+                            { id: "monitoring", label: "Monitoring" },
+                            { id: "regie", label: "Regie" }
+                          ].map((contract) => (
+                            <label key={contract.id} className="inline-flex items-center gap-1">
+                              <input
+                                type="checkbox"
+                                checked={Boolean((customer.contractFlags || []).includes(contract.id))}
+                                onChange={(event) => {
+                                  const nextFlags = applyContractFlagChange(
+                                    customer.contractFlags || [],
+                                    contract.id,
+                                    event.target.checked
+                                  );
+                                  updateCustomer(customer.id, {
+                                    contractFlags: nextFlags,
+                                    maintenanceContract: nextFlags.includes("wartung")
+                                  });
+                                }}
+                                className="h-3.5 w-3.5"
+                              />
+                              {contract.label}
+                            </label>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 align-top text-right">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setActiveId(customer.id);
+                            setSettingsTab("details");
+                            setEditCustomerId(customer.id);
+                          }}
+                          className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                          title="Bearbeiten"
+                          aria-label="Bearbeiten"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
                 ) : (
                   <tr>
-                    <td colSpan={4} className="px-3 py-6 text-center text-sand-500">
+                    <td colSpan={5} className="px-3 py-6 text-center text-sand-500">
                       Keine Treffer.
                     </td>
                   </tr>

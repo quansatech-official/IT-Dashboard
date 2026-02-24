@@ -7573,6 +7573,214 @@ def _collect_int_values_by_key_fragments(
     return out
 
 
+def _collect_agent_signal_items(
+    node: Any,
+    *,
+    include_fragments: List[str],
+    exclude_fragments: Optional[List[str]] = None,
+    limit: int = 8,
+) -> List[Dict[str, str]]:
+    include = [str(fragment or "").strip().lower() for fragment in (include_fragments or []) if str(fragment or "").strip()]
+    exclude = [str(fragment or "").strip().lower() for fragment in (exclude_fragments or []) if str(fragment or "").strip()]
+    if not include:
+        return []
+    items: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+
+    def _append_item(candidate: Dict[str, Any], source_key: str = "") -> None:
+        if len(items) >= max(1, int(limit or 1)):
+            return
+        title = _agent_field_text(
+            candidate,
+            "title",
+            "name",
+            "check_name",
+            "check",
+            "alert_name",
+            "alert",
+            "service",
+            "script",
+            "subject",
+        )
+        detail = _agent_field_text(
+            candidate,
+            "message",
+            "msg",
+            "description",
+            "details",
+            "detail",
+            "output",
+            "reason",
+            "error",
+            "last_output",
+        )
+        status = _agent_field_text(candidate, "status", "state", "severity", "level", "result", "outcome")
+        last_seen = _agent_field_text(
+            candidate,
+            "last_seen",
+            "lastSeen",
+            "last_run",
+            "lastRun",
+            "created_at",
+            "createdAt",
+            "updated_at",
+            "updatedAt",
+            "timestamp",
+            "time",
+        )
+        if not title and detail:
+            title = detail[:96]
+        if not title:
+            return
+        unique_key = "|".join(
+            [
+                title.strip().lower(),
+                status.strip().lower(),
+                detail.strip().lower()[:120],
+            ]
+        )
+        if unique_key in seen:
+            return
+        seen.add(unique_key)
+        items.append(
+            {
+                "title": title,
+                "status": status,
+                "detail": detail,
+                "lastSeen": last_seen,
+                "source": source_key,
+            }
+        )
+
+    def _walk(current: Any) -> None:
+        if len(items) >= max(1, int(limit or 1)):
+            return
+        if isinstance(current, dict):
+            for raw_key, value in current.items():
+                key_text = str(raw_key or "").strip().lower()
+                include_hit = any(fragment in key_text for fragment in include) if key_text else False
+                exclude_hit = any(fragment in key_text for fragment in exclude) if key_text and exclude else False
+                if include_hit and not exclude_hit:
+                    if isinstance(value, dict):
+                        _append_item(value, key_text)
+                    elif isinstance(value, list):
+                        for entry in value:
+                            if isinstance(entry, dict):
+                                _append_item(entry, key_text)
+                            elif isinstance(entry, str):
+                                entry_text = entry.strip()
+                                if entry_text:
+                                    _append_item({"title": entry_text}, key_text)
+                            if len(items) >= max(1, int(limit or 1)):
+                                return
+                    elif isinstance(value, str):
+                        value_text = value.strip()
+                        if value_text:
+                            _append_item({"title": value_text}, key_text)
+                _walk(value)
+                if len(items) >= max(1, int(limit or 1)):
+                    return
+            return
+        if isinstance(current, list):
+            for entry in current:
+                _walk(entry)
+                if len(items) >= max(1, int(limit or 1)):
+                    return
+
+    _walk(node)
+    return items[: max(1, int(limit or 1))]
+
+
+def _status_has_problem_flag(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "fail",
+            "error",
+            "krit",
+            "critical",
+            "warn",
+            "alert",
+            "problem",
+            "down",
+            "offline",
+            "unhealthy",
+        )
+    )
+
+
+def _build_agent_alarm_check_summary(agent: Dict[str, Any], health: Dict[str, Any]) -> Dict[str, Any]:
+    alert_items = _collect_agent_signal_items(
+        agent,
+        include_fragments=["alarm", "alert"],
+        exclude_fragments=["last", "time", "updated", "created"],
+        limit=6,
+    )
+    check_items = _collect_agent_signal_items(
+        agent,
+        include_fragments=["check"],
+        exclude_fragments=["checkin", "last_check", "timestamp", "time"],
+        limit=8,
+    )
+
+    alert_count_candidates = _collect_int_values_by_key_fragments(
+        agent,
+        include_fragments=["alarm", "alert"],
+        exclude_fragments=["last", "time", "updated", "created"],
+    )
+    check_count_candidates = _collect_int_values_by_key_fragments(
+        agent,
+        include_fragments=["check"],
+        exclude_fragments=["checkin", "last", "time", "timestamp"],
+    )
+    failing_check_candidates = _collect_int_values_by_key_fragments(
+        agent,
+        include_fragments=["check", "fail"],
+        exclude_fragments=["checkin", "last", "time", "timestamp"],
+    )
+    if not failing_check_candidates:
+        failing_check_candidates = _collect_int_values_by_key_fragments(
+            agent,
+            include_fragments=["check", "error"],
+            exclude_fragments=["checkin", "last", "time", "timestamp"],
+        )
+
+    alert_floor = int(health.get("errorCount") or 0) + int(health.get("warningCount") or 0)
+    alert_count = max(
+        [
+            len(alert_items),
+            alert_floor,
+            max(alert_count_candidates) if alert_count_candidates else 0,
+        ]
+    )
+    check_count = max(
+        [
+            len(check_items),
+            max(check_count_candidates) if check_count_candidates else 0,
+        ]
+    )
+    failing_from_items = sum(1 for row in check_items if _status_has_problem_flag(row.get("status")))
+    failing_check_count = max(
+        [
+            failing_from_items,
+            max(failing_check_candidates) if failing_check_candidates else 0,
+        ]
+    )
+    if check_count > 0 and failing_check_count > check_count:
+        check_count = failing_check_count
+
+    return {
+        "alarmCount": int(max(0, alert_count)),
+        "checkCount": int(max(0, check_count)),
+        "failingCheckCount": int(max(0, failing_check_count)),
+        "alertItems": alert_items,
+        "checkItems": check_items,
+    }
+
+
 def _agent_windows_lifecycle(os_text: str, now_dt: datetime) -> Dict[str, Any]:
     text = str(os_text or "").lower()
     entries = [
@@ -8272,6 +8480,9 @@ def _build_customer_development_context(
             "windowsUpdates": total_windows_updates,
             "thirdPartyUpdates": total_thirdparty_updates,
             "openCves": total_open_cves,
+            "alarmCount": 0,
+            "checkCount": 0,
+            "failingCheckCount": 0,
             "osExpiredCount": lifecycle_expired,
             "osEolSoonCount": lifecycle_soon,
             "rmmMappingHint": mapping_hint,
@@ -8289,8 +8500,15 @@ def _build_customer_development_context(
     if not full:
         return light
     managed_devices = []
+    total_agent_alarm_count = 0
+    total_agent_check_count = 0
+    total_agent_failing_check_count = 0
     for agent in managed_agents:
         health = _build_agent_health_summary(agent, now_dt)
+        alarm_check_summary = _build_agent_alarm_check_summary(agent, health)
+        total_agent_alarm_count += int(alarm_check_summary.get("alarmCount") or 0)
+        total_agent_check_count += int(alarm_check_summary.get("checkCount") or 0)
+        total_agent_failing_check_count += int(alarm_check_summary.get("failingCheckCount") or 0)
         managed_devices.append(
             {
                 "source": "tactical_rmm",
@@ -8308,9 +8526,18 @@ def _build_customer_development_context(
                 "windowsUpdates": int(health.get("windowsUpdates") or 0),
                 "thirdPartyUpdates": int(health.get("thirdPartyUpdates") or 0),
                 "openCves": int(health.get("openCves") or 0),
+                "alarmCount": int(alarm_check_summary.get("alarmCount") or 0),
+                "checkCount": int(alarm_check_summary.get("checkCount") or 0),
+                "failingCheckCount": int(alarm_check_summary.get("failingCheckCount") or 0),
+                "alertItems": alarm_check_summary.get("alertItems") or [],
+                "checkItems": alarm_check_summary.get("checkItems") or [],
                 "lifecycle": health.get("lifecycle") or {},
             }
         )
+    if isinstance(light.get("infra"), dict):
+        light["infra"]["alarmCount"] = int(max(0, total_agent_alarm_count))
+        light["infra"]["checkCount"] = int(max(0, total_agent_check_count))
+        light["infra"]["failingCheckCount"] = int(max(0, total_agent_failing_check_count))
     discovered_devices = []
     for row in customer_discovery_rows:
         normalized_row = _discovery_row_to_dict(row)
