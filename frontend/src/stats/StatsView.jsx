@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, FileText, PhoneCall, ClipboardList, Receipt, Users } from "lucide-react";
+import { BarChart3, FileText, PhoneCall, ClipboardList, Receipt, Users, Gauge, Wrench, Sigma } from "lucide-react";
 
 const API = "/api";
 
@@ -39,12 +39,21 @@ const formatHoursDelta = (value) => {
   const prefix = numeric > 0 ? "+" : "";
   return `${prefix}${formatNumber(numeric, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h`;
 };
+const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
 
 const StatCard = ({ title, value, subtitle }) => (
   <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
     <p className="text-[9px] uppercase tracking-[0.28em] text-sand-500">{title}</p>
     <p className="text-lg font-metrics text-sand-900 mt-1.5">{value}</p>
     {subtitle ? <p className="text-[11px] text-sand-500 mt-1">{subtitle}</p> : null}
+  </div>
+);
+
+const ContractMetricLine = ({ icon: Icon, label, value }) => (
+  <div className="flex items-center gap-1.5 text-[10px] text-sand-500">
+    <Icon size={11} className="text-sand-400" />
+    <span className="text-sand-400">{label}:</span>
+    <span className="text-sand-700">{value}</span>
   </div>
 );
 
@@ -100,7 +109,7 @@ const contractStatusLabel = (status) => {
 const contractTypeLabel = (type) => {
   if (type === "wartung") return "Wartung";
   if (type === "monitoring") return "Monitoring";
-  if (type === "avv") return "AVV";
+  if (type === "avv_dsgvo" || type === "avv") return "AVV";
   return "Vertrag";
 };
 
@@ -119,6 +128,7 @@ export default function StatsView() {
   const [tabStatus, setTabStatus] = useState({});
   const [reloadTick, setReloadTick] = useState(0);
   const [customerSort, setCustomerSort] = useState({ key: "businessWeight", direction: "desc" });
+  const [contractsCustomerFilter, setContractsCustomerFilter] = useState("all");
   const days = 30;
 
   useEffect(() => {
@@ -172,13 +182,116 @@ export default function StatsView() {
       : {};
   const contracts =
     stats?.contracts && typeof stats.contracts === "object" ? stats.contracts : {};
-  const contractHours =
-    contracts?.hours && typeof contracts.hours === "object" ? contracts.hours : {};
   const contractMonthLabels =
     contracts?.monthLabels && typeof contracts.monthLabels === "object"
       ? contracts.monthLabels
       : { current: "Aktueller Monat", previous: "Vormonat" };
   const contractRows = Array.isArray(contracts?.rows) ? contracts.rows : [];
+  const contractCustomerOptions = useMemo(() => {
+    const seen = new Set();
+    const options = [];
+    contractRows.forEach((item) => {
+      const id = Number(item?.customerId || 0);
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      const name = String(item?.customerName || "").trim() || `Kunde #${id}`;
+      const number = String(item?.customerNumber || "").trim();
+      options.push({ id, name, number });
+    });
+    options.sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }));
+    return options;
+  }, [contractRows]);
+  useEffect(() => {
+    if (contractsCustomerFilter === "all") return;
+    const hasSelected = contractCustomerOptions.some(
+      (entry) => String(entry.id) === String(contractsCustomerFilter)
+    );
+    if (!hasSelected) {
+      setContractsCustomerFilter("all");
+    }
+  }, [contractsCustomerFilter, contractCustomerOptions]);
+  const filteredContractRows = useMemo(() => {
+    if (contractsCustomerFilter === "all") return contractRows;
+    return contractRows.filter(
+      (item) => String(item?.customerId || "") === String(contractsCustomerFilter)
+    );
+  }, [contractRows, contractsCustomerFilter]);
+  const filteredContractSummary = useMemo(() => {
+    const summary = {
+      totalContracts: 0,
+      customersWithContract: filteredContractRows.length,
+      proposalContracts: 0,
+      unpaidContracts: 0,
+      invoicedContracts: 0,
+      soll: 0,
+      currentMonth: 0,
+      previousMonth: 0,
+      consumedCurrentMonth: 0,
+      consumedPreviousMonth: 0,
+      outsideCurrentMonth: 0,
+      outsidePreviousMonth: 0,
+      revenueMonthly: 0,
+      revenueMonthlyActive: 0,
+      deltaCurrentMonth: 0,
+      deltaPreviousMonth: 0
+    };
+    filteredContractRows.forEach((item) => {
+      const contractCount = Number(
+        item?.contractCount ??
+          (Array.isArray(item?.contracts) ? item.contracts.length : 0)
+      );
+      const unpaidCount =
+        item?.unpaidContractCount !== undefined ? Number(item.unpaidContractCount || 0) : 0;
+      const proposalCount =
+        item?.proposalContractCount !== undefined
+          ? Number(item.proposalContractCount || 0)
+          : item?.contractStatus === "proposal"
+            ? 1
+            : 0;
+      const invoicedCount =
+        item?.invoicedContractCount !== undefined
+          ? Number(item.invoicedContractCount || 0)
+          : item?.contractStatus === "active"
+            ? 1
+            : 0;
+      summary.totalContracts += contractCount;
+      summary.unpaidContracts += unpaidCount;
+      summary.proposalContracts += proposalCount;
+      summary.invoicedContracts += invoicedCount;
+      summary.soll += Number(item?.contractHoursSoll || 0);
+      summary.currentMonth += Number(item?.contractHoursCurrentMonth || 0);
+      summary.previousMonth += Number(item?.contractHoursPreviousMonth || 0);
+      summary.consumedCurrentMonth += Number(item?.consumedHoursCurrentMonth || 0);
+      summary.consumedPreviousMonth += Number(item?.consumedHoursPreviousMonth || 0);
+      summary.outsideCurrentMonth += Number(item?.outsideContractHoursCurrentMonth || 0);
+      summary.outsidePreviousMonth += Number(item?.outsideContractHoursPreviousMonth || 0);
+      summary.revenueMonthly += Number(item?.contractRevenueMonthly || 0);
+      summary.revenueMonthlyActive += Number(item?.contractRevenueMonthlyActive || 0);
+      summary.deltaCurrentMonth += Number(item?.deltaHoursCurrentMonth || 0);
+      summary.deltaPreviousMonth += Number(item?.deltaHoursPreviousMonth || 0);
+    });
+    return {
+      ...summary,
+      totalContracts: Math.max(0, Math.round(summary.totalContracts)),
+      customersWithContract: Math.max(0, Math.round(summary.customersWithContract)),
+      proposalContracts: Math.max(0, Math.round(summary.proposalContracts)),
+      unpaidContracts: Math.max(0, Math.round(summary.unpaidContracts)),
+      invoicedContracts: Math.max(0, Math.round(summary.invoicedContracts)),
+      soll: round2(summary.soll),
+      currentMonth: round2(summary.currentMonth),
+      previousMonth: round2(summary.previousMonth),
+      consumedCurrentMonth: round2(summary.consumedCurrentMonth),
+      consumedPreviousMonth: round2(summary.consumedPreviousMonth),
+      outsideCurrentMonth: round2(summary.outsideCurrentMonth),
+      outsidePreviousMonth: round2(summary.outsidePreviousMonth),
+      revenueMonthly: round2(summary.revenueMonthly),
+      revenueMonthlyActive: round2(summary.revenueMonthlyActive),
+      revenuePerContractMonthly:
+        summary.totalContracts > 0 ? round2(summary.revenueMonthly / summary.totalContracts) : 0,
+      deltaCurrentMonth: round2(summary.deltaCurrentMonth),
+      deltaPreviousMonth: round2(summary.deltaPreviousMonth)
+    };
+  }, [filteredContractRows]);
   const customerGradeCounts = useMemo(() => {
     const base = { A: 0, B: 0, C: 0 };
     customerPaymentStats.forEach((item) => {
@@ -517,46 +630,68 @@ export default function StatsView() {
                   <FileText size={16} />
                   <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Verträge</p>
                 </div>
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  <label className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Filter Kunde</label>
+                  <select
+                    value={contractsCustomerFilter}
+                    onChange={(event) => setContractsCustomerFilter(event.target.value)}
+                    className="h-8 rounded-lg border border-sand-200 bg-white px-2 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  >
+                    <option value="all">Alle Kunden</option>
+                    {contractCustomerOptions.map((entry) => (
+                      <option key={`contract-filter-${entry.id}`} value={String(entry.id)}>
+                        {entry.name}
+                        {entry.number ? ` (${entry.number})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <StatCard
                     title="Verträge gesamt"
-                    value={formatNumber(contracts?.totalContracts ?? 0)}
-                    subtitle={`Kunden mit Vertrag: ${formatNumber(contracts?.customersWithContract ?? 0)}`}
+                    value={formatNumber(filteredContractSummary.totalContracts)}
+                    subtitle={`Kunden mit Vertrag: ${formatNumber(filteredContractSummary.customersWithContract)}`}
                   />
                   <StatCard
-                    title="Unbezahlte Verträge"
-                    value={formatNumber(contracts?.unpaidContracts ?? 0)}
+                    title="Vertragsvorschläge"
+                    value={formatNumber(filteredContractSummary.proposalContracts)}
                     subtitle="Status Vorschlag"
                   />
                   <StatCard
                     title="Fakturierte Verträge"
-                    value={formatNumber(contracts?.invoicedContracts ?? 0)}
+                    value={formatNumber(filteredContractSummary.invoicedContracts)}
                     subtitle="Status Aktiv"
                   />
                   <StatCard
                     title="Vertragsstunden Soll"
-                    value={formatHours(contractHours?.soll ?? 0)}
+                    value={formatHours(filteredContractSummary.soll)}
                     subtitle="Monatlich gesamt"
                   />
                   <StatCard
-                    title={`Vertragsstunden ${contractMonthLabels?.current || "Aktuell"}`}
-                    value={formatHours(contractHours?.currentMonth ?? 0)}
-                    subtitle="Vereinbarte Stunden"
+                    title={`Im Vertrag ${contractMonthLabels?.current || "Aktuell"}`}
+                    value={formatHours(filteredContractSummary.consumedCurrentMonth)}
+                    subtitle={`Delta: ${formatHoursDelta(filteredContractSummary.deltaCurrentMonth)}`}
                   />
                   <StatCard
-                    title={`Vertragsstunden ${contractMonthLabels?.previous || "Vormonat"}`}
-                    value={formatHours(contractHours?.previousMonth ?? 0)}
-                    subtitle="Vereinbarte Stunden"
+                    title={`Außerhalb Vertrag ${contractMonthLabels?.current || "Aktuell"}`}
+                    value={formatHours(filteredContractSummary.outsideCurrentMonth)}
+                    subtitle={`Vormonat: ${formatHours(filteredContractSummary.outsidePreviousMonth)}`}
                   />
                   <StatCard
-                    title={`Verbrauch ${contractMonthLabels?.current || "Aktuell"}`}
-                    value={formatHours(contractHours?.consumedCurrentMonth ?? 0)}
-                    subtitle={`Delta: ${formatHoursDelta(contractHours?.deltaCurrentMonth ?? 0)}`}
+                    title={`Im Vertrag ${contractMonthLabels?.previous || "Vormonat"}`}
+                    value={formatHours(filteredContractSummary.consumedPreviousMonth)}
+                    subtitle={`Delta: ${formatHoursDelta(filteredContractSummary.deltaPreviousMonth)}`}
                   />
                   <StatCard
-                    title={`Verbrauch ${contractMonthLabels?.previous || "Vormonat"}`}
-                    value={formatHours(contractHours?.consumedPreviousMonth ?? 0)}
-                    subtitle={`Delta: ${formatHoursDelta(contractHours?.deltaPreviousMonth ?? 0)}`}
+                    title="Vertragsumsatz pro Monat"
+                    value={formatEur(filteredContractSummary.revenueMonthly)}
+                    subtitle={`Aktive Verträge: ${formatEur(filteredContractSummary.revenueMonthlyActive)}`}
+                  />
+                  <StatCard
+                    title="Wert je Vertrag / Monat"
+                    value={formatEur(filteredContractSummary.revenuePerContractMonthly)}
+                    subtitle="Durchschnitt über alle Verträge"
                   />
                 </div>
 
@@ -565,16 +700,15 @@ export default function StatsView() {
                     <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
                       <tr>
                         <th className="px-3 py-2">Kunde</th>
-                        <th className="px-3 py-2">Status</th>
-                        <th className="px-3 py-2">Vertrag</th>
+                        <th className="px-3 py-2">Verträge</th>
                         <th className="px-3 py-2">Soll</th>
                         <th className="px-3 py-2">{contractMonthLabels?.current || "Aktuell"}</th>
                         <th className="px-3 py-2">{contractMonthLabels?.previous || "Vormonat"}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {contractRows.length ? (
-                        contractRows.map((item, index) => (
+                      {filteredContractRows.length ? (
+                        filteredContractRows.map((item, index) => (
                           <tr
                             key={`${item.customerId || item.customerName || "contract-customer"}-${index}`}
                             className="border-t border-sand-100"
@@ -585,55 +719,121 @@ export default function StatsView() {
                                 {item.customerNumber || "Keine Kundennummer"}
                               </div>
                             </td>
-                            <td className="px-3 py-2">
-                              <span
-                                className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${contractStatusBadgeClass(
-                                  item.contractStatus
-                                )}`}
-                              >
-                                {contractStatusLabel(item.contractStatus)}
-                              </span>
-                            </td>
                             <td className="px-3 py-2 text-sand-700">
-                              {contractTypeLabel(item.contractType)}
-                              <div className="text-[10px] text-sand-400">
-                                {item.contractTitle || "Vertrag"}
-                              </div>
+                              {(() => {
+                                const rowContracts =
+                                  Array.isArray(item?.contracts) && item.contracts.length
+                                    ? item.contracts
+                                    : [
+                                        {
+                                          id: null,
+                                          status: item.contractStatus || "active",
+                                          type: item.contractType || "wartung",
+                                          title: item.contractTitle || "Vertrag",
+                                          monthlyHoursIncluded: Number(item.contractHoursSoll || 0),
+                                          inferred: true
+                                        }
+                                      ];
+                                return (
+                                  <div className="space-y-1.5">
+                                    {rowContracts.map((contract, contractIndex) => (
+                                      <div
+                                        key={`contract-row-${item.customerId || "c"}-${
+                                          contract.id || `virtual-${contractIndex}`
+                                        }`}
+                                        className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1"
+                                      >
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                          <span
+                                            className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${contractStatusBadgeClass(
+                                              contract.status
+                                            )}`}
+                                          >
+                                            {contractStatusLabel(contract.status)}
+                                          </span>
+                                          <span className="inline-flex rounded-full border border-sand-300 bg-white px-2 py-0.5 font-semibold text-sand-600">
+                                            {contractTypeLabel(contract.type)}
+                                          </span>
+                                        </div>
+                                        <div className="mt-1 text-[10px] text-sand-700">
+                                          {contract.title || "Vertrag"}
+                                        </div>
+                                        <div className="text-[10px] text-sand-400">
+                                          Inklusiv: {formatHours(contract.monthlyHoursIncluded || 0)}
+                                        </div>
+                                        <div className="text-[10px] text-sand-400">
+                                          Wert/Monat: {formatEur(contract.monthlyValue || 0)}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                );
+                              })()}
                             </td>
                             <td className="px-3 py-2 text-sand-700">
                               {formatHours(item.contractHoursSoll ?? 0)}
-                            </td>
-                            <td className="px-3 py-2 text-sand-700">
-                              Vertrag: {formatHours(item.contractHoursCurrentMonth ?? 0)}
                               <div className="text-[10px] text-sand-400">
-                                Verbrauch: {formatHours(item.consumedHoursCurrentMonth ?? 0)}
+                                Umsatz/Monat: {formatEur(item.contractRevenueMonthly ?? 0)}
                               </div>
                               <div className="text-[10px] text-sand-400">
-                                Delta: {formatHoursDelta(item.deltaHoursCurrentMonth ?? 0)}
-                              </div>
-                              <div className="text-[10px] text-sand-400">
-                                Aufgaben {formatHours(item.taskHoursCurrentMonth ?? 0)} · Telefonie{" "}
-                                {formatHours(item.telephonyHoursCurrentMonth ?? 0)}
+                                je Vertrag: {formatEur(item.contractRevenuePerContractMonthly ?? 0)}
                               </div>
                             </td>
                             <td className="px-3 py-2 text-sand-700">
-                              Vertrag: {formatHours(item.contractHoursPreviousMonth ?? 0)}
-                              <div className="text-[10px] text-sand-400">
-                                Verbrauch: {formatHours(item.consumedHoursPreviousMonth ?? 0)}
+                              <div className="space-y-0.5">
+                                <ContractMetricLine
+                                  icon={FileText}
+                                  label="Vertrag"
+                                  value={formatHours(item.contractHoursCurrentMonth ?? 0)}
+                                />
+                                <ContractMetricLine
+                                  icon={Gauge}
+                                  label="Verbrauch"
+                                  value={formatHours(item.consumedHoursCurrentMonth ?? 0)}
+                                />
+                                <ContractMetricLine
+                                  icon={Sigma}
+                                  label="Delta"
+                                  value={formatHoursDelta(item.deltaHoursCurrentMonth ?? 0)}
+                                />
+                                <ContractMetricLine
+                                  icon={Wrench}
+                                  label="Aufgaben · Telefonie"
+                                  value={`${formatHours(item.taskHoursCurrentMonth ?? 0)} · ${formatHours(item.telephonyHoursCurrentMonth ?? 0)}`}
+                                />
                               </div>
-                              <div className="text-[10px] text-sand-400">
-                                Delta: {formatHoursDelta(item.deltaHoursPreviousMonth ?? 0)}
-                              </div>
-                              <div className="text-[10px] text-sand-400">
-                                Aufgaben {formatHours(item.taskHoursPreviousMonth ?? 0)} · Telefonie{" "}
-                                {formatHours(item.telephonyHoursPreviousMonth ?? 0)}
+                            </td>
+                            <td className="px-3 py-2 text-sand-700">
+                              <div className="space-y-0.5">
+                                <ContractMetricLine
+                                  icon={FileText}
+                                  label="Vertrag"
+                                  value={formatHours(item.contractHoursPreviousMonth ?? 0)}
+                                />
+                                <ContractMetricLine
+                                  icon={Gauge}
+                                  label="Verbrauch"
+                                  value={formatHours(item.consumedHoursPreviousMonth ?? 0)}
+                                />
+                                <ContractMetricLine
+                                  icon={Sigma}
+                                  label="Delta"
+                                  value={formatHoursDelta(item.deltaHoursPreviousMonth ?? 0)}
+                                />
+                                <ContractMetricLine
+                                  icon={Wrench}
+                                  label="Aufgaben · Telefonie"
+                                  value={`${formatHours(item.taskHoursPreviousMonth ?? 0)} · ${formatHours(
+                                    item.telephonyHoursPreviousMonth ?? 0
+                                  )}`}
+                                />
                               </div>
                             </td>
                           </tr>
                         ))
                       ) : (
                         <tr>
-                          <td colSpan={6} className="px-3 py-4 text-sand-500">
+                          <td colSpan={5} className="px-3 py-4 text-sand-500">
                             Keine Vertragsdaten vorhanden.
                           </td>
                         </tr>

@@ -55,6 +55,26 @@ OLLAMA_STREAM_ENABLED = str(os.environ.get("OLLAMA_STREAM_ENABLED") or "").strip
     "yes",
     "on",
 }
+OLLAMA_NUM_CTX = max(256, int(os.environ.get("OLLAMA_NUM_CTX") or "1024"))
+OLLAMA_NUM_THREAD = max(
+    1,
+    int(
+        os.environ.get("OLLAMA_NUM_THREAD")
+        or min(8, max(1, int(os.cpu_count() or 1)))
+    ),
+)
+OLLAMA_PROMPT_MAX_CHARS = max(
+    2000,
+    int(os.environ.get("OLLAMA_PROMPT_MAX_CHARS") or "12000"),
+)
+OLLAMA_MAX_TOKENS_HARD_LIMIT = max(
+    64,
+    int(os.environ.get("OLLAMA_MAX_TOKENS_HARD_LIMIT") or "320"),
+)
+OLLAMA_SLOW_REQUEST_MS = max(
+    500,
+    int(os.environ.get("OLLAMA_SLOW_REQUEST_MS") or "25000"),
+)
 OLLAMA_RESPONSE_CACHE_TTL_SECONDS = max(
     0,
     int(os.environ.get("OLLAMA_RESPONSE_CACHE_TTL_SECONDS") or "180"),
@@ -2086,21 +2106,36 @@ def _ollama_generate(
     if cached_response is not None:
         return cached_response
 
+    prompt_text = str(prompt or "").strip()
+    if not prompt_text:
+        return {}, ""
+    if len(prompt_text) > OLLAMA_PROMPT_MAX_CHARS:
+        prompt_text = prompt_text[:OLLAMA_PROMPT_MAX_CHARS]
+    resolved_max_tokens: Optional[int] = None
+    if max_tokens is not None:
+        try:
+            resolved_max_tokens = max(1, min(int(max_tokens), OLLAMA_MAX_TOKENS_HARD_LIMIT))
+        except (TypeError, ValueError):
+            resolved_max_tokens = None
+
     for model in normalized_models:
         if _ollama_model_temporarily_missing(model):
             continue
         payload: Dict[str, Any] = {
             "model": model,
-            "prompt": prompt,
+            "prompt": prompt_text,
             "stream": bool(OLLAMA_STREAM_ENABLED),
         }
         if response_format:
             payload["format"] = response_format
-        options: Dict[str, Any] = {}
+        options: Dict[str, Any] = {
+            "num_ctx": int(OLLAMA_NUM_CTX),
+            "num_thread": int(OLLAMA_NUM_THREAD),
+        }
         if temperature is not None:
             options["temperature"] = float(temperature)
-        if max_tokens is not None and int(max_tokens) > 0:
-            options["num_predict"] = int(max_tokens)
+        if resolved_max_tokens is not None and resolved_max_tokens > 0:
+            options["num_predict"] = int(resolved_max_tokens)
         if options:
             payload["options"] = options
         if OLLAMA_REQUEST_KEEP_ALIVE:
@@ -2167,7 +2202,16 @@ def _ollama_generate(
             continue
         if isinstance(data, dict):
             duration_ms = int((time.time() - started_at) * 1000)
-            logger.debug("Ollama response model=%s duration_ms=%s", model, duration_ms)
+            if duration_ms >= OLLAMA_SLOW_REQUEST_MS:
+                logger.info(
+                    "Ollama slow response model=%s duration_ms=%s prompt_chars=%s num_predict=%s",
+                    model,
+                    duration_ms,
+                    len(prompt_text),
+                    int(options.get("num_predict") or 0),
+                )
+            else:
+                logger.debug("Ollama response model=%s duration_ms=%s", model, duration_ms)
             response_value = data.get("response")
             has_response = (
                 (isinstance(response_value, str) and bool(response_value.strip()))
@@ -7003,6 +7047,7 @@ def _customer_timed_task_metrics_window(
     start_ms: int,
     end_ms: int,
     now_ms: int,
+    wartungsvertrag: Optional[bool] = None,
 ) -> Dict[str, Any]:
     task_filters = _customer_task_filter(customer)
     if not task_filters:
@@ -7028,6 +7073,10 @@ def _customer_timed_task_metrics_window(
             anchor = created_at or start_time
             include_task = anchor > 0 and int(start_ms) <= anchor < int(end_ms)
         if not include_task:
+            continue
+        if wartungsvertrag is True and not bool(task.wartungsvertrag):
+            continue
+        if wartungsvertrag is False and bool(task.wartungsvertrag):
             continue
         elapsed = int(task.elapsed or 0)
         if bool(task.running) and start_time > 0 and int(start_ms) <= start_time < int(end_ms):
@@ -7065,131 +7114,258 @@ def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
         )
         .all()
     )
-    latest_doc_by_customer: Dict[int, CustomerContractDocument] = {}
+    calc_rows = (
+        db.query(CustomerContractCalculation)
+        .order_by(
+            CustomerContractCalculation.customer_id.asc(),
+            CustomerContractCalculation.created_at.desc(),
+            CustomerContractCalculation.id.desc(),
+        )
+        .all()
+    )
+    docs_by_customer: Dict[int, List[CustomerContractDocument]] = {}
     for row in contract_docs:
         customer_id = int(row.customer_id or 0)
-        if customer_id <= 0 or customer_id in latest_doc_by_customer:
+        if customer_id <= 0:
             continue
-        latest_doc_by_customer[customer_id] = row
+        docs_by_customer.setdefault(customer_id, []).append(row)
+    latest_calc_by_customer_category: Dict[Tuple[int, str], CustomerContractCalculation] = {}
+    for calc in calc_rows:
+        customer_id = int(calc.customer_id or 0)
+        if customer_id <= 0:
+            continue
+        category = str(calc.tariff_category or "").strip().lower()
+        if category not in {"wartung", "monitoring"}:
+            continue
+        key = (customer_id, category)
+        if key in latest_calc_by_customer_category:
+            continue
+        latest_calc_by_customer_category[key] = calc
 
     rows: List[Dict[str, Any]] = []
+    total_contracts = 0
     unpaid_contracts = 0
+    proposal_contracts = 0
     invoiced_contracts = 0
     total_hours_soll = 0.0
     total_hours_current = 0.0
     total_hours_previous = 0.0
     total_consumed_current = 0.0
     total_consumed_previous = 0.0
+    total_outside_current = 0.0
+    total_outside_previous = 0.0
+    total_revenue_monthly = 0.0
+    total_revenue_monthly_active = 0.0
 
     for customer in customers:
+        customer_id = int(customer.id or 0)
         contract_flags = _parse_contract_flags(customer.contract_flags)
         has_contract_flag = bool(customer.maintenance_contract) or bool(
             set(contract_flags) & {"wartung", "monitoring"}
         )
-        latest_doc = latest_doc_by_customer.get(int(customer.id))
-        if not latest_doc and not has_contract_flag:
+        customer_docs = docs_by_customer.get(customer_id, [])
+        if not customer_docs and not has_contract_flag:
             continue
 
-        contract_status = (
-            _normalize_contract_document_status(latest_doc.status, allow_cancelled=False)
-            if latest_doc
-            else "active"
-        )
-        if contract_status not in {"proposal", "active"}:
-            contract_status = "active"
-        if contract_status == "proposal":
-            unpaid_contracts += 1
-        else:
-            invoiced_contracts += 1
+        contracts: List[Dict[str, Any]] = []
+        contract_type_counts: Dict[str, int] = {}
+        service_contract_counts: Dict[str, int] = {"wartung": 0, "monitoring": 0}
+        customer_unpaid_contracts = 0
+        customer_proposal_contracts = 0
+        customer_invoiced_contracts = 0
+        monthly_hours_soll = 0.0
 
-        if latest_doc:
+        for doc in customer_docs:
+            contract_status = _normalize_contract_document_status(doc.status, allow_cancelled=False)
+            if contract_status not in {"proposal", "active"}:
+                continue
             contract_type = _normalize_contract_doc_type(
-                latest_doc.doc_type or latest_doc.template_key,
+                doc.doc_type or doc.template_key,
                 default="wartung",
             )
-            title = str(latest_doc.title or "").strip() or "Vertrag"
-            monthly_hours_soll = _safe_nonnegative_float(latest_doc.monthly_hours_included or 0.0)
-        else:
-            contract_type = "monitoring" if "monitoring" in contract_flags else "wartung"
-            title = "Vertrag"
-            monthly_hours_soll = 0.0
+            title = str(doc.title or "").strip() or "Vertrag"
+            monthly_hours_included = _safe_nonnegative_float(doc.monthly_hours_included or 0.0)
+            if contract_type in {"wartung", "monitoring"}:
+                monthly_hours_soll += monthly_hours_included
+                service_contract_counts[contract_type] = int(service_contract_counts.get(contract_type, 0)) + 1
+            contract_type_counts[contract_type] = int(contract_type_counts.get(contract_type, 0)) + 1
+            contracts.append(
+                {
+                    "id": int(doc.id),
+                    "status": contract_status,
+                    "type": contract_type,
+                    "title": title,
+                    "monthlyHoursIncluded": round(monthly_hours_included, 2),
+                    "createdAt": int(doc.created_at or 0),
+                    "inferred": False,
+                }
+            )
+            if contract_status == "proposal":
+                customer_proposal_contracts += 1
+            else:
+                customer_invoiced_contracts += 1
+
+        if not contracts:
+            inferred_types: List[str] = []
+            if bool(customer.maintenance_contract) or "wartung" in contract_flags:
+                inferred_types.append("wartung")
+            if "monitoring" in contract_flags:
+                inferred_types.append("monitoring")
+            if not inferred_types:
+                inferred_types.append("wartung")
+            inferred_seen: Set[str] = set()
+            for inferred_type in inferred_types:
+                if inferred_type in inferred_seen:
+                    continue
+                inferred_seen.add(inferred_type)
+                if inferred_type in {"wartung", "monitoring"}:
+                    service_contract_counts[inferred_type] = int(service_contract_counts.get(inferred_type, 0)) + 1
+                contract_type_counts[inferred_type] = int(contract_type_counts.get(inferred_type, 0)) + 1
+                contracts.append(
+                    {
+                        "id": None,
+                        "status": "active",
+                        "type": inferred_type,
+                        "title": "Vertrag",
+                        "monthlyHoursIncluded": 0.0,
+                        "createdAt": 0,
+                        "inferred": True,
+                    }
+                )
+                customer_invoiced_contracts += 1
 
         contract_hours_current = monthly_hours_soll
         contract_hours_previous = monthly_hours_soll
 
-        task_current = _customer_timed_task_metrics_window(
+        task_contract_current = _customer_timed_task_metrics_window(
             db,
             customer,
             current_start_ms,
             current_end_ms,
             now_ms,
+            wartungsvertrag=True,
         )
-        task_previous = _customer_timed_task_metrics_window(
+        task_contract_previous = _customer_timed_task_metrics_window(
             db,
             customer,
             previous_start_ms,
             previous_end_ms,
             now_ms,
+            wartungsvertrag=True,
         )
-        phone_numbers = [phone.number for phone in customer.phones]
-        telephony_current = _customer_telephony_metrics_window(
-            phone_numbers,
+        task_outside_current = _customer_timed_task_metrics_window(
+            db,
+            customer,
             current_start_ms,
             current_end_ms,
+            now_ms,
+            wartungsvertrag=False,
         )
-        telephony_previous = _customer_telephony_metrics_window(
-            phone_numbers,
+        task_outside_previous = _customer_timed_task_metrics_window(
+            db,
+            customer,
             previous_start_ms,
             previous_end_ms,
+            now_ms,
+            wartungsvertrag=False,
         )
 
-        consumed_current_ms = int(task_current.get("milliseconds") or 0) + int(
-            telephony_current.get("seconds") or 0
-        ) * 1000
-        consumed_previous_ms = int(task_previous.get("milliseconds") or 0) + int(
-            telephony_previous.get("seconds") or 0
-        ) * 1000
-        consumed_current_hours = round(consumed_current_ms / 3_600_000.0, 2) if consumed_current_ms else 0.0
-        consumed_previous_hours = round(consumed_previous_ms / 3_600_000.0, 2) if consumed_previous_ms else 0.0
-        telephony_current_hours = (
-            round((int(telephony_current.get("seconds") or 0) / 3600.0), 2)
-            if telephony_current.get("seconds")
-            else 0.0
+        consumed_current_hours = round(float(task_contract_current.get("hours") or 0.0), 2)
+        consumed_previous_hours = round(float(task_contract_previous.get("hours") or 0.0), 2)
+        outside_current_hours = round(float(task_outside_current.get("hours") or 0.0), 2)
+        outside_previous_hours = round(float(task_outside_previous.get("hours") or 0.0), 2)
+
+        revenue_monthly_wartung = _safe_nonnegative_float(
+            (
+                latest_calc_by_customer_category.get((customer_id, "wartung")).monthly_total
+                if latest_calc_by_customer_category.get((customer_id, "wartung"))
+                else 0.0
+            )
         )
-        telephony_previous_hours = (
-            round((int(telephony_previous.get("seconds") or 0) / 3600.0), 2)
-            if telephony_previous.get("seconds")
+        revenue_monthly_monitoring = _safe_nonnegative_float(
+            (
+                latest_calc_by_customer_category.get((customer_id, "monitoring")).monthly_total
+                if latest_calc_by_customer_category.get((customer_id, "monitoring"))
+                else 0.0
+            )
+        )
+        revenue_monthly_customer = round(revenue_monthly_wartung + revenue_monthly_monitoring, 2)
+        revenue_monthly_active_customer = 0.0
+        service_contract_count_total = int(service_contract_counts.get("wartung", 0)) + int(
+            service_contract_counts.get("monitoring", 0)
+        )
+        for contract in contracts:
+            contract_type = str(contract.get("type") or "")
+            if contract_type == "wartung":
+                split_count = max(1, int(service_contract_counts.get("wartung", 0)))
+                contract_value = revenue_monthly_wartung / split_count
+            elif contract_type == "monitoring":
+                split_count = max(1, int(service_contract_counts.get("monitoring", 0)))
+                contract_value = revenue_monthly_monitoring / split_count
+            else:
+                contract_value = 0.0
+            contract_status = str(contract.get("status") or "")
+            contract["monthlyValue"] = round(contract_value, 2)
+            if contract_status == "active":
+                revenue_monthly_active_customer += contract_value
+        revenue_monthly_active_customer = round(revenue_monthly_active_customer, 2)
+        revenue_per_contract_customer = (
+            round(revenue_monthly_customer / float(service_contract_count_total), 2)
+            if service_contract_count_total > 0
             else 0.0
         )
 
+        total_contracts += len(contracts)
+        unpaid_contracts += customer_unpaid_contracts
+        proposal_contracts += customer_proposal_contracts
+        invoiced_contracts += customer_invoiced_contracts
         total_hours_soll += monthly_hours_soll
         total_hours_current += contract_hours_current
         total_hours_previous += contract_hours_previous
         total_consumed_current += consumed_current_hours
         total_consumed_previous += consumed_previous_hours
+        total_outside_current += outside_current_hours
+        total_outside_previous += outside_previous_hours
+        total_revenue_monthly += revenue_monthly_customer
+        total_revenue_monthly_active += revenue_monthly_active_customer
+
+        primary_contract = contracts[0] if contracts else {}
 
         rows.append(
             {
-                "customerId": int(customer.id),
-                "customerName": str(customer.name or "").strip() or f"Kunde #{int(customer.id)}",
+                "customerId": customer_id,
+                "customerName": str(customer.name or "").strip() or f"Kunde #{customer_id}",
                 "customerNumber": str(customer.creditor_number or "").strip(),
                 "customerStatus": str(customer.status or "active").strip().lower() or "active",
-                "contractStatus": contract_status,
-                "contractType": contract_type,
-                "contractTitle": title,
+                "contractCount": len(contracts),
+                "unpaidContractCount": int(customer_unpaid_contracts),
+                "proposalContractCount": int(customer_proposal_contracts),
+                "invoicedContractCount": int(customer_invoiced_contracts),
+                "contractTypeCounts": _normalize_contract_type_counts(contract_type_counts),
+                "contracts": contracts,
+                "contractStatus": str(primary_contract.get("status") or "active"),
+                "contractType": str(primary_contract.get("type") or "wartung"),
+                "contractTitle": str(primary_contract.get("title") or "Vertrag"),
                 "contractHoursSoll": round(monthly_hours_soll, 2),
                 "contractHoursCurrentMonth": round(contract_hours_current, 2),
                 "contractHoursPreviousMonth": round(contract_hours_previous, 2),
+                "contractRevenueMonthly": revenue_monthly_customer,
+                "contractRevenueMonthlyActive": revenue_monthly_active_customer,
+                "contractRevenuePerContractMonthly": revenue_per_contract_customer,
                 "consumedHoursCurrentMonth": consumed_current_hours,
                 "consumedHoursPreviousMonth": consumed_previous_hours,
-                "taskHoursCurrentMonth": round(float(task_current.get("hours") or 0.0), 2),
-                "taskHoursPreviousMonth": round(float(task_previous.get("hours") or 0.0), 2),
-                "telephonyHoursCurrentMonth": telephony_current_hours,
-                "telephonyHoursPreviousMonth": telephony_previous_hours,
-                "taskCountCurrentMonth": int(task_current.get("count") or 0),
-                "taskCountPreviousMonth": int(task_previous.get("count") or 0),
-                "callCountCurrentMonth": int(telephony_current.get("calls") or 0),
-                "callCountPreviousMonth": int(telephony_previous.get("calls") or 0),
+                "outsideContractHoursCurrentMonth": outside_current_hours,
+                "outsideContractHoursPreviousMonth": outside_previous_hours,
+                "taskHoursCurrentMonth": consumed_current_hours,
+                "taskHoursPreviousMonth": consumed_previous_hours,
+                "taskCountCurrentMonth": int(task_contract_current.get("count") or 0),
+                "taskCountPreviousMonth": int(task_contract_previous.get("count") or 0),
+                "outsideTaskCountCurrentMonth": int(task_outside_current.get("count") or 0),
+                "outsideTaskCountPreviousMonth": int(task_outside_previous.get("count") or 0),
+                "telephonyHoursCurrentMonth": 0.0,
+                "telephonyHoursPreviousMonth": 0.0,
+                "callCountCurrentMonth": 0,
+                "callCountPreviousMonth": 0,
                 "deltaHoursCurrentMonth": round(consumed_current_hours - contract_hours_current, 2),
                 "deltaHoursPreviousMonth": round(consumed_previous_hours - contract_hours_previous, 2),
             }
@@ -7197,10 +7373,11 @@ def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
 
     rows.sort(key=lambda item: str(item.get("customerName") or "").lower())
     return {
-        "totalContracts": len(rows),
+        "totalContracts": int(total_contracts),
         "customersWithContract": len(rows),
         "totalContractDocuments": len(contract_docs),
         "unpaidContracts": int(unpaid_contracts),
+        "proposalContracts": int(proposal_contracts),
         "invoicedContracts": int(invoiced_contracts),
         "monthLabels": {
             "current": current_label,
@@ -7212,8 +7389,17 @@ def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
             "previousMonth": round(total_hours_previous, 2),
             "consumedCurrentMonth": round(total_consumed_current, 2),
             "consumedPreviousMonth": round(total_consumed_previous, 2),
+            "outsideCurrentMonth": round(total_outside_current, 2),
+            "outsidePreviousMonth": round(total_outside_previous, 2),
             "deltaCurrentMonth": round(total_consumed_current - total_hours_current, 2),
             "deltaPreviousMonth": round(total_consumed_previous - total_hours_previous, 2),
+        },
+        "revenue": {
+            "monthlyTotal": round(total_revenue_monthly, 2),
+            "monthlyActiveTotal": round(total_revenue_monthly_active, 2),
+            "perContractMonthly": round(total_revenue_monthly / float(total_contracts), 2)
+            if total_contracts > 0
+            else 0.0,
         },
         "rows": rows,
     }
@@ -9158,12 +9344,12 @@ def _customer_development_ai_prompt(
 def _customer_development_ai_max_tokens(mode: str) -> int:
     mode_key = str(mode or "summary").strip().lower()
     if mode_key == "analyse":
-        return 520
+        return 280
     if mode_key in {"angebot", "kundenbericht", "leitfaden", "newsletter"}:
-        return 420
+        return 240
     if mode_key in {"aktivierung_mail", "aktivierung_call", "mail"}:
-        return 360
-    return 260
+        return 200
+    return 180
 
 
 def _customer_development_ai_fallback(context: Dict[str, Any], mode: str) -> str:
@@ -12364,7 +12550,7 @@ def generate_offer_text(data: OfferAiRequest):
         prompt,
         model_candidates=model_candidates,
         temperature=0.2,
-        max_tokens=340,
+        max_tokens=220,
     )
     if not payload:
         raise HTTPException(502, "Ollama request failed")

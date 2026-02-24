@@ -324,25 +324,6 @@ const customerPayload = (customer) => ({
     }))
 });
 
-const CONTRACT_FLAG_ORDER = ["wartung", "monitoring", "regie"];
-
-const applyContractFlagChange = (flags, contractId, checked) => {
-  const current = new Set(normalizeContractFlags(flags));
-  const key = String(contractId || "").trim().toLowerCase();
-  if (!key) return CONTRACT_FLAG_ORDER.filter((item) => current.has(item));
-  if (checked) {
-    current.add(key);
-    if (key === "regie") {
-      current.delete("wartung");
-    } else if (key === "wartung") {
-      current.delete("regie");
-    }
-  } else {
-    current.delete(key);
-  }
-  return CONTRACT_FLAG_ORDER.filter((item) => current.has(item));
-};
-
 const formatEur = (value) => {
   if (value === null || typeof value === "undefined") return "n/a";
   const number = Number(value);
@@ -392,6 +373,233 @@ const formatHours = (value, fractionDigits = 2) => {
   })} h`;
 };
 
+const normalizeText = (value) => String(value || "").trim().toLowerCase();
+
+const normalizeDigitsOnly = (value) => String(value || "").replace(/\D/g, "");
+
+const toTextValue = (value) => {
+  if (typeof value === "string" || typeof value === "number") return String(value).trim();
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => toTextValue(entry))
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (value && typeof value === "object") {
+    const preferred = [value.email, value.address, value.name, value.value, value.label]
+      .map((entry) => toTextValue(entry))
+      .find(Boolean);
+    return preferred || "";
+  }
+  return "";
+};
+
+const toTimestampMs = (value) => {
+  if (value === null || typeof value === "undefined") return 0;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value > 10_000_000_000) return Math.round(value);
+    if (value > 1_000_000_000) return Math.round(value * 1000);
+    return 0;
+  }
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed)) return 0;
+    if (parsed > 10_000_000_000) return Math.round(parsed);
+    if (parsed > 1_000_000_000) return Math.round(parsed * 1000);
+    return 0;
+  }
+  const parsedDate = Date.parse(raw);
+  return Number.isFinite(parsedDate) && parsedDate > 0 ? parsedDate : 0;
+};
+
+const firstTimestampMs = (...values) => {
+  for (const value of values) {
+    const parsed = toTimestampMs(value);
+    if (parsed > 0) return parsed;
+  }
+  return 0;
+};
+
+const formatDateTime = (value) => {
+  const timestamp = toTimestampMs(value);
+  if (!timestamp) return "n/a";
+  const date = new Date(timestamp);
+  return date.toLocaleString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+};
+
+const formatCallDuration = (value) => {
+  const seconds = Number.parseInt(String(value || "0"), 10);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+};
+
+const normalizeEmailDirection = (entry) => {
+  const candidates = [
+    entry?.direction,
+    entry?.emailDirection,
+    entry?.mailDirection,
+    entry?.kind,
+    entry?.type,
+    entry?.folder,
+    entry?.mailbox
+  ]
+    .map((value) => normalizeText(value))
+    .filter(Boolean);
+  for (const value of candidates) {
+    if (/^(out|outbound|sent|gesendet)/.test(value)) return "outgoing";
+    if (/^(in|inbound|received|eingang|inbox)/.test(value)) return "incoming";
+  }
+  return "";
+};
+
+const extractMetaHubEmailsFromContext = (context) => {
+  if (!context || typeof context !== "object") return [];
+  const sources = [
+    context?.emails,
+    context?.emailEvents,
+    context?.email_events,
+    context?.emailMessages,
+    context?.email_messages,
+    context?.communication?.emails,
+    context?.communications?.emails,
+    context?.metaHub?.emails,
+    context?.meta_hub?.emails,
+    context?.metaHubEmail?.emails,
+    context?.meta_hub_email?.emails
+  ];
+  const dedupe = new Set();
+  const out = [];
+  sources.forEach((source) => {
+    if (!Array.isArray(source)) return;
+    source.forEach((entry, index) => {
+      if (!entry || typeof entry !== "object") return;
+      const subject =
+        toTextValue(entry?.subject) ||
+        toTextValue(entry?.title) ||
+        toTextValue(entry?.betreff) ||
+        "(ohne Betreff)";
+      const from =
+        toTextValue(entry?.from) ||
+        toTextValue(entry?.fromEmail) ||
+        toTextValue(entry?.from_email) ||
+        toTextValue(entry?.sender) ||
+        toTextValue(entry?.senderEmail) ||
+        toTextValue(entry?.sender_email) ||
+        "";
+      const to =
+        toTextValue(entry?.to) ||
+        toTextValue(entry?.toEmail) ||
+        toTextValue(entry?.to_email) ||
+        toTextValue(entry?.recipient) ||
+        toTextValue(entry?.recipientEmail) ||
+        toTextValue(entry?.recipient_email) ||
+        toTextValue(entry?.recipients) ||
+        "";
+      const snippetRaw =
+        toTextValue(entry?.snippet) ||
+        toTextValue(entry?.preview) ||
+        toTextValue(entry?.text) ||
+        toTextValue(entry?.body) ||
+        toTextValue(entry?.content) ||
+        "";
+      const snippet =
+        snippetRaw.length > 280 ? `${snippetRaw.slice(0, 277).trimEnd()}...` : snippetRaw;
+      const timestamp = firstTimestampMs(
+        entry?.timestamp,
+        entry?.time,
+        entry?.ts,
+        entry?.sentAt,
+        entry?.sent_at,
+        entry?.receivedAt,
+        entry?.received_at,
+        entry?.date,
+        entry?.createdAt,
+        entry?.created_at
+      );
+      const rawId =
+        toTextValue(entry?.id) ||
+        toTextValue(entry?.messageId) ||
+        toTextValue(entry?.message_id) ||
+        toTextValue(entry?.emailId) ||
+        toTextValue(entry?.email_id) ||
+        toTextValue(entry?.uid) ||
+        `entry-${index}`;
+      const dedupeKey = [
+        rawId,
+        String(timestamp || 0),
+        normalizeText(subject),
+        normalizeText(from),
+        normalizeText(to),
+        normalizeText(snippet),
+      ].join("|");
+      if (dedupe.has(dedupeKey)) return;
+      dedupe.add(dedupeKey);
+      out.push({
+        id: rawId,
+        subject,
+        from,
+        to,
+        snippet,
+        direction: normalizeEmailDirection(entry),
+        timestamp,
+      });
+    });
+  });
+  out.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+  return out;
+};
+
+const buildCustomerCallEntries = (calls, customer) => {
+  const list = Array.isArray(calls) ? calls : [];
+  const customerName = normalizeText(customer?.name);
+  const phoneDigits = (customer?.phones || [])
+    .map((phone) => normalizeDigitsOnly(phone?.number))
+    .filter((digits) => digits.length >= 4);
+  const entries = list
+    .filter((entry) => entry && typeof entry === "object")
+    .filter((entry) => {
+      const fromDigits = normalizeDigitsOnly(entry?.from);
+      const toDigits = normalizeDigitsOnly(entry?.to);
+      const hasNumberMatch = phoneDigits.some(
+        (digits) => fromDigits.includes(digits) || toDigits.includes(digits)
+      );
+      if (hasNumberMatch) return true;
+      const entryCustomerName = normalizeText(entry?.customerName);
+      if (!customerName || !entryCustomerName) return false;
+      return (
+        entryCustomerName === customerName ||
+        entryCustomerName.includes(customerName) ||
+        customerName.includes(entryCustomerName)
+      );
+    })
+    .map((entry, index) => ({
+      id: toTextValue(entry?.uuid) || `call-${index}`,
+      from: toTextValue(entry?.from),
+      to: toTextValue(entry?.to),
+      direction: normalizeText(entry?.direction),
+      extension: toTextValue(entry?.extension),
+      customerName: toTextValue(entry?.customerName),
+      answered: Boolean(entry?.answered),
+      duration: Number.parseInt(String(entry?.duration || "0"), 10) || 0,
+      timestamp: firstTimestampMs(entry?.startTime, entry?.endTime),
+    }));
+  entries.sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+  return entries;
+};
+
 const deriveContractCountsFromDevelopment = (context) => {
   if (!context || typeof context !== "object") {
     return {
@@ -418,6 +626,16 @@ const deriveContractCountsFromDevelopment = (context) => {
     managed: toCount(infra.managedAssets),
     discovered: toCount(infra.discoveredAssets)
   };
+};
+
+const EMPTY_CUSTOMER_COMMUNICATION = {
+  customerId: null,
+  emails: [],
+  calls: [],
+  loadedAt: 0,
+  metaHubAvailable: false,
+  metaHubError: false,
+  telephonyError: false
 };
 
 export default function CustomerDirectoryView() {
@@ -451,6 +669,8 @@ export default function CustomerDirectoryView() {
   const [toast, setToast] = useState("");
   const [developmentByCustomerId, setDevelopmentByCustomerId] = useState({});
   const [developmentListStatus, setDevelopmentListStatus] = useState("idle");
+  const [communicationStatus, setCommunicationStatus] = useState("idle");
+  const [customerCommunication, setCustomerCommunication] = useState(EMPTY_CUSTOMER_COMMUNICATION);
   const [previewModal, setPreviewModal] = useState({
     open: false,
     title: "",
@@ -1137,6 +1357,86 @@ export default function CustomerDirectoryView() {
     (customer) => String(customer.status || "active").toLowerCase() === "inactive"
   ).length;
   const activeCustomers = Math.max(0, totalCustomers - inactiveCustomers);
+  const communicationDataForEditCustomer =
+    Number(customerCommunication.customerId || 0) === Number(editCustomer?.id || 0)
+      ? customerCommunication
+      : EMPTY_CUSTOMER_COMMUNICATION;
+  const communicationEmailEntries = communicationDataForEditCustomer.emails || [];
+  const communicationCallEntries = communicationDataForEditCustomer.calls || [];
+
+  const fetchCustomerCommunication = async (customer, refresh = false) => {
+    const customerId = Number(customer?.id || 0);
+    if (!customerId) return { ...EMPTY_CUSTOMER_COMMUNICATION };
+    const [developmentResult, callsResult] = await Promise.allSettled([
+      api.getCustomerDevelopment(customerId, refresh),
+      telephonyService.fetchCalls(800)
+    ]);
+    const developmentPayload =
+      developmentResult.status === "fulfilled" &&
+      developmentResult.value &&
+      typeof developmentResult.value === "object" &&
+      !Array.isArray(developmentResult.value) &&
+      !developmentResult.value?.detail
+        ? developmentResult.value
+        : null;
+    const emails = extractMetaHubEmailsFromContext(developmentPayload);
+    const rawCalls =
+      callsResult.status === "fulfilled" && Array.isArray(callsResult.value)
+        ? callsResult.value
+        : [];
+    const calls = buildCustomerCallEntries(rawCalls, customer);
+    return {
+      customerId,
+      emails,
+      calls,
+      loadedAt: Date.now(),
+      metaHubAvailable: Boolean(developmentPayload),
+      metaHubError: developmentResult.status === "rejected" || Boolean(developmentResult.value?.detail),
+      telephonyError: callsResult.status === "rejected"
+    };
+  };
+
+  const refreshCustomerCommunication = async (refresh = false) => {
+    if (!editCustomer?.id) return;
+    const expectedCustomerId = Number(editCustomer.id);
+    setCommunicationStatus("loading");
+    try {
+      const payload = await fetchCustomerCommunication(editCustomer, refresh);
+      if (Number(editCustomerId || 0) !== expectedCustomerId) return;
+      setCustomerCommunication(payload);
+      setCommunicationStatus("ready");
+    } catch {
+      if (Number(editCustomerId || 0) !== expectedCustomerId) return;
+      setCustomerCommunication({
+        ...EMPTY_CUSTOMER_COMMUNICATION,
+        customerId: expectedCustomerId,
+      });
+      setCommunicationStatus("error");
+    }
+  };
+
+  useEffect(() => {
+    if (settingsTab !== "communication" || !editCustomer?.id) return;
+    let active = true;
+    setCommunicationStatus("loading");
+    fetchCustomerCommunication(editCustomer, false)
+      .then((payload) => {
+        if (!active) return;
+        setCustomerCommunication(payload);
+        setCommunicationStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setCustomerCommunication({
+          ...EMPTY_CUSTOMER_COMMUNICATION,
+          customerId: Number(editCustomer.id || 0),
+        });
+        setCommunicationStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [settingsTab, editCustomer?.id]);
 
   const renderContractListItem = (item) => {
     const status = String(item?.status || "active").toLowerCase();
@@ -2486,6 +2786,18 @@ export default function CustomerDirectoryView() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setSettingsTab("communication")}
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                    settingsTab === "communication"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white hover:bg-sand-100"
+                  }`}
+                >
+                  <Mail size={12} />
+                  Kommunikation
+                </button>
+                <button
+                  type="button"
                   onClick={() => setSettingsTab("contracts")}
                   className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
                     settingsTab === "contracts"
@@ -2589,36 +2901,6 @@ export default function CustomerDirectoryView() {
                     <option value="inactive">Inaktiv</option>
                   </select>
                 </label>
-              </div>
-              <div className="mt-2 rounded-xl border border-sand-200 bg-white px-3 py-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500 mb-2">Vertragsstatus</p>
-                <div className="flex flex-wrap items-center gap-3 text-sm text-sand-700">
-                  {[
-                    { id: "wartung", label: "Wartung" },
-                    { id: "monitoring", label: "Monitoring" },
-                    { id: "regie", label: "Regie" }
-                  ].map((contract) => (
-                    <label key={contract.id} className="inline-flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={Boolean((editCustomer.contractFlags || []).includes(contract.id))}
-                        onChange={(event) => {
-                          const nextFlags = applyContractFlagChange(
-                            editCustomer.contractFlags || [],
-                            contract.id,
-                            event.target.checked
-                          );
-                          updateCustomer(editCustomer.id, {
-                            contractFlags: nextFlags,
-                            maintenanceContract: nextFlags.includes("wartung")
-                          });
-                        }}
-                        className="h-4 w-4"
-                      />
-                      {contract.label}
-                    </label>
-                  ))}
-                </div>
               </div>
               <div className="mt-2 rounded-xl border border-sand-200 bg-white p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2861,6 +3143,122 @@ export default function CustomerDirectoryView() {
                     customerName={editCustomer.name || ""}
                     customerNumber={editCustomer.creditorNumber || ""}
                   />
+                </div>
+              ) : null}
+              {settingsTab === "communication" ? (
+                <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kommunikation</p>
+                    <button
+                      type="button"
+                      onClick={() => refreshCustomerCommunication(true)}
+                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      Aktualisieren
+                    </button>
+                  </div>
+                  {communicationStatus === "loading" ? (
+                    <p className="text-xs text-sand-500">Lade Kommunikation aus Meta-Hub und Telefonie…</p>
+                  ) : null}
+                  {communicationStatus === "error" ? (
+                    <p className="text-xs text-rose-600">Kommunikationsdaten konnten nicht geladen werden.</p>
+                  ) : null}
+                  {communicationStatus === "ready" ? (
+                    <>
+                      <div className="grid gap-2 md:grid-cols-3">
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">E-Mails (Meta-Hub)</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {Number(communicationEmailEntries.length || 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Telefonate (Telefonie-API)</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {Number(communicationCallEntries.length || 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stand</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {communicationDataForEditCustomer.loadedAt
+                              ? formatDateTime(communicationDataForEditCustomer.loadedAt)
+                              : "n/a"}
+                          </p>
+                        </div>
+                      </div>
+                      {communicationDataForEditCustomer.metaHubError ? (
+                        <p className="text-xs text-amber-700">
+                          Meta-Hub-E-Mails konnten nicht vollständig geladen werden.
+                        </p>
+                      ) : null}
+                      {communicationDataForEditCustomer.telephonyError ? (
+                        <p className="text-xs text-amber-700">
+                          Telefonie-API konnte nicht erreicht werden.
+                        </p>
+                      ) : null}
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+                          <div className="mb-2 flex items-center gap-1.5 text-sand-700">
+                            <Mail size={13} />
+                            <p className="text-[11px] uppercase tracking-wide">E-Mail-Verlauf</p>
+                          </div>
+                          <div className="max-h-80 space-y-1.5 overflow-auto pr-1">
+                            {communicationEmailEntries.length ? (
+                              communicationEmailEntries.map((entry) => (
+                                <div key={`${entry.id}-${entry.timestamp}`} className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <p className="text-xs font-semibold text-sand-900">{entry.subject || "(ohne Betreff)"}</p>
+                                    <span className="text-[10px] text-sand-500">{formatDateTime(entry.timestamp)}</span>
+                                  </div>
+                                  <p className="mt-0.5 text-[11px] text-sand-600">
+                                    {entry.from || "n/a"} → {entry.to || "n/a"}
+                                  </p>
+                                  {entry.direction ? (
+                                    <p className="mt-0.5 text-[10px] uppercase tracking-wide text-sand-500">
+                                      {entry.direction === "incoming" ? "Eingehend" : "Ausgehend"}
+                                    </p>
+                                  ) : null}
+                                  {entry.snippet ? <p className="mt-1 text-[11px] text-sand-700">{entry.snippet}</p> : null}
+                                </div>
+                              ))
+                            ) : (
+                              <p className="text-xs text-sand-500">Keine E-Mails im Meta-Hub-Snapshot gefunden.</p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+                          <div className="mb-2 flex items-center gap-1.5 text-sand-700">
+                            <Phone size={13} />
+                            <p className="text-[11px] uppercase tracking-wide">Telefonate</p>
+                          </div>
+                          <div className="max-h-80 space-y-1.5 overflow-auto pr-1">
+                            {communicationCallEntries.length ? (
+                              communicationCallEntries.map((entry) => (
+                                <div key={`${entry.id}-${entry.timestamp}`} className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <p className="text-xs font-semibold text-sand-900">
+                                      {entry.answered ? "Angenommen" : "Nicht angenommen"}
+                                    </p>
+                                    <span className="text-[10px] text-sand-500">{formatDateTime(entry.timestamp)}</span>
+                                  </div>
+                                  <p className="mt-0.5 text-[11px] text-sand-600">
+                                    {entry.from || "n/a"} → {entry.to || "n/a"}
+                                  </p>
+                                  <p className="mt-0.5 text-[10px] uppercase tracking-wide text-sand-500">
+                                    {entry.direction || "n/a"} · Dauer {formatCallDuration(entry.duration)}
+                                    {entry.extension ? ` · Nebenstelle ${entry.extension}` : ""}
+                                  </p>
+                                </div>
+                              ))
+                            ) : (
+                              <p className="text-xs text-sand-500">Keine Telefonate für diesen Kunden gefunden.</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               ) : null}
               {settingsTab === "contracts" ? (
