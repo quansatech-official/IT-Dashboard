@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
+import html2pdf from "html2pdf.js";
 import jsPDF from "jspdf";
 import {
   BadgeCheck,
@@ -169,12 +170,103 @@ const normalizeContractFlags = (flags) => {
   return values;
 };
 
+const normalizeContractDocumentType = (value) => {
+  const key = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+  if (!key) return "";
+  if (["wartung", "wartungsvertrag", "maintenance", "servicelevelagreement", "sla"].includes(key)) {
+    return "wartung";
+  }
+  if (["monitoring", "monitoringvertrag", "rmm"].includes(key)) {
+    return "monitoring";
+  }
+  if (["avv", "dsgvo", "avv_dsgvo", "auftragsverarbeitungsvertrag"].includes(key)) {
+    return "avv_dsgvo";
+  }
+  return key.replace(/[^a-z0-9_]+/g, "").replace(/^_+|_+$/g, "");
+};
+
+const normalizeContractDocumentFlags = (flags) => {
+  if (!Array.isArray(flags)) return [];
+  const seen = new Set();
+  flags.forEach((entry) => {
+    const key = normalizeContractDocumentType(entry);
+    if (key === "wartung" || key === "monitoring") seen.add(key);
+  });
+  return ["wartung", "monitoring"].filter((entry) => seen.has(entry));
+};
+
+const normalizeContractTypeCounts = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+  const counts = {};
+  Object.entries(input).forEach(([rawType, rawCount]) => {
+    const type = normalizeContractDocumentType(rawType);
+    const count = Number.parseInt(String(rawCount || "0"), 10);
+    if (!type || !Number.isFinite(count) || count <= 0) return;
+    counts[type] = (counts[type] || 0) + count;
+  });
+  return counts;
+};
+
+const deriveContractTypeCountsFromContracts = (contracts) => {
+  if (!Array.isArray(contracts)) return {};
+  const counts = {};
+  contracts.forEach((contract) => {
+    const type = normalizeContractDocumentType(
+      contract?.doc_type ?? contract?.docType ?? contract?.template_key ?? contract?.templateKey
+    );
+    if (!type) return;
+    counts[type] = (counts[type] || 0) + 1;
+  });
+  return counts;
+};
+
+const CONTRACT_TYPE_BADGE_ORDER = ["wartung", "monitoring", "avv_dsgvo"];
+
+const sortContractTypeCountEntries = (counts) => {
+  const orderIndex = new Map(CONTRACT_TYPE_BADGE_ORDER.map((key, index) => [key, index]));
+  return Object.entries(counts || {}).sort(([typeA], [typeB]) => {
+    const rankA = orderIndex.has(typeA) ? orderIndex.get(typeA) : Number.MAX_SAFE_INTEGER;
+    const rankB = orderIndex.has(typeB) ? orderIndex.get(typeB) : Number.MAX_SAFE_INTEGER;
+    if (rankA !== rankB) return rankA - rankB;
+    return typeA.localeCompare(typeB, "de");
+  });
+};
+
+const formatContractTypeLabel = (type) => {
+  if (type === "wartung") return "Wartung";
+  if (type === "monitoring") return "Monitoring";
+  if (type === "avv_dsgvo") return "AVV/DSGVO";
+  return String(type || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const contractTypeBadgeClass = (type) => {
+  if (type === "wartung") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (type === "monitoring") return "border-sky-200 bg-sky-50 text-sky-700";
+  if (type === "avv_dsgvo") return "border-cyan-200 bg-cyan-50 text-cyan-700";
+  return "border-sand-200 bg-sand-100 text-sand-700";
+};
+
 const normalizeCustomer = (customer) => {
   const contractFlags = normalizeContractFlags(
     Array.isArray(customer.contract_flags)
       ? customer.contract_flags
       : Array.isArray(customer.contractFlags)
       ? customer.contractFlags
+      : []
+  );
+  const contractTypeCounts = normalizeContractTypeCounts(
+    customer.contract_type_counts ?? customer.contractTypeCounts ?? {}
+  );
+  const contractDocumentFlags = normalizeContractDocumentFlags(
+    Array.isArray(customer.contract_document_flags)
+      ? customer.contract_document_flags
+      : Array.isArray(customer.contractDocumentFlags)
+      ? customer.contractDocumentFlags
       : []
   );
   return {
@@ -201,8 +293,11 @@ const normalizeCustomer = (customer) => {
   status: String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active",
   maintenanceContract:
     Boolean(customer.maintenance_contract ?? customer.maintenanceContract ?? false) ||
-    contractFlags.includes("wartung"),
-  contractFlags
+    contractFlags.includes("wartung") ||
+    contractDocumentFlags.includes("wartung"),
+  contractFlags,
+  contractDocumentFlags,
+  contractTypeCounts
   };
 };
 
@@ -230,19 +325,6 @@ const customerPayload = (customer) => ({
 });
 
 const CONTRACT_FLAG_ORDER = ["wartung", "monitoring", "regie"];
-const CONTRACT_PRICING_MODE_ORDER = ["tarif", "tarif_plus_h", "entgeltlos"];
-
-const CONTRACT_PRICING_MODE_LABELS = {
-  tarif: "Tarif",
-  tarif_plus_h: "Tarif+Stunden",
-  entgeltlos: "Entgeltlos (ohne Preis)"
-};
-
-const normalizePricingMode = (value) => {
-  const key = String(value || "").trim().toLowerCase();
-  if (CONTRACT_PRICING_MODE_ORDER.includes(key)) return key;
-  return "tarif_plus_h";
-};
 
 const applyContractFlagChange = (flags, contractId, checked) => {
   const current = new Set(normalizeContractFlags(flags));
@@ -284,15 +366,6 @@ const formatEurPrecise = (value) => {
 };
 
 const parseHoursInput = (value) => {
-  const normalized = String(value || "")
-    .trim()
-    .replace(",", ".");
-  const parsed = Number.parseFloat(normalized);
-  if (!Number.isFinite(parsed) || parsed < 0) return 0;
-  return parsed;
-};
-
-const parseMoneyInput = (value) => {
   const normalized = String(value || "")
     .trim()
     .replace(",", ".");
@@ -383,14 +456,6 @@ export default function CustomerDirectoryView() {
     title: "",
     html: ""
   });
-  const [metricsSettings, setMetricsSettings] = useState({
-    office_address: "",
-    km_rate_eur: "",
-    min_distance_km: "",
-    min_fee_eur: "",
-    hourly_rate_eur: ""
-  });
-  const [metricsSettingsStatus, setMetricsSettingsStatus] = useState("idle");
   const [contractTariffs, setContractTariffs] = useState([]);
   const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
   const [calcInput, setCalcInput] = useState({
@@ -409,7 +474,6 @@ export default function CustomerDirectoryView() {
   const [contractDraft, setContractDraft] = useState({
     title: "",
     docType: "wartung",
-    pricingMode: "tarif_plus_h",
     validFrom: "",
     runtimeMonths: "12",
     monthlyHoursIncluded: "0",
@@ -528,20 +592,6 @@ export default function CustomerDirectoryView() {
 
   useEffect(() => {
     let active = true;
-    api
-      .getMetricsSettings()
-      .then((data) => {
-        if (!active) return;
-        setMetricsSettings((prev) => ({ ...prev, ...data }));
-      })
-      .catch(() => {});
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
     setContractTariffsStatus("loading");
     api
       .listContractTariffs(false)
@@ -608,19 +658,25 @@ export default function CustomerDirectoryView() {
 
   const filteredActiveTariffs = useMemo(() => {
     const activeTariffs = (contractTariffs || []).filter((item) => Boolean(item?.is_active));
-    if (!tariffCategoryForContractType) return activeTariffs;
+    if (!tariffCategoryForContractType) return [];
     return activeTariffs.filter(
       (item) => String(item?.category || "").trim().toLowerCase() === tariffCategoryForContractType
     );
   }, [contractTariffs, tariffCategoryForContractType]);
+  const tariffRequired = Boolean(tariffCategoryForContractType);
+  const tariffSelectionMissing = tariffRequired && !selectedTariff;
 
   useEffect(() => {
     setCalcInput((prev) => {
+      if (!tariffCategoryForContractType) {
+        if (prev.tariffId === null) return prev;
+        return { ...prev, tariffId: null };
+      }
       const currentExists = filteredActiveTariffs.some((item) => Number(item?.id) === Number(prev.tariffId));
       if (currentExists) return prev;
       return { ...prev, tariffId: filteredActiveTariffs[0]?.id ?? null };
     });
-  }, [filteredActiveTariffs]);
+  }, [filteredActiveTariffs, tariffCategoryForContractType]);
 
   const supportsHoursBudget = useMemo(
     () => ["wartung", "monitoring"].includes(String(contractDraft.docType || "").trim().toLowerCase()),
@@ -640,7 +696,7 @@ export default function CustomerDirectoryView() {
       iotDevices: parseCount(calcInput.iotDevices)
     };
     if (!selectedTariff) {
-      return { tariffMonthly: 0, counts };
+      return { tariffMonthly: 0, hourlyPrice: 0, counts };
     }
     const tariffMonthly =
       Number(selectedTariff.base_price_monthly || 0) +
@@ -648,63 +704,49 @@ export default function CustomerDirectoryView() {
       counts.clients * Number(selectedTariff.price_client_monthly || 0) +
       counts.networkDevices * Number(selectedTariff.price_network_monthly || 0) +
       counts.iotDevices * Number(selectedTariff.price_iot_monthly || 0);
-    return { tariffMonthly, counts };
+    const hourlyPrice = Number(selectedTariff.hourly_price || 0);
+    return { tariffMonthly, hourlyPrice, counts };
   }, [selectedTariff, calcInput]);
 
-  const hourlyRateForContracts = useMemo(
-    () => parseMoneyInput(metricsSettings.hourly_rate_eur),
-    [metricsSettings.hourly_rate_eur]
-  );
-
   const contractTotals = useMemo(() => {
-    const pricingMode = normalizePricingMode(contractDraft.pricingMode);
     const tariffMonthly = Number(contractPreview.tariffMonthly || 0);
-    const hourlyMonthly = monthlyHoursIncluded * hourlyRateForContracts;
-    let monthlyAuto = tariffMonthly;
-    if (pricingMode === "tarif_plus_h") monthlyAuto = tariffMonthly + hourlyMonthly;
-    if (pricingMode === "entgeltlos") monthlyAuto = 0;
+    const hourlyRate = Number(contractPreview.hourlyPrice || 0);
+    const hourlyMonthly = monthlyHoursIncluded * hourlyRate;
+    const monthlyAuto = tariffMonthly + hourlyMonthly;
     const monthlyAutoRounded = Number(monthlyAuto.toFixed(2));
     const yearlyAutoRounded = Number((monthlyAutoRounded * 12).toFixed(2));
 
     const monthlyOverride = parseOptionalMoneyInput(contractDraft.monthlyTotalOverride);
     const yearlyOverride = parseOptionalMoneyInput(contractDraft.yearlyTotalOverride);
 
-    const monthlyFinal =
-      pricingMode === "entgeltlos"
-        ? 0
-        : Number((monthlyOverride !== null ? monthlyOverride : monthlyAutoRounded).toFixed(2));
-    const yearlyFinal =
-      pricingMode === "entgeltlos"
-        ? 0
-        : Number(
-            (
-              yearlyOverride !== null
-                ? yearlyOverride
-                : monthlyOverride !== null
-                ? monthlyFinal * 12
-                : yearlyAutoRounded
-            ).toFixed(2)
-          );
+    const monthlyFinal = Number((monthlyOverride !== null ? monthlyOverride : monthlyAutoRounded).toFixed(2));
+    const yearlyFinal = Number(
+      (
+        yearlyOverride !== null
+          ? yearlyOverride
+          : monthlyOverride !== null
+          ? monthlyFinal * 12
+          : yearlyAutoRounded
+      ).toFixed(2)
+    );
 
     return {
       monthly: monthlyFinal,
       yearly: yearlyFinal,
       monthlyAuto: monthlyAutoRounded,
       yearlyAuto: yearlyAutoRounded,
-      monthlyOverridden: monthlyOverride !== null && pricingMode !== "entgeltlos",
-      yearlyOverridden: yearlyOverride !== null && pricingMode !== "entgeltlos",
+      monthlyOverridden: monthlyOverride !== null,
+      yearlyOverridden: yearlyOverride !== null,
       tariffMonthly: Number(tariffMonthly.toFixed(2)),
       hourlyMonthly: Number(hourlyMonthly.toFixed(2)),
-      pricingMode,
-      hourlyRate: hourlyRateForContracts
+      hourlyRate
     };
   }, [
-    contractDraft.pricingMode,
     contractDraft.monthlyTotalOverride,
     contractDraft.yearlyTotalOverride,
     contractPreview.tariffMonthly,
+    contractPreview.hourlyPrice,
     monthlyHoursIncluded,
-    hourlyRateForContracts
   ]);
 
   useEffect(() => {
@@ -713,7 +755,6 @@ export default function CustomerDirectoryView() {
     activeId,
     contractDraft.title,
     contractDraft.docType,
-    contractDraft.pricingMode,
     contractDraft.validFrom,
     contractDraft.runtimeMonths,
     contractDraft.monthlyHoursIncluded,
@@ -762,12 +803,13 @@ export default function CustomerDirectoryView() {
     const container = document.createElement("div");
     container.innerHTML = html;
     container.style.position = "fixed";
-    container.style.left = "-9999px";
+    container.style.left = "-20000px";
     container.style.top = "0";
     container.style.width = "210mm";
     container.style.boxSizing = "border-box";
     container.style.background = "#ffffff";
-    container.style.padding = "12mm";
+    container.style.padding = "0";
+    container.style.zIndex = "-1";
     document.body.appendChild(container);
     try {
       const images = Array.from(container.querySelectorAll("img"));
@@ -788,30 +830,27 @@ export default function CustomerDirectoryView() {
         await document.fonts.ready;
       }
       const renderScale = Math.max(2, Math.min(window.devicePixelRatio || 1, 3));
-      const canvas = await html2canvas(container, {
-        scale: renderScale,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-        windowWidth: container.scrollWidth,
-        windowHeight: container.scrollHeight,
-        logging: false
-      });
-      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-      const imgData = canvas.toDataURL("image/jpeg", 0.98);
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const ratio = pageWidth / canvas.width;
-      const imgHeight = canvas.height * ratio;
-      let position = 0;
-      pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
-      let heightLeft = imgHeight - pageHeight;
-      while (heightLeft > 0) {
-        position -= pageHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
-        heightLeft -= pageHeight;
-      }
-      return pdf.output("datauristring");
+      const worker = html2pdf()
+        .set({
+          margin: [10, 10, 10, 10],
+          filename: "vertrag.pdf",
+          image: { type: "jpeg", quality: 0.98 },
+          html2canvas: {
+            scale: renderScale,
+            useCORS: true,
+            backgroundColor: "#ffffff",
+            windowWidth: container.scrollWidth,
+            logging: false,
+          },
+          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+          pagebreak: {
+            mode: ["css", "legacy"],
+            before: [".contract-page-break"],
+            avoid: [".contract-no-break", "h2", "h3", "table", "thead", "tr"],
+          },
+        })
+        .from(container);
+      return await worker.outputPdf("datauristring");
     } finally {
       if (container.parentNode) container.parentNode.removeChild(container);
     }
@@ -819,6 +858,11 @@ export default function CustomerDirectoryView() {
 
   const generateContractPreview = async (openModal = true) => {
     if (!activeId) return null;
+    if (tariffSelectionMissing) {
+      setToast("Für Wartung/Monitoring muss ein Tarif gewählt werden.");
+      return null;
+    }
+    const selectedTariffId = tariffRequired ? selectedTariff?.id || null : null;
     setContractPreviewStatus("saving");
     try {
       const preview = await api.previewCustomerContract(activeId, {
@@ -827,7 +871,7 @@ export default function CustomerDirectoryView() {
         note: "",
         valid_from: String(contractDraft.validFrom || ""),
         runtime_months: Number(contractDraft.runtimeMonths || 12),
-        tariff_id: contractTotals.pricingMode === "entgeltlos" ? null : selectedTariff?.id || null,
+        tariff_id: selectedTariffId,
         servers: contractPreview.counts.servers,
         clients: contractPreview.counts.clients,
         network_devices: contractPreview.counts.networkDevices,
@@ -873,6 +917,10 @@ export default function CustomerDirectoryView() {
 
   const saveGeneratedContract = async () => {
     if (!activeId) return;
+    if (tariffSelectionMissing) {
+      setToast("Für Wartung/Monitoring muss ein Tarif gewählt werden.");
+      return;
+    }
     setContractSaveStatus("saving");
     try {
       const source = generatedContract || (await generateContractPreview(false));
@@ -882,6 +930,9 @@ export default function CustomerDirectoryView() {
       const idx = String(dataUri).indexOf(marker);
       if (idx === -1) throw new Error("pdf_base64_missing");
       const contentBase64 = String(dataUri).slice(idx + marker.length);
+      const selectedTariffId = tariffRequired
+        ? Number(source?.meta?.tariff?.id || selectedTariff?.id || 0) || null
+        : null;
       const saved = await api.createCustomerContract(activeId, {
         title: String(source.title || contractDraft.title || "Vertrag").trim(),
         doc_type: String(source.doc_type || contractDraft.docType || "wartung"),
@@ -890,6 +941,7 @@ export default function CustomerDirectoryView() {
         content_base64: contentBase64,
         html_content: String(source.html || ""),
         template_key: String(source.template_key || contractDraft.docType || "wartung"),
+        tariff_id: selectedTariffId,
         monthly_hours_included: Number(source?.meta?.monthly_hours_included ?? monthlyHoursIncluded),
         note: "",
         status: "proposal"
@@ -977,7 +1029,6 @@ export default function CustomerDirectoryView() {
     setContractDraft({
       title: customerLabel ? `Wartungsvertrag ${customerLabel}` : "",
       docType: "wartung",
-      pricingMode: "tarif_plus_h",
       validFrom: "",
       runtimeMonths: "12",
       monthlyHoursIncluded: "0",
@@ -1058,10 +1109,13 @@ export default function CustomerDirectoryView() {
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
   const editCustomer = customers.find((customer) => customer.id === editCustomerId) || null;
   const editContractFlags = normalizeContractFlags(editCustomer?.contractFlags || []);
+  const editContractDocumentFlags = normalizeContractDocumentFlags(editCustomer?.contractDocumentFlags || []);
   const editHasServiceContract =
     Boolean(editCustomer?.maintenanceContract) ||
     editContractFlags.includes("wartung") ||
-    editContractFlags.includes("monitoring");
+    editContractFlags.includes("monitoring") ||
+    editContractDocumentFlags.includes("wartung") ||
+    editContractDocumentFlags.includes("monitoring");
   const metricsCustomerId = Number(editCustomer?.id || activeCustomer?.id || 0);
   const selectedCustomerMetrics =
     metrics &&
@@ -2029,33 +2083,15 @@ export default function CustomerDirectoryView() {
             </select>
           </label>
           <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Abrechnungsart</span>
-            <select
-              value={normalizePricingMode(contractDraft.pricingMode)}
-              onChange={(event) => setContractDraft((prev) => ({ ...prev, pricingMode: normalizePricingMode(event.target.value) }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            >
-              {CONTRACT_PRICING_MODE_ORDER.map((mode) => (
-                <option key={mode} value={mode}>
-                  {CONTRACT_PRICING_MODE_LABELS[mode]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">3) Tarif</span>
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Tarif</span>
             <select
               value={calcInput.tariffId || ""}
               onChange={(event) => setCalcInput((prev) => ({ ...prev, tariffId: Number(event.target.value) || null }))}
-              disabled={contractTotals.pricingMode === "entgeltlos"}
+              disabled={!tariffRequired}
               className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             >
               <option value="">
-                {contractTotals.pricingMode === "entgeltlos"
-                  ? "Entgeltlos: kein Tarif nötig"
-                  : tariffCategoryForContractType
-                  ? `Tarif für ${tariffCategoryForContractType} wählen`
-                  : "Tarif wählen (optional)"}
+                {tariffRequired ? `Tarif für ${tariffCategoryForContractType} wählen (Pflicht)` : "Nicht erforderlich (AVV)"}
               </option>
               {filteredActiveTariffs.map((item) => (
                 <option key={item.id} value={item.id}>
@@ -2064,11 +2100,14 @@ export default function CustomerDirectoryView() {
               ))}
             </select>
           </label>
+          {tariffSelectionMissing ? (
+            <p className="text-xs text-rose-600">Wartungs- und Monitoringverträge benötigen einen Tarif.</p>
+          ) : null}
           {contractTariffsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Tarife…</p> : null}
           {contractTariffsStatus === "error" ? <p className="text-xs text-rose-600">Tarife konnten nicht geladen werden.</p> : null}
           <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">4) Mengenblock</p>
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">3) Mengenblock</p>
               <button
                 type="button"
                 onClick={importCalcValuesFromRmm}
@@ -2117,15 +2156,10 @@ export default function CustomerDirectoryView() {
           <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
             <p className="text-[10px] uppercase tracking-wide text-sand-500">Monatspreis</p>
             <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractTotals.monthly)}</p>
-            {contractTotals.pricingMode === "tarif_plus_h" ? (
-              <p className="mt-1 text-[11px] text-sand-500">
-                Tarif {formatEurPrecise(contractTotals.tariffMonthly)} + Stundenanteil {formatEurPrecise(contractTotals.hourlyMonthly)}
-              </p>
-            ) : contractTotals.pricingMode === "entgeltlos" ? (
-              <p className="mt-1 text-[11px] text-sand-500">Entgeltlos ohne Preisansatz.</p>
-            ) : (
-              <p className="mt-1 text-[11px] text-sand-500">Preis entspricht dem Tarif.</p>
-            )}
+            <p className="mt-1 text-[11px] text-sand-500">
+              Grund- und Gerätepreise {formatEurPrecise(contractTotals.tariffMonthly)} + Stundenanteil{" "}
+              {formatEurPrecise(contractTotals.hourlyMonthly)}
+            </p>
           </div>
           <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
             <p className="text-[10px] uppercase tracking-wide text-sand-500">Jahrespreis</p>
@@ -2134,7 +2168,7 @@ export default function CustomerDirectoryView() {
         </div>
         <div className="mt-2 grid gap-2 md:grid-cols-2">
           <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">5) Endpreis pro Monat (optional)</span>
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">4) Endpreis pro Monat (optional)</span>
             <input
               type="number"
               min="0"
@@ -2143,13 +2177,12 @@ export default function CustomerDirectoryView() {
               onChange={(event) =>
                 setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: event.target.value }))
               }
-              disabled={contractTotals.pricingMode === "entgeltlos"}
               placeholder={`Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}`}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm disabled:bg-sand-100"
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             />
           </label>
           <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">6) Endpreis pro Jahr (optional)</span>
+            <span className="text-[10px] uppercase tracking-wide text-sand-500">5) Endpreis pro Jahr (optional)</span>
             <input
               type="number"
               min="0"
@@ -2158,9 +2191,8 @@ export default function CustomerDirectoryView() {
               onChange={(event) =>
                 setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }))
               }
-              disabled={contractTotals.pricingMode === "entgeltlos"}
               placeholder={`Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}`}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm disabled:bg-sand-100"
+              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
             />
           </label>
         </div>
@@ -2175,9 +2207,6 @@ export default function CustomerDirectoryView() {
           >
             Endpreis zurücksetzen
           </button>
-          {contractTotals.pricingMode === "entgeltlos" ? (
-            <span className="text-xs text-sand-500">Entgeltlos erzwingt 0,00 EUR.</span>
-          ) : null}
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {calcImportStatus === "loading" ? <span className="text-xs text-sand-500">Importiere aus Meta-Hub…</span> : null}
@@ -2191,11 +2220,11 @@ export default function CustomerDirectoryView() {
           <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Vertragsdetail</p>
           <span className="text-[11px] text-sand-500">
             Grundlage:{" "}
-            {contractTotals.pricingMode === "entgeltlos"
-              ? CONTRACT_PRICING_MODE_LABELS.entgeltlos
-              : selectedTariff
+            {selectedTariff
               ? `${selectedTariff.name}`
-              : "Ohne Tarif (z.B. AVV)"}
+              : tariffRequired
+              ? "Tarif fehlt (Pflicht)"
+              : "Ohne Tarif (AVV)"}
           </span>
         </div>
         <div className="mt-2.5 grid gap-2 md:grid-cols-2">
@@ -2281,17 +2310,18 @@ export default function CustomerDirectoryView() {
           ) : null}
         </div>
         <p className="mt-2 text-[11px] text-sand-500">
-          {contractTotals.pricingMode === "tarif_plus_h"
-            ? `Gesamtpreis = Tarif+Stundenbudget (${formatHours(monthlyHoursIncluded)}) x Stundensatz (${formatEurPrecise(contractTotals.hourlyRate)}).`
-            : contractTotals.pricingMode === "entgeltlos"
-            ? "Entgeltloser Vertrag: Gesamtpreis wird auf 0 gesetzt."
-            : "Gesamtpreis entspricht dem ausgewählten Tarif."}
+          {tariffRequired
+            ? `Gesamtpreis = Grund-/Gerätepreise (${formatEurPrecise(contractTotals.tariffMonthly)}) + Stundenbudget (${formatHours(
+                monthlyHoursIncluded
+              )}) x Stundensatz (${formatEurPrecise(contractTotals.hourlyRate)}).`
+            : "AVV/DSGVO: kein Tarif erforderlich."}
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => generateContractPreview(true)}
-            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+            disabled={tariffSelectionMissing}
+            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Eye size={12} />
             Vorschau öffnen
@@ -2299,7 +2329,8 @@ export default function CustomerDirectoryView() {
           <button
             type="button"
             onClick={exportGeneratedContractPdf}
-            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+            disabled={tariffSelectionMissing}
+            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <FileDown size={12} />
             PDF laden
@@ -2307,7 +2338,8 @@ export default function CustomerDirectoryView() {
           <button
             type="button"
             onClick={() => saveGeneratedContract()}
-            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90"
+            disabled={tariffSelectionMissing}
+            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <BadgeCheck size={12} />
             Als Vorschlag speichern
@@ -3076,33 +3108,28 @@ export default function CustomerDirectoryView() {
                         </select>
                       </td>
                       <td className="px-3 py-2 align-top">
-                        <div className="flex flex-wrap items-center gap-2">
-                          {[
-                            { id: "wartung", label: "Wartung" },
-                            { id: "monitoring", label: "Monitoring" },
-                            { id: "regie", label: "Regie" }
-                          ].map((contract) => (
-                            <label key={contract.id} className="inline-flex items-center gap-1">
-                              <input
-                                type="checkbox"
-                                checked={Boolean((customer.contractFlags || []).includes(contract.id))}
-                                onChange={(event) => {
-                                  const nextFlags = applyContractFlagChange(
-                                    customer.contractFlags || [],
-                                    contract.id,
-                                    event.target.checked
-                                  );
-                                  updateCustomer(customer.id, {
-                                    contractFlags: nextFlags,
-                                    maintenanceContract: nextFlags.includes("wartung")
-                                  });
-                                }}
-                                className="h-3.5 w-3.5"
-                              />
-                              {contract.label}
-                            </label>
-                          ))}
-                        </div>
+                        {(() => {
+                          const contractTypeCounts =
+                            customer.id === activeId
+                              ? deriveContractTypeCountsFromContracts(customerContracts)
+                              : normalizeContractTypeCounts(customer.contractTypeCounts || {});
+                          const entries = sortContractTypeCountEntries(contractTypeCounts);
+                          if (!entries.length) {
+                            return <span className="text-[11px] text-sand-400">Kein Vertrag</span>;
+                          }
+                          return (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {entries.map(([type, count]) => (
+                                <span
+                                  key={type}
+                                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${contractTypeBadgeClass(type)}`}
+                                >
+                                  {formatContractTypeLabel(type)} {count}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-3 py-2 align-top text-right">
                         <button

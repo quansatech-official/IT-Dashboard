@@ -348,10 +348,13 @@ export default function SettingsView() {
     price_client_monthly: "",
     price_network_monthly: "",
     price_iot_monthly: "",
+    hourly_price: "",
     notes: ""
   });
   const [tariffEditId, setTariffEditId] = useState(null);
   const [tariffSaveStatus, setTariffSaveStatus] = useState("idle");
+  const [tariffActionMessage, setTariffActionMessage] = useState("");
+  const [tariffActionMessageType, setTariffActionMessageType] = useState("info");
   const [aiPromptsStatus, setAiPromptsStatus] = useState("idle");
   const [contractTemplatesStatus, setContractTemplatesStatus] = useState("idle");
   const [aiPromptsLoadStatus, setAiPromptsLoadStatus] = useState("loading");
@@ -886,6 +889,7 @@ export default function SettingsView() {
       price_client_monthly: "",
       price_network_monthly: "",
       price_iot_monthly: "",
+      hourly_price: "",
       notes: ""
     });
     setTariffEditId(null);
@@ -901,6 +905,7 @@ export default function SettingsView() {
       price_client_monthly: String(tariff.price_client_monthly ?? ""),
       price_network_monthly: String(tariff.price_network_monthly ?? ""),
       price_iot_monthly: String(tariff.price_iot_monthly ?? ""),
+      hourly_price: String(tariff.hourly_price ?? ""),
       notes: String(tariff.notes || "")
     });
     setTariffEditId(Number(tariff.id));
@@ -911,6 +916,15 @@ export default function SettingsView() {
     if (!res.ok) throw new Error("load_failed");
     const data = await res.json();
     setContractTariffs(Array.isArray(data) ? data : []);
+  };
+
+  const showTariffActionMessage = (message, type = "info") => {
+    setTariffActionMessage(String(message || "").trim());
+    setTariffActionMessageType(type);
+    window.setTimeout(() => {
+      setTariffActionMessage("");
+      setTariffActionMessageType("info");
+    }, 2500);
   };
 
   const saveTariffDraft = async () => {
@@ -930,6 +944,7 @@ export default function SettingsView() {
         price_client_monthly: Number(tariffDraft.price_client_monthly || 0),
         price_network_monthly: Number(tariffDraft.price_network_monthly || 0),
         price_iot_monthly: Number(tariffDraft.price_iot_monthly || 0),
+        hourly_price: Number(tariffDraft.hourly_price || 0),
         notes: String(tariffDraft.notes || "")
       };
       const endpoint = tariffEditId
@@ -953,10 +968,41 @@ export default function SettingsView() {
   const deactivateTariff = async (tariffId) => {
     try {
       const res = await fetch(`${API}/contract_tariffs/${tariffId}/deactivate`, { method: "POST" });
-      if (!res.ok) throw new Error("deactivate_failed");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.detail || "deactivate_failed");
+      }
       await refreshTariffs();
-    } catch {
-      // ignore for now
+      showTariffActionMessage("Tarif deaktiviert.", "success");
+    } catch (error) {
+      const message = String(error?.message || "").trim();
+      showTariffActionMessage(
+        message && message !== "deactivate_failed" ? message : "Deaktivieren fehlgeschlagen.",
+        "error"
+      );
+    }
+  };
+
+  const deleteTariff = async (tariffId) => {
+    if (!tariffId) return;
+    if (!window.confirm("Tarif wirklich dauerhaft löschen?")) return;
+    try {
+      const res = await fetch(`${API}/contract_tariffs/${tariffId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.detail || "delete_failed");
+      }
+      await refreshTariffs();
+      if (Number(tariffEditId) === Number(tariffId)) {
+        resetTariffDraft();
+      }
+      showTariffActionMessage("Tarif gelöscht.", "success");
+    } catch (error) {
+      const message = String(error?.message || "").trim();
+      showTariffActionMessage(
+        message && message !== "delete_failed" ? message : "Löschen fehlgeschlagen.",
+        "error"
+      );
     }
   };
 
@@ -2076,6 +2122,14 @@ export default function SettingsView() {
                       className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
                     />
                   </label>
+                  <label className="block">
+                    <span className="text-[10px] uppercase tracking-wide text-sand-500">Stundenpreis</span>
+                    <input
+                      value={tariffDraft.hourly_price}
+                      onChange={(event) => setTariffDraft((prev) => ({ ...prev, hourly_price: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                    />
+                  </label>
                   <label className="block md:col-span-4">
                     <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
                     <input
@@ -2104,6 +2158,11 @@ export default function SettingsView() {
                   ) : null}
                   {tariffSaveStatus === "saved" ? <span className="text-emerald-600">Gespeichert</span> : null}
                   {tariffSaveStatus === "error" ? <span className="text-rose-600">Speichern fehlgeschlagen</span> : null}
+                  {tariffActionMessage ? (
+                    <span className={tariffActionMessageType === "error" ? "text-rose-600" : "text-emerald-600"}>
+                      {tariffActionMessage}
+                    </span>
+                  ) : null}
                   {contractTariffsStatus === "error" ? <span className="text-rose-600">Tarife konnten nicht geladen werden</span> : null}
                 </div>
                 <div className="mt-3 space-y-2 max-h-64 overflow-auto pr-1">
@@ -2133,10 +2192,18 @@ export default function SettingsView() {
                               Deaktivieren
                             </button>
                           ) : null}
+                          <button
+                            type="button"
+                            onClick={() => deleteTariff(tariff.id)}
+                            className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                          >
+                            <Trash2 size={10} />
+                            Löschen
+                          </button>
                         </div>
                       </div>
                       <p className="mt-1 text-[11px] text-sand-600">
-                        Grundpreis {formatEurPrecise(tariff.base_price_monthly)} · Server {formatEurPrecise(tariff.price_server_monthly)} · Client {formatEurPrecise(tariff.price_client_monthly)} · Netzwerk {formatEurPrecise(tariff.price_network_monthly)} · IoT {formatEurPrecise(tariff.price_iot_monthly)}
+                        Grundpreis {formatEurPrecise(tariff.base_price_monthly)} · Server {formatEurPrecise(tariff.price_server_monthly)} · Client {formatEurPrecise(tariff.price_client_monthly)} · Netzwerk {formatEurPrecise(tariff.price_network_monthly)} · IoT {formatEurPrecise(tariff.price_iot_monthly)} · Stunde {formatEurPrecise(tariff.hourly_price)}
                       </p>
                     </div>
                   ))}

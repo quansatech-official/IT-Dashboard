@@ -38,7 +38,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL") or (
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
 )
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL") or "http://ollama:11434"
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "llama3.2:3b"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "qwen3:8b"
 OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS") or "180")
 OLLAMA_CONNECT_TIMEOUT_SECONDS = max(1, int(os.environ.get("OLLAMA_CONNECT_TIMEOUT_SECONDS") or "6"))
 OLLAMA_REQUEST_KEEP_ALIVE = (
@@ -612,6 +612,7 @@ class ContractTariff(Base):
     price_client_monthly = Column(Float, default=0.0)
     price_network_monthly = Column(Float, default=0.0)
     price_iot_monthly = Column(Float, default=0.0)
+    hourly_price = Column(Float, default=0.0)
     notes = Column(Text, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
@@ -1197,6 +1198,27 @@ _run_db_startup_step(
     _ensure_customer_contract_documents_columns,
 )
 
+
+def _ensure_contract_tariffs_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("contract_tariffs"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("contract_tariffs")}
+    statements = []
+    if "hourly_price" not in columns:
+        statements.append("ALTER TABLE contract_tariffs ADD COLUMN hourly_price DOUBLE PRECISION DEFAULT 0")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_run_db_startup_step(
+    "ensure_contract_tariffs_columns",
+    _ensure_contract_tariffs_columns,
+)
+
 # ================= SCHEMAS ==================
 class CustomerPhoneSchema(BaseModel):
     id: Optional[int] = None
@@ -1550,6 +1572,7 @@ class ContractTariffCreate(BaseModel):
     price_client_monthly: float = 0.0
     price_network_monthly: float = 0.0
     price_iot_monthly: float = 0.0
+    hourly_price: float = 0.0
     notes: Optional[str] = ""
 
 
@@ -1561,6 +1584,7 @@ class ContractTariffVersionCreate(BaseModel):
     price_client_monthly: Optional[float] = None
     price_network_monthly: Optional[float] = None
     price_iot_monthly: Optional[float] = None
+    hourly_price: Optional[float] = None
     notes: Optional[str] = None
 
 
@@ -1572,6 +1596,7 @@ class ContractTariffUpdate(BaseModel):
     price_client_monthly: Optional[float] = None
     price_network_monthly: Optional[float] = None
     price_iot_monthly: Optional[float] = None
+    hourly_price: Optional[float] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -1595,6 +1620,7 @@ class CustomerContractDocumentCreate(BaseModel):
     content_base64: str
     html_content: Optional[str] = ""
     template_key: Optional[str] = ""
+    tariff_id: Optional[int] = None
     monthly_hours_included: Optional[float] = 0.0
     note: Optional[str] = ""
     status: Optional[str] = "active"
@@ -1941,7 +1967,7 @@ def _resolve_ollama_models(*specific_values: Any) -> List[str]:
             seen.add(lowered)
             ordered.append(model)
     if not ordered:
-        ordered.append("llama3.2:3b")
+        ordered.append("qwen3:8b")
     return ordered
 
 
@@ -3085,8 +3111,92 @@ def _parse_contract_flags(raw: Optional[str]) -> List[str]:
     return _normalize_contract_flags(parsed if isinstance(parsed, list) else [])
 
 
-def serialize_customer(c: Customer) -> Dict[str, Any]:
+def _normalize_contract_document_flags(flags: Optional[List[Any]]) -> List[str]:
+    if not isinstance(flags, list):
+        return []
+    normalized: List[str] = []
+    seen = set()
+    for value in flags:
+        key = _normalize_contract_doc_type(value, default="")
+        if key not in {"wartung", "monitoring"} or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    return normalized
+
+
+def _normalize_contract_type_counts(raw_counts: Optional[Dict[Any, Any]]) -> Dict[str, int]:
+    if not isinstance(raw_counts, dict):
+        return {}
+    aggregated: Dict[str, int] = {}
+    for raw_key, raw_value in raw_counts.items():
+        key = _normalize_contract_doc_type(raw_key, default="")
+        if not key:
+            continue
+        try:
+            amount = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if amount <= 0:
+            continue
+        aggregated[key] = int(aggregated.get(key, 0)) + amount
+    ordered: Dict[str, int] = {}
+    for key in ["wartung", "monitoring", "avv_dsgvo"]:
+        if key in aggregated:
+            ordered[key] = aggregated[key]
+    for key in sorted([entry for entry in aggregated.keys() if entry not in {"wartung", "monitoring", "avv_dsgvo"}]):
+        ordered[key] = aggregated[key]
+    return ordered
+
+
+def _load_contract_document_meta_for_customers(
+    db,
+    customer_ids: List[int],
+) -> Tuple[Dict[int, List[str]], Dict[int, Dict[str, int]]]:
+    unique_ids = sorted({int(customer_id) for customer_id in customer_ids if customer_id is not None})
+    if not unique_ids:
+        return {}, {}
+    rows = (
+        db.query(
+            CustomerContractDocument.customer_id,
+            CustomerContractDocument.doc_type,
+            CustomerContractDocument.template_key,
+            CustomerContractDocument.status,
+        )
+        .filter(CustomerContractDocument.customer_id.in_(unique_ids))
+        .all()
+    )
+    flags_by_customer_set: Dict[int, Set[str]] = {}
+    counts_by_customer: Dict[int, Dict[str, int]] = {}
+    for customer_id, doc_type, template_key, status in rows:
+        cid = int(customer_id)
+        key = _normalize_contract_doc_type(doc_type or template_key, default="")
+        if not key:
+            continue
+        counts_for_customer = counts_by_customer.setdefault(cid, {})
+        counts_for_customer[key] = int(counts_for_customer.get(key, 0)) + 1
+        status_key = str(status or "").strip().lower()
+        if status_key in {"active", "proposal"} and key in {"wartung", "monitoring"}:
+            flags_by_customer_set.setdefault(cid, set()).add(key)
+    flags_by_customer = {
+        customer_id: [key for key in ["wartung", "monitoring"] if key in keys]
+        for customer_id, keys in flags_by_customer_set.items()
+    }
+    counts_by_customer_normalized = {
+        customer_id: _normalize_contract_type_counts(counts)
+        for customer_id, counts in counts_by_customer.items()
+    }
+    return flags_by_customer, counts_by_customer_normalized
+
+
+def serialize_customer(
+    c: Customer,
+    contract_document_flags: Optional[List[str]] = None,
+    contract_type_counts: Optional[Dict[str, int]] = None,
+) -> Dict[str, Any]:
     contract_flags = _parse_contract_flags(c.contract_flags)
+    normalized_contract_document_flags = _normalize_contract_document_flags(contract_document_flags)
+    normalized_contract_type_counts = _normalize_contract_type_counts(contract_type_counts)
     return {
         "id": c.id,
         "name": c.name,
@@ -3097,8 +3207,14 @@ def serialize_customer(c: Customer) -> Dict[str, Any]:
         "customer_report": c.customer_report,
         "newsletter": c.newsletter,
         "status": (c.status or "active").strip().lower() or "active",
-        "maintenance_contract": bool(c.maintenance_contract) or ("wartung" in contract_flags),
+        "maintenance_contract": (
+            bool(c.maintenance_contract)
+            or ("wartung" in contract_flags)
+            or ("wartung" in normalized_contract_document_flags)
+        ),
         "contract_flags": contract_flags,
+        "contract_document_flags": normalized_contract_document_flags,
+        "contract_type_counts": normalized_contract_type_counts,
         "street": c.street,
         "postal_code": c.postal_code,
         "city": c.city,
@@ -4047,58 +4163,77 @@ def _render_contract_html(
     customer_address = re.sub(r"\s+", " ", customer_address)
     customer_display = escape(str(customer.name or "").strip() or "Kunde")
     template_label = escape((template_key or "wartung").replace("_", " ").upper())
-    provider_name = escape(str(placeholders.get("provider_name", "")).strip() or "QT Workbench Services")
     generated_at = escape(str(placeholders.get("generated_at", "")).strip())
     valid_from = escape(str(placeholders.get("valid_from", "")).strip())
+    customer_address_display = escape(customer_address) if customer_address else "Keine Adresse hinterlegt"
     return (
-        "<div style=\"font-family:Arial,sans-serif; color:#1f2937; line-height:1.55; background:#f8fafc; padding:18px;\">"
-        "<div style=\"max-width:920px; margin:0 auto;\">"
-        "<div style=\"border:1px solid #dbe4ef; border-radius:16px; overflow:hidden; background:#ffffff;\">"
-        "<div style=\"padding:16px 18px; border-bottom:1px solid #e5e7eb;\">"
-        "<table style=\"width:100%; border-collapse:collapse;\">"
-        "<tr>"
-        "<td style=\"vertical-align:top;\">"
-        "<img src=\"/QTLogo.jpg\" alt=\"Logo\" style=\"height:52px; width:auto; object-fit:contain; display:block;\" />"
-        "</td>"
-        "<td style=\"text-align:right; vertical-align:top;\">"
-        f"<div style=\"display:inline-block; border:1px solid #dbe4ef; background:#f8fafc; color:#1e3a5f; padding:4px 9px; border-radius:999px; font-size:10px; letter-spacing:0.16em; text-transform:uppercase;\">{template_label}</div>"
-        f"<div style=\"margin-top:8px; font-size:11px; color:#64748b;\">{provider_name}</div>"
-        "</td>"
-        "</tr>"
-        "</table>"
+        "<style>"
+        "@page { size: A4 portrait; margin: 12mm; }"
+        "* { box-sizing: border-box; }"
+        ".contract-document { font-family: Arial, sans-serif; color:#0f172a; line-height:1.56; font-size:11pt; background:#f1f5f9; padding:14px; }"
+        ".contract-sheet { max-width:190mm; margin:0 auto; background:#ffffff; border:1px solid #dbe4ef; border-radius:14px; padding:12mm; box-shadow:0 10px 22px rgba(15, 23, 42, 0.06); }"
+        ".contract-header { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; border-bottom:1px solid #e2e8f0; padding-bottom:10px; margin-bottom:12px; }"
+        ".contract-logo { height:44px; width:auto; object-fit:contain; display:block; }"
+        ".contract-chip { display:inline-block; border:1px solid #dbe4ef; background:#f8fafc; color:#1e3a5f; padding:4px 9px; border-radius:999px; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; }"
+        ".contract-created-at { margin-top:8px; font-size:11px; color:#64748b; text-align:right; }"
+        ".contract-title { margin:0 0 6px; font-size:26px; line-height:1.16; color:#0b1324; }"
+        ".contract-subline { font-size:12px; color:#475569; margin:0 0 14px; }"
+        ".contract-meta-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:0 0 14px; }"
+        ".contract-card { border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; background:#f8fafc; }"
+        ".contract-card-label { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#94a3b8; margin-bottom:5px; }"
+        ".contract-card-main { font-size:12px; color:#0f172a; font-weight:600; }"
+        ".contract-card-sub { font-size:11px; color:#64748b; margin-top:4px; }"
+        ".contract-body { border:1px solid #e2e8f0; border-radius:12px; padding:14px; background:#ffffff; }"
+        ".contract-body p { margin:0 0 10px; color:#1f2937; }"
+        ".contract-body h3 { margin:14px 0 6px; font-size:13.5px; line-height:1.3; color:#0f172a; page-break-after:avoid; break-after:avoid; }"
+        ".contract-body h3 + p, .contract-body h3 + ul, .contract-body h3 + ol { page-break-before:avoid; break-before:avoid; }"
+        ".contract-body ul, .contract-body ol { margin:0 0 10px; padding-left:20px; }"
+        ".contract-body li { margin:0 0 5px; page-break-inside:avoid; break-inside:avoid; }"
+        ".contract-footer { margin-top:12px; }"
+        ".contract-signatures { margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:16px; }"
+        ".contract-signature { border-top:1px solid #cbd5e1; padding-top:9px; font-size:11px; color:#64748b; }"
+        ".contract-no-break { page-break-inside:avoid; break-inside:avoid; }"
+        ".contract-page-break { page-break-before:always; break-before:page; }"
+        "@media (max-width: 900px) {"
+        "  .contract-meta-grid, .contract-signatures { grid-template-columns:1fr; }"
+        "  .contract-document { padding:8px; }"
+        "}"
+        "@media print {"
+        "  .contract-document { background:#ffffff; padding:0; }"
+        "  .contract-sheet { max-width:none; border:none; border-radius:0; box-shadow:none; padding:0; }"
+        "}"
+        "</style>"
+        "<div class=\"contract-document\">"
+        "<div class=\"contract-sheet\">"
+        "<div class=\"contract-header contract-no-break\">"
+        "<img src=\"/QTLogo.jpg\" alt=\"Logo\" class=\"contract-logo\" />"
+        "<div>"
+        f"<div class=\"contract-chip\">{template_label}</div>"
+        f"<div class=\"contract-created-at\">Erstellt am: <strong>{generated_at}</strong></div>"
         "</div>"
-        "<div style=\"padding:20px 22px 16px;\">"
-        f"<h1 style=\"margin:0 0 6px; font-size:25px; line-height:1.2; color:#0f172a;\">{escape(title)}</h1>"
-        f"<div style=\"font-size:12px; color:#475569; margin-bottom:14px;\">Vertragspartner: <strong>{customer_display}</strong></div>"
-        "<table style=\"width:100%; border-collapse:collapse; margin-bottom:14px;\">"
-        "<tr>"
-        "<td style=\"width:50%; vertical-align:top; border:1px solid #e2e8f0; border-radius:12px; padding:10px 12px;\">"
-        "<div style=\"font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#94a3b8; margin-bottom:5px;\">Kunde</div>"
-        f"<div style=\"font-size:12px; color:#0f172a; font-weight:600;\">{customer_display}</div>"
-        f"<div style=\"font-size:11px; color:#64748b; margin-top:4px;\">{escape(customer_address) if customer_address else ''}</div>"
-        "</td>"
-        "<td style=\"width:16px;\"></td>"
-        "<td style=\"width:50%; vertical-align:top; border:1px solid #e2e8f0; border-radius:12px; padding:10px 12px;\">"
-        "<div style=\"font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#94a3b8; margin-bottom:5px;\">Vertragsdaten</div>"
-        f"<div style=\"font-size:11px; color:#334155;\">Erstellt am: <strong>{generated_at}</strong></div>"
-        f"<div style=\"font-size:11px; color:#334155; margin-top:3px;\">Gueltig ab: <strong>{valid_from}</strong></div>"
-        "</td>"
-        "</tr>"
-        "</table>"
+        "</div>"
+        f"<h1 class=\"contract-title\">{escape(title)}</h1>"
+        f"<p class=\"contract-subline\">Vertragspartner: <strong>{customer_display}</strong></p>"
+        "<div class=\"contract-meta-grid contract-no-break\">"
+        "<div class=\"contract-card\">"
+        "<div class=\"contract-card-label\">Kunde</div>"
+        f"<div class=\"contract-card-main\">{customer_display}</div>"
+        f"<div class=\"contract-card-sub\">{customer_address_display}</div>"
+        "</div>"
+        "<div class=\"contract-card\">"
+        "<div class=\"contract-card-label\">Vertragsdaten</div>"
+        f"<div class=\"contract-card-sub\">Erstellt am: <strong>{generated_at}</strong></div>"
+        f"<div class=\"contract-card-sub\">Gueltig ab: <strong>{valid_from}</strong></div>"
+        "</div>"
+        "</div>"
         f"{header_block}"
-        "<div style=\"border:1px solid #e2e8f0; border-radius:12px; padding:16px; background:#ffffff;\">"
+        "<div class=\"contract-body\">"
         f"{rendered_body}"
         "</div>"
-        f"{footer_block}"
-        "<div style=\"margin-top:22px; display:grid; grid-template-columns:1fr 1fr; gap:18px;\">"
-        "<div style=\"border-top:1px solid #cbd5e1; padding-top:10px; font-size:11px; color:#64748b;\">"
-        "Ort, Datum, Auftraggeber"
-        "</div>"
-        "<div style=\"border-top:1px solid #cbd5e1; padding-top:10px; font-size:11px; color:#64748b;\">"
-        "Ort, Datum, Auftragnehmer"
-        "</div>"
-        "</div>"
-        "</div>"
+        f"<div class=\"contract-footer\">{footer_block}</div>"
+        "<div class=\"contract-signatures contract-no-break\">"
+        "<div class=\"contract-signature\">Ort, Datum, Auftraggeber</div>"
+        "<div class=\"contract-signature\">Ort, Datum, Auftragnehmer</div>"
         "</div>"
         "</div>"
         "</div>"
@@ -4459,6 +4594,7 @@ def serialize_contract_tariff(tariff: ContractTariff) -> Dict[str, Any]:
         "price_client_monthly": round(float(tariff.price_client_monthly or 0), 2),
         "price_network_monthly": round(float(tariff.price_network_monthly or 0), 2),
         "price_iot_monthly": round(float(tariff.price_iot_monthly or 0), 2),
+        "hourly_price": round(float(tariff.hourly_price or 0), 2),
         "notes": tariff.notes or "",
         "created_at": int(tariff.created_at or 0),
     }
@@ -4471,6 +4607,7 @@ def _calc_contract_total_monthly(
     clients: int,
     network_devices: int,
     iot_devices: int,
+    monthly_hours_included: float = 0.0,
 ) -> float:
     return (
         _safe_nonnegative_float(tariff.base_price_monthly)
@@ -4478,6 +4615,7 @@ def _calc_contract_total_monthly(
         + _safe_nonnegative_float(tariff.price_client_monthly) * _safe_nonnegative_int(clients)
         + _safe_nonnegative_float(tariff.price_network_monthly) * _safe_nonnegative_int(network_devices)
         + _safe_nonnegative_float(tariff.price_iot_monthly) * _safe_nonnegative_int(iot_devices)
+        + _safe_nonnegative_float(tariff.hourly_price) * _safe_nonnegative_float(monthly_hours_included)
     )
 
 
@@ -9153,7 +9291,18 @@ def _build_report_item_from_recommendation(
 def get_customers():
     with SessionLocal() as db:
         customers = db.query(Customer).all()
-        return [serialize_customer(c) for c in customers]
+        customer_ids = [int(c.id) for c in customers if c.id is not None]
+        contract_document_flags_by_customer, contract_type_counts_by_customer = (
+            _load_contract_document_meta_for_customers(db, customer_ids)
+        )
+        return [
+            serialize_customer(
+                c,
+                contract_document_flags=contract_document_flags_by_customer.get(int(c.id), []),
+                contract_type_counts=contract_type_counts_by_customer.get(int(c.id), {}),
+            )
+            for c in customers
+        ]
 
 
 @app.get("/api/customer_development")
@@ -10259,7 +10408,14 @@ def create_customer(data: CustomerCreate):
                     )
                 )
         db.commit()
-        return serialize_customer(customer)
+        contract_document_flags_by_customer, contract_type_counts_by_customer = (
+            _load_contract_document_meta_for_customers(db, [int(customer.id)])
+        )
+        return serialize_customer(
+            customer,
+            contract_document_flags=contract_document_flags_by_customer.get(int(customer.id), []),
+            contract_type_counts=contract_type_counts_by_customer.get(int(customer.id), {}),
+        )
 
 
 @app.patch("/api/customers/{customer_id}")
@@ -10309,7 +10465,14 @@ def update_customer(customer_id: int, data: CustomerUpdate):
 
         db.commit()
         db.refresh(customer)
-        return serialize_customer(customer)
+        contract_document_flags_by_customer, contract_type_counts_by_customer = (
+            _load_contract_document_meta_for_customers(db, [int(customer.id)])
+        )
+        return serialize_customer(
+            customer,
+            contract_document_flags=contract_document_flags_by_customer.get(int(customer.id), []),
+            contract_type_counts=contract_type_counts_by_customer.get(int(customer.id), {}),
+        )
 
 
 @app.delete("/api/customers/{customer_id}")
@@ -12631,6 +12794,7 @@ def create_contract_tariff(data: ContractTariffCreate):
             price_client_monthly=_safe_nonnegative_float(data.price_client_monthly),
             price_network_monthly=_safe_nonnegative_float(data.price_network_monthly),
             price_iot_monthly=_safe_nonnegative_float(data.price_iot_monthly),
+            hourly_price=_safe_nonnegative_float(data.hourly_price),
             notes=str(data.notes or "").strip(),
             created_at=now_ms,
         )
@@ -12664,6 +12828,8 @@ def update_contract_tariff(tariff_id: int, data: ContractTariffUpdate):
             row.price_network_monthly = _safe_nonnegative_float(data.price_network_monthly)
         if data.price_iot_monthly is not None:
             row.price_iot_monthly = _safe_nonnegative_float(data.price_iot_monthly)
+        if data.hourly_price is not None:
+            row.hourly_price = _safe_nonnegative_float(data.hourly_price)
         if data.notes is not None:
             row.notes = str(data.notes or "").strip()
         if data.is_active is not None:
@@ -12692,6 +12858,28 @@ def deactivate_contract_tariff(tariff_id: int):
         db.commit()
         db.refresh(row)
         return serialize_contract_tariff(row)
+
+
+@app.delete("/api/contract_tariffs/{tariff_id}")
+def delete_contract_tariff(tariff_id: int):
+    with SessionLocal() as db:
+        row = db.query(ContractTariff).get(tariff_id)
+        if not row:
+            raise HTTPException(404, "Tariff not found")
+        usage_count = (
+            db.query(func.count(CustomerContractCalculation.id))
+            .filter(CustomerContractCalculation.tariff_id == row.id)
+            .scalar()
+            or 0
+        )
+        if usage_count > 0:
+            raise HTTPException(
+                409,
+                f"Tariff cannot be deleted because it is used in {int(usage_count)} calculation(s)",
+            )
+        db.delete(row)
+        db.commit()
+        return {"status": "deleted", "id": int(tariff_id)}
 
 
 @app.get("/api/customers/{customer_id}/contract_calculations")
@@ -12801,6 +12989,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
         templates = prompts.get("contract_templates") or {}
         template_key = _normalize_contract_doc_type(data.doc_type, default="wartung")
+        is_service_contract = template_key in {"wartung", "monitoring"}
         template_entry = templates.get(template_key) or templates.get("wartung") or {}
         template_title = str(template_entry.get("title") or "Vertrag")
         template_header_html = str(prompts.get("contract_header_html") or template_entry.get("header_html") or "")
@@ -12815,7 +13004,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         valid_from = str(data.valid_from or "").strip() or generated_at
         runtime_months = max(1, _safe_nonnegative_int(data.runtime_months or 12))
         monthly_hours_included = _safe_nonnegative_float(data.monthly_hours_included or 0.0)
-        if template_key not in {"wartung", "monitoring"}:
+        if not is_service_contract:
             monthly_hours_included = 0.0
 
         servers = _safe_nonnegative_int(data.servers or 0)
@@ -12825,7 +13014,11 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         counts_source = "request"
         monthly_total = float(data.monthly_total or 0.0)
         yearly_total = float(data.yearly_total or 0.0)
-        service_scope = "Standardleistungen laut vereinbartem Serviceumfang."
+        service_scope = (
+            "Standardleistungen laut vereinbartem Serviceumfang."
+            if is_service_contract
+            else "Regelungen laut AVV/DSGVO."
+        )
 
         counts_are_empty = (
             servers <= 0
@@ -12854,35 +13047,43 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 counts_source = "calculation"
                 monthly_total = float(calc.monthly_total or 0.0)
                 yearly_total = float(calc.yearly_total or 0.0)
-                if calc.tariff_name:
+                if is_service_contract and calc.tariff_name:
                     service_scope = f"Tarif: {calc.tariff_name}."
-                if calc.tariff_id:
+                if is_service_contract and calc.tariff_id:
                     tariff = db.query(ContractTariff).get(int(calc.tariff_id))
-        if data.tariff_id:
+        if is_service_contract and data.tariff_id:
             tariff_candidate = db.query(ContractTariff).get(int(data.tariff_id))
-            if tariff_candidate:
-                tariff = tariff_candidate
-                suggested_monthly_total = _calc_contract_total_monthly(
-                    tariff,
-                    servers=servers,
-                    clients=clients,
-                    network_devices=network_devices,
-                    iot_devices=iot_devices,
-                )
-                suggested_yearly_total = suggested_monthly_total * 12.0
-                # Tariff is a pricing suggestion. Keep explicit request totals if provided.
-                if data.monthly_total is None:
-                    monthly_total = suggested_monthly_total
-                if data.yearly_total is None:
-                    yearly_total = monthly_total * 12.0 if data.monthly_total is not None else suggested_yearly_total
-                service_scope = f"Tarif: {str(tariff.name or 'Service').strip()}."
+            if not tariff_candidate:
+                raise HTTPException(404, "Tariff not found")
+            tariff = tariff_candidate
+        if is_service_contract and tariff:
+            tariff_category = str(tariff.category or "").strip().lower()
+            if tariff_category and tariff_category != template_key:
+                raise HTTPException(400, "tariff category does not match contract type")
+            suggested_monthly_total = _calc_contract_total_monthly(
+                tariff,
+                servers=servers,
+                clients=clients,
+                network_devices=network_devices,
+                iot_devices=iot_devices,
+                monthly_hours_included=monthly_hours_included,
+            )
+            suggested_yearly_total = suggested_monthly_total * 12.0
+            # Tariff is a pricing suggestion. Keep explicit request totals if provided.
+            if data.monthly_total is None:
+                monthly_total = suggested_monthly_total
+            if data.yearly_total is None:
+                yearly_total = monthly_total * 12.0 if data.monthly_total is not None else suggested_yearly_total
+            service_scope = f"Tarif: {str(tariff.name or 'Service').strip()}."
+        if is_service_contract and not tariff:
+            raise HTTPException(400, "tariff_id is required for wartung/monitoring contracts")
+        hourly_price = _safe_nonnegative_float(tariff.hourly_price if is_service_contract and tariff else 0.0)
 
         note_raw = str(data.note or "").strip()
         note_block = (
             f"Hinweis: {escape(note_raw).replace(chr(10), '<br/>')}" if note_raw else "Ohne Zusatzhinweise."
         )
         extension_period_months = max(1, runtime_months)
-        is_service_contract = template_key in {"wartung", "monitoring"}
         placeholder_values = {
             "provider_name": "QT Workbench Services",
             "customer_name": escape(str(customer.name or "").strip() or "Kunde"),
@@ -12903,7 +13104,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             "service_scope": escape(service_scope),
             "service_hours": "Montag bis Freitag, 08:00-17:00 Uhr (werktags)",
             "reaction_time": "innerhalb von 8 Arbeitsstunden",
-            "hourly_rate_extra": "120,00 EUR pro Stunde",
+            "hourly_rate_extra": f"{_format_contract_currency(hourly_price)} pro Stunde",
             "billing_interval": "monatlich",
             "additional_systems": "keine",
             "monitoring_enabled": "ja" if is_service_contract else "nicht zutreffend",
@@ -12966,9 +13167,22 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
         if status_value not in {"active", "proposal"}:
             status_value = "active"
         doc_type_value = _normalize_contract_doc_type(data.doc_type, default="wartung")
+        template_key_value = _normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value)
+        if not str(data.doc_type or "").strip():
+            doc_type_value = template_key_value
+        is_service_contract = template_key_value in {"wartung", "monitoring"}
         monthly_hours_included = _safe_nonnegative_float(data.monthly_hours_included or 0.0)
-        if doc_type_value not in {"wartung", "monitoring"}:
+        if not is_service_contract:
             monthly_hours_included = 0.0
+        if is_service_contract:
+            if not data.tariff_id:
+                raise HTTPException(400, "tariff_id is required for wartung/monitoring contracts")
+            tariff = db.query(ContractTariff).get(int(data.tariff_id))
+            if not tariff:
+                raise HTTPException(404, "Tariff not found")
+            tariff_category = str(tariff.category or "").strip().lower()
+            if tariff_category and tariff_category != template_key_value:
+                raise HTTPException(400, "tariff category does not match contract type")
         # Validate base64 payload.
         try:
             base64.b64decode(content_base64, validate=True)
@@ -12983,7 +13197,7 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             mime_type=str(data.mime_type or "application/pdf").strip() or "application/pdf",
             content_base64=content_base64,
             html_content=str(data.html_content or ""),
-            template_key=_normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value),
+            template_key=template_key_value,
             monthly_hours_included=monthly_hours_included,
             note=str(data.note or "").strip(),
             created_at=int(time.time() * 1000),
