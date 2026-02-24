@@ -10,6 +10,11 @@ const formatEur = (value) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   })}`;
+const formatHours = (value) =>
+  `${Number(value || 0).toLocaleString("de-DE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })} h`;
 const formatMonthLabel = (year, month) =>
   new Date(year, month - 1, 1).toLocaleDateString("de-DE", {
     month: "short",
@@ -27,6 +32,12 @@ const formatDays = (value) => {
 const formatPercent = (value) => {
   if (value === null || typeof value === "undefined") return "-";
   return `${formatNumber(value, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}%`;
+};
+const formatHoursDelta = (value) => {
+  const numeric = Number(value || 0);
+  if (!numeric) return "0,00 h";
+  const prefix = numeric > 0 ? "+" : "";
+  return `${prefix}${formatNumber(numeric, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h`;
 };
 
 const StatCard = ({ title, value, subtitle }) => (
@@ -77,12 +88,28 @@ const gradeBadgeClass = (grade) => {
   if (grade === "B") return "border-amber-200 bg-amber-50 text-amber-700";
   return "border-rose-200 bg-rose-50 text-rose-700";
 };
+const contractStatusBadgeClass = (status) => {
+  if (status === "proposal") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-emerald-200 bg-emerald-50 text-emerald-700";
+};
+const contractStatusLabel = (status) => {
+  if (status === "proposal") return "Unbezahlt";
+  if (status === "active") return "Fakturiert";
+  return "Unbekannt";
+};
+const contractTypeLabel = (type) => {
+  if (type === "wartung") return "Wartung";
+  if (type === "monitoring") return "Monitoring";
+  if (type === "avv") return "AVV";
+  return "Vertrag";
+};
 
 const customerTabs = [
   { key: "general", label: "Allgemein", icon: ClipboardList },
   { key: "telephony", label: "Telefonie", icon: PhoneCall },
   { key: "billing", label: "Faktura", icon: Receipt },
   { key: "reports", label: "Berichte", icon: FileText },
+  { key: "contracts", label: "Verträge", icon: FileText },
   { key: "customers", label: "Kunden", icon: Users }
 ];
 
@@ -143,6 +170,15 @@ export default function StatsView() {
     stats?.sevdesk?.customerPaymentSummary && typeof stats.sevdesk.customerPaymentSummary === "object"
       ? stats.sevdesk.customerPaymentSummary
       : {};
+  const contracts =
+    stats?.contracts && typeof stats.contracts === "object" ? stats.contracts : {};
+  const contractHours =
+    contracts?.hours && typeof contracts.hours === "object" ? contracts.hours : {};
+  const contractMonthLabels =
+    contracts?.monthLabels && typeof contracts.monthLabels === "object"
+      ? contracts.monthLabels
+      : { current: "Aktueller Monat", previous: "Vormonat" };
+  const contractRows = Array.isArray(contracts?.rows) ? contracts.rows : [];
   const customerGradeCounts = useMemo(() => {
     const base = { A: 0, B: 0, C: 0 };
     customerPaymentStats.forEach((item) => {
@@ -471,6 +507,139 @@ export default function StatsView() {
                       Keine Monatsdaten vorhanden.
                     </div>
                   )}
+                </div>
+              </section>
+            ) : null}
+
+            {activeTab === "contracts" ? (
+              <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
+                <div className="flex items-center gap-2 mb-3 text-sand-700">
+                  <FileText size={16} />
+                  <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Verträge</p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <StatCard
+                    title="Verträge gesamt"
+                    value={formatNumber(contracts?.totalContracts ?? 0)}
+                    subtitle={`Kunden mit Vertrag: ${formatNumber(contracts?.customersWithContract ?? 0)}`}
+                  />
+                  <StatCard
+                    title="Unbezahlte Verträge"
+                    value={formatNumber(contracts?.unpaidContracts ?? 0)}
+                    subtitle="Status Vorschlag"
+                  />
+                  <StatCard
+                    title="Fakturierte Verträge"
+                    value={formatNumber(contracts?.invoicedContracts ?? 0)}
+                    subtitle="Status Aktiv"
+                  />
+                  <StatCard
+                    title="Vertragsstunden Soll"
+                    value={formatHours(contractHours?.soll ?? 0)}
+                    subtitle="Monatlich gesamt"
+                  />
+                  <StatCard
+                    title={`Vertragsstunden ${contractMonthLabels?.current || "Aktuell"}`}
+                    value={formatHours(contractHours?.currentMonth ?? 0)}
+                    subtitle="Vereinbarte Stunden"
+                  />
+                  <StatCard
+                    title={`Vertragsstunden ${contractMonthLabels?.previous || "Vormonat"}`}
+                    value={formatHours(contractHours?.previousMonth ?? 0)}
+                    subtitle="Vereinbarte Stunden"
+                  />
+                  <StatCard
+                    title={`Verbrauch ${contractMonthLabels?.current || "Aktuell"}`}
+                    value={formatHours(contractHours?.consumedCurrentMonth ?? 0)}
+                    subtitle={`Delta: ${formatHoursDelta(contractHours?.deltaCurrentMonth ?? 0)}`}
+                  />
+                  <StatCard
+                    title={`Verbrauch ${contractMonthLabels?.previous || "Vormonat"}`}
+                    value={formatHours(contractHours?.consumedPreviousMonth ?? 0)}
+                    subtitle={`Delta: ${formatHoursDelta(contractHours?.deltaPreviousMonth ?? 0)}`}
+                  />
+                </div>
+
+                <div className="mt-4 overflow-x-auto rounded-2xl border border-sand-200">
+                  <table className="min-w-full text-left text-xs">
+                    <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
+                      <tr>
+                        <th className="px-3 py-2">Kunde</th>
+                        <th className="px-3 py-2">Status</th>
+                        <th className="px-3 py-2">Vertrag</th>
+                        <th className="px-3 py-2">Soll</th>
+                        <th className="px-3 py-2">{contractMonthLabels?.current || "Aktuell"}</th>
+                        <th className="px-3 py-2">{contractMonthLabels?.previous || "Vormonat"}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {contractRows.length ? (
+                        contractRows.map((item, index) => (
+                          <tr
+                            key={`${item.customerId || item.customerName || "contract-customer"}-${index}`}
+                            className="border-t border-sand-100"
+                          >
+                            <td className="px-3 py-2 text-sand-800">
+                              {item.customerName || "Unbekannt"}
+                              <div className="text-[10px] text-sand-400">
+                                {item.customerNumber || "Keine Kundennummer"}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2">
+                              <span
+                                className={`inline-flex rounded-full border px-2 py-0.5 font-semibold ${contractStatusBadgeClass(
+                                  item.contractStatus
+                                )}`}
+                              >
+                                {contractStatusLabel(item.contractStatus)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-sand-700">
+                              {contractTypeLabel(item.contractType)}
+                              <div className="text-[10px] text-sand-400">
+                                {item.contractTitle || "Vertrag"}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-sand-700">
+                              {formatHours(item.contractHoursSoll ?? 0)}
+                            </td>
+                            <td className="px-3 py-2 text-sand-700">
+                              Vertrag: {formatHours(item.contractHoursCurrentMonth ?? 0)}
+                              <div className="text-[10px] text-sand-400">
+                                Verbrauch: {formatHours(item.consumedHoursCurrentMonth ?? 0)}
+                              </div>
+                              <div className="text-[10px] text-sand-400">
+                                Delta: {formatHoursDelta(item.deltaHoursCurrentMonth ?? 0)}
+                              </div>
+                              <div className="text-[10px] text-sand-400">
+                                Aufgaben {formatHours(item.taskHoursCurrentMonth ?? 0)} · Telefonie{" "}
+                                {formatHours(item.telephonyHoursCurrentMonth ?? 0)}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-sand-700">
+                              Vertrag: {formatHours(item.contractHoursPreviousMonth ?? 0)}
+                              <div className="text-[10px] text-sand-400">
+                                Verbrauch: {formatHours(item.consumedHoursPreviousMonth ?? 0)}
+                              </div>
+                              <div className="text-[10px] text-sand-400">
+                                Delta: {formatHoursDelta(item.deltaHoursPreviousMonth ?? 0)}
+                              </div>
+                              <div className="text-[10px] text-sand-400">
+                                Aufgaben {formatHours(item.taskHoursPreviousMonth ?? 0)} · Telefonie{" "}
+                                {formatHours(item.telephonyHoursPreviousMonth ?? 0)}
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-4 text-sand-500">
+                            Keine Vertragsdaten vorhanden.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </section>
             ) : null}

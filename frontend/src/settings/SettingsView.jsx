@@ -844,13 +844,28 @@ export default function SettingsView() {
     customer_name: "Musterkunde GmbH",
     generated_at: "22.02.2026",
     valid_from: "01.03.2026",
+    contract_start: "01.03.2026",
     runtime_months: "12",
+    minimum_term_months: "12",
+    extension_period: "12",
+    termination_notice: "3 Monate",
     servers: "3",
     clients: "24",
     network_devices: "14",
     iot_devices: "6",
     monthly_total: "1.250,00 EUR",
     yearly_total: "15.000,00 EUR",
+    monthly_hours_included: "4,00 h",
+    service_hours: "Montag bis Freitag, 08:00-17:00 Uhr (werktags)",
+    reaction_time: "innerhalb von 8 Arbeitsstunden",
+    hourly_rate_extra: "120,00 EUR pro Stunde",
+    billing_interval: "monatlich",
+    additional_systems: "keine",
+    monitoring_enabled: "ja",
+    backup_monitoring: "nach Vereinbarung",
+    patch_management: "ja (sicherheitsrelevant)",
+    security_monitoring: "ja (Basis)",
+    liability_limit: "gemaess AGB",
     service_scope: "Wartung und Monitoring laut Tarif.",
     note_block: "Hinweis: Monatliche Leistungserbringung nach Vereinbarung."
   };
@@ -1859,7 +1874,7 @@ export default function SettingsView() {
             <>
               <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-4">
                 <p className="text-[11px] text-sand-500">
-                  Platzhalter z. B.: {"{customer_name}"}, {"{monthly_total}"}, {"{yearly_total}"}, {"{valid_from}"}, {"{runtime_months}"}
+                  Platzhalter z. B.: {"{customer_name}"}, {"{monthly_total}"}, {"{yearly_total}"}, {"{valid_from}"}, {"{runtime_months}"}, {"{service_hours}"}, {"{reaction_time}"}, {"{extension_period}"}
                 </p>
                 <div className="mt-3 grid grid-cols-1 gap-4">
                   <div className="rounded-xl border border-sand-200 bg-white p-3">

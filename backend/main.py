@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List, Tuple, Set, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text,
     Boolean, BigInteger, ForeignKey, Float, inspect, text, func, or_
@@ -93,18 +94,25 @@ SEVDESK_CONTACT_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 _sevdesk_contact_cache: Dict[str, Tuple[int, str]] = {}
 CUSTOMER_DEVELOPMENT_CACHE_TTL_MS = 5 * 60 * 1000
 CUSTOMER_CVE_CACHE_TTL_MS = 30 * 60 * 1000
+CUSTOMER_CVE_EMPTY_CACHE_TTL_MS = 3 * 60 * 1000
 RECENT_WORK_SUMMARY_CACHE_TTL_MS = 15 * 60 * 1000
 NVD_LOOKUP_CACHE_TTL_MS = 12 * 60 * 60 * 1000
 OSV_LOOKUP_CACHE_TTL_MS = 12 * 60 * 60 * 1000
+CVE_LOOKUP_BUDGET_SECONDS = max(5, int(os.environ.get("CVE_LOOKUP_BUDGET_SECONDS") or "45"))
+CVE_LOOKUP_MAX_UNIQUE = max(20, int(os.environ.get("CVE_LOOKUP_MAX_UNIQUE") or "120"))
+CVE_LOOKUP_MAX_WORKERS = max(2, min(16, int(os.environ.get("CVE_LOOKUP_MAX_WORKERS") or "8")))
 _customer_development_cache: Dict[str, Dict[str, Any]] = {}
 _customer_cve_cache: Dict[int, Dict[str, Any]] = {}
 _recent_work_summary_cache: Dict[str, Dict[str, Any]] = {}
 TACTICAL_SITE_CACHE_TTL_MS = 5 * 60 * 1000
+TACTICAL_SOFTWARE_ENDPOINT_CACHE_TTL_MS = 60 * 60 * 1000
 _tactical_site_lookup_cache: Dict[str, Dict[str, Any]] = {}
+_tactical_software_endpoint_cache: Dict[str, Dict[str, Any]] = {}
 _nvd_lookup_cache: Dict[str, Dict[str, Any]] = {}
 _osv_lookup_cache: Dict[str, Dict[str, Any]] = {}
 _nvd_lookup_lock = threading.Lock()
 _osv_lookup_lock = threading.Lock()
+_tactical_software_endpoint_lock = threading.Lock()
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -1574,6 +1582,8 @@ class CustomerContractCalculationCreate(BaseModel):
     clients: int = 0
     network_devices: int = 0
     iot_devices: int = 0
+    monthly_total: Optional[float] = None
+    yearly_total: Optional[float] = None
     note: Optional[str] = ""
 
 
@@ -3665,8 +3675,8 @@ def _default_ai_prompts() -> Dict[str, Any]:
             "background:#f8fafc; color:#475569; font-size:11px;\">"
             "<p style=\"margin:0 0 6px;\">"
             "Hinweis: Die Leistungen werden als Dienstleistung nach bestem Wissen und Stand der Technik erbracht. "
-            "Ein bestimmter wirtschaftlicher oder technischer Erfolg ist nur geschuldet, wenn er ausdruecklich "
-            "und schriftlich zugesagt wurde."
+            "Die Haftung richtet sich - soweit gesetzlich zulaessig - auf Vorsatz und grobe Fahrlaessigkeit; "
+            "weitere Haftungsregelungen ergeben sich aus den vereinbarten AGB."
             "</p>"
             "<p style=\"margin:0;\">"
             "Aenderungen, Nebenabreden und Erweiterungen beduerfen der Textform. "
@@ -3933,6 +3943,50 @@ def _render_prompt(template: str, values: Dict[str, str]) -> str:
     return text
 
 
+_CONTRACT_PLACEHOLDER_PATTERN = re.compile(r"\{([a-zA-Z0-9_]+)\}")
+
+
+def _render_contract_template(template: str, values: Dict[str, str]) -> str:
+    rendered = _render_prompt(template or "", values)
+    fallback_values = {
+        "service_hours": "Montag bis Freitag, 08:00-17:00 Uhr (werktags)",
+        "reaction_time": "innerhalb von 8 Arbeitsstunden",
+        "hourly_rate_extra": "120,00 EUR pro Stunde",
+        "billing_interval": "monatlich",
+        "additional_systems": "keine",
+        "monitoring_enabled": "ja",
+        "backup_monitoring": "nach Vereinbarung",
+        "patch_management": "ja (sicherheitsrelevant)",
+        "security_monitoring": "ja (Basis)",
+        "extension_period": "12",
+        "termination_notice": "3 Monate",
+        "liability_limit": "gemaess AGB",
+    }
+
+    def _replace_missing(match: re.Match[str]) -> str:
+        key = str(match.group(1) or "").strip().lower()
+        if not key:
+            return ""
+        return escape(str(fallback_values.get(key, "—")))
+
+    return _CONTRACT_PLACEHOLDER_PATTERN.sub(_replace_missing, rendered)
+
+
+def _normalize_contract_liability_section(rendered_html: str) -> str:
+    html = str(rendered_html or "")
+    html = re.sub(
+        r"(?is)<p[^>]*>\s*Keine\s+Haftung\s+besteht[^<:]*:\s*</p>\s*<ul[^>]*>.*?</ul>",
+        "<p>Weitere Haftungsregelungen und Ausschluesse richten sich nach den vereinbarten AGB.</p>",
+        html,
+    )
+    html = re.sub(
+        r"(?is)<p[^>]*>\s*Haftungsh[^<]*grenze[^<]*</p>",
+        "<p>Weitere Haftungsregelungen und Haftungshoechstgrenzen richten sich nach den vereinbarten AGB.</p>",
+        html,
+    )
+    return html
+
+
 def _format_contract_currency(value: float) -> str:
     amount = float(value or 0.0)
     total_cents = int(round(abs(amount) * 100))
@@ -3964,9 +4018,25 @@ def _render_contract_html(
     footer_html: str,
     placeholders: Dict[str, str],
 ) -> str:
-    rendered_body = _render_prompt(body_template or "", placeholders)
-    rendered_header = _render_prompt(header_html or "", placeholders)
-    rendered_footer = _render_prompt(footer_html or "", placeholders)
+    rendered_body = _normalize_contract_liability_section(
+        _render_contract_template(body_template or "", placeholders)
+    )
+    rendered_header = _render_contract_template(header_html or "", placeholders)
+    rendered_footer = _render_contract_template(footer_html or "", placeholders)
+    header_block = (
+        "<div style=\"margin-bottom:12px;\">"
+        f"{rendered_header}"
+        "</div>"
+        if str(rendered_header or "").strip()
+        else ""
+    )
+    footer_block = (
+        "<div style=\"margin-top:12px;\">"
+        f"{rendered_footer}"
+        "</div>"
+        if str(rendered_footer or "").strip()
+        else ""
+    )
     customer_address = " ".join(
         [
             str(customer.street or "").strip(),
@@ -3982,7 +4052,7 @@ def _render_contract_html(
     valid_from = escape(str(placeholders.get("valid_from", "")).strip())
     return (
         "<div style=\"font-family:Arial,sans-serif; color:#1f2937; line-height:1.55; background:#f8fafc; padding:18px;\">"
-        f"{rendered_header}"
+        "<div style=\"max-width:920px; margin:0 auto;\">"
         "<div style=\"border:1px solid #dbe4ef; border-radius:16px; overflow:hidden; background:#ffffff;\">"
         "<div style=\"padding:16px 18px; border-bottom:1px solid #e5e7eb;\">"
         "<table style=\"width:100%; border-collapse:collapse;\">"
@@ -4015,9 +4085,11 @@ def _render_contract_html(
         "</td>"
         "</tr>"
         "</table>"
+        f"{header_block}"
         "<div style=\"border:1px solid #e2e8f0; border-radius:12px; padding:16px; background:#ffffff;\">"
         f"{rendered_body}"
         "</div>"
+        f"{footer_block}"
         "<div style=\"margin-top:22px; display:grid; grid-template-columns:1fr 1fr; gap:18px;\">"
         "<div style=\"border-top:1px solid #cbd5e1; padding-top:10px; font-size:11px; color:#64748b;\">"
         "Ort, Datum, Auftraggeber"
@@ -4028,7 +4100,7 @@ def _render_contract_html(
         "</div>"
         "</div>"
         "</div>"
-        f"{rendered_footer}"
+        "</div>"
         "</div>"
     )
 
@@ -6093,6 +6165,33 @@ def _extract_software_entries(payload: Any) -> List[Dict[str, str]]:
     return out
 
 
+def _get_cached_tactical_software_endpoint_template(host: str) -> str:
+    normalized_host = _normalize_tactical_host(host)
+    if not normalized_host:
+        return ""
+    now_ms = int(time.time() * 1000)
+    with _tactical_software_endpoint_lock:
+        cached = _tactical_software_endpoint_cache.get(normalized_host)
+        if not cached:
+            return ""
+        if now_ms - int(cached.get("cachedAt") or 0) >= TACTICAL_SOFTWARE_ENDPOINT_CACHE_TTL_MS:
+            _tactical_software_endpoint_cache.pop(normalized_host, None)
+            return ""
+        return str(cached.get("template") or "").strip()
+
+
+def _set_cached_tactical_software_endpoint_template(host: str, template: str) -> None:
+    normalized_host = _normalize_tactical_host(host)
+    normalized_template = str(template or "").strip()
+    if not normalized_host or not normalized_template:
+        return
+    with _tactical_software_endpoint_lock:
+        _tactical_software_endpoint_cache[normalized_host] = {
+            "cachedAt": int(time.time() * 1000),
+            "template": normalized_template,
+        }
+
+
 def _fetch_tactical_rmm_software(
     settings: Optional[IntegrationSettings],
     agent_ids: List[str],
@@ -6101,40 +6200,54 @@ def _fetch_tactical_rmm_software(
     session, host = _build_tactical_rmm_session(settings)
     if not session or not host:
         return []
+    candidate_templates = [
+        "/software/{agent_id}/",
+        "/software/{agent_id}",
+        "/winsoftware/{agent_id}/",
+        "/winsoftware/{agent_id}",
+        "/api/v3/software/{agent_id}/",
+        "/api/v3/software/{agent_id}",
+        "/api/v3/winsoftware/{agent_id}/",
+        "/api/v3/winsoftware/{agent_id}",
+        "/agents/{agent_id}/software/",
+        "/agents/{agent_id}/software",
+        "/api/v3/agents/{agent_id}/software/",
+        "/api/v3/agents/{agent_id}/software",
+        "/software/?agent={agent_id_q}",
+        "/software?agent={agent_id_q}",
+        "/software/?agent_id={agent_id_q}",
+        "/software?agent_id={agent_id_q}",
+        "/api/software/?agent={agent_id_q}",
+        "/api/software?agent={agent_id_q}",
+        "/api/software/?agent_id={agent_id_q}",
+        "/api/software?agent_id={agent_id_q}",
+        "/api/v3/software/?agent={agent_id_q}",
+        "/api/v3/software?agent={agent_id_q}",
+        "/api/v3/software/?agent_id={agent_id_q}",
+        "/api/v3/software?agent_id={agent_id_q}",
+    ]
+    preferred_template = _get_cached_tactical_software_endpoint_template(host)
     rows: List[Dict[str, Any]] = []
     for agent_id in agent_ids[:25]:
         if not agent_id:
             continue
-        candidates = [
-            f"/software/{agent_id}/",
-            f"/software/{agent_id}",
-            f"/winsoftware/{agent_id}/",
-            f"/winsoftware/{agent_id}",
-            f"/api/v3/software/{agent_id}/",
-            f"/api/v3/software/{agent_id}",
-            f"/api/v3/winsoftware/{agent_id}/",
-            f"/api/v3/winsoftware/{agent_id}",
-            f"/agents/{agent_id}/software/",
-            f"/agents/{agent_id}/software",
-            f"/api/v3/agents/{agent_id}/software/",
-            f"/api/v3/agents/{agent_id}/software",
-            f"/software/?agent={quote(agent_id)}",
-            f"/software?agent={quote(agent_id)}",
-            f"/software/?agent_id={quote(agent_id)}",
-            f"/software?agent_id={quote(agent_id)}",
-            f"/api/software/?agent={quote(agent_id)}",
-            f"/api/software?agent={quote(agent_id)}",
-            f"/api/software/?agent_id={quote(agent_id)}",
-            f"/api/software?agent_id={quote(agent_id)}",
-            f"/api/v3/software/?agent={quote(agent_id)}",
-            f"/api/v3/software?agent={quote(agent_id)}",
-            f"/api/v3/software/?agent_id={quote(agent_id)}",
-            f"/api/v3/software?agent_id={quote(agent_id)}",
+        ordered_templates: List[str] = []
+        if preferred_template and preferred_template in candidate_templates:
+            ordered_templates.append(preferred_template)
+        for template in candidate_templates:
+            if template not in ordered_templates:
+                ordered_templates.append(template)
+
+        rendered_candidates = [
+            template.format(agent_id=agent_id, agent_id_q=quote(agent_id))
+            for template in ordered_templates
         ]
         software_items: List[Dict[str, str]] = []
         used_path = ""
-        for path in candidates:
-            res, _ = _tactical_request(session, host, "GET", path, timeout=8, retries=1)
+        used_template = ""
+        for idx, path in enumerate(rendered_candidates):
+            timeout_value = 5 if idx == 0 else 6
+            res, _ = _tactical_request(session, host, "GET", path, timeout=timeout_value, retries=0)
             if not res:
                 continue
             if not res.ok:
@@ -6148,10 +6261,14 @@ def _fetch_tactical_rmm_software(
                 continue
             software_items = extracted
             used_path = path
+            used_template = ordered_templates[idx]
             break
         if not software_items:
             logger.info("RMM software inventory empty for agent %s: no endpoint matched", agent_id)
             continue
+        if used_template and used_template != preferred_template:
+            preferred_template = used_template
+            _set_cached_tactical_software_endpoint_template(host, preferred_template)
         logger.info(
             "RMM software inventory for agent %s via %s: %s items",
             agent_id,
@@ -6303,6 +6420,18 @@ def _osv_fixed_versions(name: str, version: str) -> List[str]:
             "fixedVersions": result,
         }
     return result
+
+
+def _lookup_cve_for_software(name: str, version: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    lookup_name = str(name or "").strip()
+    lookup_version = str(version or "").strip()
+    if not lookup_name:
+        return [], []
+    cves = _nvd_lookup(lookup_name, lookup_version)
+    fixed_versions: List[str] = []
+    if cves or _software_should_query_osv(lookup_name):
+        fixed_versions = _osv_fixed_versions(lookup_name, lookup_version)
+    return cves[:5], fixed_versions
 
 
 def _extract_customer_number_from_contact(contact: Dict[str, Any]) -> str:
@@ -6662,6 +6791,294 @@ def _month_bounds_ms(now_dt: datetime) -> Tuple[int, int]:
     else:
         next_month_start = datetime(now_dt.year, now_dt.month + 1, 1)
     return int(month_start.timestamp() * 1000), int(next_month_start.timestamp() * 1000)
+
+
+def _month_bounds_with_offset(now_dt: datetime, offset_months: int = 0) -> Tuple[int, int, str]:
+    year = int(now_dt.year)
+    month = int(now_dt.month) + int(offset_months or 0)
+    while month <= 0:
+        month += 12
+        year -= 1
+    while month > 12:
+        month -= 12
+        year += 1
+    month_start = datetime(year, month, 1)
+    if month == 12:
+        next_month_start = datetime(year + 1, 1, 1)
+    else:
+        next_month_start = datetime(year, month + 1, 1)
+    return (
+        int(month_start.timestamp() * 1000),
+        int(next_month_start.timestamp() * 1000),
+        f"{month:02d}/{year:04d}",
+    )
+
+
+def _customer_telephony_metrics_window(
+    phone_numbers: List[str],
+    start_ms: int,
+    end_ms: int,
+) -> Dict[str, Any]:
+    phone_digits: List[str] = []
+    for number in phone_numbers:
+        normalized = _normalize_phone(number)
+        if normalized and normalized not in phone_digits:
+            phone_digits.append(normalized)
+    if not phone_digits:
+        return {"seconds": 0, "minutes": 0.0, "missed": 0, "calls": 0}
+
+    params: Dict[str, Any] = {"since": int(start_ms), "until": int(end_ms)}
+    conditions = []
+    for idx, digits in enumerate(phone_digits):
+        params[f"p{idx}"] = f"%{digits}"
+        conditions.append(
+            f"(regexp_replace(from_number, '\\\\D', '', 'g') LIKE :p{idx} "
+            f"OR regexp_replace(to_number, '\\\\D', '', 'g') LIKE :p{idx})"
+        )
+    where_clause = " OR ".join(conditions)
+    sql = (
+        "SELECT COALESCE(SUM(duration), 0) AS total_seconds, "
+        "COALESCE(SUM(CASE WHEN answered = false THEN 1 ELSE 0 END), 0) AS missed_calls, "
+        "COALESCE(COUNT(*), 0) AS total_calls "
+        "FROM telephony_calls "
+        "WHERE start_time >= :since AND start_time < :until AND (" + where_clause + ")"
+    )
+    try:
+        with engine.begin() as connection:
+            row = connection.execute(text(sql), params).mappings().first()
+            if not row:
+                return {"seconds": 0, "minutes": 0.0, "missed": 0, "calls": 0}
+            seconds = int(row.get("total_seconds") or 0)
+            return {
+                "seconds": seconds,
+                "minutes": round(seconds / 60.0, 1) if seconds else 0.0,
+                "missed": int(row.get("missed_calls") or 0),
+                "calls": int(row.get("total_calls") or 0),
+            }
+    except Exception:
+        return {"seconds": 0, "minutes": 0.0, "missed": 0, "calls": 0}
+
+
+def _customer_timed_task_metrics_window(
+    db,
+    customer: Customer,
+    start_ms: int,
+    end_ms: int,
+    now_ms: int,
+) -> Dict[str, Any]:
+    task_filters = _customer_task_filter(customer)
+    if not task_filters:
+        return {"milliseconds": 0, "hours": 0.0, "count": 0}
+    timed_tasks = (
+        db.query(DayTask)
+        .filter(or_(*task_filters))
+        .filter(DayTask.time_enabled == True)
+        .all()
+    )
+    total_ms = 0
+    count = 0
+    for task in timed_tasks:
+        status = str(task.status or "").strip().lower()
+        completed_at = int(task.completed_at or 0)
+        created_at = int(task.created_at or 0)
+        start_time = int(task.startTime or 0)
+        include_task = False
+        if status == "done":
+            anchor = completed_at or created_at
+            include_task = anchor > 0 and int(start_ms) <= anchor < int(end_ms)
+        else:
+            anchor = created_at or start_time
+            include_task = anchor > 0 and int(start_ms) <= anchor < int(end_ms)
+        if not include_task:
+            continue
+        elapsed = int(task.elapsed or 0)
+        if bool(task.running) and start_time > 0 and int(start_ms) <= start_time < int(end_ms):
+            window_end = min(int(now_ms), int(end_ms))
+            if window_end > start_time:
+                elapsed += max(0, window_end - start_time)
+        if elapsed <= 0:
+            continue
+        total_ms += elapsed
+        count += 1
+    return {
+        "milliseconds": int(total_ms),
+        "hours": round(total_ms / 3_600_000.0, 2) if total_ms else 0.0,
+        "count": int(count),
+    }
+
+
+def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
+    now_dt = datetime.fromtimestamp(now_ms / 1000)
+    current_start_ms, current_end_ms, current_label = _month_bounds_with_offset(now_dt, 0)
+    previous_start_ms, previous_end_ms, previous_label = _month_bounds_with_offset(now_dt, -1)
+
+    customers = (
+        db.query(Customer)
+        .order_by(func.lower(func.trim(Customer.name)).asc(), Customer.id.asc())
+        .all()
+    )
+    contract_docs = (
+        db.query(CustomerContractDocument)
+        .filter(CustomerContractDocument.status.in_(["proposal", "active"]))
+        .order_by(
+            CustomerContractDocument.customer_id.asc(),
+            CustomerContractDocument.created_at.desc(),
+            CustomerContractDocument.id.desc(),
+        )
+        .all()
+    )
+    latest_doc_by_customer: Dict[int, CustomerContractDocument] = {}
+    for row in contract_docs:
+        customer_id = int(row.customer_id or 0)
+        if customer_id <= 0 or customer_id in latest_doc_by_customer:
+            continue
+        latest_doc_by_customer[customer_id] = row
+
+    rows: List[Dict[str, Any]] = []
+    unpaid_contracts = 0
+    invoiced_contracts = 0
+    total_hours_soll = 0.0
+    total_hours_current = 0.0
+    total_hours_previous = 0.0
+    total_consumed_current = 0.0
+    total_consumed_previous = 0.0
+
+    for customer in customers:
+        contract_flags = _parse_contract_flags(customer.contract_flags)
+        has_contract_flag = bool(customer.maintenance_contract) or bool(
+            set(contract_flags) & {"wartung", "monitoring"}
+        )
+        latest_doc = latest_doc_by_customer.get(int(customer.id))
+        if not latest_doc and not has_contract_flag:
+            continue
+
+        contract_status = (
+            _normalize_contract_document_status(latest_doc.status, allow_cancelled=False)
+            if latest_doc
+            else "active"
+        )
+        if contract_status not in {"proposal", "active"}:
+            contract_status = "active"
+        if contract_status == "proposal":
+            unpaid_contracts += 1
+        else:
+            invoiced_contracts += 1
+
+        if latest_doc:
+            contract_type = _normalize_contract_doc_type(
+                latest_doc.doc_type or latest_doc.template_key,
+                default="wartung",
+            )
+            title = str(latest_doc.title or "").strip() or "Vertrag"
+            monthly_hours_soll = _safe_nonnegative_float(latest_doc.monthly_hours_included or 0.0)
+        else:
+            contract_type = "monitoring" if "monitoring" in contract_flags else "wartung"
+            title = "Vertrag"
+            monthly_hours_soll = 0.0
+
+        contract_hours_current = monthly_hours_soll
+        contract_hours_previous = monthly_hours_soll
+
+        task_current = _customer_timed_task_metrics_window(
+            db,
+            customer,
+            current_start_ms,
+            current_end_ms,
+            now_ms,
+        )
+        task_previous = _customer_timed_task_metrics_window(
+            db,
+            customer,
+            previous_start_ms,
+            previous_end_ms,
+            now_ms,
+        )
+        phone_numbers = [phone.number for phone in customer.phones]
+        telephony_current = _customer_telephony_metrics_window(
+            phone_numbers,
+            current_start_ms,
+            current_end_ms,
+        )
+        telephony_previous = _customer_telephony_metrics_window(
+            phone_numbers,
+            previous_start_ms,
+            previous_end_ms,
+        )
+
+        consumed_current_ms = int(task_current.get("milliseconds") or 0) + int(
+            telephony_current.get("seconds") or 0
+        ) * 1000
+        consumed_previous_ms = int(task_previous.get("milliseconds") or 0) + int(
+            telephony_previous.get("seconds") or 0
+        ) * 1000
+        consumed_current_hours = round(consumed_current_ms / 3_600_000.0, 2) if consumed_current_ms else 0.0
+        consumed_previous_hours = round(consumed_previous_ms / 3_600_000.0, 2) if consumed_previous_ms else 0.0
+        telephony_current_hours = (
+            round((int(telephony_current.get("seconds") or 0) / 3600.0), 2)
+            if telephony_current.get("seconds")
+            else 0.0
+        )
+        telephony_previous_hours = (
+            round((int(telephony_previous.get("seconds") or 0) / 3600.0), 2)
+            if telephony_previous.get("seconds")
+            else 0.0
+        )
+
+        total_hours_soll += monthly_hours_soll
+        total_hours_current += contract_hours_current
+        total_hours_previous += contract_hours_previous
+        total_consumed_current += consumed_current_hours
+        total_consumed_previous += consumed_previous_hours
+
+        rows.append(
+            {
+                "customerId": int(customer.id),
+                "customerName": str(customer.name or "").strip() or f"Kunde #{int(customer.id)}",
+                "customerNumber": str(customer.creditor_number or "").strip(),
+                "customerStatus": str(customer.status or "active").strip().lower() or "active",
+                "contractStatus": contract_status,
+                "contractType": contract_type,
+                "contractTitle": title,
+                "contractHoursSoll": round(monthly_hours_soll, 2),
+                "contractHoursCurrentMonth": round(contract_hours_current, 2),
+                "contractHoursPreviousMonth": round(contract_hours_previous, 2),
+                "consumedHoursCurrentMonth": consumed_current_hours,
+                "consumedHoursPreviousMonth": consumed_previous_hours,
+                "taskHoursCurrentMonth": round(float(task_current.get("hours") or 0.0), 2),
+                "taskHoursPreviousMonth": round(float(task_previous.get("hours") or 0.0), 2),
+                "telephonyHoursCurrentMonth": telephony_current_hours,
+                "telephonyHoursPreviousMonth": telephony_previous_hours,
+                "taskCountCurrentMonth": int(task_current.get("count") or 0),
+                "taskCountPreviousMonth": int(task_previous.get("count") or 0),
+                "callCountCurrentMonth": int(telephony_current.get("calls") or 0),
+                "callCountPreviousMonth": int(telephony_previous.get("calls") or 0),
+                "deltaHoursCurrentMonth": round(consumed_current_hours - contract_hours_current, 2),
+                "deltaHoursPreviousMonth": round(consumed_previous_hours - contract_hours_previous, 2),
+            }
+        )
+
+    rows.sort(key=lambda item: str(item.get("customerName") or "").lower())
+    return {
+        "totalContracts": len(rows),
+        "customersWithContract": len(rows),
+        "totalContractDocuments": len(contract_docs),
+        "unpaidContracts": int(unpaid_contracts),
+        "invoicedContracts": int(invoiced_contracts),
+        "monthLabels": {
+            "current": current_label,
+            "previous": previous_label,
+        },
+        "hours": {
+            "soll": round(total_hours_soll, 2),
+            "currentMonth": round(total_hours_current, 2),
+            "previousMonth": round(total_hours_previous, 2),
+            "consumedCurrentMonth": round(total_consumed_current, 2),
+            "consumedPreviousMonth": round(total_consumed_previous, 2),
+            "deltaCurrentMonth": round(total_consumed_current - total_hours_current, 2),
+            "deltaPreviousMonth": round(total_consumed_previous - total_hours_previous, 2),
+        },
+        "rows": rows,
+    }
 
 
 def _customer_contract_time_budget(db, customer: Customer, now_ms: int) -> Dict[str, Any]:
@@ -8575,8 +8992,9 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
     if not refresh and cached and now_ms - int(cached.get("cachedAt") or 0) < CUSTOMER_CVE_CACHE_TTL_MS:
         payload = cached.get("payload")
         if isinstance(payload, dict):
-            # Avoid serving stale cache when agent matching was empty.
-            if int(payload.get("matchedAgents") or 0) == 0:
+            cached_at = int(cached.get("cachedAt") or 0)
+            matched_agents = int(payload.get("matchedAgents") or 0)
+            if matched_agents == 0 and now_ms - cached_at > CUSTOMER_CVE_EMPTY_CACHE_TTL_MS:
                 payload = None
             if isinstance(payload, dict):
                 payload["fromCache"] = True
@@ -8649,13 +9067,14 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
             software_by_name[key] = {"name": name, "version": version}
 
     agents_payload: List[Dict[str, Any]] = []
-    lookup_cache: Dict[Tuple[str, str], Tuple[List[Dict[str, Any]], List[str]]] = {}
     lookup_started_at = time.time()
-    lookup_budget_seconds = 65.0
-    lookup_max_unique = 90
-    lookup_unique_count = 0
-    lookup_skipped = 0
+    lookup_budget_seconds = float(CVE_LOOKUP_BUDGET_SECONDS)
+    lookup_max_unique = int(CVE_LOOKUP_MAX_UNIQUE)
+    lookup_max_workers = int(CVE_LOOKUP_MAX_WORKERS)
     scanned = 0
+
+    agent_scan_rows: List[Dict[str, Any]] = []
+    lookup_candidates: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for agent_key in ordered_agent_keys:
         meta = agent_meta.get(agent_key, {"agentId": "", "hostname": "", "site": "", "client": "", "online": None})
         agent_id = str(meta.get("agentId") or "").strip()
@@ -8667,7 +9086,7 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
                 str(item.get("name") or "").lower(),
             ),
         )[:40]
-        agent_findings: List[Dict[str, Any]] = []
+        software_scan_rows: List[Dict[str, Any]] = []
         for item in software_list:
             scanned += 1
             name = str(item.get("name") or "").strip()
@@ -8681,29 +9100,108 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
                 else version
             )
             lookup_key = (lookup_name.lower(), lookup_version.lower())
-            if lookup_key in lookup_cache:
-                cves, fixed_versions = lookup_cache[lookup_key]
-            else:
-                budget_exceeded = (
-                    (time.time() - lookup_started_at) >= lookup_budget_seconds
-                    or lookup_unique_count >= lookup_max_unique
+            software_scan_rows.append(
+                {
+                    "name": name,
+                    "version": version,
+                    "lookupKey": lookup_key,
+                }
+            )
+            lookup_priority = _cve_lookup_priority(name)
+            existing_lookup = lookup_candidates.get(lookup_key)
+            if not existing_lookup or lookup_priority > int(existing_lookup.get("priority") or 0):
+                lookup_candidates[lookup_key] = {
+                    "lookupKey": lookup_key,
+                    "lookupName": lookup_name,
+                    "lookupVersion": lookup_version,
+                    "priority": lookup_priority,
+                }
+        agent_scan_rows.append(
+            {
+                "meta": meta,
+                "software": software_list,
+                "scanRows": software_scan_rows,
+            }
+        )
+
+    ordered_lookup_candidates = sorted(
+        list(lookup_candidates.values()),
+        key=lambda item: (
+            -int(item.get("priority") or 0),
+            str(item.get("lookupName") or "").lower(),
+            str(item.get("lookupVersion") or "").lower(),
+        ),
+    )
+    selected_lookup_candidates = ordered_lookup_candidates[:lookup_max_unique]
+    lookup_skipped = max(0, len(ordered_lookup_candidates) - len(selected_lookup_candidates))
+    lookup_results: Dict[Tuple[str, str], Tuple[List[Dict[str, Any]], List[str]]] = {}
+    if selected_lookup_candidates:
+        max_workers = min(max(1, lookup_max_workers), len(selected_lookup_candidates))
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        future_map: Dict[Any, Tuple[str, str]] = {}
+        completed_futures: Set[Any] = set()
+        try:
+            for candidate in selected_lookup_candidates:
+                lookup_key = candidate.get("lookupKey")
+                if not isinstance(lookup_key, tuple) or len(lookup_key) != 2:
+                    continue
+                future = executor.submit(
+                    _lookup_cve_for_software,
+                    str(candidate.get("lookupName") or ""),
+                    str(candidate.get("lookupVersion") or ""),
                 )
-                if budget_exceeded:
-                    lookup_skipped += 1
-                    cves, fixed_versions = [], []
-                else:
-                    lookup_unique_count += 1
-                    cves = _nvd_lookup(lookup_name, lookup_version)
-                    fixed_versions: List[str] = []
-                    if cves or _software_should_query_osv(lookup_name):
-                        fixed_versions = _osv_fixed_versions(lookup_name, lookup_version)
-                lookup_cache[lookup_key] = (cves[:5], fixed_versions)
+                future_map[future] = (str(lookup_key[0]), str(lookup_key[1]))
+
+            if future_map:
+                timeout_seconds = max(1.0, lookup_budget_seconds - max(0.0, time.time() - lookup_started_at))
+                try:
+                    for future in as_completed(list(future_map.keys()), timeout=timeout_seconds):
+                        completed_futures.add(future)
+                        lookup_key = future_map.get(future)
+                        if not lookup_key:
+                            continue
+                        try:
+                            cves, fixed_versions = future.result()
+                        except Exception:
+                            cves, fixed_versions = [], []
+                        lookup_results[lookup_key] = (cves[:5], fixed_versions)
+                except FuturesTimeoutError:
+                    pass
+
+            for future, lookup_key in future_map.items():
+                if future in completed_futures:
+                    continue
+                if future.done():
+                    try:
+                        cves, fixed_versions = future.result()
+                    except Exception:
+                        cves, fixed_versions = [], []
+                    lookup_results[lookup_key] = (cves[:5], fixed_versions)
+                    continue
+                future.cancel()
+                lookup_skipped += 1
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    for agent_scan in agent_scan_rows:
+        meta = agent_scan.get("meta") if isinstance(agent_scan.get("meta"), dict) else {}
+        software_list = agent_scan.get("software") if isinstance(agent_scan.get("software"), list) else []
+        scan_rows = agent_scan.get("scanRows") if isinstance(agent_scan.get("scanRows"), list) else []
+        agent_findings: List[Dict[str, Any]] = []
+        for scan_row in scan_rows:
+            if not isinstance(scan_row, dict):
+                continue
+            lookup_key = scan_row.get("lookupKey")
+            if not isinstance(lookup_key, tuple) or len(lookup_key) != 2:
+                continue
+            normalized_lookup_key = (str(lookup_key[0]), str(lookup_key[1]))
+            cves, fixed_versions = lookup_results.get(normalized_lookup_key, ([], []))
             if not cves and not fixed_versions:
                 continue
             agent_findings.append(
                 {
-                    "name": name,
-                    "version": version,
+                    "name": str(scan_row.get("name") or "").strip(),
+                    "version": str(scan_row.get("version") or "").strip(),
                     "cves": cves[:5],
                     "fixedVersions": fixed_versions,
                 }
@@ -10537,6 +11035,7 @@ def update_integrations(data: IntegrationSettingsUpdate):
         db.commit()
         if rmm_fields_changed or meta_hub_fields_changed:
             _tactical_site_lookup_cache.clear()
+            _tactical_software_endpoint_cache.clear()
             _customer_development_cache.clear()
             _customer_cve_cache.clear()
         return serialize_integration_settings(settings)
@@ -11997,14 +12496,22 @@ def create_customer_contract_calculation(customer_id: int, data: CustomerContrac
         clients = _safe_nonnegative_int(data.clients)
         network_devices = _safe_nonnegative_int(data.network_devices)
         iot_devices = _safe_nonnegative_int(data.iot_devices)
-        monthly_total = _calc_contract_total_monthly(
+        suggested_monthly_total = _calc_contract_total_monthly(
             tariff,
             servers=servers,
             clients=clients,
             network_devices=network_devices,
             iot_devices=iot_devices,
         )
-        yearly_total = monthly_total * 12.0
+        suggested_yearly_total = suggested_monthly_total * 12.0
+        monthly_total = suggested_monthly_total
+        yearly_total = suggested_yearly_total
+        if data.monthly_total is not None:
+            monthly_total = _safe_nonnegative_float(data.monthly_total)
+        if data.yearly_total is not None:
+            yearly_total = _safe_nonnegative_float(data.yearly_total)
+        elif data.monthly_total is not None:
+            yearly_total = monthly_total * 12.0
         snapshot_payload = {
             "tariff": serialize_contract_tariff(tariff),
             "counts": {
@@ -12016,6 +12523,8 @@ def create_customer_contract_calculation(customer_id: int, data: CustomerContrac
             "totals": {
                 "monthly_total": round(monthly_total, 2),
                 "yearly_total": round(yearly_total, 2),
+                "monthly_total_suggested": round(suggested_monthly_total, 2),
+                "yearly_total_suggested": round(suggested_yearly_total, 2),
             },
         }
         row = CustomerContractCalculation(
@@ -12145,12 +12654,18 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         note_block = (
             f"Hinweis: {escape(note_raw).replace(chr(10), '<br/>')}" if note_raw else "Ohne Zusatzhinweise."
         )
+        extension_period_months = max(1, runtime_months)
+        is_service_contract = template_key in {"wartung", "monitoring"}
         placeholder_values = {
             "provider_name": "QT Workbench Services",
             "customer_name": escape(str(customer.name or "").strip() or "Kunde"),
             "generated_at": generated_at,
             "valid_from": escape(valid_from),
+            "contract_start": escape(valid_from),
             "runtime_months": str(runtime_months),
+            "minimum_term_months": str(runtime_months),
+            "extension_period": str(extension_period_months),
+            "termination_notice": "3 Monate",
             "servers": str(servers),
             "clients": str(clients),
             "network_devices": str(network_devices),
@@ -12159,6 +12674,16 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             "yearly_total": _format_contract_currency(yearly_total),
             "monthly_hours_included": _format_contract_hours(monthly_hours_included),
             "service_scope": escape(service_scope),
+            "service_hours": "Montag bis Freitag, 08:00-17:00 Uhr (werktags)",
+            "reaction_time": "innerhalb von 8 Arbeitsstunden",
+            "hourly_rate_extra": "120,00 EUR pro Stunde",
+            "billing_interval": "monatlich",
+            "additional_systems": "keine",
+            "monitoring_enabled": "ja" if is_service_contract else "nicht zutreffend",
+            "backup_monitoring": "nach Vereinbarung",
+            "patch_management": "ja (sicherheitsrelevant)",
+            "security_monitoring": "ja (Basis)",
+            "liability_limit": "gemaess AGB",
             "note_block": note_block,
         }
         html = _render_contract_html(
@@ -12389,6 +12914,7 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
     load_reports = load_all or section_key == "reports"
     load_billing = load_all or section_key == "billing"
     load_customers = load_all or section_key == "customers"
+    load_contracts = load_all or section_key == "contracts"
     load_sevdesk = load_billing or load_customers
 
     start_of_day = datetime(now_dt.year, now_dt.month, now_dt.day)
@@ -12416,6 +12942,7 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
     month_stats: Dict[str, Dict[str, Any]] = {}
     hourly_rate = 0.0
     sevdesk_config: Optional[SevdeskConfig] = None
+    contracts_stats: Dict[str, Any] = {}
     inactive_customer_name_keys: Set[str] = set()
     active_customer_name_keys: Set[str] = set()
     inactive_customer_number_keys: Set[str] = set()
@@ -12555,6 +13082,9 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                 if (report.customer_status or "").strip() == "Bestätigt":
                     bucket["confirmed"] += 1
 
+        if load_contracts:
+            contracts_stats = _build_contracts_stats(db, now_ms)
+
         if load_sevdesk:
             integration = db.query(IntegrationSettings).first()
             if not integration:
@@ -12673,6 +13203,8 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
         )
     if load_sevdesk:
         response["sevdesk"] = sevdesk_stats
+    if load_contracts:
+        response["contracts"] = contracts_stats
     return response
 
 
