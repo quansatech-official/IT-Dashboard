@@ -17,6 +17,7 @@ const EMPTY_DRAFT = {
   title: "",
   sourceUrl: "",
   quantity: "",
+  trackingNumber: "",
   purchasePrice: "",
   salePrice: ""
 };
@@ -45,6 +46,55 @@ const normalizeStatus = (item) => {
   const status = String(item?.status || "").trim().toLowerCase();
   if (status === "open" || status === "ordered" || status === "received") return status;
   return item?.done ? "received" : "open";
+};
+
+const sanitizeTrackingNumber = (value) => String(value || "").replace(/\s+/g, "").toUpperCase();
+
+const resolveTrackingInfo = (value) => {
+  const trackingNumber = sanitizeTrackingNumber(value);
+  if (!trackingNumber) {
+    return {
+      trackingNumber: "",
+      provider: "",
+      resolvedUrl: ""
+    };
+  }
+
+  const encoded = encodeURIComponent(trackingNumber);
+
+  if (/^1Z[0-9A-Z]{16}$/.test(trackingNumber)) {
+    return {
+      trackingNumber,
+      provider: "UPS",
+      resolvedUrl: `https://www.ups.com/track?tracknum=${encoded}`
+    };
+  }
+  if (/^(JJD|JVGL|00340434)/.test(trackingNumber)) {
+    return {
+      trackingNumber,
+      provider: "DHL",
+      resolvedUrl: `https://www.dhl.de/de/privatkunden/dhl-sendungsverfolgung.html?piececode=${encoded}`
+    };
+  }
+  if (/^\d{12,22}$/.test(trackingNumber)) {
+    return {
+      trackingNumber,
+      provider: "Automatisch",
+      resolvedUrl: `https://www.17track.net/de?nums=${encoded}`
+    };
+  }
+  if (/^[A-Z]{2}\d{9}[A-Z]{2}$/.test(trackingNumber)) {
+    return {
+      trackingNumber,
+      provider: "Post / UPU",
+      resolvedUrl: `https://www.17track.net/de?nums=${encoded}`
+    };
+  }
+  return {
+    trackingNumber,
+    provider: "Unbekannt",
+    resolvedUrl: `https://www.17track.net/de?nums=${encoded}`
+  };
 };
 
 const fetchJson = async (url, options) => {
@@ -147,7 +197,7 @@ export default function PurchasingView() {
       }
 
       if (queryNeedle) {
-        const haystack = [item.title, item.customer, item.sourceUrl, item.quantity]
+        const haystack = [item.title, item.customer, item.sourceUrl, item.quantity, item.trackingNumber]
           .map((value) => String(value || "").toLowerCase())
           .join(" ");
         if (!haystack.includes(queryNeedle)) return false;
@@ -204,6 +254,7 @@ export default function PurchasingView() {
       title,
       sourceUrl: normalizeUrl(draft.sourceUrl),
       quantity: draft.quantity.trim(),
+      trackingNumber: sanitizeTrackingNumber(draft.trackingNumber),
       purchasePrice: draft.purchasePrice.trim(),
       salePrice: draft.salePrice.trim()
     };
@@ -267,6 +318,7 @@ export default function PurchasingView() {
       const purchase = parsePrice(item.purchasePrice);
       const sale = parsePrice(item.salePrice);
       const margin = sale - purchase;
+      const trackingInfo = resolveTrackingInfo(item.trackingNumber);
       return (
         <tr key={item.id} className="border-b border-sand-200 align-top">
           <td className="px-3 py-1.5">
@@ -379,6 +431,39 @@ export default function PurchasingView() {
             />
           </td>
           <td className="px-2 py-1.5">
+            <div className="flex items-center gap-2">
+              <input
+                value={item.trackingNumber || ""}
+                onChange={(event) =>
+                  updateItem(item.id, "trackingNumber", sanitizeTrackingNumber(event.target.value))
+                }
+                readOnly={!isEditing(item.id, "trackingNumber")}
+                onDoubleClick={(event) => handleCellDoubleClick(item.id, "trackingNumber", event)}
+                onBlur={() => handleCellBlur(item.id, "trackingNumber")}
+                className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
+                placeholder={status === "ordered" ? "Tracking #" : "Optional"}
+                title="Doppelklick zum Bearbeiten"
+              />
+              {trackingInfo.resolvedUrl ? (
+                <a
+                  href={trackingInfo.resolvedUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center rounded-full border border-sand-300 p-1.5 text-xs hover:bg-sand-100"
+                  title={`Tracking öffnen (${trackingInfo.provider || "Auto"})`}
+                  aria-label="Tracking öffnen"
+                >
+                  <ExternalLink size={12} />
+                </a>
+              ) : null}
+            </div>
+            {trackingInfo.provider ? (
+              <p className="mt-0.5 text-[10px] text-sand-500">
+                Auflösung: {trackingInfo.provider}
+              </p>
+            ) : null}
+          </td>
+          <td className="px-2 py-1.5">
             <div className="relative">
               <input
                 value={item.purchasePrice || ""}
@@ -447,7 +532,7 @@ export default function PurchasingView() {
         <p className="text-xs text-sand-500">{rows.length} Einträge</p>
       </div>
       <div className="overflow-auto">
-        <table className="w-full min-w-[1360px]">
+        <table className="w-full min-w-[1540px]">
           <thead>
             <tr className="border-b border-sand-200 text-left text-xs uppercase tracking-[0.2em] text-sand-500">
               <th className="px-3 py-2 w-44">Status</th>
@@ -455,6 +540,7 @@ export default function PurchasingView() {
               <th className="px-3 py-2">Bezugsquelle</th>
               <th className="px-3 py-2">Kunde</th>
               <th className="px-2 py-2 w-24">Menge</th>
+              <th className="px-2 py-2 w-72">Sendungsverfolgung</th>
               <th className="px-2 py-2 w-24">EK</th>
               <th className="px-2 py-2 w-24">VK</th>
               <th className="px-3 py-2 w-24">Marge</th>
@@ -466,7 +552,7 @@ export default function PurchasingView() {
               renderRows(rows, status)
             ) : (
               <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-sm text-sand-500">
+                <td colSpan={10} className="px-4 py-8 text-center text-sm text-sand-500">
                   Keine Einträge vorhanden.
                 </td>
               </tr>
@@ -520,7 +606,7 @@ export default function PurchasingView() {
             <input
               value={queryFilter}
               onChange={(event) => setQueryFilter(event.target.value)}
-              placeholder="Suche: Bezeichnung, Link, Kunde"
+              placeholder="Suche: Bezeichnung, Link, Kunde, Tracking"
               className="w-full rounded-md border border-sand-200 bg-white px-2.5 py-1.5 text-sm focus:outline-none"
             />
             <button
@@ -536,7 +622,7 @@ export default function PurchasingView() {
           </div>
 
           <div className="overflow-auto">
-            <table className="w-full min-w-[1360px]">
+            <table className="w-full min-w-[1540px]">
               <thead>
                 <tr className="border-b border-sand-200 text-left text-xs uppercase tracking-[0.2em] text-sand-500">
                   <th className="px-3 py-2 w-44">Status</th>
@@ -544,6 +630,7 @@ export default function PurchasingView() {
                   <th className="px-3 py-2">Bezugsquelle</th>
                   <th className="px-3 py-2">Kunde</th>
                   <th className="px-2 py-2 w-24">Menge</th>
+                  <th className="px-2 py-2 w-72">Sendungsverfolgung</th>
                   <th className="px-2 py-2 w-24">EK</th>
                   <th className="px-2 py-2 w-24">VK</th>
                   <th className="px-3 py-2 w-24">Marge</th>
@@ -584,6 +671,19 @@ export default function PurchasingView() {
                       value={draft.quantity}
                       onChange={(event) => setDraft((prev) => ({ ...prev, quantity: event.target.value }))}
                       placeholder="1"
+                      className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
+                    />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input
+                      value={draft.trackingNumber}
+                      onChange={(event) =>
+                        setDraft((prev) => ({
+                          ...prev,
+                          trackingNumber: sanitizeTrackingNumber(event.target.value)
+                        }))
+                      }
+                      placeholder="Trackingnummer"
                       className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
                     />
                   </td>

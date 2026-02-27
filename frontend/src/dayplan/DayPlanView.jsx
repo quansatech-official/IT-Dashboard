@@ -81,6 +81,55 @@ const openSinceDays = (value) => {
   return Math.max(0, Math.floor(ms / (1000 * 60 * 60 * 24)));
 };
 
+const URGENCY_FLAG_OPTIONS = [
+  { value: "red", label: "Stillstand", dotClass: "border-rose-300 bg-rose-500" },
+  { value: "orange", label: "Eingeschränkt", dotClass: "border-amber-300 bg-amber-500" },
+  { value: "green", label: "Komfortproblem", dotClass: "border-emerald-300 bg-emerald-500" },
+  { value: "blue", label: "Warten auf Rückmeldung", dotClass: "border-sky-300 bg-sky-500" }
+];
+
+const URGENCY_FLAG_LOOKUP = URGENCY_FLAG_OPTIONS.reduce((acc, option) => {
+  acc[option.value] = option;
+  return acc;
+}, {});
+
+const normalizeUrgencyFlag = (value) => {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  const aliases = {
+    rot: "red",
+    stillstand: "red",
+    red: "red",
+    orange: "orange",
+    eingeschrankt: "orange",
+    eingeschränkt: "orange",
+    gruen: "green",
+    grün: "green",
+    green: "green",
+    komfortproblem: "green",
+    blau: "blue",
+    blue: "blue",
+    "warten auf rueckmeldung": "blue",
+    "warten auf rückmeldung": "blue",
+    rueckmeldung: "blue",
+    rückmeldung: "blue"
+  };
+  return aliases[raw] || "";
+};
+
+const getUrgencyMeta = (value) => {
+  const normalized = normalizeUrgencyFlag(value);
+  return URGENCY_FLAG_LOOKUP[normalized] || null;
+};
+
+const getNextUrgencyFlag = (value) => {
+  const order = ["", "red", "orange", "green", "blue"];
+  const current = normalizeUrgencyFlag(value);
+  const index = order.indexOf(current);
+  const safeIndex = index >= 0 ? index : 0;
+  return order[(safeIndex + 1) % order.length];
+};
+
 export default function DayPlanView() {
   const [tasks, setTasks] = useState([]);
   const [error, setError] = useState("");
@@ -609,12 +658,21 @@ export default function DayPlanView() {
         arrival_time: task.arrival_time || "",
         departure_time: task.departure_time || "",
         deadline: task.deadline || "",
+        urgency_flag: normalizeUrgencyFlag(task.urgency_flag),
         randzeit: Boolean(task.randzeit),
         kulant: Boolean(task.kulant),
         wartungsvertrag: Boolean(task.wartungsvertrag),
         details: task.details || ""
       }
     }));
+  };
+
+  const cycleUrgencyFlag = async (task) => {
+    const next = getNextUrgencyFlag(task?.urgency_flag);
+    if (detailOpenId === task?.id) {
+      setDetailValue(task.id, "urgency_flag", next);
+    }
+    await updateTask(task, { urgency_flag: next });
   };
 
   const openSevdeskDraft = async (task) => {
@@ -725,7 +783,11 @@ export default function DayPlanView() {
     if (!trimmed) {
       await updateTask(task, { customer: "", customer_number: "" });
     } else {
-      await updateTask(task, { customer: trimmed });
+      const matchedCustomer = findCustomerByTaskName(trimmed);
+      await updateTask(task, {
+        customer: trimmed,
+        customer_number: getCustomerReferenceNumber(matchedCustomer)
+      });
     }
     cancelCustomerEdit();
   };
@@ -772,12 +834,52 @@ export default function DayPlanView() {
     return Array.from(new Set([base, noH])).filter(Boolean);
   }
 
-  function getCustomerShortCodeForTask(task) {
-    const name = String(task?.customer || "").trim().toLowerCase();
-    if (!name) return "";
-    const match = customers.find(
-      (customer) => String(customer?.name || "").trim().toLowerCase() === name
+  function getCustomerReferenceNumber(customer) {
+    return String(
+      customer?.creditor_number || customer?.creditorNumber || customer?.short_code || customer?.shortCode || ""
+    ).trim();
+  }
+
+  function findCustomerByTaskName(nameValue) {
+    const rawName = String(nameValue || "").trim();
+    if (!rawName) return null;
+    const lowerName = rawName.toLowerCase();
+    const exactMatches = customers.filter(
+      (customer) => String(customer?.name || "").trim().toLowerCase() === lowerName
     );
+    if (exactMatches.length) {
+      return [...exactMatches].sort((a, b) => {
+        const aHasNumber = Boolean(getCustomerReferenceNumber(a));
+        const bHasNumber = Boolean(getCustomerReferenceNumber(b));
+        if (aHasNumber !== bHasNumber) return bHasNumber ? 1 : -1;
+        const aActive = String(a?.status || "active").toLowerCase() === "active";
+        const bActive = String(b?.status || "active").toLowerCase() === "active";
+        if (aActive !== bActive) return bActive ? 1 : -1;
+        return 0;
+      })[0];
+    }
+    const targetVariants = new Set(normalizeVariants(rawName));
+    let best = null;
+    let bestScore = -1;
+    customers.forEach((customer) => {
+      const customerName = String(customer?.name || "").trim();
+      if (!customerName) return;
+      const customerVariants = normalizeVariants(customerName);
+      const overlap = customerVariants.some((variant) => targetVariants.has(variant));
+      if (!overlap) return;
+      let score = 10;
+      if (getCustomerReferenceNumber(customer)) score += 3;
+      if (String(customer?.status || "active").toLowerCase() === "active") score += 1;
+      if (score > bestScore) {
+        bestScore = score;
+        best = customer;
+      }
+    });
+    return best;
+  }
+
+  function getCustomerShortCodeForTask(task) {
+    const match = findCustomerByTaskName(task?.customer);
     return String(match?.short_code || match?.shortCode || "").trim();
   }
 
@@ -950,12 +1052,10 @@ export default function DayPlanView() {
   };
 
   const getCustomerNumberForTask = (task) => {
-    const name = String(task?.customer || "").trim().toLowerCase();
-    if (!name) return "";
-    const match = customers.find(
-      (customer) => String(customer?.name || "").trim().toLowerCase() === name
-    );
-    return String(match?.creditor_number || "").trim();
+    const existingNumber = String(task?.customer_number || "").trim();
+    if (existingNumber) return existingNumber;
+    const match = findCustomerByTaskName(task?.customer);
+    return getCustomerReferenceNumber(match);
   };
 
 
@@ -980,14 +1080,6 @@ export default function DayPlanView() {
       use_existing_draft: true
     };
   };
-
-  const knownCustomerNames = useMemo(
-    () =>
-      customers
-        .map((item) => String(item?.name || "").trim().toLowerCase())
-        .filter(Boolean),
-    [customers]
-  );
 
   const hasRunningTimer = useMemo(() => tasks.some((task) => task?.running), [tasks]);
 
@@ -1343,11 +1435,6 @@ export default function DayPlanView() {
     handleEmailDropTransfer(transfer);
   };
 
-  const isKnownCustomer = (value) => {
-    const name = String(value || "").trim().toLowerCase();
-    return name ? knownCustomerNames.includes(name) : false;
-  };
-
   // no extra time task fetch needed; timing fields live on day_tasks
 
   const getCustomerSuggestions = (task) => {
@@ -1420,7 +1507,7 @@ export default function DayPlanView() {
     const isWartungsvertrag = Boolean(task.wartungsvertrag);
     const canInvoice = Boolean(customerNumber) && !isKulant && !isWartungsvertrag;
     const isBilled = Boolean(task.aberechnet);
-    const knownCustomer = isKnownCustomer(task.customer);
+    const urgencyMeta = getUrgencyMeta(task.urgency_flag);
     const assignedEmployee = employees.find((employee) => employee.id === task.employee_id);
     const timeTask = task.time_enabled ? task : null;
     const elapsedMs = timeTask
@@ -1531,70 +1618,88 @@ export default function DayPlanView() {
                 >
                   <Sparkles size={12} />
                 </button>
-                {!task.time_enabled || isTimerCollapsed ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (task.time_enabled) {
-                        setCollapsedTimers((prev) => {
-                          if (!prev[task.id]) return prev;
-                          const next = { ...prev };
-                          delete next[task.id];
-                          return next;
-                        });
-                        return;
-                      }
-                      enableTime(task);
-                    }}
-                    disabled={!canPromote && !task.time_enabled}
-                    className={`rounded-full border p-1 ${
-                      canPromote || task.time_enabled
-                        ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                        : "border-sand-100 text-sand-300 cursor-not-allowed"
-                    }`}
-                    title="Zeit in Aufgabe aktivieren"
-                  >
-                    <Clock size={12} />
-                  </button>
-                ) : (
-                  <div
-                    className="flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1"
-                    onDoubleClick={() =>
-                      setCollapsedTimers((prev) => ({ ...prev, [task.id]: true }))
-                    }
-                    title="Doppelklick zum Ausblenden"
-                  >
+                <div className="inline-flex flex-col items-center gap-0.5">
+                  {!task.time_enabled || isTimerCollapsed ? (
                     <button
                       type="button"
-                      onClick={() => toggleTimeTask(timeTask)}
-                      className={`rounded-full border p-1 ${
-                        timeTask?.running
-                          ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
-                          : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                      }`}
-                      title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
-                      disabled={!timeTask}
-                    >
-                      {timeTask?.running ? <Square size={10} /> : <Play size={10} />}
-                    </button>
-                    <input
-                      value={timeInputValue}
-                      onChange={(event) =>
-                        setTimeEdits((prev) => ({ ...prev, [task.id]: event.target.value }))
-                      }
-                      onBlur={() => commitManualTime(task.id, timeTask, timeInputValue)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          commitManualTime(task.id, timeTask, timeInputValue);
+                      onClick={() => {
+                        if (task.time_enabled) {
+                          setCollapsedTimers((prev) => {
+                            if (!prev[task.id]) return prev;
+                            const next = { ...prev };
+                            delete next[task.id];
+                            return next;
+                          });
+                          return;
                         }
+                        enableTime(task);
                       }}
-                      className="w-[78px] bg-transparent text-base font-mono text-sand-600 focus:outline-none md:text-[10px]"
-                      title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
-                      disabled={!timeTask}
+                      disabled={!canPromote && !task.time_enabled}
+                      className={`rounded-full border p-1 ${
+                        canPromote || task.time_enabled
+                          ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                          : "border-sand-100 text-sand-300 cursor-not-allowed"
+                      }`}
+                      title="Zeit in Aufgabe aktivieren"
+                    >
+                      <Clock size={12} />
+                    </button>
+                  ) : (
+                    <div
+                      className="flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1"
+                      onDoubleClick={() =>
+                        setCollapsedTimers((prev) => ({ ...prev, [task.id]: true }))
+                      }
+                      title="Doppelklick zum Ausblenden"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleTimeTask(timeTask)}
+                        className={`rounded-full border p-1 ${
+                          timeTask?.running
+                            ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+                            : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                        }`}
+                        title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
+                        disabled={!timeTask}
+                      >
+                        {timeTask?.running ? <Square size={10} /> : <Play size={10} />}
+                      </button>
+                      <input
+                        value={timeInputValue}
+                        onChange={(event) =>
+                          setTimeEdits((prev) => ({ ...prev, [task.id]: event.target.value }))
+                        }
+                        onBlur={() => commitManualTime(task.id, timeTask, timeInputValue)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            commitManualTime(task.id, timeTask, timeInputValue);
+                          }
+                        }}
+                        className="w-[78px] bg-transparent text-base font-mono text-sand-600 focus:outline-none md:text-[10px]"
+                        title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
+                        disabled={!timeTask}
+                      />
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => cycleUrgencyFlag(task)}
+                    className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-sand-200 bg-white hover:bg-sand-50"
+                    title={
+                      urgencyMeta
+                        ? `Dringlichkeits-Flag: ${urgencyMeta.label} (klicken zum Wechseln)`
+                        : "Dringlichkeits-Flag setzen"
+                    }
+                  >
+                    <span
+                      className={`h-2.5 w-2.5 rounded-full border ${
+                        urgencyMeta ? urgencyMeta.dotClass : "border-sand-300 bg-sand-200"
+                      }`}
                     />
-                  </div>
-                )}
+                  </button>
+                </div>
                 {!isDone ? (
                   <button
                     type="button"
@@ -1816,7 +1921,7 @@ export default function DayPlanView() {
             ) : null}
             {detailOpenId === task.id ? (
               <div className="mt-2 rounded-xl border border-sand-200 bg-white p-2 space-y-2">
-                <div className="grid gap-2 md:grid-cols-3">
+                <div className="grid gap-2 md:grid-cols-4">
                   <div>
                     <label className="text-[10px] uppercase tracking-wide text-sand-500">
                       Anfahrtszeit
@@ -1856,6 +1961,27 @@ export default function DayPlanView() {
                       onBlur={() => commitDetail(task, "deadline")}
                       className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
                     />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wide text-sand-500">
+                      Dringlichkeit
+                    </label>
+                    <select
+                      value={normalizeUrgencyFlag(getDetailValue(task, "urgency_flag"))}
+                      onChange={(event) => {
+                        const next = normalizeUrgencyFlag(event.target.value);
+                        setDetailValue(task.id, "urgency_flag", next);
+                        commitDetail(task, "urgency_flag", next);
+                      }}
+                      className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-2 py-1 text-xs text-sand-700 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    >
+                      <option value="">Keine Kennzeichnung</option>
+                      {URGENCY_FLAG_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-4">

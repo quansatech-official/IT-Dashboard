@@ -9,7 +9,7 @@ from sqlalchemy import (
     Boolean, BigInteger, ForeignKey, Float, inspect, text, func, or_
 )
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship, Session
 import os
 import math
 import time
@@ -253,6 +253,7 @@ class DayTask(Base):
     arrival_time = Column(String, default="")
     departure_time = Column(String, default="")
     deadline = Column(String, default="")
+    urgency_flag = Column(String, default="")
     employee_id = Column(Integer, nullable=True)
     elapsed = Column(BigInteger, default=0)      # ms
     running = Column(Boolean, default=False)
@@ -602,6 +603,7 @@ class PurchasingItem(Base):
     title = Column(String, default="")
     source_url = Column(String, default="")
     quantity = Column(String, default="")
+    tracking_number = Column(String, default="")
     purchase_price = Column(String, default="")
     sale_price = Column(String, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
@@ -730,6 +732,8 @@ def _ensure_purchasing_items_columns() -> None:
     statements = []
     if "quantity" not in columns:
         statements.append("ALTER TABLE purchasing_items ADD COLUMN quantity VARCHAR DEFAULT ''")
+    if "tracking_number" not in columns:
+        statements.append("ALTER TABLE purchasing_items ADD COLUMN tracking_number VARCHAR DEFAULT ''")
     if "status" not in columns:
         statements.append("ALTER TABLE purchasing_items ADD COLUMN status VARCHAR DEFAULT 'open'")
     if not statements:
@@ -1143,6 +1147,8 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN departure_time VARCHAR DEFAULT ''")
     if "deadline" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN deadline VARCHAR DEFAULT ''")
+    if "urgency_flag" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN urgency_flag VARCHAR DEFAULT ''")
     if "employee_id" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN employee_id INTEGER")
     if "elapsed" not in columns:
@@ -1322,6 +1328,7 @@ class DayTaskCreate(BaseModel):
     arrival_time: Optional[str] = ""
     departure_time: Optional[str] = ""
     deadline: Optional[str] = ""
+    urgency_flag: Optional[str] = ""
     employee_id: Optional[int] = None
     elapsed: Optional[int] = 0
     running: Optional[bool] = False
@@ -1348,6 +1355,7 @@ class DayTaskUpdate(BaseModel):
     arrival_time: Optional[str] = None
     departure_time: Optional[str] = None
     deadline: Optional[str] = None
+    urgency_flag: Optional[str] = None
     employee_id: Optional[int] = None
     elapsed: Optional[int] = None
     running: Optional[bool] = None
@@ -1422,6 +1430,7 @@ class PurchasingItemCreate(BaseModel):
     title: str
     sourceUrl: Optional[str] = ""
     quantity: Optional[str] = ""
+    trackingNumber: Optional[str] = ""
     purchasePrice: Optional[str] = ""
     salePrice: Optional[str] = ""
 
@@ -1433,6 +1442,7 @@ class PurchasingItemUpdate(BaseModel):
     title: Optional[str] = None
     sourceUrl: Optional[str] = None
     quantity: Optional[str] = None
+    trackingNumber: Optional[str] = None
     purchasePrice: Optional[str] = None
     salePrice: Optional[str] = None
 
@@ -1923,6 +1933,31 @@ app.add_middleware(
 )
 
 # ================= HELPERS ==================
+def _normalize_urgency_flag(value: Optional[str]) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    aliases = {
+        "rot": "red",
+        "stillstand": "red",
+        "red": "red",
+        "orange": "orange",
+        "eingeschrankt": "orange",
+        "eingeschränkt": "orange",
+        "green": "green",
+        "gruen": "green",
+        "grün": "green",
+        "komfortproblem": "green",
+        "blue": "blue",
+        "blau": "blue",
+        "warten auf rueckmeldung": "blue",
+        "warten auf rückmeldung": "blue",
+        "rueckmeldung": "blue",
+        "rückmeldung": "blue",
+    }
+    return aliases.get(raw, "")
+
+
 def serialize_day_task(t: DayTask) -> Dict[str, Any]:
     return {
         "id": t.id,
@@ -1944,6 +1979,7 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "arrival_time": t.arrival_time,
         "departure_time": t.departure_time,
         "deadline": t.deadline,
+        "urgency_flag": _normalize_urgency_flag(t.urgency_flag),
         "employee_id": t.employee_id,
         "elapsed": t.elapsed,
         "running": t.running,
@@ -3414,6 +3450,7 @@ def serialize_purchasing_item(item: PurchasingItem) -> Dict[str, Any]:
         "title": item.title or "",
         "sourceUrl": item.source_url or "",
         "quantity": item.quantity or "",
+        "trackingNumber": item.tracking_number or "",
         "purchasePrice": item.purchase_price or "",
         "salePrice": item.sale_price or "",
         "createdAt": item.created_at,
@@ -7122,6 +7159,70 @@ def _normalize_customer_number(value: Any) -> str:
         return ""
     # Match customer numbers resilient against separators/spacing changes.
     return re.sub(r"[^A-Za-z0-9]+", "", raw).upper()
+
+
+def _resolve_local_customer_number_by_name(db: Session, customer_name: Any) -> str:
+    raw_name = str(customer_name or "").strip()
+    if not raw_name:
+        return ""
+    target_key = _dev_normalize_text(raw_name)
+    candidates = (
+        db.query(Customer)
+        .filter(func.lower(func.trim(Customer.name)) == func.lower(func.trim(raw_name)))
+        .all()
+    )
+    if not candidates:
+        candidates = db.query(Customer).all()
+    best_number = ""
+    best_score = -1
+    for customer in candidates:
+        number = str(customer.creditor_number or customer.short_code or "").strip()
+        if not number:
+            continue
+        score = 0
+        candidate_key = _dev_normalize_text(customer.name)
+        if target_key and candidate_key:
+            if candidate_key == target_key:
+                score += 100
+            elif target_key in candidate_key or candidate_key in target_key:
+                score += 45
+        if str(customer.status or "active").strip().lower() == "active":
+            score += 5
+        if score > best_score:
+            best_score = score
+            best_number = number
+    return best_number
+
+
+def _resolve_offer_customer_number(db: Session, offer_payload: Dict[str, Any]) -> str:
+    explicit = str(offer_payload.get("customerNumber") or "").strip()
+    if explicit:
+        return explicit
+    for key in ("customer", "recipientCompany", "recipient_company", "name"):
+        number = _resolve_local_customer_number_by_name(db, offer_payload.get(key))
+        if number:
+            return number
+    return ""
+
+
+def _find_sevdesk_contact_by_customer_number(
+    client: SevdeskClient, customer_number: Any
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    raw_value = str(customer_number or "").strip()
+    normalized_value = _normalize_customer_number(raw_value)
+    seen: Set[str] = set()
+    for candidate in (raw_value, normalized_value):
+        value = str(candidate or "").strip()
+        if not value:
+            continue
+        marker = value.lower()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        contact = client.get_contact_by_customer_number(value)
+        if contact:
+            return contact, value
+    return None, raw_value
 
 
 def _build_sevdesk_customer_rows(
@@ -11796,6 +11897,7 @@ def create_day_task(data: DayTaskCreate):
         erledigt = bool(data.erledigt) or status == "done"
         kulant = bool(data.kulant)
         wartungsvertrag = bool(data.wartungsvertrag)
+        urgency_flag = _normalize_urgency_flag(data.urgency_flag)
         task = DayTask(
             title=data.title,
             customer=data.customer or "",
@@ -11813,6 +11915,7 @@ def create_day_task(data: DayTaskCreate):
             arrival_time=data.arrival_time or "",
             departure_time=data.departure_time or "",
             deadline=data.deadline or "",
+            urgency_flag=urgency_flag,
             employee_id=data.employee_id,
             elapsed=int(data.elapsed or 0),
             running=bool(data.running),
@@ -11842,12 +11945,16 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
             "arrival_time",
             "departure_time",
             "deadline",
+            "urgency_flag",
         }
-        for field, value in data.dict(exclude_unset=True).items():
+        payload = data.dict(exclude_unset=True)
+        for field, value in payload.items():
             if value is None and field in string_fields:
                 setattr(task, field, "")
             else:
                 setattr(task, field, value)
+        if "urgency_flag" in payload:
+            task.urgency_flag = _normalize_urgency_flag(task.urgency_flag)
         if data.erledigt is not None and data.status is None:
             task.status = "done" if data.erledigt else "todo"
         if data.status is not None or data.erledigt is not None:
@@ -11942,6 +12049,7 @@ def create_purchasing_item(data: PurchasingItemCreate):
             title=(data.title or "").strip(),
             source_url=(data.sourceUrl or "").strip(),
             quantity=(data.quantity or "").strip(),
+            tracking_number=(data.trackingNumber or "").strip(),
             purchase_price=(data.purchasePrice or "").strip(),
             sale_price=(data.salePrice or "").strip(),
             created_at=now_ms,
@@ -11979,6 +12087,8 @@ def update_purchasing_item(item_id: int, data: PurchasingItemUpdate):
             item.source_url = str(payload["sourceUrl"] or "").strip()
         if "quantity" in payload:
             item.quantity = str(payload["quantity"] or "").strip()
+        if "trackingNumber" in payload:
+            item.tracking_number = str(payload["trackingNumber"] or "").strip()
         if "purchasePrice" in payload:
             item.purchase_price = str(payload["purchasePrice"] or "").strip()
         if "salePrice" in payload:
@@ -12465,57 +12575,57 @@ def sevdesk_offer_to_invoice(offer_id: int, payload: Optional[SevdeskOfferDraftR
         config = _require_sevdesk_config(settings)
         _require_sevdesk_invoice_fields(config)
 
-    offer_payload = {}
-    if offer.data_json:
+        offer_payload: Dict[str, Any] = {}
+        if offer.data_json:
+            try:
+                offer_payload = json.loads(offer.data_json)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(400, f"Invalid offer payload: {exc}") from exc
+
+        if payload:
+            if payload.line_item_ids is not None:
+                line_ids = set(payload.line_item_ids or [])
+                offer_payload["lineItems"] = _filter_offer_items(
+                    offer_payload.get("lineItems") or [], line_ids
+                )
+            if payload.device_item_ids is not None:
+                device_ids = set(payload.device_item_ids or [])
+                offer_payload["deviceItems"] = _filter_offer_items(
+                    offer_payload.get("deviceItems") or [], device_ids
+                )
+
+        customer_number = _resolve_offer_customer_number(db, offer_payload)
+        if not customer_number:
+            raise HTTPException(400, "Offer missing customerNumber")
+
+        client = SevdeskClient(config)
         try:
-            offer_payload = json.loads(offer.data_json)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(400, f"Invalid offer payload: {exc}") from exc
+            contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
+            if not contact:
+                raise HTTPException(404, f"Sevdesk contact not found for {customer_number}")
+            contact_id = int(contact.get("id"))
+            positions = _offer_items_to_sevdesk_positions(offer_payload, config)
+            if not positions:
+                raise HTTPException(400, "Offer has no positions to export")
+            if any((pos.get("unity_id") or 0) <= 0 for pos in positions):
+                raise HTTPException(400, "Sevdesk unity id missing for offer positions")
 
-    if payload:
-        if payload.line_item_ids is not None:
-            line_ids = set(payload.line_item_ids or [])
-            offer_payload["lineItems"] = _filter_offer_items(
-                offer_payload.get("lineItems") or [], line_ids
-            )
-        if payload.device_item_ids is not None:
-            device_ids = set(payload.device_item_ids or [])
-            offer_payload["deviceItems"] = _filter_offer_items(
-                offer_payload.get("deviceItems") or [], device_ids
-            )
+            draft = client.find_draft_invoice(contact_id)
+            if draft:
+                invoice_id = int(draft.get("id"))
+                invoice_snapshot = client.get_invoice(invoice_id) or draft
+                header = _build_sevdesk_draft_header(client, config, invoice_snapshot, draft)
+                invoice_payload = client.build_invoice_payload(
+                    contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot, header=header
+                )
+            else:
+                header = _build_sevdesk_draft_header(client, config)
+                invoice_payload = client.build_invoice_payload(contact_id, header=header)
+            response = client.save_invoice(invoice_payload, client.build_positions(positions))
+        except SevdeskError as exc:
+            raise HTTPException(502, str(exc)) from exc
 
-    customer_number = (offer_payload.get("customerNumber") or "").strip()
-    if not customer_number:
-        raise HTTPException(400, "Offer missing customerNumber")
-
-    client = SevdeskClient(config)
-    try:
-        contact = client.get_contact_by_customer_number(customer_number)
-        if not contact:
-            raise HTTPException(404, f"Sevdesk contact not found for {customer_number}")
-        contact_id = int(contact.get("id"))
-        positions = _offer_items_to_sevdesk_positions(offer_payload, config)
-        if not positions:
-            raise HTTPException(400, "Offer has no positions to export")
-        if any((pos.get("unity_id") or 0) <= 0 for pos in positions):
-            raise HTTPException(400, "Sevdesk unity id missing for offer positions")
-
-        draft = client.find_draft_invoice(contact_id)
-        if draft:
-            invoice_id = int(draft.get("id"))
-            invoice_snapshot = client.get_invoice(invoice_id) or draft
-            header = _build_sevdesk_draft_header(client, config, invoice_snapshot, draft)
-            invoice_payload = client.build_invoice_payload(
-                contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot, header=header
-            )
-        else:
-            header = _build_sevdesk_draft_header(client, config)
-            invoice_payload = client.build_invoice_payload(contact_id, header=header)
-        response = client.save_invoice(invoice_payload, client.build_positions(positions))
-    except SevdeskError as exc:
-        raise HTTPException(502, str(exc)) from exc
-
-    return {"ok": True, "invoice": response}
+        return {"ok": True, "invoice": response}
 
 
 @app.post("/api/sevdesk/tasks/{task_id}/draft")
@@ -12536,6 +12646,8 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
         _require_sevdesk_invoice_fields(config)
 
         customer_number = (payload.customer_number or task.customer_number or "").strip()
+        if not customer_number:
+            customer_number = _resolve_local_customer_number_by_name(db, task.customer)
         if not customer_number:
             raise HTTPException(400, "Missing customer_number")
 
@@ -12565,10 +12677,19 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
 
         client = SevdeskClient(config)
         try:
-            contact = client.get_contact_by_customer_number(customer_number)
+            contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
+            if not contact and task.customer:
+                fallback_number = _resolve_local_customer_number_by_name(db, task.customer)
+                if fallback_number and fallback_number != customer_number:
+                    customer_number = fallback_number
+                    contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(
+                        client, customer_number
+                    )
             if not contact:
                 raise HTTPException(404, f"Sevdesk contact not found for {customer_number}")
             contact_id = int(contact.get("id"))
+            if resolved_customer_number:
+                task.customer_number = resolved_customer_number
 
             positions = [
                 {
@@ -12626,7 +12747,7 @@ def sevdesk_check_draft(customer_number: str):
 
     client = SevdeskClient(config)
     try:
-        contact = client.get_contact_by_customer_number(customer_number)
+        contact, _ = _find_sevdesk_contact_by_customer_number(client, customer_number)
         if not contact:
             return {"contact_found": False, "has_draft": False, "draft_id": None}
         contact_id = int(contact.get("id"))

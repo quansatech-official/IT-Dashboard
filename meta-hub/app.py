@@ -1451,7 +1451,18 @@ def _fetch_development_payload(force_refresh: bool) -> Dict[str, Any]:
         "full": "1" if SOURCE_FULL else "0",
         "refresh": "1" if force_refresh else "0",
     }
-    return _request_backend_json("/api/customer_development", params=params)
+    try:
+        return _request_backend_json("/api/customer_development", params=params)
+    except Exception as exc:
+        if not force_refresh:
+            raise
+        logger.warning(
+            "Forced backend refresh failed (%s). Retrying without refresh=1 to use cached payload.",
+            exc,
+        )
+        fallback_params = dict(params)
+        fallback_params["refresh"] = "0"
+        return _request_backend_json("/api/customer_development", params=fallback_params)
 
 
 def _fetch_rmm_snapshot() -> Dict[str, Any]:
@@ -1774,7 +1785,7 @@ def _background_loop() -> None:
     while True:
         if _stop_event.wait(_next_refresh_delay_seconds()):
             return
-        _refresh_snapshot(force=True)
+        _refresh_snapshot(force=False)
 
 
 def _filter_payload(payload: Dict[str, Any], include_inactive: bool, customer_id: Optional[int]) -> Dict[str, Any]:
@@ -1806,7 +1817,7 @@ def _filter_payload(payload: Dict[str, Any], include_inactive: bool, customer_id
 @app.on_event("startup")
 def startup_event() -> None:
     _load_snapshot()
-    _refresh_in_background(force=True)
+    _refresh_in_background(force=False)
     _refresh_ai_in_background()
     if AUTO_REFRESH:
         threading.Thread(target=_background_loop, daemon=True).start()
