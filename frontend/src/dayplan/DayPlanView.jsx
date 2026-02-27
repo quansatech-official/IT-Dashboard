@@ -93,6 +93,14 @@ const URGENCY_FLAG_LOOKUP = URGENCY_FLAG_OPTIONS.reduce((acc, option) => {
   return acc;
 }, {});
 
+const URGENCY_SORT_WEIGHT = {
+  red: 4,
+  orange: 3,
+  blue: 2,
+  green: 1,
+  "": 0
+};
+
 const normalizeUrgencyFlag = (value) => {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "";
@@ -970,8 +978,31 @@ export default function DayPlanView() {
         const bTs = b.created_at || 0;
         return direction === "desc" ? aTs - bTs : bTs - aTs;
       });
+    const sortByUrgency = (items) =>
+      [...items].sort((a, b) => {
+        const aHasTime = hasRecordedTime(a);
+        const bHasTime = hasRecordedTime(b);
+        if (aHasTime !== bHasTime) {
+          return aHasTime ? -1 : 1;
+        }
+        const aUrgency = URGENCY_SORT_WEIGHT[normalizeUrgencyFlag(a?.urgency_flag)] ?? 0;
+        const bUrgency = URGENCY_SORT_WEIGHT[normalizeUrgencyFlag(b?.urgency_flag)] ?? 0;
+        if (aUrgency !== bUrgency) {
+          return bUrgency - aUrgency;
+        }
+        const aName = normalizeName(a.customer);
+        const bName = normalizeName(b.customer);
+        if (aName && bName && aName !== bName) {
+          return aName.localeCompare(bName, "de");
+        }
+        if (aName && !bName) return -1;
+        if (!aName && bName) return 1;
+        return (b.created_at || 0) - (a.created_at || 0);
+      });
     map.todo =
-      openSort === "age_desc"
+      openSort === "urgency"
+        ? sortByUrgency(map.todo)
+        : openSort === "age_desc"
         ? sortByOpenAge(map.todo, "desc")
         : openSort === "age_asc"
         ? sortByOpenAge(map.todo, "asc")
@@ -1683,22 +1714,6 @@ export default function DayPlanView() {
                       />
                     </div>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => cycleUrgencyFlag(task)}
-                    className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-sand-200 bg-white hover:bg-sand-50"
-                    title={
-                      urgencyMeta
-                        ? `Dringlichkeits-Flag: ${urgencyMeta.label} (klicken zum Wechseln)`
-                        : "Dringlichkeits-Flag setzen"
-                    }
-                  >
-                    <span
-                      className={`h-2.5 w-2.5 rounded-full border ${
-                        urgencyMeta ? urgencyMeta.dotClass : "border-sand-300 bg-sand-200"
-                      }`}
-                    />
-                  </button>
                 </div>
                 {!isDone ? (
                   <button
@@ -1817,7 +1832,7 @@ export default function DayPlanView() {
                 autoFocus
               />
             ) : task.customer ? (
-              <div className="mt-1 flex w-full items-start gap-2">
+              <div className="mt-1 flex w-full items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -1828,11 +1843,31 @@ export default function DayPlanView() {
                 >
                   {task.customer}
                 </button>
-                {!isDone ? (
-                  <span className="ml-auto whitespace-nowrap text-[10px] text-sand-400">
-                    offen seit {openSinceDays(task.created_at)} Tagen
-                  </span>
-                ) : null}
+                <div className="ml-auto inline-flex min-h-[16px] items-center gap-1">
+                  {!isDone ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => cycleUrgencyFlag(task)}
+                        className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-sand-200 bg-white hover:bg-sand-50"
+                        title={
+                          urgencyMeta
+                            ? `Dringlichkeits-Flag: ${urgencyMeta.label} (klicken zum Wechseln)`
+                            : "Dringlichkeits-Flag setzen"
+                        }
+                      >
+                        <span
+                          className={`h-2.5 w-2.5 rounded-full border ${
+                            urgencyMeta ? urgencyMeta.dotClass : "border-sand-300 bg-sand-200"
+                          }`}
+                        />
+                      </button>
+                      <span className="whitespace-nowrap text-[10px] text-sand-400">
+                        offen seit {openSinceDays(task.created_at)} Tagen
+                      </span>
+                    </>
+                  ) : null}
+                </div>
               </div>
             ) : null}
             {suggestionOpenId === task.id ? (
@@ -2142,6 +2177,7 @@ export default function DayPlanView() {
                     onChange={(event) => setOpenSort(event.target.value)}
                     className="mt-1 w-full rounded-lg border border-sand-200 bg-white px-2 py-1 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-sand-200"
                   >
+                    <option value="urgency">Dringlichkeit</option>
                     <option value="name">Kunde</option>
                     <option value="age_desc">Offen (älteste)</option>
                     <option value="age_asc">Offen (neueste)</option>
