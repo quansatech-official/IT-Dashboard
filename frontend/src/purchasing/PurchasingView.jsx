@@ -222,6 +222,16 @@ export default function PurchasingView() {
     [filteredItems]
   );
 
+  const receivedTotals = useMemo(() => {
+    return receivedItems.reduce(
+      (sum, item) => ({
+        purchase: sum.purchase + parsePrice(item.purchasePrice),
+        sale: sum.sale + parsePrice(item.salePrice)
+      }),
+      { purchase: 0, sale: 0 }
+    );
+  }, [receivedItems]);
+
   const scheduleUpdate = (id, patch) => {
     pendingPatchesRef.current[id] = {
       ...(pendingPatchesRef.current[id] || {}),
@@ -563,6 +573,68 @@ export default function PurchasingView() {
     </section>
   );
 
+  const renderReceivedSection = () => (
+    <section className="rounded-3xl border border-emerald-200 bg-emerald-50/40 shadow-soft overflow-hidden">
+      <div className="flex flex-col gap-3 border-b border-emerald-200 px-4 py-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-3 text-emerald-900">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-600 text-white">
+            <PackageCheck size={18} />
+          </div>
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-700">Erhaltene Ware</p>
+            <p className="text-sm text-emerald-800">
+              Bereits gelieferte Artikel in eigenem Container.
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
+          <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-emerald-700">Eintraege</p>
+            <p className="font-semibold text-emerald-900">{receivedItems.length}</p>
+          </div>
+          <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-emerald-700">EK gesamt</p>
+            <p className="font-semibold text-emerald-900">{toCurrency(receivedTotals.purchase)}</p>
+          </div>
+          <div className="rounded-xl border border-emerald-200 bg-white px-3 py-2">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-emerald-700">VK gesamt</p>
+            <p className="font-semibold text-emerald-900">{toCurrency(receivedTotals.sale)}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="overflow-auto bg-white">
+        <table className="w-full min-w-[1540px]">
+          <thead>
+            <tr className="border-b border-emerald-200 text-left text-xs uppercase tracking-[0.2em] text-emerald-700">
+              <th className="px-3 py-2 w-44">Status</th>
+              <th className="px-3 py-2">Bezeichnung</th>
+              <th className="px-3 py-2">Bezugsquelle</th>
+              <th className="px-3 py-2">Kunde</th>
+              <th className="px-2 py-2 w-24">Menge</th>
+              <th className="px-2 py-2 w-72">Sendungsverfolgung</th>
+              <th className="px-2 py-2 w-24">EK</th>
+              <th className="px-2 py-2 w-24">VK</th>
+              <th className="px-3 py-2 w-24">Marge</th>
+              <th className="px-3 py-2 w-16" />
+            </tr>
+          </thead>
+          <tbody>
+            {receivedItems.length ? (
+              renderRows(receivedItems, "received")
+            ) : (
+              <tr>
+                <td colSpan={10} className="px-4 py-8 text-center text-sm text-sand-500">
+                  Keine erhaltenen Artikel vorhanden.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
@@ -765,15 +837,7 @@ export default function PurchasingView() {
           <Truck size={16} />
         )}
 
-        {showReceived
-          ? renderSectionTable(
-              "Container",
-              "Erhalten",
-              receivedItems,
-              "received",
-              <Check size={16} />
-            )
-          : null}
+        {showReceived ? renderReceivedSection() : null}
       </main>
     </div>
   );

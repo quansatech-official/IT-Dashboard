@@ -40,12 +40,10 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
   const [aiStatus, setAiStatus] = useState("");
   const aiActions = [
     { mode: "summary", label: "Summary" },
-    { mode: "mail", label: "Mail" },
-    { mode: "leitfaden", label: "Leitfaden" },
+    { mode: "aktivierung_mail", label: "Aktivierungs-Mail" },
+    { mode: "aktivierung_call", label: "Telefonleitfaden" },
     { mode: "analyse", label: "Analyse" },
     { mode: "angebot", label: "Angebot" },
-    { mode: "kundenbericht", label: "Bericht" },
-    { mode: "newsletter", label: "Newsletter" },
   ];
 
   const load = async (forceRefresh = false) => {

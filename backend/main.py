@@ -3742,6 +3742,8 @@ def _normalize_meta_hub_mailbox(raw: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         port = 993 if use_ssl else 993
     port = max(1, min(port, 65535))
+    # Meta-Hub mailbox access is intentionally restricted to read-only.
+    read_only = True
     if not name:
         name = email or username or host or "Postfach"
     return {
@@ -3756,6 +3758,7 @@ def _normalize_meta_hub_mailbox(raw: Dict[str, Any]) -> Dict[str, Any]:
         "enabled": enabled,
         "use_tls": use_tls,
         "use_ssl": use_ssl,
+        "read_only": read_only,
     }
 
 
@@ -3803,6 +3806,7 @@ def _serialize_meta_hub_mailboxes_for_response(raw: Any) -> List[Dict[str, Any]]
                 "enabled": bool(row.get("enabled", True)),
                 "use_tls": bool(row.get("use_tls", True)),
                 "use_ssl": bool(row.get("use_ssl", False)),
+                "read_only": True,
             }
         )
     return out
@@ -3882,6 +3886,7 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "meta_hub_rmm_enabled": bool(settings.meta_hub_rmm_enabled),
         "meta_hub_rmm_customer_field_name": settings.meta_hub_rmm_customer_field_name or "Kundennummer",
         "meta_hub_email_enabled": bool(settings.meta_hub_email_enabled),
+        "meta_hub_email_access_mode": "read_only",
         "meta_hub_refresh_seconds": int(settings.meta_hub_refresh_seconds or 300),
         "meta_hub_mailboxes": meta_hub_mailboxes,
         "meta_hub_mailbox_count": len(meta_hub_mailboxes),
@@ -12301,6 +12306,13 @@ def get_meta_hub_status(trigger_refresh: bool = False):
             "last_refresh_at": int(health_payload.get("lastRefreshAt") or 0),
             "last_duration_ms": int(health_payload.get("lastDurationMs") or 0),
             "last_error": str(health_payload.get("lastError") or ""),
+            "email_sync_enabled": bool(health_payload.get("emailSyncEnabled")),
+            "email_last_refresh_at": int(health_payload.get("emailLastRefreshAt") or 0),
+            "email_last_duration_ms": int(health_payload.get("emailLastDurationMs") or 0),
+            "email_last_error": str(health_payload.get("emailLastError") or ""),
+            "email_message_count": int(health_payload.get("emailMessageCount") or 0),
+            "email_matched_message_count": int(health_payload.get("emailMatchedMessageCount") or 0),
+            "email_connected_mailboxes": int(health_payload.get("emailConnectedMailboxes") or 0),
             "ai_preanalysis_enabled": bool(health_payload.get("aiPreanalysisEnabled")),
             "ai_preanalysis_refreshing": bool(health_payload.get("aiPreanalysisRefreshing")),
             "ai_preanalysis_last_refresh_at": int(health_payload.get("aiPreanalysisLastRefreshAt") or 0),
@@ -12318,15 +12330,22 @@ def get_meta_hub_status(trigger_refresh: bool = False):
             if snapshot_response.ok:
                 snapshot_payload = snapshot_response.json()
                 if isinstance(snapshot_payload, dict):
+                    snapshot_meta = snapshot_payload.get("metaHub") if isinstance(snapshot_payload.get("metaHub"), dict) else {}
                     base_payload["snapshot"] = {
                         "cached_at": int(snapshot_payload.get("cachedAt") or 0),
                         "generated_at": int(snapshot_payload.get("generatedAt") or 0),
                         "count": int(snapshot_payload.get("count") or 0),
+                        "email_sync_generated_at": int(snapshot_meta.get("emailSyncGeneratedAt") or 0),
+                        "email_message_count": int(snapshot_meta.get("emailMessageCount") or 0),
+                        "email_matched_message_count": int(snapshot_meta.get("emailMatchedMessageCount") or 0),
+                        "email_connected_mailboxes": int(snapshot_meta.get("emailConnectedMailboxes") or 0),
+                        "email_access_mode": str(snapshot_meta.get("emailAccessMode") or ""),
+                        "email_errors": list(snapshot_meta.get("emailErrors") or []),
                         "ai_preanalysis_generated_at": int(
-                            snapshot_payload.get("aiPreanalysisGeneratedAt") or 0
+                            snapshot_meta.get("aiPreanalysisGeneratedAt") or 0
                         ),
-                        "ai_preanalysis_entries": int(snapshot_payload.get("aiPreanalysisEntries") or 0),
-                        "ai_preanalysis_modes": list(snapshot_payload.get("aiPreanalysisModes") or []),
+                        "ai_preanalysis_entries": int(snapshot_meta.get("aiPreanalysisEntries") or 0),
+                        "ai_preanalysis_modes": list(snapshot_meta.get("aiPreanalysisModes") or []),
                     }
             elif not base_payload["error"]:
                 base_payload["error"] = f"Snapshot nicht erreichbar ({snapshot_response.status_code})"
@@ -12395,11 +12414,13 @@ def get_internal_customer_development_rmm_snapshot(request: Request):
                     "host": str(row.get("host") or "").strip(),
                     "port": int(row.get("port") or 993),
                     "username": str(row.get("username") or "").strip(),
+                    "password": str(row.get("password") or ""),
                     "folder": str(row.get("folder") or "INBOX").strip() or "INBOX",
                     "enabled": bool(row.get("enabled", True)),
                     "use_tls": bool(row.get("use_tls", True)),
                     "use_ssl": bool(row.get("use_ssl", False)),
                     "has_password": bool(str(row.get("password") or "").strip()),
+                    "read_only": True,
                 }
             )
         meta_hub_refresh_seconds = int(settings.meta_hub_refresh_seconds or 300)
@@ -12409,6 +12430,7 @@ def get_internal_customer_development_rmm_snapshot(request: Request):
             "rmm_customer_field_name": str(settings.meta_hub_rmm_customer_field_name or "Kundennummer").strip()
             or "Kundennummer",
             "email_enabled": bool(settings.meta_hub_email_enabled),
+            "email_access_mode": "read_only",
             "refresh_seconds": meta_hub_refresh_seconds,
             "mailbox_count": len(mailbox_summaries),
             "mailboxes": mailbox_summaries,

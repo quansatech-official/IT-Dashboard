@@ -456,6 +456,37 @@ const deriveDisplaySignals = (item, maxItems = 4) => {
   return unique.slice(0, Math.max(1, maxItems));
 };
 
+const deriveHeuristicSignalText = (item, signals) => {
+  const entries = (Array.isArray(signals) ? signals : [])
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean);
+  if (!entries.length) {
+    return "Heuristisch sind aktuell keine auffaelligen Signale erkennbar.";
+  }
+  const topSignals = entries.slice(0, 3);
+  const intro =
+    topSignals.length === 1
+      ? `Heuristisch faellt aktuell auf: ${topSignals[0]}.`
+      : `Heuristisch fallen aktuell vor allem diese Punkte auf: ${topSignals.join(" | ")}.`;
+  const primaryRecommendation =
+    (item?.topRecommendations || item?.recommendations || []).find(
+      (entry) => entry && typeof entry === "object" && String(entry?.title || "").trim()
+    ) || null;
+  const recommendationText = primaryRecommendation?.title
+    ? ` Daraus leitet die Regelbasis vorrangig "${normalizeActivityTitle(primaryRecommendation.title)}" ab.`
+    : "";
+  return `${intro}${recommendationText}`;
+};
+
+const deriveAiTextPreview = (text, maxItems = 3) => {
+  const blocks = String(text || "")
+    .split(/\n+/g)
+    .map((entry) => String(entry || "").replace(/^[\-\u2022]\s*/, "").trim())
+    .filter(Boolean);
+  if (!blocks.length) return [];
+  return blocks.slice(0, Math.max(1, maxItems));
+};
+
 const actionTypeMeta = (value) => {
   const type = String(value || "").trim().toLowerCase();
   if (type === "security") {
@@ -796,9 +827,6 @@ export default function CustomerDevelopmentView() {
     { value: "aktivierung_mail", label: "Aktivierungs-Mail" },
     { value: "aktivierung_call", label: "Telefonleitfaden" },
     { value: "angebot", label: "Angebot" },
-    { value: "kundenbericht", label: "Kundenbericht" },
-    { value: "mail", label: "Mail" },
-    { value: "leitfaden", label: "Leitfaden" },
     { value: "analyse", label: "Analyse" },
     { value: "summary", label: "Summary" }
   ];
@@ -1096,11 +1124,6 @@ export default function CustomerDevelopmentView() {
       `Abstimmung ${detailModal.customerName || "Kunde"}`
     );
     window.location.href = `mailto:${email}?subject=${subject}`;
-  };
-
-  const startAiContactFlow = (mode) => {
-    setDetailTab("ki");
-    applyCachedDetailAi(mode);
   };
 
   const actionSuggestions = useMemo(() => {
@@ -1646,6 +1669,15 @@ export default function CustomerDevelopmentView() {
     [detailData?.workSummary?.summary, detailData?.workSummary?.items]
   );
   const detailSignals = useMemo(() => deriveDisplaySignals(detailData || {}, 5), [detailData]);
+  const detailSummaryAi = useMemo(() => readAiPreanalysis(detailData || {}, "summary"), [detailData]);
+  const heuristicSignalText = useMemo(
+    () => deriveHeuristicSignalText(detailData || {}, detailSignals),
+    [detailData, detailSignals]
+  );
+  const aiSignalPreview = useMemo(
+    () => deriveAiTextPreview(detailSummaryAi?.text || detailAi.text || "", 4),
+    [detailSummaryAi?.text, detailAi.text]
+  );
   const quickNeedKpis = useMemo(() => {
     const source = detailData?.source && typeof detailData.source === "object" ? detailData.source : {};
     const infra = detailData?.infra && typeof detailData.infra === "object" ? detailData.infra : {};
@@ -1714,7 +1746,7 @@ export default function CustomerDevelopmentView() {
           ? "border-sky-200 bg-sky-50 text-sky-700"
           : "border-emerald-200 bg-emerald-50 text-emerald-700";
 
-    const aiSignalCount = String(detailAi.text || "")
+    const aiSignalCount = String(detailSummaryAi?.text || detailAi.text || "")
       .split(/\n+/g)
       .map((entry) => String(entry || "").trim())
       .filter(Boolean)
@@ -1750,14 +1782,12 @@ export default function CustomerDevelopmentView() {
         key: "ai-signals",
         label: "Signale KI",
         value: String(aiSignalCount),
-        detail: aiSignalCount > 0 ? "Aus letztem KI-Vorschlag" : "Noch kein KI-Vorschlag erstellt",
+        detail: aiSignalCount > 0 ? "Aus letzter KI-Summary" : "Noch kein KI-Vorschlag erstellt",
         badgeClass: aiBadgeClass,
       },
     ];
-  }, [detailData, detailSignals, cveOverview?.totalCves, cveScan.status, detailAi.text]);
+  }, [detailData, detailSignals, cveOverview?.totalCves, cveScan.status, detailAi.text, detailSummaryAi?.text]);
   const hasCustomerMail = Boolean(String(detailData?.customerEmail || "").trim());
-  const runningCallGuide = isAiActionRunning(detailModal.customerId, "aktivierung_call");
-  const runningMailGuide = isAiActionRunning(detailModal.customerId, "aktivierung_mail");
   return (
       <div className="min-h-screen bg-sand-50 text-sand-900">
       {detailModal.open ? (
@@ -1958,24 +1988,45 @@ export default function CustomerDevelopmentView() {
 	                        </div>
 	                      ))}
 	                    </div>
+	                    <div className="mt-3 grid gap-2 lg:grid-cols-2">
+	                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+	                        <div className="flex items-center gap-1.5">
+	                          <AlertTriangle size={13} className="text-amber-600" />
+	                          <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Signale heuristisch</p>
+	                        </div>
+	                        <p className="mt-1.5 text-[12px] leading-6 text-sand-800">
+	                          {heuristicSignalText}
+	                        </p>
+	                      </div>
+	                      <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+	                        <div className="flex items-center gap-1.5">
+	                          <Sparkles size={13} className="text-sky-600" />
+	                          <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Signale KI</p>
+	                        </div>
+	                        {aiSignalPreview.length ? (
+	                          <div className="mt-1.5 space-y-1">
+	                            {aiSignalPreview.map((line, idx) => (
+	                              <p key={`ai-preview-${idx}`} className="flex items-start gap-1 text-[12px] leading-6 text-sand-800">
+	                                <span className="mt-0.5 text-sand-400">•</span>
+	                                <span>{line}</span>
+	                              </p>
+	                            ))}
+	                          </div>
+	                        ) : (
+	                          <p className="mt-1.5 text-[12px] leading-6 text-sand-600">
+	                            Noch keine textuelle KI-Zusammenfassung vorhanden. Ueber "KI Unterstuetzung" kann eine Summary geladen werden.
+	                          </p>
+	                        )}
+	                      </div>
+	                    </div>
 	                    <div className="mt-2 flex flex-wrap gap-1.5">
 	                      <button
 	                        type="button"
-	                        onClick={() => startAiContactFlow("aktivierung_call")}
-	                        disabled={aiBusy}
-	                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-sand-900 px-2.5 py-1 text-[10px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-wait disabled:opacity-70"
+	                        onClick={() => setDetailTab("ki")}
+	                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-sand-900 px-2.5 py-1 text-[10px] uppercase tracking-wide text-white hover:opacity-90"
 	                      >
-	                        {runningCallGuide ? <InlineSpinner /> : <Phone size={11} />}
-	                        {runningCallGuide ? "Lädt..." : "Telefonleitfaden"}
-	                      </button>
-	                      <button
-	                        type="button"
-	                        onClick={() => startAiContactFlow("aktivierung_mail")}
-	                        disabled={aiBusy}
-	                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-60"
-	                      >
-	                        {runningMailGuide ? <InlineSpinner /> : <Sparkles size={11} />}
-	                        {runningMailGuide ? "Lädt..." : "Mail-Entwurf (KI)"}
+	                        <Sparkles size={11} />
+	                        KI Unterstuetzung
 	                      </button>
 	                      <button
 	                        type="button"

@@ -1,12 +1,20 @@
+import datetime
+import html
+import imaplib
 import json
 import logging
 import os
+import ssl
 import re
 import random
 import threading
 import time
 import unicodedata
 import ipaddress
+from email.header import decode_header, make_header
+from email.parser import BytesParser
+from email.policy import default as default_email_policy
+from email.utils import getaddresses, parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
@@ -106,6 +114,46 @@ AI_PREANALYSIS_MODES = [
     ).split(",")
     if mode.strip()
 ]
+EMAIL_SYNC_ENABLED = _to_bool(os.environ.get("META_HUB_EMAIL_SYNC_ENABLED"), default=True)
+EMAIL_IMAP_TIMEOUT_SECONDS = max(3.0, _to_float(os.environ.get("META_HUB_IMAP_TIMEOUT_SECONDS"), 15.0))
+EMAIL_LOOKBACK_DAYS = _to_positive_int(
+    os.environ.get("META_HUB_EMAIL_LOOKBACK_DAYS"),
+    default=30,
+    minimum=1,
+)
+EMAIL_MAX_MESSAGES_PER_MAILBOX = _to_positive_int(
+    os.environ.get("META_HUB_EMAIL_MAX_MESSAGES_PER_MAILBOX"),
+    default=80,
+    minimum=1,
+)
+EMAIL_MAX_MESSAGES_PER_CUSTOMER = _to_positive_int(
+    os.environ.get("META_HUB_EMAIL_MAX_MESSAGES_PER_CUSTOMER"),
+    default=25,
+    minimum=1,
+)
+EMAIL_SNIPPET_MAX_CHARS = _to_positive_int(
+    os.environ.get("META_HUB_EMAIL_SNIPPET_MAX_CHARS"),
+    default=420,
+    minimum=120,
+)
+FREE_EMAIL_DOMAINS = {
+    "gmail.com",
+    "googlemail.com",
+    "hotmail.com",
+    "outlook.com",
+    "live.com",
+    "msn.com",
+    "icloud.com",
+    "me.com",
+    "mac.com",
+    "yahoo.com",
+    "yahoo.de",
+    "gmx.de",
+    "gmx.net",
+    "web.de",
+    "t-online.de",
+    "protonmail.com",
+}
 
 if not logging.getLogger().handlers:
     logging.basicConfig(
@@ -132,6 +180,13 @@ _state: Dict[str, Any] = {
     "aiLastRefreshAt": 0,
     "aiLastDurationMs": 0,
     "aiLastError": "",
+    "emailSyncEnabled": EMAIL_SYNC_ENABLED,
+    "emailLastRefreshAt": 0,
+    "emailLastDurationMs": 0,
+    "emailLastError": "",
+    "emailMessageCount": 0,
+    "emailMatchedMessageCount": 0,
+    "emailConnectedMailboxes": 0,
 }
 _mac_vendor_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -276,6 +331,430 @@ def _normalize_customer_number(value: Any) -> str:
     if not raw:
         return ""
     return re.sub(r"[^A-Za-z0-9]+", "", raw).upper()
+
+
+def _normalize_space(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _normalize_email_address(value: Any) -> str:
+    if value is None:
+        return ""
+    _, address = getaddresses([str(value)])[0] if getaddresses([str(value)]) else ("", "")
+    return str(address or value).strip().lower()
+
+
+def _extract_email_domain(address: Any) -> str:
+    normalized = _normalize_email_address(address)
+    if "@" not in normalized:
+        return ""
+    return normalized.split("@", 1)[1]
+
+
+def _decode_mime_header(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return str(make_header(decode_header(text))).strip()
+    except Exception:
+        return text
+
+
+def _parse_email_addresses(raw: Any) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    for name, address in getaddresses([str(raw or "")]):
+        email_value = str(address or "").strip().lower()
+        if not email_value or email_value in seen:
+            continue
+        seen.add(email_value)
+        out.append(
+            {
+                "name": _decode_mime_header(name),
+                "email": email_value,
+            }
+        )
+    return out
+
+
+def _format_email_addresses(addresses: List[Dict[str, str]]) -> str:
+    parts: List[str] = []
+    for item in addresses:
+        if not isinstance(item, dict):
+            continue
+        name = _normalize_space(item.get("name"))
+        email_value = _normalize_email_address(item.get("email"))
+        if not email_value:
+            continue
+        if name and name.lower() != email_value:
+            parts.append(f"{name} <{email_value}>")
+        else:
+            parts.append(email_value)
+    return ", ".join(parts)
+
+
+def _strip_html_tags(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    return _normalize_space(html.unescape(text))
+
+
+def _message_timestamp_ms(message: Any) -> int:
+    raw_date = _decode_mime_header(message.get("Date") if hasattr(message, "get") else "")
+    if not raw_date:
+        return 0
+    try:
+        parsed = parsedate_to_datetime(raw_date)
+        if parsed is None:
+            return 0
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+        return int(parsed.timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def _truncate_text(value: Any, limit: int) -> str:
+    text = _normalize_space(value)
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _extract_message_text(message: Any) -> str:
+    plain_candidates: List[str] = []
+    html_candidates: List[str] = []
+    try:
+        parts = message.walk() if getattr(message, "is_multipart", lambda: False)() else [message]
+    except Exception:
+        parts = [message]
+    for part in parts:
+        if getattr(part, "is_multipart", lambda: False)():
+            continue
+        disposition = str(getattr(part, "get_content_disposition", lambda: None)() or "").strip().lower()
+        if disposition == "attachment":
+            continue
+        content_type = str(getattr(part, "get_content_type", lambda: "")() or "").strip().lower()
+        if content_type not in {"text/plain", "text/html"}:
+            continue
+        try:
+            payload = part.get_content()
+        except Exception:
+            try:
+                raw_bytes = part.get_payload(decode=True)
+            except Exception:
+                raw_bytes = None
+            if raw_bytes is None:
+                continue
+            charset = str(getattr(part, "get_content_charset", lambda: None)() or "utf-8").strip() or "utf-8"
+            try:
+                payload = raw_bytes.decode(charset, errors="replace")
+            except Exception:
+                payload = raw_bytes.decode("utf-8", errors="replace")
+        text_value = _normalize_space(payload if content_type == "text/plain" else _strip_html_tags(payload))
+        if not text_value:
+            continue
+        if content_type == "text/plain":
+            plain_candidates.append(text_value)
+        else:
+            html_candidates.append(text_value)
+    if plain_candidates:
+        return plain_candidates[0]
+    if html_candidates:
+        return html_candidates[0]
+    return ""
+
+
+def _imap_connect_read_only(mailbox: Dict[str, Any]) -> imaplib.IMAP4:
+    host = str(mailbox.get("host") or "").strip()
+    username = str(mailbox.get("username") or "").strip()
+    password = str(mailbox.get("password") or "")
+    port = _to_positive_int(mailbox.get("port"), default=993, minimum=1)
+    folder = str(mailbox.get("folder") or "INBOX").strip() or "INBOX"
+    use_ssl = bool(mailbox.get("use_ssl", False))
+    use_tls = bool(mailbox.get("use_tls", True))
+    if not host or not username or not password:
+        raise RuntimeError("Mailbox unvollstaendig konfiguriert")
+    if use_ssl:
+        connection = imaplib.IMAP4_SSL(host, port, timeout=EMAIL_IMAP_TIMEOUT_SECONDS)
+    else:
+        connection = imaplib.IMAP4(host, port, timeout=EMAIL_IMAP_TIMEOUT_SECONDS)
+        if use_tls:
+            connection.starttls(ssl_context=ssl.create_default_context())
+    connection.login(username, password)
+    status, _ = connection.select(folder, readonly=True)
+    if status != "OK":
+        try:
+            connection.logout()
+        except Exception:
+            pass
+        raise RuntimeError(f"Read-only select fuer {folder} fehlgeschlagen")
+    return connection
+
+
+def _imap_latest_uids(connection: imaplib.IMAP4) -> List[str]:
+    lookback_date = (datetime.datetime.utcnow() - datetime.timedelta(days=EMAIL_LOOKBACK_DAYS)).strftime("%d-%b-%Y")
+    status, payload = connection.uid("search", None, "SINCE", lookback_date)
+    if status != "OK" or not payload:
+        status, payload = connection.uid("search", None, "ALL")
+    if status != "OK" or not payload:
+        raise RuntimeError("IMAP search fehlgeschlagen")
+    raw_uids = payload[0] if payload else b""
+    if isinstance(raw_uids, str):
+        tokens = [item.strip() for item in raw_uids.split() if item.strip()]
+    else:
+        tokens = [item.decode("utf-8", errors="ignore").strip() for item in raw_uids.split() if item]
+    return tokens[-EMAIL_MAX_MESSAGES_PER_MAILBOX:]
+
+
+def _imap_fetch_message_bytes(connection: imaplib.IMAP4, uid: str) -> bytes:
+    status, payload = connection.uid("fetch", str(uid), "(BODY.PEEK[])")
+    if status != "OK" or not payload:
+        raise RuntimeError(f"IMAP fetch fehlgeschlagen fuer UID {uid}")
+    for item in payload:
+        if isinstance(item, tuple) and len(item) >= 2 and isinstance(item[1], (bytes, bytearray)):
+            return bytes(item[1])
+    raise RuntimeError(f"Keine Nachrichtendaten fuer UID {uid}")
+
+
+def _build_email_message_entry(
+    mailbox: Dict[str, Any],
+    uid: str,
+    raw_bytes: bytes,
+    *,
+    own_addresses: Set[str],
+) -> Dict[str, Any]:
+    message = BytesParser(policy=default_email_policy).parsebytes(raw_bytes)
+    from_addresses = _parse_email_addresses(message.get("From"))
+    to_addresses = _parse_email_addresses(message.get("To"))
+    cc_addresses = _parse_email_addresses(message.get("Cc"))
+    reply_to_addresses = _parse_email_addresses(message.get("Reply-To"))
+    subject = _decode_mime_header(message.get("Subject")) or "(ohne Betreff)"
+    text_preview = _truncate_text(_extract_message_text(message), EMAIL_SNIPPET_MAX_CHARS)
+    timestamp_ms = _message_timestamp_ms(message)
+    message_id = _normalize_space(message.get("Message-Id") or message.get("Message-ID") or "")
+    address_pool = from_addresses + to_addresses + cc_addresses + reply_to_addresses
+    external_addresses = []
+    seen_external: Set[str] = set()
+    for item in address_pool:
+        email_value = _normalize_email_address(item.get("email"))
+        if not email_value or email_value in own_addresses or email_value in seen_external:
+            continue
+        seen_external.add(email_value)
+        external_addresses.append(email_value)
+    sender_addresses = {_normalize_email_address(item.get("email")) for item in from_addresses if item.get("email")}
+    direction = "outgoing" if sender_addresses & own_addresses else "incoming"
+    synthetic_id = message_id or f"{mailbox.get('id') or 'mailbox'}:{uid}:{timestamp_ms}"
+    return {
+        "id": synthetic_id,
+        "uid": str(uid),
+        "messageId": message_id,
+        "mailboxId": str(mailbox.get("id") or "").strip(),
+        "mailboxName": str(mailbox.get("name") or mailbox.get("email") or mailbox.get("username") or "").strip(),
+        "mailbox": str(mailbox.get("folder") or "INBOX").strip() or "INBOX",
+        "subject": subject,
+        "from": _format_email_addresses(from_addresses),
+        "fromEmail": from_addresses[0]["email"] if from_addresses else "",
+        "to": _format_email_addresses(to_addresses),
+        "toEmail": to_addresses[0]["email"] if to_addresses else "",
+        "cc": _format_email_addresses(cc_addresses),
+        "snippet": text_preview,
+        "timestamp": int(timestamp_ms or 0),
+        "direction": direction,
+        "externalAddresses": external_addresses,
+    }
+
+
+def _fetch_mailbox_messages(mailbox: Dict[str, Any], own_addresses: Set[str]) -> List[Dict[str, Any]]:
+    connection: Optional[imaplib.IMAP4] = None
+    try:
+        connection = _imap_connect_read_only(mailbox)
+        messages: List[Dict[str, Any]] = []
+        for uid in _imap_latest_uids(connection):
+            try:
+                raw_bytes = _imap_fetch_message_bytes(connection, uid)
+                messages.append(_build_email_message_entry(mailbox, uid, raw_bytes, own_addresses=own_addresses))
+            except Exception as exc:
+                logger.warning("Meta-hub IMAP fetch skipped for mailbox %s UID %s: %s", mailbox.get("name"), uid, exc)
+        return messages
+    finally:
+        if connection is not None:
+            try:
+                connection.logout()
+            except Exception:
+                pass
+
+
+def _build_customer_email_matchers(contexts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    by_email: Dict[str, int] = {}
+    domain_candidates: Dict[str, Set[int]] = {}
+    customer_numbers: Dict[str, int] = {}
+    for row in contexts:
+        if not isinstance(row, dict):
+            continue
+        customer_id = _safe_int(row.get("customerId"), default=0)
+        if customer_id <= 0:
+            continue
+        email_value = _normalize_email_address(row.get("customerEmail"))
+        if email_value:
+            by_email[email_value] = customer_id
+            domain = _extract_email_domain(email_value)
+            if domain and domain not in FREE_EMAIL_DOMAINS:
+                domain_candidates.setdefault(domain, set()).add(customer_id)
+        customer_number = _normalize_customer_number(row.get("customerNumber"))
+        if customer_number:
+            customer_numbers[customer_number] = customer_id
+    unique_domains = {
+        domain: next(iter(customer_ids))
+        for domain, customer_ids in domain_candidates.items()
+        if len(customer_ids) == 1
+    }
+    return {
+        "byEmail": by_email,
+        "byDomain": unique_domains,
+        "byCustomerNumber": customer_numbers,
+    }
+
+
+def _match_email_to_customer(message: Dict[str, Any], matchers: Dict[str, Any]) -> int:
+    exact_candidates: Set[int] = set()
+    for address in message.get("externalAddresses") or []:
+        customer_id = matchers.get("byEmail", {}).get(_normalize_email_address(address))
+        if customer_id:
+            exact_candidates.add(int(customer_id))
+    if len(exact_candidates) == 1:
+        return next(iter(exact_candidates))
+
+    subject_snippet = _normalize_customer_number(
+        f"{message.get('subject') or ''} {message.get('snippet') or ''}"
+    )
+    customer_number_match = 0
+    for customer_number, customer_id in matchers.get("byCustomerNumber", {}).items():
+        if customer_number and customer_number in subject_snippet:
+            if customer_number_match and customer_number_match != int(customer_id):
+                customer_number_match = 0
+                break
+            customer_number_match = int(customer_id)
+    if customer_number_match:
+        return customer_number_match
+
+    domain_candidates: Set[int] = set()
+    for address in message.get("externalAddresses") or []:
+        domain = _extract_email_domain(address)
+        if not domain or domain in FREE_EMAIL_DOMAINS:
+            continue
+        customer_id = matchers.get("byDomain", {}).get(domain)
+        if customer_id:
+            domain_candidates.add(int(customer_id))
+    if len(domain_candidates) == 1:
+        return next(iter(domain_candidates))
+    return 0
+
+
+def _enrich_payload_with_emails(raw: Dict[str, Any], meta_hub_config: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(raw)
+    contexts = payload.get("contexts")
+    if not isinstance(contexts, list):
+        return payload
+
+    mailboxes_raw = meta_hub_config.get("mailboxes") if isinstance(meta_hub_config.get("mailboxes"), list) else []
+    email_enabled = bool(meta_hub_config.get("email_enabled")) and EMAIL_SYNC_ENABLED
+    access_mode = str(meta_hub_config.get("email_access_mode") or "read_only")
+    active_mailboxes = [
+        row
+        for row in mailboxes_raw
+        if isinstance(row, dict) and bool(row.get("enabled", True))
+    ]
+    own_addresses: Set[str] = set()
+    for mailbox in active_mailboxes:
+        for value in (mailbox.get("email"), mailbox.get("username")):
+            normalized = _normalize_email_address(value)
+            if normalized:
+                own_addresses.add(normalized)
+
+    stats: Dict[str, Any] = {
+        "enabled": bool(email_enabled),
+        "accessMode": access_mode or "read_only",
+        "configuredMailboxes": len(mailboxes_raw),
+        "activeMailboxes": len(active_mailboxes),
+        "connectedMailboxes": 0,
+        "messageCount": 0,
+        "matchedMessageCount": 0,
+        "generatedAt": int(time.time() * 1000),
+        "errors": [],
+    }
+    if not email_enabled or not active_mailboxes:
+        payload["metaHubEmail"] = stats
+        return payload
+
+    matchers = _build_customer_email_matchers([row for row in contexts if isinstance(row, dict)])
+    emails_by_customer: Dict[int, List[Dict[str, Any]]] = {}
+    mailbox_errors: List[str] = []
+    seen_messages: Set[str] = set()
+
+    for mailbox in active_mailboxes:
+        mailbox_label = str(mailbox.get("name") or mailbox.get("email") or mailbox.get("host") or "Mailbox").strip()
+        try:
+            mailbox_messages = _fetch_mailbox_messages(mailbox, own_addresses)
+            stats["connectedMailboxes"] += 1
+        except Exception as exc:
+            logger.warning("Meta-hub IMAP mailbox failed (%s): %s", mailbox_label, exc)
+            mailbox_errors.append(f"{mailbox_label}: {exc}")
+            continue
+        stats["messageCount"] += len(mailbox_messages)
+        for message in mailbox_messages:
+            dedupe_key = "|".join(
+                [
+                    str(message.get("id") or ""),
+                    str(message.get("timestamp") or 0),
+                    _normalize_space(message.get("subject")),
+                    _normalize_space(message.get("fromEmail")),
+                    _normalize_space(message.get("toEmail")),
+                ]
+            )
+            if dedupe_key in seen_messages:
+                continue
+            seen_messages.add(dedupe_key)
+            customer_id = _match_email_to_customer(message, matchers)
+            if customer_id <= 0:
+                continue
+            stats["matchedMessageCount"] += 1
+            emails_by_customer.setdefault(int(customer_id), []).append(message)
+
+    stats["errors"] = mailbox_errors[:20]
+    patched_contexts: List[Dict[str, Any]] = []
+    for context in contexts:
+        if not isinstance(context, dict):
+            continue
+        row = dict(context)
+        customer_id = _safe_int(row.get("customerId"), default=0)
+        matched = emails_by_customer.get(customer_id, [])
+        matched.sort(key=lambda item: int(item.get("timestamp") or 0), reverse=True)
+        matched = matched[:EMAIL_MAX_MESSAGES_PER_CUSTOMER]
+        row["metaHubEmail"] = {
+            "enabled": bool(email_enabled),
+            "accessMode": access_mode or "read_only",
+            "emails": matched,
+            "count": len(matched),
+            "generatedAt": int(stats.get("generatedAt") or time.time() * 1000),
+        }
+        patched_contexts.append(row)
+
+    payload["contexts"] = patched_contexts
+    payload["count"] = len(patched_contexts)
+    payload["metaHubEmail"] = stats
+    payload_sources = payload.get("sources") if isinstance(payload.get("sources"), dict) else {}
+    payload["sources"] = {
+        **payload_sources,
+        "metaHubEmail": bool(email_enabled and stats["connectedMailboxes"] > 0),
+    }
+    return payload
 
 
 def _agent_field_text(agent: Dict[str, Any], *keys: str) -> str:
@@ -1441,6 +1920,7 @@ def _enrich_payload_with_rmm(raw: Dict[str, Any], rmm_snapshot: Dict[str, Any]) 
         "error": str(rmm_snapshot.get("error") or ""),
         "customerFieldName": preferred_customer_field_name or "Kundennummer",
         "mailboxCount": int(meta_hub_config.get("mailbox_count") or 0),
+        "emailAccessMode": str(meta_hub_config.get("email_access_mode") or "read_only"),
     }
     return payload
 
@@ -1482,8 +1962,9 @@ def _fetch_from_backend(force_refresh: bool) -> Dict[str, Any]:
         runtime_config = rmm_snapshot.get("metaHubConfig") if isinstance(rmm_snapshot.get("metaHubConfig"), dict) else {}
         _apply_runtime_config(runtime_config)
         data = _enrich_payload_with_rmm(data, rmm_snapshot)
+        data = _enrich_payload_with_emails(data, runtime_config)
     except Exception as exc:
-        logger.warning("RMM enrichment skipped: %s", exc)
+        logger.warning("Meta-hub enrichment skipped: %s", exc)
     if not isinstance(data, dict):
         raise ValueError("Backend payload is not an object")
     return data
@@ -1502,11 +1983,20 @@ def _prepare_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
     if isinstance(raw.get("metaHubRmm"), dict):
         prepared["metaHubRmm"] = raw.get("metaHubRmm")
+    if isinstance(raw.get("metaHubEmail"), dict):
+        prepared["metaHubEmail"] = raw.get("metaHubEmail")
+    email_meta = raw.get("metaHubEmail") if isinstance(raw.get("metaHubEmail"), dict) else {}
     prepared["metaHub"] = {
         "preparedAt": now_ms,
         "source": "customer-development",
         "sourceIncludeInactive": SOURCE_INCLUDE_INACTIVE,
         "sourceFull": SOURCE_FULL,
+        "emailSyncGeneratedAt": int(email_meta.get("generatedAt") or 0),
+        "emailMessageCount": int(email_meta.get("messageCount") or 0),
+        "emailMatchedMessageCount": int(email_meta.get("matchedMessageCount") or 0),
+        "emailConnectedMailboxes": int(email_meta.get("connectedMailboxes") or 0),
+        "emailAccessMode": str(email_meta.get("accessMode") or "read_only"),
+        "emailErrors": list(email_meta.get("errors") or []),
         **_snapshot_meta(contexts),
     }
     return prepared
@@ -1740,12 +2230,21 @@ def _load_snapshot() -> None:
         _state["lastRefreshAt"] = cached_at
         _state["lastDurationMs"] = 0
         _state["lastError"] = ""
+        email_meta = payload.get("metaHubEmail") if isinstance(payload.get("metaHubEmail"), dict) else {}
+        _state["emailSyncEnabled"] = bool(email_meta.get("enabled", EMAIL_SYNC_ENABLED))
+        _state["emailLastRefreshAt"] = int(email_meta.get("generatedAt") or 0)
+        _state["emailLastDurationMs"] = 0
+        _state["emailLastError"] = "; ".join(str(item) for item in (email_meta.get("errors") or []) if item)
+        _state["emailMessageCount"] = int(email_meta.get("messageCount") or 0)
+        _state["emailMatchedMessageCount"] = int(email_meta.get("matchedMessageCount") or 0)
+        _state["emailConnectedMailboxes"] = int(email_meta.get("connectedMailboxes") or 0)
 
 
 def _refresh_snapshot(force: bool = True) -> bool:
     if not _refresh_lock.acquire(blocking=False):
         return False
     start_ms = int(time.time() * 1000)
+    email_start_ms = start_ms
     with _state_lock:
         _state["refreshing"] = True
     try:
@@ -1755,12 +2254,21 @@ def _refresh_snapshot(force: bool = True) -> bool:
             previous_payload = _state.get("payload")
         _copy_existing_ai_preanalysis(prepared, previous_payload if isinstance(previous_payload, dict) else None)
         now_ms = int(time.time() * 1000)
+        email_meta = prepared.get("metaHubEmail") if isinstance(prepared.get("metaHubEmail"), dict) else {}
+        email_errors = [str(item) for item in (email_meta.get("errors") or []) if str(item).strip()]
         with _state_lock:
             _state["payload"] = prepared
             _state["updatedAt"] = now_ms
             _state["lastRefreshAt"] = now_ms
             _state["lastDurationMs"] = max(0, now_ms - start_ms)
             _state["lastError"] = ""
+            _state["emailSyncEnabled"] = bool(email_meta.get("enabled", EMAIL_SYNC_ENABLED))
+            _state["emailLastRefreshAt"] = int(email_meta.get("generatedAt") or now_ms)
+            _state["emailLastDurationMs"] = max(0, now_ms - email_start_ms)
+            _state["emailLastError"] = "; ".join(email_errors)
+            _state["emailMessageCount"] = int(email_meta.get("messageCount") or 0)
+            _state["emailMatchedMessageCount"] = int(email_meta.get("matchedMessageCount") or 0)
+            _state["emailConnectedMailboxes"] = int(email_meta.get("connectedMailboxes") or 0)
         _save_snapshot(prepared)
         _refresh_ai_in_background()
         return True
@@ -1769,6 +2277,9 @@ def _refresh_snapshot(force: bool = True) -> bool:
             _state["lastRefreshAt"] = int(time.time() * 1000)
             _state["lastDurationMs"] = max(0, int(time.time() * 1000) - start_ms)
             _state["lastError"] = str(exc)
+            _state["emailLastRefreshAt"] = int(time.time() * 1000)
+            _state["emailLastDurationMs"] = max(0, int(time.time() * 1000) - email_start_ms)
+            _state["emailLastError"] = str(exc)
         logger.warning("Meta-hub refresh failed: %s", exc)
         return False
     finally:
@@ -1846,6 +2357,13 @@ def get_health() -> Dict[str, Any]:
             "lastRefreshAt": int(_state.get("lastRefreshAt") or 0),
             "lastDurationMs": int(_state.get("lastDurationMs") or 0),
             "lastError": str(_state.get("lastError") or ""),
+            "emailSyncEnabled": bool(_state.get("emailSyncEnabled")),
+            "emailLastRefreshAt": int(_state.get("emailLastRefreshAt") or 0),
+            "emailLastDurationMs": int(_state.get("emailLastDurationMs") or 0),
+            "emailLastError": str(_state.get("emailLastError") or ""),
+            "emailMessageCount": int(_state.get("emailMessageCount") or 0),
+            "emailMatchedMessageCount": int(_state.get("emailMatchedMessageCount") or 0),
+            "emailConnectedMailboxes": int(_state.get("emailConnectedMailboxes") or 0),
             "aiPreanalysisEnabled": bool(AI_PREANALYSIS_ENABLED),
             "aiPreanalysisRefreshing": bool(_state.get("aiRefreshing")),
             "aiPreanalysisLastRefreshAt": int(_state.get("aiLastRefreshAt") or 0),

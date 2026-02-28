@@ -64,7 +64,8 @@ const defaultMetaHubMailbox = () => ({
   folder: "INBOX",
   enabled: true,
   use_tls: true,
-  use_ssl: false
+  use_ssl: false,
+  read_only: true
 });
 
 const normalizeMetaHubMailbox = (raw) => ({
@@ -81,7 +82,8 @@ const normalizeMetaHubMailbox = (raw) => ({
   folder: String(raw?.folder || "INBOX"),
   enabled: raw?.enabled !== false,
   use_tls: raw?.use_tls !== false,
-  use_ssl: Boolean(raw?.use_ssl)
+  use_ssl: Boolean(raw?.use_ssl),
+  read_only: true
 });
 
 const defaultMetaHub = {
@@ -1527,7 +1529,8 @@ export default function SettingsView() {
           folder: String(row?.folder || "INBOX"),
           enabled: Boolean(row?.enabled),
           use_tls: Boolean(row?.use_tls),
-          use_ssl: Boolean(row?.use_ssl)
+          use_ssl: Boolean(row?.use_ssl),
+          read_only: true
         }))
         .filter((row) => row.host || row.username || row.email || row.name);
 
@@ -3141,6 +3144,7 @@ export default function SettingsView() {
             <>
               <p className="mt-4 text-xs text-sand-500 mb-4">
                 Steuerung der Meta-Hub Datenquellen für Kundenentwicklung: RMM-Mapping und mehrere E-Mail-Postfächer (IMAP).
+                Meta-Hub greift auf E-Mails nur lesend zu.
               </p>
               <div className="mb-4 rounded-2xl border border-sand-200 bg-sand-50 p-3">
                 <button
@@ -3233,6 +3237,38 @@ export default function SettingsView() {
                         <span className="text-sand-500">Letzte KI-Snapshot Aktualisierung:</span>{" "}
                         {formatTimestampOrNa(metaHubRuntimeStatus.snapshot?.ai_preanalysis_generated_at)}
                       </div>
+                      <div>
+                        <span className="text-sand-500">E-Mail Sync:</span>{" "}
+                        {metaHubRuntimeStatus.health?.email_sync_enabled ? "ja" : "nein"}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">E-Mail Zugriff:</span>{" "}
+                        {metaHubRuntimeStatus.snapshot?.email_access_mode || "read_only"}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">Mailboxen verbunden:</span>{" "}
+                        {Number(metaHubRuntimeStatus.health?.email_connected_mailboxes || 0)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">Geladene Mails:</span>{" "}
+                        {Number(metaHubRuntimeStatus.health?.email_message_count || 0)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">Kunden zugeordnet:</span>{" "}
+                        {Number(metaHubRuntimeStatus.health?.email_matched_message_count || 0)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">E-Mail Lauf:</span>{" "}
+                        {formatTimestampOrNa(metaHubRuntimeStatus.health?.email_last_refresh_at)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">E-Mail Dauer:</span>{" "}
+                        {formatDurationMs(metaHubRuntimeStatus.health?.email_last_duration_ms)}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">E-Mail Snapshot:</span>{" "}
+                        {formatTimestampOrNa(metaHubRuntimeStatus.snapshot?.email_sync_generated_at)}
+                      </div>
                     </div>
                     <div className="text-xs text-sand-600">
                       <span className="text-sand-500">KI Modi:</span>{" "}
@@ -3240,11 +3276,15 @@ export default function SettingsView() {
                         ? metaHubRuntimeStatus.health.ai_preanalysis_modes.join(", ")
                         : "n/a"}
                     </div>
-                    {(metaHubRuntimeStatus.health?.last_error || metaHubRuntimeStatus.health?.ai_preanalysis_last_error || metaHubRuntimeStatus.error) ? (
+                    {(metaHubRuntimeStatus.health?.last_error || metaHubRuntimeStatus.health?.email_last_error || metaHubRuntimeStatus.health?.ai_preanalysis_last_error || metaHubRuntimeStatus.error) ? (
                       <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
                         <div>
                           <span className="font-semibold">Fehler Snapshot:</span>{" "}
                           {metaHubRuntimeStatus.health?.last_error || "n/a"}
+                        </div>
+                        <div>
+                          <span className="font-semibold">Fehler E-Mail:</span>{" "}
+                          {metaHubRuntimeStatus.health?.email_last_error || "n/a"}
                         </div>
                         <div>
                           <span className="font-semibold">Fehler KI:</span>{" "}
@@ -3254,6 +3294,12 @@ export default function SettingsView() {
                           <span className="font-semibold">Statusfehler:</span>{" "}
                           {metaHubRuntimeStatus.error || "n/a"}
                         </div>
+                      </div>
+                    ) : null}
+                    {(metaHubRuntimeStatus.snapshot?.email_errors || []).length ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        <div className="font-semibold">Mailbox Fehler</div>
+                        <div>{metaHubRuntimeStatus.snapshot.email_errors.join(" | ")}</div>
                       </div>
                     ) : null}
                   </div>
@@ -3318,9 +3364,19 @@ export default function SettingsView() {
                     Postfach
                   </button>
                 </div>
+                <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                  Zugriff ist fest auf Nur-Lesen gesetzt. Meta-Hub soll keine Nachrichten markieren,
+                  verschieben oder loeschen.
+                </div>
                 <div className="space-y-2 max-h-[420px] overflow-auto pr-1">
                   {(metaHub.mailboxes || []).map((mailbox) => (
                     <div key={mailbox.id} className="rounded-xl border border-sand-200 bg-white p-3">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Zugriffsmodus</p>
+                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-800">
+                          Nur Lesen
+                        </span>
+                      </div>
                       <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
                         <div>
                           <label className="text-[11px] text-sand-500">Name</label>
