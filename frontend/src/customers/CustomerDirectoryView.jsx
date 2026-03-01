@@ -538,6 +538,22 @@ const formatDate = (value) => {
     year: "numeric"
   });
 };
+const todayInputValue = () => {
+  const now = new Date();
+  const localTime = new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000);
+  return localTime.toISOString().slice(0, 10);
+};
+const contractTypeLabel = (value) => {
+  const type = normalizeContractDocumentType(value) || "wartung";
+  if (type === "monitoring") return "Monitoringvertrag";
+  if (type === "avv_dsgvo") return "AVV / DSGVO";
+  return "Wartungsvertrag";
+};
+const buildDefaultContractTitle = (docType, customerLabel) => {
+  const base = contractTypeLabel(docType);
+  const name = String(customerLabel || "").trim();
+  return name ? `${base} ${name}` : base;
+};
 const daysUntilTimestamp = (timestampMs) => {
   const target = Number(timestampMs || 0);
   if (!Number.isFinite(target) || target <= 0) return null;
@@ -818,6 +834,7 @@ export default function CustomerDirectoryView() {
   const [deliveryNotes, setDeliveryNotes] = useState([]);
   const [deliveryStatus, setDeliveryStatus] = useState("idle");
   const [settingsTab, setSettingsTab] = useState("details");
+  const [customerStatsPeriod, setCustomerStatsPeriod] = useState("currentYear");
   const [contractCalcModalOpen, setContractCalcModalOpen] = useState(false);
   const [pbxApiActive, setPbxApiActive] = useState(false);
   const [pbxEntries, setPbxEntries] = useState([]);
@@ -854,6 +871,8 @@ export default function CustomerDirectoryView() {
   const [contractSaveStatus, setContractSaveStatus] = useState("idle");
   const [generatedContract, setGeneratedContract] = useState(null);
   const [editingContractId, setEditingContractId] = useState(null);
+  const [contractAdvancedOpen, setContractAdvancedOpen] = useState(false);
+  const [contractTitleAuto, setContractTitleAuto] = useState(true);
   const [contractVariableDefinitions, setContractVariableDefinitions] = useState({});
   const [contractVariableValues, setContractVariableValues] = useState({});
   const [contractDraft, setContractDraft] = useState({
@@ -1498,6 +1517,8 @@ export default function CustomerDirectoryView() {
   const closeContractCreator = () => {
     setContractCalcModalOpen(false);
     setEditingContractId(null);
+    setContractAdvancedOpen(false);
+    setContractTitleAuto(true);
   };
 
   const openContractProposalEditor = (item) => {
@@ -1518,7 +1539,7 @@ export default function CustomerDirectoryView() {
     setContractDraft({
       title: String(item?.title || "").trim(),
       docType,
-      validFrom: String(item?.valid_from || "").trim(),
+      validFrom: String(item?.valid_from || "").trim() || todayInputValue(),
       runtimeMonths: String(Number(item?.runtime_months || 12) || 12),
       terminationNoticeMonths: String(Number(item?.termination_notice_months || 3) || 3),
       autoExtensionMonths: String(Number(item?.auto_extension_months || 12) || 12),
@@ -1537,12 +1558,13 @@ export default function CustomerDirectoryView() {
       }
     });
     setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
+    setContractAdvancedOpen(true);
+    setContractTitleAuto(false);
     setContractCalcModalOpen(true);
   };
 
   const openContractCreator = () => {
     if (!activeCustomer) return;
-    const customerLabel = String(activeCustomer.name || "").trim();
     const context = developmentByCustomerId[activeCustomer.id] || null;
     const counts = deriveContractCountsFromDevelopment(context);
     setCalcInput((prev) => ({
@@ -1557,9 +1579,9 @@ export default function CustomerDirectoryView() {
       ),
     }));
     setContractDraft({
-      title: customerLabel ? `Wartungsvertrag ${customerLabel}` : "",
+      title: buildDefaultContractTitle("wartung", activeCustomerLabel),
       docType: "wartung",
-      validFrom: "",
+      validFrom: todayInputValue(),
       runtimeMonths: "12",
       terminationNoticeMonths: "3",
       autoExtensionMonths: "12",
@@ -1570,6 +1592,8 @@ export default function CustomerDirectoryView() {
     setEditingContractId(null);
     setGeneratedContract(null);
     setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
+    setContractAdvancedOpen(false);
+    setContractTitleAuto(true);
     setContractCalcModalOpen(true);
   };
 
@@ -1642,6 +1666,23 @@ export default function CustomerDirectoryView() {
 
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
   const editCustomer = customers.find((customer) => customer.id === editCustomerId) || null;
+  const activeCustomerLabel = String(activeCustomer?.name || "").trim();
+  const autoContractTitle = buildDefaultContractTitle(contractDraft.docType, activeCustomerLabel);
+  const applyContractTypeChange = (nextType) => {
+    const normalizedType = normalizeContractDocumentType(nextType) || "wartung";
+    const previousAutoTitle = buildDefaultContractTitle(contractDraft.docType, activeCustomerLabel);
+    const currentTitle = String(contractDraft.title || "").trim();
+    const shouldUpdateTitle = contractTitleAuto || !currentTitle || currentTitle === previousAutoTitle;
+    setContractDraft((prev) => ({
+      ...prev,
+      docType: normalizedType,
+      title: shouldUpdateTitle ? buildDefaultContractTitle(normalizedType, activeCustomerLabel) : prev.title,
+      monthlyHoursIncluded: normalizedType === "avv_dsgvo" ? "0" : prev.monthlyHoursIncluded
+    }));
+    if (shouldUpdateTitle) {
+      setContractTitleAuto(true);
+    }
+  };
   const metricsCustomerId = Number(editCustomer?.id || activeCustomer?.id || 0);
   const selectedCustomerMetrics =
     metrics &&
@@ -1668,6 +1709,20 @@ export default function CustomerDirectoryView() {
   const monthlyTelephonyHours = Number(contractTimeBudget?.telephonyHours || 0);
   const monthlyConsumedHours = Number(contractTimeBudget?.consumedHours || 0);
   const openEffortHours = Number(selectedCustomerMetrics?.openTimeMinutes || 0) / 60;
+  const travelRoundTripKm = Number(
+    selectedCustomerMetrics?.distanceRoundTripKm ||
+      (Number(selectedCustomerMetrics?.distanceKm || 0) > 0
+        ? Number(selectedCustomerMetrics.distanceKm) * 2
+        : 0)
+  );
+  const periodStats =
+    selectedCustomerMetrics?.periodStats && typeof selectedCustomerMetrics.periodStats === "object"
+      ? selectedCustomerMetrics.periodStats
+      : {};
+  const selectedPeriodStats =
+    periodStats?.[customerStatsPeriod] && typeof periodStats[customerStatsPeriod] === "object"
+      ? periodStats[customerStatsPeriod]
+      : null;
   const totalCustomers = customers.length;
   const inactiveCustomers = customers.filter(
     (customer) => String(customer.status || "active").toLowerCase() === "inactive"
@@ -2822,369 +2877,494 @@ export default function CustomerDirectoryView() {
     }
   };
 
-  const renderContractCalculationContent = () => (
-    <div className="space-y-3">
-      <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
-        <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Kalkulation</p>
-        <div className="mt-2.5 space-y-2.5">
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">1) Vertragstyp</span>
-            <select
-              value={contractDraft.docType}
-              onChange={(event) => setContractDraft((prev) => ({ ...prev, docType: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            >
-              <option value="wartung">Wartungsvertrag</option>
-              <option value="monitoring">Monitoringvertrag</option>
-              <option value="avv_dsgvo">AVV / DSGVO</option>
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Tarif</span>
-            <select
-              value={calcInput.tariffId || ""}
-              onChange={(event) => setCalcInput((prev) => ({ ...prev, tariffId: Number(event.target.value) || null }))}
-              disabled={!tariffRequired}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            >
-              <option value="">
-                {tariffRequired ? `Tarif für ${tariffCategoryForContractType} wählen (Pflicht)` : "Nicht erforderlich (AVV)"}
-              </option>
-              {filteredActiveTariffs.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} ({item.category})
-                </option>
-              ))}
-            </select>
-          </label>
-          {tariffSelectionMissing ? (
-            <p className="text-xs text-rose-600">Wartungs- und Monitoringverträge benötigen einen Tarif.</p>
-          ) : null}
-          {contractRuntimeInvalid ? (
-            <p className="text-xs text-rose-600">Kündigungsfrist darf die Laufzeit nicht überschreiten.</p>
-          ) : null}
-          {contractTariffsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Tarife…</p> : null}
-          {contractTariffsStatus === "error" ? <p className="text-xs text-rose-600">Tarife konnten nicht geladen werden.</p> : null}
-          <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">3) Mengenblock</p>
-              <button
-                type="button"
-                onClick={importCalcValuesFromRmm}
-                className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-              >
-                Aus RMM/Discovery übernehmen
-              </button>
+  const renderContractCalculationContent = () => {
+    const contractTypeOptions = [
+      { value: "wartung", label: "Wartung" },
+      { value: "monitoring", label: "Monitoring" },
+      { value: "avv_dsgvo", label: "AVV / DSGVO" }
+    ];
+
+    return (
+      <div className="space-y-3">
+        <div className="rounded-2xl border border-sand-200 bg-gradient-to-br from-white via-sand-50 to-sand-100 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Schnellstart</p>
+              <h4 className="mt-1 text-lg font-semibold text-sand-900">
+                {editingContractId ? "Vertragsvorschlag aktualisieren" : "Neuen Vertrag einfacher anlegen"}
+              </h4>
+              <p className="mt-1 text-sm text-sand-600">
+                Typ, Tarif und Startdatum prüfen. Titel und Standardlaufzeit werden automatisch vorbelegt.
+              </p>
             </div>
-            <div className="mt-2 grid gap-2 md:grid-cols-4">
+            <button
+              type="button"
+              onClick={() => setContractAdvancedOpen((prev) => !prev)}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+            >
+              {contractAdvancedOpen ? "Weniger anzeigen" : "Erweiterte Felder"}
+            </button>
+          </div>
+          <div className="mt-3 space-y-3">
+            <div>
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">1) Vertragstyp</span>
+              <div className="mt-1.5 flex flex-wrap gap-2">
+                {contractTypeOptions.map((option) => {
+                  const active = contractDraft.docType === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => applyContractTypeChange(option.value)}
+                      className={`rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-wide ${
+                        active
+                          ? "border-sand-900 bg-sand-900 text-white"
+                          : "border-sand-200 bg-white text-sand-700 hover:bg-sand-100"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
               <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">Server</span>
-                <input
-                  value={calcInput.servers}
-                  onChange={(event) => setCalcInput((prev) => ({ ...prev, servers: event.target.value }))}
-                  className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-                />
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Tarif</span>
+                <select
+                  value={calcInput.tariffId || ""}
+                  onChange={(event) =>
+                    setCalcInput((prev) => ({ ...prev, tariffId: Number(event.target.value) || null }))
+                  }
+                  disabled={!tariffRequired}
+                  className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="">
+                    {tariffRequired
+                      ? `Tarif für ${contractTypeLabel(contractDraft.docType)} wählen`
+                      : "Für AVV / DSGVO nicht erforderlich"}
+                  </option>
+                  {filteredActiveTariffs.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.category})
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">Clients</span>
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">3) Gültig ab</span>
                 <input
-                  value={calcInput.clients}
-                  onChange={(event) => setCalcInput((prev) => ({ ...prev, clients: event.target.value }))}
-                  className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">Netzwerkgeräte</span>
-                <input
-                  value={calcInput.networkDevices}
-                  onChange={(event) => setCalcInput((prev) => ({ ...prev, networkDevices: event.target.value }))}
-                  className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-                />
-              </label>
-              <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">IoT</span>
-                <input
-                  value={calcInput.iotDevices}
-                  onChange={(event) => setCalcInput((prev) => ({ ...prev, iotDevices: event.target.value }))}
-                  className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+                  type="date"
+                  value={contractDraft.validFrom}
+                  onChange={(event) => setContractDraft((prev) => ({ ...prev, validFrom: event.target.value }))}
+                  className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
                 />
               </label>
             </div>
-          </div>
-        </div>
-        <div className="mt-2.5 grid gap-2 md:grid-cols-2">
-          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
-            <p className="text-[10px] uppercase tracking-wide text-sand-500">Monatspreis</p>
-            <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractTotals.monthly)}</p>
-            <p className="mt-1 text-[11px] text-sand-500">
-              Grund- und Gerätepreise {formatEurPrecise(contractTotals.tariffMonthly)} + Stundenanteil{" "}
-              {formatEurPrecise(contractTotals.hourlyMonthly)}
-            </p>
-          </div>
-          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5">
-            <p className="text-[10px] uppercase tracking-wide text-sand-500">Jahrespreis</p>
-            <p className="text-base font-semibold text-sand-900">{formatEurPrecise(contractTotals.yearly)}</p>
-          </div>
-        </div>
-        <div className="mt-2 grid gap-2 md:grid-cols-2">
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">4) Endpreis pro Monat (optional)</span>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={contractDraft.monthlyTotalOverride}
-              onChange={(event) =>
-                setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: event.target.value }))
-              }
-              placeholder={`Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}`}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">5) Endpreis pro Jahr (optional)</span>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={contractDraft.yearlyTotalOverride}
-              onChange={(event) =>
-                setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }))
-              }
-              placeholder={`Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}`}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            />
-          </label>
-        </div>
-        <div className="mt-1 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() =>
-              setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: "", yearlyTotalOverride: "" }))
-            }
-            disabled={!contractDraft.monthlyTotalOverride && !contractDraft.yearlyTotalOverride}
-            className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            Endpreis zurücksetzen
-          </button>
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {calcImportStatus === "loading" ? <span className="text-xs text-sand-500">Importiere aus Meta-Hub…</span> : null}
-          {calcImportStatus === "done" ? <span className="text-xs text-emerald-600">Werte übernommen</span> : null}
-          {calcImportStatus === "empty" ? <span className="text-xs text-amber-700">Keine Meta-Hub Infrastrukturdaten gefunden</span> : null}
-          {calcImportStatus === "error" ? <span className="text-xs text-rose-600">Meta-Hub Import fehlgeschlagen</span> : null}
-        </div>
-      </div>
-      <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Vertragsdetail</p>
-          <span className="text-[11px] text-sand-500">
-            Grundlage:{" "}
-            {selectedTariff
-              ? `${selectedTariff.name}`
-              : tariffRequired
-              ? "Tarif fehlt (Pflicht)"
-              : "Ohne Tarif (AVV)"}
-          </span>
-        </div>
-        <div className="mt-2.5 grid gap-2 md:grid-cols-2">
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Titel</span>
-            <input
-              value={contractDraft.title}
-              onChange={(event) => setContractDraft((prev) => ({ ...prev, title: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-              placeholder="z.B. Wartungsvertrag Kunde"
-            />
-          </label>
-          <div className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Vertragstyp</span>
-            <p className="mt-1 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm text-sand-800">
-              {String(contractDraft.docType || "wartung")
-                .replace("avv_dsgvo", "AVV / DSGVO")
-                .replace("wartung", "Wartung")
-                .replace("monitoring", "Monitoring")}
-            </p>
-          </div>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Gültig ab</span>
-            <input
-              type="date"
-              value={contractDraft.validFrom}
-              onChange={(event) => setContractDraft((prev) => ({ ...prev, validFrom: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Laufzeit (Monate)</span>
-            <input
-              type="number"
-              min="1"
-              value={contractDraft.runtimeMonths}
-              onChange={(event) => setContractDraft((prev) => ({ ...prev, runtimeMonths: event.target.value }))}
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Kündigungsfrist (Monate)</span>
-            <input
-              type="number"
-              min="0"
-              value={contractDraft.terminationNoticeMonths}
-              onChange={(event) =>
-                setContractDraft((prev) => ({ ...prev, terminationNoticeMonths: event.target.value }))
-              }
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-[10px] uppercase tracking-wide text-sand-500">Auto-Verlängerung (Monate)</span>
-            <input
-              type="number"
-              min="1"
-              value={contractDraft.autoExtensionMonths}
-              onChange={(event) =>
-                setContractDraft((prev) => ({ ...prev, autoExtensionMonths: event.target.value }))
-              }
-              className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
-            />
-          </label>
-          {supportsHoursBudget ? (
             <label className="block">
-              <span className="text-[10px] uppercase tracking-wide text-sand-500">Inklusivstunden pro Monat</span>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">Titel</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setContractDraft((prev) => ({ ...prev, title: autoContractTitle }));
+                    setContractTitleAuto(true);
+                  }}
+                  className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                >
+                  Auto-Titel
+                </button>
+              </div>
               <input
-                type="number"
-                min="0"
-                step="0.25"
-                value={contractDraft.monthlyHoursIncluded}
-                onChange={(event) => setContractDraft((prev) => ({ ...prev, monthlyHoursIncluded: event.target.value }))}
-                className="mt-1 w-full rounded-xl border border-sand-200 px-2.5 py-1.5 text-sm"
+                value={contractDraft.title}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setContractDraft((prev) => ({ ...prev, title: nextValue }));
+                  setContractTitleAuto(String(nextValue || "").trim() === autoContractTitle);
+                }}
+                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                placeholder={autoContractTitle}
               />
             </label>
-          ) : null}
+            {supportsHoursBudget ? (
+              <label className="block md:max-w-xs">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">Inklusivstunden / Monat</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.25"
+                  value={contractDraft.monthlyHoursIncluded}
+                  onChange={(event) =>
+                    setContractDraft((prev) => ({ ...prev, monthlyHoursIncluded: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                />
+              </label>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-sand-600">
+              <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1">
+                Laufzeit {runtimeMonthsValue} Mon.
+              </span>
+              <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1">
+                Kündigungsfrist {terminationNoticeMonthsValue} Mon.
+              </span>
+              <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1">
+                Verlängerung {autoExtensionMonthsValue} Mon.
+              </span>
+              <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1">
+                {contractTitleAuto ? "Titel automatisch" : "Titel manuell"}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              {tariffSelectionMissing ? (
+                <span className="text-rose-600">Wartungs- und Monitoringverträge benötigen einen Tarif.</span>
+              ) : null}
+              {contractRuntimeInvalid ? (
+                <span className="text-rose-600">Kündigungsfrist darf die Laufzeit nicht überschreiten.</span>
+              ) : null}
+              {contractTariffsStatus === "loading" ? <span className="text-sand-500">Lade Tarife…</span> : null}
+              {contractTariffsStatus === "error" ? (
+                <span className="text-rose-600">Tarife konnten nicht geladen werden.</span>
+              ) : null}
+            </div>
+          </div>
         </div>
-        {editableContractVariables.length ? (
-          <div className="mt-2.5 rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+
+        <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Bestand</p>
+              <p className="mt-1 text-sm text-sand-600">
+                Geräteanzahl direkt aus Meta-Hub übernehmen oder manuell anpassen.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={importCalcValuesFromRmm}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+            >
+              Aus RMM/Discovery übernehmen
+            </button>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-4">
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Server</span>
+              <input
+                value={calcInput.servers}
+                onChange={(event) => setCalcInput((prev) => ({ ...prev, servers: event.target.value }))}
+                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Clients</span>
+              <input
+                value={calcInput.clients}
+                onChange={(event) => setCalcInput((prev) => ({ ...prev, clients: event.target.value }))}
+                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Netzwerkgeräte</span>
+              <input
+                value={calcInput.networkDevices}
+                onChange={(event) => setCalcInput((prev) => ({ ...prev, networkDevices: event.target.value }))}
+                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">IoT</span>
+              <input
+                value={calcInput.iotDevices}
+                onChange={(event) => setCalcInput((prev) => ({ ...prev, iotDevices: event.target.value }))}
+                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {calcImportStatus === "loading" ? (
+              <span className="text-xs text-sand-500">Importiere aus Meta-Hub…</span>
+            ) : null}
+            {calcImportStatus === "done" ? (
+              <span className="text-xs text-emerald-600">Werte übernommen</span>
+            ) : null}
+            {calcImportStatus === "empty" ? (
+              <span className="text-xs text-amber-700">Keine Meta-Hub Infrastrukturdaten gefunden</span>
+            ) : null}
+            {calcImportStatus === "error" ? (
+              <span className="text-xs text-rose-600">Meta-Hub Import fehlgeschlagen</span>
+            ) : null}
+          </div>
+        </div>
+
+        {contractAdvancedOpen ? (
+          <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Individuelle Vertragsvariablen</p>
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Erweitert</p>
+                <p className="mt-1 text-sm text-sand-600">
+                  Laufzeit, Preis-Overrides und individuelle Vertragsvariablen nur bei Bedarf anpassen.
+                </p>
+              </div>
+              <span className="text-[11px] text-sand-500">
+                Grundlage: {selectedTariff ? selectedTariff.name : tariffRequired ? "Tarif fehlt" : "Ohne Tarif"}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-3">
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">Laufzeit (Monate)</span>
+                <input
+                  type="number"
+                  min="1"
+                  value={contractDraft.runtimeMonths}
+                  onChange={(event) =>
+                    setContractDraft((prev) => ({ ...prev, runtimeMonths: event.target.value }))
+                  }
+                  className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                  Kündigungsfrist (Monate)
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  value={contractDraft.terminationNoticeMonths}
+                  onChange={(event) =>
+                    setContractDraft((prev) => ({
+                      ...prev,
+                      terminationNoticeMonths: event.target.value
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                  Auto-Verlängerung (Monate)
+                </span>
+                <input
+                  type="number"
+                  min="1"
+                  value={contractDraft.autoExtensionMonths}
+                  onChange={(event) =>
+                    setContractDraft((prev) => ({
+                      ...prev,
+                      autoExtensionMonths: event.target.value
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                />
+              </label>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                  Endpreis pro Monat (optional)
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={contractDraft.monthlyTotalOverride}
+                  onChange={(event) =>
+                    setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: event.target.value }))
+                  }
+                  placeholder={`Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}`}
+                  className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                  Endpreis pro Jahr (optional)
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={contractDraft.yearlyTotalOverride}
+                  onChange={(event) =>
+                    setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }))
+                  }
+                  placeholder={`Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}`}
+                  className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                />
+              </label>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
-                  setGeneratedContract(null);
-                }}
-                className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                onClick={() =>
+                  setContractDraft((prev) => ({
+                    ...prev,
+                    monthlyTotalOverride: "",
+                    yearlyTotalOverride: ""
+                  }))
+                }
+                disabled={!contractDraft.monthlyTotalOverride && !contractDraft.yearlyTotalOverride}
+                className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Vorschläge laden
+                Endpreis zurücksetzen
               </button>
             </div>
-            <div className="mt-2 grid gap-2 md:grid-cols-2">
-              {editableContractVariables.map((item) => (
-                <label key={item.key} className="block">
-                  <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                    {item.label}
-                    <span className="ml-1 text-sand-400">({item.key})</span>
-                  </span>
-                  <input
-                    value={String(contractVariableValues[item.key] ?? "")}
-                    onChange={(event) => {
-                      setContractVariableValues((prev) => ({
-                        ...prev,
-                        [item.key]: event.target.value
-                      }));
+            {editableContractVariables.length ? (
+              <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[10px] uppercase tracking-wide text-sand-500">
+                    Individuelle Vertragsvariablen
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
                       setGeneratedContract(null);
                     }}
-                    placeholder={item.suggestedValue || "-"}
-                    className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-2.5 py-1.5 text-sm"
-                  />
-                </label>
-              ))}
-            </div>
+                    className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    Vorschläge laden
+                  </button>
+                </div>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  {editableContractVariables.map((item) => (
+                    <label key={item.key} className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                        {item.label}
+                        <span className="ml-1 text-sand-400">({item.key})</span>
+                      </span>
+                      <input
+                        value={String(contractVariableValues[item.key] ?? "")}
+                        onChange={(event) => {
+                          setContractVariableValues((prev) => ({
+                            ...prev,
+                            [item.key]: event.target.value
+                          }));
+                          setGeneratedContract(null);
+                        }}
+                        placeholder={item.suggestedValue || "-"}
+                        className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
-        <div
-          className={`mt-2.5 grid gap-2 ${
-            supportsHoursBudget ? "md:grid-cols-3" : "md:grid-cols-2"
-          }`}
-        >
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5">
-            <p className="text-[10px] uppercase tracking-wide text-emerald-700">Monatspreis final</p>
-            <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.monthly)}</p>
-            <p className="mt-1 text-[11px] text-emerald-800">
-              {contractTotals.monthlyOverridden
-                ? `Manuell überschrieben (Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}).`
-                : "Automatisch aus Tarifkalkulation übernommen."}
-            </p>
-          </div>
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-1.5">
-            <p className="text-[10px] uppercase tracking-wide text-emerald-700">Jahrespreis final</p>
-            <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.yearly)}</p>
-            <p className="mt-1 text-[11px] text-emerald-800">
-              {contractTotals.yearlyOverridden
-                ? `Manuell überschrieben (Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}).`
-                : "Automatisch aus Tarifkalkulation übernommen."}
-            </p>
-          </div>
-          {supportsHoursBudget ? (
-            <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-1.5">
-              <p className="text-[10px] uppercase tracking-wide text-sky-700">Stundenbudget / Monat</p>
-              <p className="text-base font-semibold text-sky-900">{formatHours(monthlyHoursIncluded)}</p>
+
+        <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Preis & Aktion</p>
+              <p className="mt-1 text-sm text-sand-600">
+                {tariffRequired
+                  ? "Preis wird aus Tarif, Geräteanzahl und Stundenbudget berechnet."
+                  : "AVV / DSGVO wird ohne Tarif kalkuliert."}
+              </p>
             </div>
-          ) : null}
-        </div>
-        <p className="mt-2 text-[11px] text-sand-500">
-          {tariffRequired
-            ? `Gesamtpreis = Grund-/Gerätepreise (${formatEurPrecise(contractTotals.tariffMonthly)}) + Stundenbudget (${formatHours(
-                monthlyHoursIncluded
-              )}) x Stundensatz (${formatEurPrecise(contractTotals.hourlyRate)}).`
-            : "AVV/DSGVO: kein Tarif erforderlich."}
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => generateContractPreview(true)}
-            disabled={contractGenerationBlocked}
-            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Eye size={12} />
-            Vorschau öffnen
-          </button>
-          <button
-            type="button"
-            onClick={exportGeneratedContractPdf}
-            disabled={contractGenerationBlocked}
-            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <FileDown size={12} />
-            PDF laden
-          </button>
-          <button
-            type="button"
-            onClick={() => saveGeneratedContract()}
-            disabled={contractGenerationBlocked}
-            className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <BadgeCheck size={12} />
-            {editingContractId ? "Vorschlag aktualisieren" : "Als Vorschlag speichern"}
-          </button>
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {contractPreviewStatus === "saving" ? <span className="text-xs text-sand-500">Erzeuge Vorschau…</span> : null}
-          {contractPreviewStatus === "saved" ? <span className="text-xs text-emerald-600">Vorschau aktualisiert</span> : null}
-          {contractPreviewStatus === "error" ? <span className="text-xs text-rose-600">Vorschau fehlgeschlagen</span> : null}
-          {contractSaveStatus === "saving" ? <span className="text-xs text-sand-500">Speichere Vertrag…</span> : null}
-          {contractSaveStatus === "saved" ? <span className="text-xs text-emerald-600">Vertrag gespeichert</span> : null}
-          {contractSaveStatus === "error" ? <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span> : null}
-          {Array.isArray(generatedContract?.meta?.unresolved_placeholders) &&
-          generatedContract.meta.unresolved_placeholders.length ? (
-            <span className="text-xs text-amber-700">
-              Unbekannte Template-Variablen: {generatedContract.meta.unresolved_placeholders.join(", ")}
+            <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[11px] text-sand-600">
+              {contractTypeLabel(contractDraft.docType)}
             </span>
-          ) : null}
+          </div>
+          <div
+            className={`mt-3 grid gap-2 ${
+              supportsHoursBudget ? "md:grid-cols-3" : "md:grid-cols-2"
+            }`}
+          >
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Monatspreis final</p>
+              <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.monthly)}</p>
+              <p className="mt-1 text-[11px] text-emerald-800">
+                {contractTotals.monthlyOverridden
+                  ? `Manuell überschrieben (Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}).`
+                  : "Automatisch aus Tarifkalkulation übernommen."}
+              </p>
+            </div>
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Jahrespreis final</p>
+              <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.yearly)}</p>
+              <p className="mt-1 text-[11px] text-emerald-800">
+                {contractTotals.yearlyOverridden
+                  ? `Manuell überschrieben (Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}).`
+                  : "Automatisch aus Tarifkalkulation übernommen."}
+              </p>
+            </div>
+            {supportsHoursBudget ? (
+              <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sky-700">Stundenbudget / Monat</p>
+                <p className="text-base font-semibold text-sky-900">{formatHours(monthlyHoursIncluded)}</p>
+                <p className="mt-1 text-[11px] text-sky-800">
+                  Stundensatz {formatEurPrecise(contractTotals.hourlyRate)} · Anteil{" "}
+                  {formatEurPrecise(contractTotals.hourlyMonthly)}
+                </p>
+              </div>
+            ) : null}
+          </div>
+          <p className="mt-2 text-[11px] text-sand-500">
+            {tariffRequired
+              ? `Gesamtpreis = Grund-/Gerätepreise (${formatEurPrecise(contractTotals.tariffMonthly)}) + Stundenbudget (${formatHours(
+                  monthlyHoursIncluded
+                )}) x Stundensatz (${formatEurPrecise(contractTotals.hourlyRate)}).`
+              : "AVV/DSGVO: kein Tarif erforderlich."}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => saveGeneratedContract()}
+              disabled={contractGenerationBlocked}
+              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <BadgeCheck size={12} />
+              {editingContractId ? "Vorschlag aktualisieren" : "Direkt als Vorschlag speichern"}
+            </button>
+            <button
+              type="button"
+              onClick={() => generateContractPreview(true)}
+              disabled={contractGenerationBlocked}
+              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Eye size={12} />
+              Vorschau öffnen
+            </button>
+            <button
+              type="button"
+              onClick={exportGeneratedContractPdf}
+              disabled={contractGenerationBlocked}
+              className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <FileDown size={12} />
+              PDF laden
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {contractPreviewStatus === "saving" ? (
+              <span className="text-xs text-sand-500">Erzeuge Vorschau…</span>
+            ) : null}
+            {contractPreviewStatus === "saved" ? (
+              <span className="text-xs text-emerald-600">Vorschau aktualisiert</span>
+            ) : null}
+            {contractPreviewStatus === "error" ? (
+              <span className="text-xs text-rose-600">Vorschau fehlgeschlagen</span>
+            ) : null}
+            {contractSaveStatus === "saving" ? (
+              <span className="text-xs text-sand-500">Speichere Vertrag…</span>
+            ) : null}
+            {contractSaveStatus === "saved" ? (
+              <span className="text-xs text-emerald-600">Vertrag gespeichert</span>
+            ) : null}
+            {contractSaveStatus === "error" ? (
+              <span className="text-xs text-rose-600">Speichern fehlgeschlagen</span>
+            ) : null}
+            {Array.isArray(generatedContract?.meta?.unresolved_placeholders) &&
+            generatedContract.meta.unresolved_placeholders.length ? (
+              <span className="text-xs text-amber-700">
+                Unbekannte Template-Variablen: {generatedContract.meta.unresolved_placeholders.join(", ")}
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="min-h-screen bg-sand-50">
@@ -3444,7 +3624,7 @@ export default function CustomerDirectoryView() {
                 ) : null}
                 {metricsStatus === "ready" && selectedCustomerMetrics ? (
                   <>
-                    <div className="mt-2 grid gap-2 md:grid-cols-5">
+                    <div className="mt-2 grid gap-2 md:grid-cols-4">
                       <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufwand Monat</p>
                         <p className="text-sm font-semibold text-sand-900">{formatHours(monthlyConsumedHours)}</p>
@@ -3465,6 +3645,23 @@ export default function CustomerDirectoryView() {
                         </p>
                         <p className="text-[11px] text-sand-600">{formatHours(openEffortHours, 1)} offen</p>
                       </div>
+                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Anfahrt</p>
+                        <p className="text-sm font-semibold text-sand-900">
+                          {travelRoundTripKm > 0
+                            ? `${travelRoundTripKm.toLocaleString("de-DE", {
+                                minimumFractionDigits: 1,
+                                maximumFractionDigits: 1
+                              })} km`
+                            : "n/a"}
+                        </p>
+                        <p className="text-[11px] text-sand-600">
+                          {selectedCustomerMetrics.mileageEur !== null &&
+                          typeof selectedCustomerMetrics.mileageEur !== "undefined"
+                            ? `${formatEurPrecise(selectedCustomerMetrics.mileageEur)} Vorschlag`
+                            : "kein Vorschlag"}
+                        </p>
+                      </div>
                     </div>
                     <p className="mt-2 text-[11px] text-sand-600">
                       Monat: Aufgabe {formatHours(monthlyTaskHours, 1)} · Telefon {formatHours(monthlyTelephonyHours, 1)} ·
@@ -3475,6 +3672,65 @@ export default function CustomerDirectoryView() {
                       {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst ·{" "}
                       {Number(selectedCustomerMetrics.openTasks || 0)} offene Aufgaben.
                     </p>
+                    <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Statistik Zeitraum</p>
+                          <p className="text-[11px] text-sand-600">
+                            Arbeitszeit, Material und Umsatz als Volumenindikator.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1">
+                          {["currentYear", "lastYear"].map((key) => (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => setCustomerStatsPeriod(key)}
+                              className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
+                                customerStatsPeriod === key
+                                  ? "border-sand-900 bg-sand-900 text-white"
+                                  : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                              }`}
+                            >
+                              {periodStats?.[key]?.label || (key === "currentYear" ? "Lfd. Jahr" : "Vorjahr")}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="mt-2 grid gap-2 md:grid-cols-3">
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Arbeitszeit</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {selectedPeriodStats?.workHours === null || typeof selectedPeriodStats?.workHours === "undefined"
+                              ? "n/a"
+                              : formatHours(selectedPeriodStats.workHours)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Material</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {selectedPeriodStats?.materialRevenueEur === null ||
+                            typeof selectedPeriodStats?.materialRevenueEur === "undefined"
+                              ? "n/a"
+                              : formatEurPrecise(selectedPeriodStats.materialRevenueEur)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamtumsatz</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {selectedPeriodStats?.totalRevenueEur === null ||
+                            typeof selectedPeriodStats?.totalRevenueEur === "undefined"
+                              ? "n/a"
+                              : formatEurPrecise(selectedPeriodStats.totalRevenueEur)}
+                          </p>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[11px] text-sand-600">
+                        {selectedPeriodStats?.invoiceCount
+                          ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum.`
+                          : "Keine bezahlten sevdesk-Rechnungen im Zeitraum."}
+                      </p>
+                    </div>
                     <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2.5 py-2">
                       <div className="flex flex-wrap items-center justify-between gap-1.5">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Steuerung (kundenbezogen)</p>
@@ -3870,7 +4126,9 @@ export default function CustomerDirectoryView() {
             <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Popup</p>
-                <h3 className="text-lg font-display text-sand-900">Vertragskalkulation</h3>
+                <h3 className="text-lg font-display text-sand-900">
+                  {editingContractId ? "Vertragsvorschlag bearbeiten" : "Neuen Vertrag anlegen"}
+                </h3>
               </div>
               <button
                 onClick={closeContractCreator}
