@@ -188,6 +188,8 @@ export default function DayPlanView() {
     hasDraft: false,
     contactFound: true
   });
+  const [sevdeskDraftMetrics, setSevdeskDraftMetrics] = useState(null);
+  const [sevdeskDraftMetricsStatus, setSevdeskDraftMetricsStatus] = useState("idle");
   const [collapsedTimers, setCollapsedTimers] = useState(() => {
     if (typeof window === "undefined") return {};
     try {
@@ -208,6 +210,7 @@ export default function DayPlanView() {
   const [emailTaskSaving, setEmailTaskSaving] = useState(false);
   const emailDropGuardRef = useRef(0);
   const emailDropBadgeRef = useRef(null);
+  const sevdeskDraftMetricsRequestRef = useRef(0);
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
   const taskHighlightTimeoutsRef = useRef({});
   const [highlightedTaskIds, setHighlightedTaskIds] = useState({});
@@ -689,7 +692,30 @@ export default function DayPlanView() {
     setSevdeskDraftForm(buildSevdeskDraftDefaults(task, latestDefaults));
     setSevdeskDraftStatus({ state: "idle", error: "" });
     setSevdeskDraftAdvancedOpen(false);
+    setSevdeskDraftMetrics(null);
+    setSevdeskDraftMetricsStatus("idle");
     setSevdeskDraftOpen(true);
+    const matchedCustomer = findCustomerByTaskName(task?.customer);
+    const customerId = Number(matchedCustomer?.id || 0);
+    if (!customerId) return;
+    const requestId = Date.now();
+    sevdeskDraftMetricsRequestRef.current = requestId;
+    setSevdeskDraftMetricsStatus("loading");
+    fetch(`${API}/customers/${customerId}/metrics`)
+      .then((res) => {
+        if (!res.ok) throw new Error("draft_metrics_failed");
+        return res.json();
+      })
+      .then((data) => {
+        if (sevdeskDraftMetricsRequestRef.current !== requestId) return;
+        setSevdeskDraftMetrics(data);
+        setSevdeskDraftMetricsStatus("ready");
+      })
+      .catch(() => {
+        if (sevdeskDraftMetricsRequestRef.current !== requestId) return;
+        setSevdeskDraftMetrics(null);
+        setSevdeskDraftMetricsStatus("error");
+      });
   };
 
   const updateSevdeskDraftForm = (field, value) => {
@@ -700,11 +726,14 @@ export default function DayPlanView() {
   };
 
   const closeSevdeskDraft = () => {
+    sevdeskDraftMetricsRequestRef.current += 1;
     setSevdeskDraftOpen(false);
     setSevdeskDraftTask(null);
     setSevdeskDraftForm(null);
     setSevdeskDraftStatus({ state: "idle", error: "" });
     setSevdeskDraftAiLoading(false);
+    setSevdeskDraftMetrics(null);
+    setSevdeskDraftMetricsStatus("idle");
   };
 
   const submitSevdeskDraft = async () => {
@@ -730,6 +759,25 @@ export default function DayPlanView() {
     if (Number.isFinite(taxRate)) payload.tax_rate = taxRate;
     const unityId = Number(sevdeskDraftForm.unity_id);
     if (Number.isFinite(unityId) && unityId > 0) payload.unity_id = unityId;
+    const mileageEur = Number(sevdeskDraftMetrics?.mileageEur || 0);
+    const roundTripKm = Number(
+      sevdeskDraftMetrics?.distanceRoundTripKm ||
+        (Number(sevdeskDraftMetrics?.distanceKm || 0) > 0
+          ? Number(sevdeskDraftMetrics.distanceKm) * 2
+          : 0)
+    );
+    if (sevdeskDraftForm.include_mileage && Number.isFinite(mileageEur) && mileageEur > 0) {
+      payload.add_mileage = true;
+      payload.mileage_name = "Anfahrt";
+      payload.mileage_price = mileageEur;
+      payload.mileage_text =
+        roundTripKm > 0
+          ? `Anfahrt laut Kundenstamm (${roundTripKm.toLocaleString("de-DE", {
+              minimumFractionDigits: 1,
+              maximumFractionDigits: 1
+            })} km Hin/Rueckfahrt).`
+          : "Anfahrt laut Kundenstamm.";
+    }
 
     try {
       const res = await fetch(`${API}/sevdesk/tasks/${sevdeskDraftTask.id}/draft`, {
@@ -757,10 +805,18 @@ export default function DayPlanView() {
     if (!sevdeskDraftTask || !sevdeskDraftForm) return;
     setSevdeskDraftAiLoading(true);
     try {
+      const quantity = roundUpToQuarterHours(Number(sevdeskDraftForm.quantity));
       const contextParts = [
-        sevdeskDraftTask.title ? `Aufgabe: ${sevdeskDraftTask.title}` : "",
         sevdeskDraftTask.customer ? `Kunde: ${sevdeskDraftTask.customer}` : "",
-        sevdeskDraftTask.details ? `Notiz: ${sevdeskDraftTask.details}` : ""
+        sevdeskDraftTask.title ? `Leistung/Thema: ${sevdeskDraftTask.title}` : "",
+        sevdeskDraftTask.details ? `Ausgangslage/Details: ${sevdeskDraftTask.details}` : "",
+        sevdeskDraftTask.arrival_time || sevdeskDraftTask.departure_time
+          ? `Vor Ort: ${sevdeskDraftTask.arrival_time || "?"} bis ${sevdeskDraftTask.departure_time || "?"}`
+          : "",
+        Number.isFinite(quantity) && quantity > 0 ? `Abrechenbare Zeit: ${quantity} h` : "",
+        sevdeskDraftForm.name ? `Positionsname: ${sevdeskDraftForm.name}` : "",
+        sevdeskDraftForm.include_mileage ? "Anfahrt wird separat als eigene Position berechnet." : "",
+        "Ziel: kurze, professionelle Rechnungsposition fuer sevdesk."
       ]
         .filter(Boolean)
         .join("\n");
@@ -768,7 +824,7 @@ export default function DayPlanView() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mode: "position_text",
+          mode: "invoice_position_text",
           current_text: sevdeskDraftForm.text || "",
           context: contextParts || "n/a"
         })
@@ -1098,7 +1154,7 @@ export default function DayPlanView() {
     const unityDefault = defaults.service_unity_id || defaults.unity_id || "";
     const title = String(task?.title || "").trim();
     const details = String(task?.details || "").trim();
-    const positionText = title && details ? `${title}. Notiz: ${details}` : title || details;
+    const positionText = title && details ? `${title}. ${details}` : title || details;
     return {
       customer_number: getCustomerNumberForTask(task),
       header: "Leistungsnachweis",
@@ -1108,7 +1164,8 @@ export default function DayPlanView() {
       price: defaults.hourly_rate_eur ? String(defaults.hourly_rate_eur) : "",
       tax_rate: defaults.default_tax_rate ? String(defaults.default_tax_rate) : "",
       unity_id: unityDefault ? String(unityDefault) : "",
-      use_existing_draft: true
+      use_existing_draft: true,
+      include_mileage: false
     };
   };
 
@@ -2547,6 +2604,8 @@ export default function DayPlanView() {
         hasToken={sevdeskTokenAvailable || sevdeskDefaults.has_sevdesk_api_token}
         missingInvoiceFields={missingSevdeskInvoiceFields}
         draftCheck={sevdeskDraftCheck}
+        travelMetrics={sevdeskDraftMetrics}
+        travelStatus={sevdeskDraftMetricsStatus}
         onClose={closeSevdeskDraft}
         onSubmit={submitSevdeskDraft}
         onGenerateAi={generateSevdeskDraftText}
@@ -2667,6 +2726,8 @@ function FakturaTaskModal({
   hasToken,
   missingInvoiceFields,
   draftCheck,
+  travelMetrics,
+  travelStatus,
   onClose,
   onSubmit,
   onGenerateAi,
@@ -2679,6 +2740,12 @@ function FakturaTaskModal({
   const hasDraft = Boolean(draftCheck?.hasDraft);
   const contactFound = draftCheck?.contactFound !== false;
   const hasMissingInvoiceFields = Array.isArray(missingInvoiceFields) && missingInvoiceFields.length > 0;
+  const mileageEur = Number(travelMetrics?.mileageEur || 0);
+  const roundTripKm = Number(
+    travelMetrics?.distanceRoundTripKm ||
+      (Number(travelMetrics?.distanceKm || 0) > 0 ? Number(travelMetrics.distanceKm) * 2 : 0)
+  );
+  const hasMileageSuggestion = Number.isFinite(mileageEur) && mileageEur > 0;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
       <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
@@ -2758,6 +2825,52 @@ function FakturaTaskModal({
               >
                 Neuen Entwurf erstellen
               </button>
+            </div>
+          ) : null}
+          {travelStatus === "loading" ? (
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
+              Lade Anfahrtsvorschlag aus dem Kundenstamm...
+            </div>
+          ) : null}
+          {travelStatus === "error" ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              Anfahrtsvorschlag konnte nicht geladen werden.
+            </div>
+          ) : null}
+          {travelStatus === "ready" && hasMileageSuggestion ? (
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.3em] text-sky-700">Anfahrt Vorschlag</p>
+                  <p className="mt-1 text-sm font-semibold text-sand-900">
+                    {mileageEur.toLocaleString("de-DE", {
+                      style: "currency",
+                      currency: "EUR",
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2
+                    })}
+                  </p>
+                  <p className="text-[11px] text-sand-600">
+                    {roundTripKm > 0
+                      ? `${roundTripKm.toLocaleString("de-DE", {
+                          minimumFractionDigits: 1,
+                          maximumFractionDigits: 1
+                        })} km Hin/Rueckfahrt`
+                      : "Betrag aus Kundenstamm"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onChange("include_mileage", !form.include_mileage)}
+                  className={`rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
+                    form.include_mileage
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                  }`}
+                >
+                  {form.include_mileage ? "Anfahrt aktiv" : "Zur Rechnung hinzufügen"}
+                </button>
+              </div>
             </div>
           ) : null}
           <div className="grid gap-3 md:grid-cols-2 text-xs text-sand-600">

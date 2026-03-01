@@ -90,7 +90,7 @@ MAC_VENDOR_CACHE_TTL_MS = _to_positive_int(
     minimum=60,
 ) * 1000
 AI_PREANALYSIS_ENABLED = _to_bool(os.environ.get("META_HUB_AI_PREANALYSIS_ENABLED"), default=True)
-AI_PREANALYSIS_TIMEOUT_SECONDS = float(os.environ.get("META_HUB_AI_TIMEOUT_SECONDS") or "150")
+AI_PREANALYSIS_TIMEOUT_SECONDS = float(os.environ.get("META_HUB_AI_TIMEOUT_SECONDS") or "45")
 AI_PREANALYSIS_MAX_CUSTOMERS = _to_positive_int(
     os.environ.get("META_HUB_AI_MAX_CUSTOMERS"),
     default=40,
@@ -105,6 +105,11 @@ AI_PREANALYSIS_TTL_MS = _to_positive_int(
     os.environ.get("META_HUB_AI_TTL_SECONDS"),
     default=6 * 60 * 60,
     minimum=120,
+) * 1000
+AI_PREANALYSIS_BACKEND_COOLDOWN_MS = _to_positive_int(
+    os.environ.get("META_HUB_AI_BACKEND_COOLDOWN_SECONDS"),
+    default=10 * 60,
+    minimum=30,
 ) * 1000
 AI_PREANALYSIS_MODES = [
     mode.strip().lower()
@@ -161,6 +166,15 @@ if not logging.getLogger().handlers:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 logger = logging.getLogger("meta_hub")
+_backend_http = requests.Session()
+_backend_http.mount(
+    "http://",
+    requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16, max_retries=0),
+)
+_backend_http.mount(
+    "https://",
+    requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16, max_retries=0),
+)
 
 app = FastAPI(title="Customer Meta Hub", version="1.1.0")
 _state_lock = threading.Lock()
@@ -180,6 +194,7 @@ _state: Dict[str, Any] = {
     "aiLastRefreshAt": 0,
     "aiLastDurationMs": 0,
     "aiLastError": "",
+    "aiBackendCooldownUntil": 0,
     "emailSyncEnabled": EMAIL_SYNC_ENABLED,
     "emailLastRefreshAt": 0,
     "emailLastDurationMs": 0,
@@ -215,7 +230,7 @@ def _request_backend_json(
     timeout_seconds: Optional[float] = None,
     include_internal_token: bool = False,
 ) -> Dict[str, Any]:
-    response = requests.get(
+    response = _backend_http.get(
         f"{BACKEND_URL}{path}",
         params=params,
         headers=_backend_headers(include_internal_token=include_internal_token),
@@ -233,11 +248,15 @@ def _request_backend_post_json(
     *,
     body: Optional[Dict[str, Any]] = None,
     timeout_seconds: Optional[float] = None,
+    include_internal_token: bool = False,
 ) -> Dict[str, Any]:
-    response = requests.post(
+    response = _backend_http.post(
         f"{BACKEND_URL}{path}",
         json=body or {},
-        headers={**_backend_headers(), "Content-Type": "application/json"},
+        headers={
+            **_backend_headers(include_internal_token=include_internal_token),
+            "Content-Type": "application/json",
+        },
         timeout=timeout_seconds or REQUEST_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
@@ -2060,6 +2079,19 @@ def _queue_ai_preanalysis_jobs(payload: Dict[str, Any]) -> List[Tuple[int, str]]
     return jobs
 
 
+def _context_map_from_payload(payload: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+    contexts = payload.get("contexts") if isinstance(payload, dict) else []
+    mapped: Dict[int, Dict[str, Any]] = {}
+    for row in contexts or []:
+        if not isinstance(row, dict):
+            continue
+        customer_id = _safe_int(row.get("customerId"))
+        if customer_id <= 0:
+            continue
+        mapped[customer_id] = row
+    return mapped
+
+
 def _apply_ai_preanalysis_results(results: List[Tuple[int, str, Dict[str, Any]]]) -> None:
     if not results:
         return
@@ -2119,9 +2151,19 @@ def _refresh_ai_preanalysis() -> bool:
     with _state_lock:
         _state["aiRefreshing"] = True
     try:
+        now_ms = int(time.time() * 1000)
         with _state_lock:
+            cooldown_until = _safe_int(_state.get("aiBackendCooldownUntil"))
+            if cooldown_until > now_ms:
+                _state["aiLastRefreshAt"] = now_ms
+                _state["aiLastDurationMs"] = max(0, now_ms - start_ms)
+                _state["aiLastError"] = (
+                    f"Backend cooldown active until {cooldown_until}"
+                )
+                return False
             payload = _state.get("payload")
             jobs = _queue_ai_preanalysis_jobs(payload if isinstance(payload, dict) else {})
+            context_map = _context_map_from_payload(payload if isinstance(payload, dict) else {})
         if not jobs:
             with _state_lock:
                 _state["aiLastRefreshAt"] = int(time.time() * 1000)
@@ -2132,12 +2174,31 @@ def _refresh_ai_preanalysis() -> bool:
         failed_jobs = 0
         last_job_error = ""
         backend_unreachable = False
+        use_internal_context_endpoint = bool(INTERNAL_TOKEN)
         for idx, (customer_id, mode) in enumerate(jobs):
+            context = context_map.get(int(customer_id))
+            if not isinstance(context, dict):
+                continue
             try:
+                request_path = (
+                    "/api/internal/customer_development/ai_assist_context"
+                    if use_internal_context_endpoint
+                    else "/api/customer_development/ai_assist"
+                )
+                request_body: Dict[str, Any]
+                if use_internal_context_endpoint:
+                    request_body = {
+                        "customer_id": int(customer_id),
+                        "mode": str(mode),
+                        "context": context,
+                    }
+                else:
+                    request_body = {"customer_id": int(customer_id), "mode": str(mode)}
                 data = _request_backend_post_json(
-                    "/api/customer_development/ai_assist",
-                    body={"customer_id": int(customer_id), "mode": str(mode)},
+                    request_path,
+                    body=request_body,
                     timeout_seconds=AI_PREANALYSIS_TIMEOUT_SECONDS,
+                    include_internal_token=use_internal_context_endpoint,
                 )
                 text = str(data.get("text") or "").strip()
                 if not text:
@@ -2166,6 +2227,8 @@ def _refresh_ai_preanalysis() -> bool:
                             exc,
                             max(0, len(jobs) - idx),
                         )
+                    with _state_lock:
+                        _state["aiBackendCooldownUntil"] = int(time.time() * 1000) + AI_PREANALYSIS_BACKEND_COOLDOWN_MS
                     backend_unreachable = True
                     break
                 logger.warning("AI preanalysis failed for customer=%s mode=%s: %s", customer_id, mode, exc)
@@ -2176,6 +2239,8 @@ def _refresh_ai_preanalysis() -> bool:
             _state["aiLastError"] = (
                 f"{failed_jobs} jobs failed: {last_job_error}" if failed_jobs > 0 else ""
             )
+            if not backend_unreachable:
+                _state["aiBackendCooldownUntil"] = 0
         return True
     except Exception as exc:
         with _state_lock:
