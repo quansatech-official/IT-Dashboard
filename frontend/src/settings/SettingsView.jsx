@@ -156,7 +156,7 @@ const defaultContractTemplates = {
   avv_dsgvo: { title: "Vereinbarung zur Auftragsverarbeitung (Art. 28 DSGVO)", body_template: "" }
 };
 const defaultContractVariables = {
-  provider_name: "QT Workbench Services",
+  provider_name: "Unternehmen aus Einstellungen",
   customer_name: "Musterkunde GmbH",
   generated_at: "22.02.2026",
   valid_from: "01.03.2026",

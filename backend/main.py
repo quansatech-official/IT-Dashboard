@@ -4961,6 +4961,39 @@ _CONTRACT_FALLBACK_VALUES: Dict[str, str] = {
     "liability_limit": "gemäß AGB",
 }
 
+_CONTRACT_RUNTIME_PLACEHOLDERS: Set[str] = {
+    "provider_name",
+    "provider_address",
+    "provider_email",
+    "provider_contact_line",
+    "customer_name",
+    "customer_number",
+    "customer_short_code",
+    "customer_email",
+    "customer_street",
+    "customer_postal_code",
+    "customer_city",
+    "customer_country",
+    "customer_address",
+    "generated_at",
+    "valid_from",
+    "contract_start",
+    "runtime_months",
+    "minimum_term_months",
+    "extension_period",
+    "auto_extension_months",
+    "termination_notice_months",
+    "termination_notice",
+    "servers",
+    "clients",
+    "network_devices",
+    "iot_devices",
+    "monthly_total",
+    "yearly_total",
+    "monthly_hours_included",
+    "service_scope",
+}
+
 
 def _render_contract_template(template: str, values: Dict[str, str]) -> str:
     rendered = _render_prompt(template or "", values)
@@ -5045,6 +5078,20 @@ def _format_contract_display_date(value: Any, *, fallback: str = "") -> str:
     return raw
 
 
+def _resolve_contract_provider_meta(settings: Optional[IntegrationSettings]) -> Dict[str, str]:
+    company_name = str(getattr(settings, "company", "") or "").strip()
+    sender_name = str(getattr(settings, "sender_name", "") or "").strip()
+    sender_email = str(getattr(settings, "sender_email", "") or "").strip()
+    office_address = str(getattr(settings, "office_address", "") or "").strip()
+    provider_name = company_name or sender_name or "Ihr IT-Dienstleister"
+    return {
+        "provider_name": provider_name,
+        "provider_address": office_address,
+        "provider_email": sender_email,
+        "provider_contact_line": sender_email,
+    }
+
+
 def _render_contract_html(
     *,
     customer: Customer,
@@ -5086,12 +5133,15 @@ def _render_contract_html(
     template_label = escape((template_key or "wartung").replace("_", " ").upper())
     generated_at = escape(str(placeholders.get("generated_at", "")).strip())
     valid_from = escape(str(placeholders.get("valid_from", "")).strip())
+    provider_name = escape(str(placeholders.get("provider_name", "")).strip() or "Ihr IT-Dienstleister")
+    provider_address = escape(str(placeholders.get("provider_address", "")).strip() or "Keine Anbieteradresse hinterlegt")
+    provider_contact_line = escape(str(placeholders.get("provider_contact_line", "")).strip())
     customer_address_display = escape(customer_address) if customer_address else "Keine Adresse hinterlegt"
     return (
         "<style>"
         "@page { size: A4 portrait; margin: 12mm; }"
         "* { box-sizing: border-box; }"
-        ".contract-document { font-family: Arial, sans-serif; color:#0f172a; line-height:1.56; font-size:11pt; background:#f1f5f9; padding:14px; }"
+        ".contract-document { font-family:\"DejaVu Sans\", \"Noto Sans\", Arial, sans-serif; color:#0f172a; line-height:1.56; font-size:11pt; background:#f1f5f9; padding:14px; }"
         ".contract-sheet { max-width:190mm; margin:0 auto; background:#ffffff; border:1px solid #dbe4ef; border-radius:14px; padding:12mm; box-shadow:0 10px 22px rgba(15, 23, 42, 0.06); }"
         ".contract-header { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; border-bottom:1px solid #e2e8f0; padding-bottom:10px; margin-bottom:12px; }"
         ".contract-logo { height:44px; width:auto; object-fit:contain; display:block; }"
@@ -5099,7 +5149,7 @@ def _render_contract_html(
         ".contract-created-at { margin-top:8px; font-size:11px; color:#64748b; text-align:right; }"
         ".contract-title { margin:0 0 6px; font-size:26px; line-height:1.16; color:#0b1324; }"
         ".contract-subline { font-size:12px; color:#475569; margin:0 0 14px; }"
-        ".contract-meta-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:0 0 14px; }"
+        ".contract-meta-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px; margin:0 0 14px; }"
         ".contract-card { border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; background:#f8fafc; }"
         ".contract-card-label { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#94a3b8; margin-bottom:5px; }"
         ".contract-card-main { font-size:12px; color:#0f172a; font-weight:600; }"
@@ -5142,9 +5192,15 @@ def _render_contract_html(
         f"<div class=\"contract-card-sub\">{customer_address_display}</div>"
         "</div>"
         "<div class=\"contract-card\">"
+        "<div class=\"contract-card-label\">Dienstleister</div>"
+        f"<div class=\"contract-card-main\">{provider_name}</div>"
+        f"<div class=\"contract-card-sub\">{provider_address}</div>"
+        + (f"<div class=\"contract-card-sub\">{provider_contact_line}</div>" if str(provider_contact_line or "").strip() else "")
+        + "</div>"
+        "<div class=\"contract-card\">"
         "<div class=\"contract-card-label\">Vertragsdaten</div>"
         f"<div class=\"contract-card-sub\">Erstellt am: <strong>{generated_at}</strong></div>"
-        f"<div class=\"contract-card-sub\">Gueltig ab: <strong>{valid_from}</strong></div>"
+        f"<div class=\"contract-card-sub\">Gültig ab: <strong>{valid_from}</strong></div>"
         "</div>"
         "</div>"
         f"{header_block}"
@@ -5153,8 +5209,8 @@ def _render_contract_html(
         "</div>"
         f"<div class=\"contract-footer\">{footer_block}</div>"
         "<div class=\"contract-signatures contract-no-break\">"
-        "<div class=\"contract-signature\">Ort, Datum, Auftraggeber</div>"
-        "<div class=\"contract-signature\">Ort, Datum, Auftragnehmer</div>"
+        f"<div class=\"contract-signature\">Ort, Datum, für den Auftraggeber<br><strong>{customer_display}</strong></div>"
+        f"<div class=\"contract-signature\">Ort, Datum, für den Auftragnehmer<br><strong>{provider_name}</strong></div>"
         "</div>"
         "</div>"
         "</div>"
@@ -14675,6 +14731,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         customer = db.query(Customer).get(customer_id)
         if not customer:
             raise HTTPException(404, "Customer not found")
+        settings = _get_settings(db)
         prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
         templates = prompts.get("contract_templates") or {}
         template_key = _normalize_contract_doc_type(data.doc_type, default="wartung")
@@ -14791,8 +14848,12 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         termination_notice_label = (
             f"{termination_notice_months} Monat" if termination_notice_months == 1 else f"{termination_notice_months} Monate"
         )
+        provider_meta = _resolve_contract_provider_meta(settings)
         placeholder_values = {
-            "provider_name": "QT Workbench Services",
+            "provider_name": escape(provider_meta["provider_name"]),
+            "provider_address": escape(provider_meta["provider_address"]),
+            "provider_email": escape(provider_meta["provider_email"]),
+            "provider_contact_line": escape(provider_meta["provider_contact_line"]),
             "customer_name": escape(str(customer.name or "").strip() or "Kunde"),
             "customer_number": escape(customer_number),
             "customer_short_code": escape(customer_short_code),
@@ -14837,6 +14898,8 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         for raw_key, raw_value in prompt_contract_variables.items():
             key = _normalize_contract_variable_key(raw_key)
             if not key:
+                continue
+            if key in _CONTRACT_RUNTIME_PLACEHOLDERS:
                 continue
             placeholder_values[key] = str(raw_value or "")
         prompt_contract_variable_definitions = (

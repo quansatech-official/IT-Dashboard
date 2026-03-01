@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
-import html2pdf from "html2pdf.js";
 import jsPDF from "jspdf";
 import {
   BadgeCheck,
@@ -128,6 +127,18 @@ const api = {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.detail || "contract_cancel_failed");
       return data;
+    }),
+  buildPdf: (html, filename = "dokument.pdf") =>
+    fetch(`${API}/reports/pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ html, filename })
+    }).then(async (r) => {
+      if (!r.ok) {
+        const data = await r.json().catch(() => ({}));
+        throw new Error(data?.detail || "pdf_build_failed");
+      }
+      return r.blob();
     }),
   reactivateCustomerContract: (customerId, contractId) =>
     fetch(`${API}/customers/${customerId}/contracts/${contractId}/reactivate`, {
@@ -543,6 +554,18 @@ const todayInputValue = () => {
   const localTime = new Date(now.getTime() - now.getTimezoneOffset() * 60 * 1000);
   return localTime.toISOString().slice(0, 10);
 };
+
+const blobToBase64 = async (blob) => {
+  const buffer = await blob.arrayBuffer();
+  let binary = "";
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return window.btoa(binary);
+};
+
 const contractTypeLabel = (value) => {
   const type = normalizeContractDocumentType(value) || "wartung";
   if (type === "monitoring") return "Monitoringvertrag";
@@ -1259,62 +1282,7 @@ export default function CustomerDirectoryView() {
     }
   };
 
-  const contractHtmlToPdfDataUri = async (html) => {
-    const container = document.createElement("div");
-    container.innerHTML = html;
-    container.style.position = "fixed";
-    container.style.left = "-20000px";
-    container.style.top = "0";
-    container.style.width = "210mm";
-    container.style.boxSizing = "border-box";
-    container.style.background = "#ffffff";
-    container.style.padding = "0";
-    container.style.zIndex = "-1";
-    document.body.appendChild(container);
-    try {
-      const images = Array.from(container.querySelectorAll("img"));
-      await Promise.all(
-        images.map(
-          (img) =>
-            new Promise((resolve) => {
-              if (img.complete) {
-                resolve();
-                return;
-              }
-              img.onload = resolve;
-              img.onerror = resolve;
-            })
-        )
-      );
-      if (document.fonts?.ready) {
-        await document.fonts.ready;
-      }
-      const renderScale = Math.max(2, Math.min(window.devicePixelRatio || 1, 3));
-      const worker = html2pdf()
-        .set({
-          margin: [10, 10, 10, 10],
-          filename: "vertrag.pdf",
-          image: { type: "jpeg", quality: 0.98 },
-          html2canvas: {
-            scale: renderScale,
-            useCORS: true,
-            backgroundColor: "#ffffff",
-            windowWidth: container.scrollWidth,
-            logging: false,
-          },
-          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-          pagebreak: {
-            mode: ["css", "legacy"],
-            before: [".contract-page-break"],
-            avoid: [".contract-no-break", "h2", "h3", "table", "thead", "tr"],
-          },
-        })
-        .from(container);
-      return await worker.outputPdf("datauristring");
-    } finally {
-      if (container.parentNode) container.parentNode.removeChild(container);
-    }
-  };
+  const renderContractPdfBlob = async (html, filename = "vertrag.pdf") => api.buildPdf(html, filename);
 
   const generateContractPreview = async (openModal = true) => {
     if (!activeId) return null;
@@ -1384,13 +1352,15 @@ export default function CustomerDirectoryView() {
     const source = generatedContract || (await generateContractPreview(false));
     if (!source?.html) return;
     try {
-      const dataUri = await contractHtmlToPdfDataUri(source.html);
+      const pdfBlob = await renderContractPdfBlob(source.html, source.file_name || "vertrag.pdf");
+      const objectUrl = window.URL.createObjectURL(pdfBlob);
       const anchor = document.createElement("a");
-      anchor.href = dataUri;
+      anchor.href = objectUrl;
       anchor.download = source.file_name || "vertrag.pdf";
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
+      window.URL.revokeObjectURL(objectUrl);
     } catch {
       setToast("PDF-Erzeugung fehlgeschlagen.");
     }
@@ -1410,11 +1380,8 @@ export default function CustomerDirectoryView() {
     try {
       const source = generatedContract || (await generateContractPreview(false));
       if (!source?.html) throw new Error("no_preview");
-      const dataUri = await contractHtmlToPdfDataUri(source.html);
-      const marker = "base64,";
-      const idx = String(dataUri).indexOf(marker);
-      if (idx === -1) throw new Error("pdf_base64_missing");
-      const contentBase64 = String(dataUri).slice(idx + marker.length);
+      const pdfBlob = await renderContractPdfBlob(source.html, source.file_name || "vertrag.pdf");
+      const contentBase64 = await blobToBase64(pdfBlob);
       const selectedTariffId = tariffRequired
         ? Number(source?.meta?.tariff?.id || selectedTariff?.id || 0) || null
         : null;
@@ -3102,7 +3069,7 @@ export default function CustomerDirectoryView() {
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Erweitert</p>
                 <p className="mt-1 text-sm text-sand-600">
-                  Laufzeit, Preis-Overrides und individuelle Vertragsvariablen nur bei Bedarf anpassen.
+                  Laufzeit und individuelle Vertragsvariablen nur bei Bedarf anpassen.
                 </p>
               </div>
               <span className="text-[11px] text-sand-500">
@@ -3157,56 +3124,6 @@ export default function CustomerDirectoryView() {
                 />
               </label>
             </div>
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
-              <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                  Endpreis pro Monat (optional)
-                </span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={contractDraft.monthlyTotalOverride}
-                  onChange={(event) =>
-                    setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: event.target.value }))
-                  }
-                  placeholder={`Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}`}
-                  className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                  Endpreis pro Jahr (optional)
-                </span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={contractDraft.yearlyTotalOverride}
-                  onChange={(event) =>
-                    setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }))
-                  }
-                  placeholder={`Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}`}
-                  className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                />
-              </label>
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setContractDraft((prev) => ({
-                    ...prev,
-                    monthlyTotalOverride: "",
-                    yearlyTotalOverride: ""
-                  }))
-                }
-                disabled={!contractDraft.monthlyTotalOverride && !contractDraft.yearlyTotalOverride}
-                className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Endpreis zurücksetzen
-              </button>
-            </div>
             {editableContractVariables.length ? (
               <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3257,7 +3174,7 @@ export default function CustomerDirectoryView() {
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Preis & Aktion</p>
               <p className="mt-1 text-sm text-sand-600">
                 {tariffRequired
-                  ? "Preis wird aus Tarif, Geräteanzahl und Stundenbudget berechnet."
+                  ? "Preis wird aus Tarif, Geräteanzahl und Stundenbudget berechnet. Individualpreise kannst du hier direkt übersteuern."
                   : "AVV / DSGVO wird ohne Tarif kalkuliert."}
               </p>
             </div>
@@ -3299,6 +3216,40 @@ export default function CustomerDirectoryView() {
               </div>
             ) : null}
           </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                Individualpreis pro Monat (optional)
+              </span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={contractDraft.monthlyTotalOverride}
+                onChange={(event) =>
+                  setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: event.target.value }))
+                }
+                placeholder={`Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}`}
+                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                Individualpreis pro Jahr (optional)
+              </span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={contractDraft.yearlyTotalOverride}
+                onChange={(event) =>
+                  setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }))
+                }
+                placeholder={`Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}`}
+                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
           <p className="mt-2 text-[11px] text-sand-500">
             {tariffRequired
               ? `Gesamtpreis = Grund-/Gerätepreise (${formatEurPrecise(contractTotals.tariffMonthly)}) + Stundenbudget (${formatHours(
@@ -3306,6 +3257,22 @@ export default function CustomerDirectoryView() {
                 )}) x Stundensatz (${formatEurPrecise(contractTotals.hourlyRate)}).`
               : "AVV/DSGVO: kein Tarif erforderlich."}
           </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                setContractDraft((prev) => ({
+                  ...prev,
+                  monthlyTotalOverride: "",
+                  yearlyTotalOverride: ""
+                }))
+              }
+              disabled={!contractDraft.monthlyTotalOverride && !contractDraft.yearlyTotalOverride}
+              className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Endpreis zurücksetzen
+            </button>
+          </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
               type="button"
