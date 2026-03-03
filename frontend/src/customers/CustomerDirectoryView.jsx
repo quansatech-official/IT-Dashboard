@@ -10,12 +10,14 @@ import {
   ChevronRight,
   Eye,
   FileDown,
+  FileText,
   Mail,
   Pencil,
   Phone,
   PhoneOutgoing,
   Plus,
   Search,
+  WalletCards,
   Trash2,
   Users,
   X
@@ -656,6 +658,14 @@ const downloadBlob = (blob, filename) => {
   window.URL.revokeObjectURL(objectUrl);
 };
 
+const getQtLogoDataUrl = async () => {
+  const response = await fetch("/QTLogo.jpg");
+  if (!response.ok) return "";
+  const blob = await response.blob();
+  const base64 = await blobToBase64(blob);
+  return `data:${blob.type || "image/jpeg"};base64,${base64}`;
+};
+
 const escapeHtml = (value) =>
   String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -769,7 +779,7 @@ const formatCallDuration = (value) => {
   return `${s}s`;
 };
 
-const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, generatedAt = Date.now() }) => {
+const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, logoSrc = "", generatedAt = Date.now() }) => {
   const summary =
     prepaidHoursSummary && typeof prepaidHoursSummary === "object" && !Array.isArray(prepaidHoursSummary)
       ? prepaidHoursSummary
@@ -812,7 +822,7 @@ const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, generatedAt =
     <style>
       @page {
         size: A4;
-        margin: 16mm 14mm;
+        margin: 12mm 11mm;
       }
       body {
         font-family: "Aptos", "Segoe UI", sans-serif;
@@ -821,62 +831,76 @@ const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, generatedAt =
       .sheet {
         display: flex;
         flex-direction: column;
-        gap: 18px;
+        gap: 12px;
       }
       .hero {
-        background: linear-gradient(135deg, #17324d 0%, #285b78 60%, #d8e8ef 100%);
-        border-radius: 18px;
+        align-items: flex-start;
+        background: linear-gradient(135deg, #17324d 0%, #285b78 62%, #d8e8ef 100%);
+        border-radius: 16px;
         color: #f8fafc;
-        padding: 20px 22px;
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 15px 18px;
       }
       .hero h1 {
-        font-size: 26px;
-        line-height: 1.15;
-        margin: 6px 0 0;
+        font-size: 22px;
+        line-height: 1.12;
+        margin: 5px 0 0;
       }
       .eyebrow {
-        font-size: 11px;
-        letter-spacing: 0.28em;
+        font-size: 10px;
+        letter-spacing: 0.24em;
         margin: 0;
         opacity: 0.8;
         text-transform: uppercase;
       }
-      .hero-meta {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 12px;
+      .hero-copy {
+        flex: 1 1 auto;
       }
-      .hero-chip {
-        background: rgba(255, 255, 255, 0.12);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        border-radius: 999px;
+      .hero-meta {
+        display: grid;
+        gap: 4px;
+        margin-top: 10px;
+      }
+      .hero-meta-line {
         font-size: 11px;
-        padding: 5px 10px;
+        line-height: 1.35;
+        opacity: 0.92;
+      }
+      .hero-logo {
+        background: rgba(255, 255, 255, 0.96);
+        border-radius: 12px;
+        padding: 10px 12px;
+      }
+      .hero-logo img {
+        display: block;
+        height: 34px;
+        width: auto;
       }
       .section {
         background: #ffffff;
         border: 1px solid #e5e7eb;
-        border-radius: 18px;
-        padding: 18px;
+        border-radius: 16px;
+        padding: 14px;
       }
       .section-title {
         color: #64748b;
-        font-size: 11px;
-        letter-spacing: 0.22em;
-        margin: 0 0 14px;
+        font-size: 10px;
+        letter-spacing: 0.2em;
+        margin: 0 0 10px;
         text-transform: uppercase;
       }
       .grid {
         display: grid;
-        gap: 12px;
+        gap: 10px;
         grid-template-columns: repeat(3, minmax(0, 1fr));
       }
       .metric {
         background: #f8fafc;
         border: 1px solid #e5e7eb;
-        border-radius: 14px;
-        padding: 14px 16px;
+        border-radius: 12px;
+        padding: 11px 12px;
       }
       .metric-label {
         color: #64748b;
@@ -887,15 +911,15 @@ const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, generatedAt =
       }
       .metric-value {
         color: #111827;
-        font-size: 20px;
+        font-size: 18px;
         font-weight: 700;
         margin: 0;
       }
       .muted {
         color: #6b7280;
-        font-size: 12px;
+        font-size: 11px;
         line-height: 1.5;
-        margin: 6px 0 0;
+        margin: 4px 0 0;
       }
       table {
         border-collapse: collapse;
@@ -904,8 +928,8 @@ const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, generatedAt =
       th,
       td {
         border-bottom: 1px solid #e5e7eb;
-        font-size: 12px;
-        padding: 10px 8px;
+        font-size: 11px;
+        padding: 8px 6px;
         text-align: left;
         vertical-align: top;
       }
@@ -917,23 +941,30 @@ const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, generatedAt =
       }
       .footer {
         color: #94a3b8;
-        font-size: 11px;
+        font-size: 10px;
         text-align: right;
       }
     </style>
     <div class="sheet">
       <section class="hero">
-        <p class="eyebrow">Vorausstunden</p>
-        <h1>${escapeHtml(String(customer?.name || "Unbenannter Kunde").trim() || "Unbenannter Kunde")}</h1>
-        <div class="hero-meta">
-          <span class="hero-chip">Nr. ${escapeHtml(String(customer?.creditorNumber || "ohne").trim() || "ohne")}</span>
-          ${
-            addressParts.length
-              ? `<span class="hero-chip">${escapeHtml(addressParts.join(", "))}</span>`
-              : ""
-          }
-          <span class="hero-chip">Stand ${escapeHtml(formatDateTime(generatedAt))}</span>
+        <div class="hero-copy">
+          <p class="eyebrow">Quansatech · Vorausstunden</p>
+          <h1>${escapeHtml(String(customer?.name || "Unbenannter Kunde").trim() || "Unbenannter Kunde")}</h1>
+          <div class="hero-meta">
+            <div class="hero-meta-line">Kundennummer ${escapeHtml(String(customer?.creditorNumber || "ohne").trim() || "ohne")}</div>
+            ${
+              addressParts.length
+                ? `<div class="hero-meta-line">${escapeHtml(addressParts.join(", "))}</div>`
+                : ""
+            }
+            <div class="hero-meta-line">Stand ${escapeHtml(formatDateTime(generatedAt))}</div>
+          </div>
         </div>
+        ${
+          logoSrc
+            ? `<div class="hero-logo"><img src="${escapeHtml(logoSrc)}" alt="Quansatech" /></div>`
+            : ""
+        }
       </section>
 
       <section class="section">
@@ -2504,14 +2535,21 @@ export default function CustomerDirectoryView() {
     };
   }, [settingsTab, editCustomer?.id]);
 
-  const openPrepaidHoursPdfPreview = () => {
+  const openPrepaidHoursPdfPreview = async () => {
     if (!editCustomer || !prepaidHoursSummary) return;
+    let logoSrc = "";
+    try {
+      logoSrc = await getQtLogoDataUrl();
+    } catch {
+      logoSrc = "";
+    }
     setPreviewModal({
       open: true,
       title: `Vorausstunden ${editCustomer.name || "Kunde"}`,
       html: buildPrepaidHoursPdfHtml({
         customer: editCustomer,
         prepaidHoursSummary,
+        logoSrc,
         generatedAt: Date.now()
       }),
       filename: buildPrepaidHoursPdfFilename(editCustomer)
@@ -2534,13 +2572,18 @@ export default function CustomerDirectoryView() {
   };
 
   const renderPrepaidHoursContainer = () => (
-    <div className="rounded-xl border border-sand-200 bg-white p-3">
+    <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-white via-sky-50/40 to-sky-100/40 p-3.5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-[10px] uppercase tracking-wide text-sand-500">Vorausstunden</p>
-          <p className="mt-1 text-[11px] text-sand-600">
-            Stundenkäufe und Abbuchungen bleiben manuell. Aufgaben werden nur als Referenz verknüpft.
-          </p>
+        <div className="flex items-start gap-2">
+          <div className="mt-0.5 rounded-xl border border-sky-200 bg-white p-2 text-sky-700">
+            <WalletCards size={15} />
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.24em] text-sky-700">Vorausstunden</p>
+            <p className="mt-1 text-[11px] text-sand-600">
+              Manuelle Käufe und manuelle Abbuchungen mit Aufgabenreferenz.
+            </p>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -2568,16 +2611,16 @@ export default function CustomerDirectoryView() {
         <p className="mt-2 text-xs text-rose-600">Vorausstunden konnten nicht geladen werden.</p>
       ) : null}
       <div className="mt-3 grid gap-2 md:grid-cols-3">
-        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+        <div className="rounded-xl border border-sky-100 bg-white px-3 py-2">
           <p className="text-[10px] uppercase tracking-wide text-sand-500">Gekauft</p>
           <p className="text-sm font-semibold text-sand-900">{formatHours(prepaidHoursSummary?.purchasedHours || 0)}</p>
         </div>
-        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+        <div className="rounded-xl border border-sky-100 bg-white px-3 py-2">
           <p className="text-[10px] uppercase tracking-wide text-sand-500">Abgebucht</p>
           <p className="text-sm font-semibold text-sand-900">{formatHours(prepaidHoursSummary?.debitedHours || 0)}</p>
         </div>
         <div
-          className={`rounded-lg border px-2.5 py-1.5 ${
+          className={`rounded-xl border px-3 py-2 ${
             prepaidHoursBalance < 0 ? "border-rose-200 bg-rose-50" : "border-emerald-200 bg-emerald-50"
           }`}
         >
@@ -2588,9 +2631,9 @@ export default function CustomerDirectoryView() {
         </div>
       </div>
       <div className="mt-3 grid gap-3 xl:grid-cols-2">
-        <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
-          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stunden kaufen</p>
-          <div className="mt-2 grid gap-2 md:grid-cols-3">
+        <div className="rounded-xl border border-sky-100 bg-white p-3">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-sand-500">Stunden kaufen</p>
+          <div className="mt-2 grid gap-2 md:grid-cols-[110px_minmax(0,1fr)_150px]">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</span>
               <input
@@ -2601,10 +2644,10 @@ export default function CustomerDirectoryView() {
                 onChange={(event) =>
                   setPrepaidHoursPurchaseDraft((prev) => ({ ...prev, hours: event.target.value }))
                 }
-                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               />
             </label>
-            <label className="block md:col-span-2">
+            <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Bezeichnung</span>
               <input
                 value={prepaidHoursPurchaseDraft.label}
@@ -2612,11 +2655,9 @@ export default function CustomerDirectoryView() {
                   setPrepaidHoursPurchaseDraft((prev) => ({ ...prev, label: event.target.value }))
                 }
                 placeholder="z. B. 10h Paket März"
-                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               />
             </label>
-          </div>
-          <div className="mt-2 grid gap-2 md:grid-cols-[180px_minmax(0,1fr)]">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Datum</span>
               <input
@@ -2625,9 +2666,11 @@ export default function CustomerDirectoryView() {
                 onChange={(event) =>
                   setPrepaidHoursPurchaseDraft((prev) => ({ ...prev, effectiveAt: event.target.value }))
                 }
-                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               />
             </label>
+          </div>
+          <div className="mt-2 grid gap-2">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
               <input
@@ -2636,7 +2679,7 @@ export default function CustomerDirectoryView() {
                   setPrepaidHoursPurchaseDraft((prev) => ({ ...prev, note: event.target.value }))
                 }
                 placeholder="optional"
-                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               />
             </label>
           </div>
@@ -2654,9 +2697,9 @@ export default function CustomerDirectoryView() {
             </button>
           </div>
         </div>
-        <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
-          <p className="text-[10px] uppercase tracking-wide text-sand-500">Manuell abbuchen</p>
-          <div className="mt-2 grid gap-2 md:grid-cols-[120px_minmax(0,1fr)]">
+        <div className="rounded-xl border border-sky-100 bg-white p-3">
+          <p className="text-[10px] uppercase tracking-[0.18em] text-sand-500">Manuell abbuchen</p>
+          <div className="mt-2 grid gap-2 md:grid-cols-[110px_150px_minmax(0,1fr)]">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</span>
               <input
@@ -2667,7 +2710,18 @@ export default function CustomerDirectoryView() {
                 onChange={(event) =>
                   setPrepaidHoursDebitDraft((prev) => ({ ...prev, hours: event.target.value }))
                 }
-                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Datum</span>
+              <input
+                type="date"
+                value={prepaidHoursDebitDraft.effectiveAt}
+                onChange={(event) =>
+                  setPrepaidHoursDebitDraft((prev) => ({ ...prev, effectiveAt: event.target.value }))
+                }
+                className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               />
             </label>
             <label className="block">
@@ -2693,7 +2747,7 @@ export default function CustomerDirectoryView() {
                 onChange={(event) =>
                   setPrepaidHoursDebitDraft((prev) => ({ ...prev, taskId: event.target.value }))
                 }
-                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               >
                 <option value="">Ohne Aufgabenbezug</option>
                 {prepaidHoursTaskOptions.map((item) => (
@@ -2706,18 +2760,7 @@ export default function CustomerDirectoryView() {
               </select>
             </label>
           </div>
-          <div className="mt-2 grid gap-2 md:grid-cols-[180px_minmax(0,1fr)]">
-            <label className="block">
-              <span className="text-[10px] uppercase tracking-wide text-sand-500">Datum</span>
-              <input
-                type="date"
-                value={prepaidHoursDebitDraft.effectiveAt}
-                onChange={(event) =>
-                  setPrepaidHoursDebitDraft((prev) => ({ ...prev, effectiveAt: event.target.value }))
-                }
-                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
-              />
-            </label>
+          <div className="mt-2 grid gap-2">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Bemerkung</span>
               <input
@@ -2726,7 +2769,7 @@ export default function CustomerDirectoryView() {
                   setPrepaidHoursDebitDraft((prev) => ({ ...prev, note: event.target.value }))
                 }
                 placeholder="wofür abgebucht wurde"
-                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               />
             </label>
           </div>
@@ -2756,7 +2799,7 @@ export default function CustomerDirectoryView() {
           </div>
         </div>
       </div>
-      <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-3">
+      <div className="mt-3 rounded-xl border border-sky-100 bg-white p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-[10px] uppercase tracking-wide text-sand-500">Historie</p>
           <span className="text-[11px] text-sand-500">{prepaidHoursEntries.length} Buchungen</span>
@@ -5084,121 +5127,133 @@ export default function CustomerDirectoryView() {
                 </div>
               ) : null}
               {settingsTab === "contracts" ? (
-                <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3 space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Verträge</p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={openContractCreator}
-                        className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
-                      >
-                        <Plus size={12} />
-                        Neuer Vertrag
-                      </button>
+                <div className="mt-4 space-y-3">
+                  <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-white via-emerald-50/40 to-emerald-100/30 p-3.5 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <div className="mt-0.5 rounded-xl border border-emerald-200 bg-white p-2 text-emerald-700">
+                          <FileText size={15} />
+                        </div>
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.28em] text-emerald-700">Verträge</p>
+                          <p className="mt-1 text-[11px] text-sand-600">
+                            Laufende Verträge, Laufzeiten und Vertragssteuerung.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={openContractCreator}
+                          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+                        >
+                          <Plus size={12} />
+                          Neuer Vertrag
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
-                    <div className="grid gap-2 md:grid-cols-3">
-                      <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5">
+                    <div className="mt-3 rounded-xl border border-emerald-100 bg-white p-2.5">
+                      <div className="grid gap-2 md:grid-cols-3">
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Verlängerung</p>
                         <p className="text-sm font-semibold text-sand-900">{contractControlStats.renewalsDueSoon}</p>
                         <p className="text-[11px] text-sand-600">{"<= 45 Tage fällig"}</p>
-                      </div>
-                      <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5">
+                        </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Laufzeit</p>
                         <p className="text-sm font-semibold text-sand-900">{contractControlStats.runtimeDaysAvg} Tage</p>
                         <p className="text-[11px] text-sand-600">Ø Vertragsalter</p>
-                      </div>
-                      <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5">
+                        </div>
+                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                         <p className="text-[10px] uppercase tracking-wide text-sand-500">Tarifabweichung</p>
                         <p className="text-sm font-semibold text-sand-900">{contractControlStats.missingIncludedHours}</p>
                         <p className="text-[11px] text-sand-600">Servicevertrag ohne Inklusivstunden</p>
+                        </div>
                       </div>
+                      <p className="mt-1.5 text-[11px] text-sand-600">
+                        Nächste Verlängerung:{" "}
+                        {contractControlStats.nextRenewalAt
+                          ? `${formatDate(contractControlStats.nextRenewalAt)} (${contractControlStats.nextRenewalDays} Tage)`
+                          : "n/a"}
+                      </p>
                     </div>
-                    <p className="mt-1.5 text-[11px] text-sand-600">
-                      Nächste Verlängerung:{" "}
-                      {contractControlStats.nextRenewalAt
-                        ? `${formatDate(contractControlStats.nextRenewalAt)} (${contractControlStats.nextRenewalDays} Tage)`
-                        : "n/a"}
-                    </p>
-                  </div>
-                  {editHasServiceContract ? (
-                    <div className="rounded-xl border border-sand-200 bg-white p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Stundenbudget (aktueller Monat)</p>
-                        <span className="text-[11px] text-sand-500">{contractTimeBudget?.monthLabel || "Aktueller Monat"}</span>
-                      </div>
-                      {metricsStatus === "loading" ? (
-                        <p className="mt-1.5 text-xs text-sand-500">Berechne Vertragsstunden…</p>
-                      ) : null}
-                      {metricsStatus === "error" ? (
-                        <p className="mt-1.5 text-xs text-rose-600">Stundenbilanz konnte nicht geladen werden.</p>
-                      ) : null}
-                      {metricsStatus === "ready" && contractTimeBudget ? (
-                        <>
-                          <div className="mt-2 grid gap-2 md:grid-cols-4">
-                            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Inkludiert</p>
-                              <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.includedHours)}</p>
-                            </div>
-                            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Verbraucht</p>
-                              <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.consumedHours)}</p>
-                            </div>
-                            <div
-                              className={`rounded-lg border px-2.5 py-1.5 ${
-                                contractTimeBudget.isOverrun
-                                  ? "border-rose-200 bg-rose-50"
-                                  : "border-emerald-200 bg-emerald-50"
-                              }`}
-                            >
-                              <p className="text-[10px] uppercase tracking-wide text-sand-500">
-                                {contractTimeBudget.isOverrun ? "Überzug" : "Rest"}
-                              </p>
-                              <p
-                                className={`text-sm font-semibold ${
-                                  contractTimeBudget.isOverrun ? "text-rose-700" : "text-emerald-700"
+                    {editHasServiceContract ? (
+                      <div className="mt-3 rounded-xl border border-emerald-100 bg-white p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stundenbudget (aktueller Monat)</p>
+                          <span className="text-[11px] text-sand-500">{contractTimeBudget?.monthLabel || "Aktueller Monat"}</span>
+                        </div>
+                        {metricsStatus === "loading" ? (
+                          <p className="mt-1.5 text-xs text-sand-500">Berechne Vertragsstunden…</p>
+                        ) : null}
+                        {metricsStatus === "error" ? (
+                          <p className="mt-1.5 text-xs text-rose-600">Stundenbilanz konnte nicht geladen werden.</p>
+                        ) : null}
+                        {metricsStatus === "ready" && contractTimeBudget ? (
+                          <>
+                            <div className="mt-2 grid gap-2 md:grid-cols-4">
+                              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">Inkludiert</p>
+                                <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.includedHours)}</p>
+                              </div>
+                              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">Verbraucht</p>
+                                <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.consumedHours)}</p>
+                              </div>
+                              <div
+                                className={`rounded-lg border px-2.5 py-1.5 ${
+                                  contractTimeBudget.isOverrun
+                                    ? "border-rose-200 bg-rose-50"
+                                    : "border-emerald-200 bg-emerald-50"
                                 }`}
                               >
-                                {formatHours(
-                                  contractTimeBudget.isOverrun
-                                    ? contractTimeBudget.overrunHours
-                                    : contractTimeBudget.remainingHours
-                                )}
-                              </p>
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">
+                                  {contractTimeBudget.isOverrun ? "Überzug" : "Rest"}
+                                </p>
+                                <p
+                                  className={`text-sm font-semibold ${
+                                    contractTimeBudget.isOverrun ? "text-rose-700" : "text-emerald-700"
+                                  }`}
+                                >
+                                  {formatHours(
+                                    contractTimeBudget.isOverrun
+                                      ? contractTimeBudget.overrunHours
+                                      : contractTimeBudget.remainingHours
+                                  )}
+                                </p>
+                              </div>
+                              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufteilung</p>
+                                <p className="text-sm font-semibold text-sand-900">
+                                  Aufgabe {formatHours(contractTimeBudget.taskHours, 1)}
+                                </p>
+                                <p className="text-[11px] text-sand-600">
+                                  Telefon {formatHours(contractTimeBudget.telephonyHours, 1)}
+                                </p>
+                              </div>
                             </div>
-                            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                              <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufteilung</p>
-                              <p className="text-sm font-semibold text-sand-900">
-                                Aufgabe {formatHours(contractTimeBudget.taskHours, 1)}
-                              </p>
-                              <p className="text-[11px] text-sand-600">
-                                Telefon {formatHours(contractTimeBudget.telephonyHours, 1)}
-                              </p>
-                            </div>
-                          </div>
-                          <p className="mt-2 text-[11px] text-sand-600">
-                            Verbrauch aus {contractTimeBudget.taskCount || 0} Zeitaufgaben und {contractTimeBudget.callCount || 0} Telefonaten.
-                          </p>
-                          {contractTimeBudget.missingIncludedHours ? (
-                            <p className="mt-1 text-[11px] text-amber-700">
-                              Vertrag vorhanden, aber keine Inklusivstunden hinterlegt. Bitte im Vertragsdetail setzen.
+                            <p className="mt-2 text-[11px] text-sand-600">
+                              Verbrauch aus {contractTimeBudget.taskCount || 0} Zeitaufgaben und {contractTimeBudget.callCount || 0} Telefonaten.
                             </p>
-                          ) : null}
-                        </>
+                            {contractTimeBudget.missingIncludedHours ? (
+                              <p className="mt-1 text-[11px] text-amber-700">
+                                Vertrag vorhanden, aber keine Inklusivstunden hinterlegt. Bitte im Vertragsdetail setzen.
+                              </p>
+                            ) : null}
+                          </>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {contractsStatus === "loading" ? <p className="mt-3 text-xs text-sand-500">Lade Verträge…</p> : null}
+                    {contractsStatus === "error" ? <p className="mt-3 text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
+                    <div className="mt-3 space-y-2 max-h-64 overflow-auto pr-1">
+                      {(customerContracts || []).map((item) => renderContractListItem(item))}
+                      {!customerContracts.length && contractsStatus !== "loading" ? (
+                        <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
                       ) : null}
                     </div>
-                  ) : null}
-                  {renderPrepaidHoursContainer()}
-                  {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
-                  {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
-                  <div className="space-y-2 max-h-64 overflow-auto pr-1">
-                    {(customerContracts || []).map((item) => renderContractListItem(item))}
-                    {!customerContracts.length && contractsStatus !== "loading" ? (
-                      <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
-                    ) : null}
                   </div>
+                  {renderPrepaidHoursContainer()}
                 </div>
               ) : null}
               {settingsTab === "inventory" ? (
