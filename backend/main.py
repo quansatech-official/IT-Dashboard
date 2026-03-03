@@ -1828,6 +1828,7 @@ class InternalAiPromptRequest(BaseModel):
     prompt: str
     content: Optional[str] = ""
     output_format: Optional[str] = "markdown"
+    model: Optional[str] = ""
 
 
 class CustomerDevelopmentReportSuggestionPreviewRequest(BaseModel):
@@ -2204,6 +2205,67 @@ def _resolve_ollama_models(*specific_values: Any) -> List[str]:
     if not ordered:
         ordered.append("qwen3:8b")
     return ordered
+
+
+def _list_ollama_models(timeout_seconds: int = 8) -> List[str]:
+    connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
+    request_timeout = max(connect_timeout, int(timeout_seconds or 8))
+    try:
+        with _ollama_http.get(
+            f"{OLLAMA_BASE_URL}/api/tags",
+            timeout=(connect_timeout, request_timeout),
+        ) as response:
+            response.raise_for_status()
+            payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Ollama model listing failed: %s", exc)
+        return []
+    models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        return []
+    ordered: List[str] = []
+    seen = set()
+    for entry in models:
+        if not isinstance(entry, dict):
+            continue
+        model_name = str(entry.get("model") or entry.get("name") or "").strip()
+        if not model_name:
+            continue
+        normalized = model_name.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(model_name)
+    return ordered
+
+
+def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
+    requested = str(requested_model or "").strip()
+    available_models = _list_ollama_models()
+    if requested:
+        available_lookup = {model.lower(): model for model in available_models}
+        matched_model = available_lookup.get(requested.lower())
+        if not matched_model:
+            raise HTTPException(400, f"Unbekanntes Modell: {requested}")
+        return _resolve_ollama_models(matched_model)
+    if available_models:
+        available_lookup = {model.lower(): model for model in available_models}
+        preferred = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+        ordered: List[str] = []
+        seen = set()
+        for candidate in preferred:
+            matched_model = available_lookup.get(candidate.lower())
+            if matched_model and matched_model.lower() not in seen:
+                ordered.append(matched_model)
+                seen.add(matched_model.lower())
+        for model in available_models:
+            normalized = model.lower()
+            if normalized in seen:
+                continue
+            ordered.append(model)
+            seen.add(normalized)
+        return ordered
+    return _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
 
 
 def _ollama_cache_key(
@@ -14491,6 +14553,25 @@ def _build_internal_ai_prompt(prompt_text: str, content_text: str, output_format
     )
 
 
+@app.get("/api/tools/internal_ai_models")
+def tools_internal_ai_models():
+    available_models = _list_ollama_models()
+    preferred_models = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+    default_model = ""
+    available_lookup = {model.lower(): model for model in available_models}
+    for candidate in preferred_models:
+        matched_model = available_lookup.get(candidate.lower())
+        if matched_model:
+            default_model = matched_model
+            break
+    if not default_model:
+        default_model = preferred_models[0] if preferred_models else ""
+    return {
+        "models": available_models,
+        "default_model": default_model,
+    }
+
+
 @app.post("/api/tools/internal_ai_prompt")
 def tools_internal_ai_prompt(data: InternalAiPromptRequest):
     prompt_text = str(data.prompt or "").strip()
@@ -14500,7 +14581,7 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
         raise HTTPException(400, "prompt required")
     internal_prompt = _build_internal_ai_prompt(prompt_text, content_text, output_format)
 
-    model_candidates = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+    model_candidates = _resolve_internal_ai_tool_models(data.model)
     payload, used_model = _ollama_generate(
         internal_prompt,
         model_candidates=model_candidates,
@@ -14530,7 +14611,7 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
         raise HTTPException(400, "prompt required")
 
     internal_prompt = _build_internal_ai_prompt(prompt_text, content_text, output_format)
-    model_candidates = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+    model_candidates = _resolve_internal_ai_tool_models(data.model)
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
     request_timeout = max(int(INTERNAL_AI_STREAM_TIMEOUT_SECONDS), int(OLLAMA_TIMEOUT_SECONDS or 0), 30)
 

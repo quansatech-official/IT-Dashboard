@@ -7,6 +7,7 @@ const API = "/api";
 const defaultDraft = {
   prompt: "",
   outputFormat: "markdown",
+  model: "",
 };
 
 export default function ToolsView() {
@@ -16,6 +17,8 @@ export default function ToolsView() {
   const [aiResult, setAiResult] = useState("");
   const [aiMeta, setAiMeta] = useState(null);
   const [toast, setToast] = useState("");
+  const [aiModels, setAiModels] = useState([]);
+  const [aiModelsBusy, setAiModelsBusy] = useState(false);
   const abortRef = useRef(null);
 
   useEffect(() => {
@@ -29,6 +32,41 @@ export default function ToolsView() {
       if (abortRef.current) {
         abortRef.current.abort();
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadModels = async () => {
+      setAiModelsBusy(true);
+      try {
+        const response = await fetch(`${API}/tools/internal_ai_models`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data?.detail || "model_list_failed");
+        }
+        const models = Array.isArray(data?.models)
+          ? data.models.map((entry) => String(entry || "").trim()).filter(Boolean)
+          : [];
+        const defaultModel = String(data?.default_model || "").trim();
+        if (cancelled) return;
+        setAiModels(models);
+        setAiDraft((prev) => ({
+          ...prev,
+          model: prev.model || defaultModel || models[0] || "",
+        }));
+      } catch (error) {
+        if (cancelled) return;
+        setToast(error?.message ? String(error.message) : "Modellliste konnte nicht geladen werden.");
+      } finally {
+        if (!cancelled) {
+          setAiModelsBusy(false);
+        }
+      }
+    };
+    loadModels();
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -55,6 +93,7 @@ export default function ToolsView() {
         body: JSON.stringify({
           prompt,
           output_format: aiDraft.outputFormat,
+          model: aiDraft.model,
         }),
       });
       if (!response.ok) {
@@ -223,7 +262,7 @@ export default function ToolsView() {
               </div>
             </div>
             <p className="mt-3 max-w-3xl text-sm text-sand-700">
-              Gib der internen KI einen freien Arbeitsauftrag und optional Rohdaten. Geeignet für Listen, Tabellen,
+              Gib der internen KI einen freien Arbeitsauftrag direkt im Prompt. Geeignet für Listen, Tabellen,
               Bereinigung, Umformatierung oder strukturierte Aufbereitung.
             </p>
           </div>
@@ -240,7 +279,7 @@ export default function ToolsView() {
                     className="mt-1 min-h-[92px] w-full rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-900 outline-none focus:border-sand-300"
                   />
                 </label>
-                <div className="mt-3 grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+                <div className="mt-3 grid gap-3 md:grid-cols-[180px_220px_minmax(0,1fr)]">
                   <label className="block">
                     <span className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Ausgabeformat</span>
                     <select
@@ -251,6 +290,22 @@ export default function ToolsView() {
                       <option value="markdown">Markdown</option>
                       <option value="table">Tabelle</option>
                       <option value="text">Text</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Modell</span>
+                    <select
+                      value={aiDraft.model}
+                      onChange={(event) => setAiDraft((prev) => ({ ...prev, model: event.target.value }))}
+                      disabled={aiBusy || aiModelsBusy || aiModels.length === 0}
+                      className="mt-1 w-full rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {aiModels.length ? null : <option value="">{aiModelsBusy ? "Lade Modelle…" : "Kein Modell"}</option>}
+                      {aiModels.map((modelName) => (
+                        <option key={modelName} value={modelName}>
+                          {modelName}
+                        </option>
+                      ))}
                     </select>
                   </label>
                   <div className="flex flex-wrap items-end gap-2">
@@ -319,6 +374,9 @@ export default function ToolsView() {
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-sand-500">
                     <span className="rounded-full border border-sand-200 bg-white/70 px-2.5 py-1">
                       Ausgabe {aiDraft.outputFormat}
+                    </span>
+                    <span className="rounded-full border border-sand-200 bg-white/70 px-2.5 py-1">
+                      Modell {aiDraft.model || "Standard"}
                     </span>
                     <span className="rounded-full border border-sand-200 bg-white/70 px-2.5 py-1">
                       Zeichen {aiResult.length}
