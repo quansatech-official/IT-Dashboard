@@ -2267,6 +2267,16 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
     return _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
 
 
+def _internal_ai_prompt_limit_chars() -> int:
+    resolved_max_tokens = max(64, min(480, int(OLLAMA_MAX_TOKENS_HARD_LIMIT or 480)))
+    prompt_ctx_budget = max(
+        128,
+        int(OLLAMA_NUM_CTX) - int(resolved_max_tokens) - int(OLLAMA_PROMPT_TOKEN_MARGIN),
+    )
+    ctx_limited_chars = max(800, int(prompt_ctx_budget * 4))
+    return max(800, min(int(OLLAMA_PROMPT_MAX_CHARS), ctx_limited_chars))
+
+
 def _ollama_cache_key(
     *,
     prompt: str,
@@ -14546,6 +14556,8 @@ def tools_internal_ai_models():
     return {
         "models": available_models,
         "default_model": default_model,
+        "prompt_limit_chars": _internal_ai_prompt_limit_chars(),
+        "prompt_limit_scope": "server",
     }
 
 

@@ -18,6 +18,7 @@ export default function ToolsView() {
   const [toast, setToast] = useState("");
   const [aiModels, setAiModels] = useState([]);
   const [aiModelsBusy, setAiModelsBusy] = useState(false);
+  const [aiPromptLimit, setAiPromptLimit] = useState(0);
   const abortRef = useRef(null);
 
   useEffect(() => {
@@ -48,8 +49,10 @@ export default function ToolsView() {
           ? data.models.map((entry) => String(entry || "").trim()).filter(Boolean)
           : [];
         const defaultModel = String(data?.default_model || "").trim();
+        const promptLimit = Math.max(0, Number(data?.prompt_limit_chars || 0));
         if (cancelled) return;
         setAiModels(models);
+        setAiPromptLimit(promptLimit);
         setAiDraft((prev) => ({
           ...prev,
           model: prev.model || defaultModel || models[0] || "",
@@ -212,6 +215,8 @@ export default function ToolsView() {
     abortRef.current.abort();
   };
 
+  const promptLength = aiDraft.prompt.length;
+
   const copyResult = async () => {
     if (!aiResult) return;
     try {
@@ -277,6 +282,13 @@ export default function ToolsView() {
                     className="mt-1 min-h-[320px] flex-1 w-full rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-900 outline-none focus:border-sand-300"
                   />
                 </label>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-sand-500">
+                  <span>
+                    Zeichen {promptLength}
+                    {aiPromptLimit > 0 ? ` / ${aiPromptLimit}` : ""}
+                  </span>
+                  <span>{aiPromptLimit > 0 ? "Aktuelles Server-Limit" : "Kein Limit geladen"}</span>
+                </div>
                 <div className="mt-3 grid gap-3 md:grid-cols-[220px]">
                   <label className="block">
                     <span className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Modell</span>
