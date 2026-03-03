@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Response, Request, Form, Header
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List, Tuple, Set, Callable
@@ -100,6 +100,10 @@ CUSTOMER_DEVELOPMENT_AI_TIMEOUT_SECONDS = max(
 CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS = max(
     3,
     int(os.environ.get("CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS") or "20"),
+)
+INTERNAL_AI_STREAM_TIMEOUT_SECONDS = max(
+    30,
+    int(os.environ.get("INTERNAL_AI_STREAM_TIMEOUT_SECONDS") or "300"),
 )
 DB_STARTUP_RETRY_ATTEMPTS = max(
     1,
@@ -14444,23 +14448,20 @@ def generate_action(data: ActionAiRequest):
     return action
 
 
-@app.post("/api/tools/internal_ai_prompt")
-def tools_internal_ai_prompt(data: InternalAiPromptRequest):
-    prompt_text = str(data.prompt or "").strip()
-    content_text = str(data.content or "").strip()
-    output_format = str(data.output_format or "markdown").strip().lower()
-    if not prompt_text:
-        raise HTTPException(400, "prompt required")
+def _normalize_internal_ai_output_format(value: Any) -> str:
+    output_format = str(value or "markdown").strip().lower()
     if output_format not in {"markdown", "text", "table"}:
-        output_format = "markdown"
+        return "markdown"
+    return output_format
 
+
+def _build_internal_ai_prompt(prompt_text: str, content_text: str, output_format: str) -> str:
     format_hint = {
         "text": "Gib die Antwort als klar strukturierten Fließtext ohne JSON aus.",
         "table": "Wenn sinnvoll, gib das Ergebnis als Markdown-Tabelle aus. Ergänze nur kurze Nachbemerkungen.",
         "markdown": "Gib die Antwort als gut lesbares Markdown aus. Tabellen sind erlaubt, wenn sie helfen.",
     }.get(output_format, "Gib die Antwort als gut lesbares Markdown aus.")
-
-    internal_prompt = (
+    return (
         "Du bist ein internes Quansatech-Arbeitstool fuer freie Datenaufbereitung.\n"
         "Die Eingaben koennen sensible interne Daten enthalten.\n"
         "Nutze ausschliesslich die vom Benutzer gelieferten Inhalte und erfinde keine fehlenden Fakten.\n"
@@ -14472,6 +14473,16 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
         "DATEN:\n"
         f"{content_text or '(keine zusaetzlichen Daten)'}"
     )
+
+
+@app.post("/api/tools/internal_ai_prompt")
+def tools_internal_ai_prompt(data: InternalAiPromptRequest):
+    prompt_text = str(data.prompt or "").strip()
+    content_text = str(data.content or "").strip()
+    output_format = _normalize_internal_ai_output_format(data.output_format)
+    if not prompt_text:
+        raise HTTPException(400, "prompt required")
+    internal_prompt = _build_internal_ai_prompt(prompt_text, content_text, output_format)
 
     model_candidates = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
     payload, used_model = _ollama_generate(
@@ -14492,6 +14503,119 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
         "output_format": output_format,
         "generated_at": int(time.time() * 1000),
     }
+
+
+@app.post("/api/tools/internal_ai_prompt_stream")
+def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
+    prompt_text = str(data.prompt or "").strip()
+    content_text = str(data.content or "").strip()
+    output_format = _normalize_internal_ai_output_format(data.output_format)
+    if not prompt_text:
+        raise HTTPException(400, "prompt required")
+
+    internal_prompt = _build_internal_ai_prompt(prompt_text, content_text, output_format)
+    model_candidates = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+    connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
+    request_timeout = max(int(INTERNAL_AI_STREAM_TIMEOUT_SECONDS), int(OLLAMA_TIMEOUT_SECONDS or 0), 30)
+
+    def stream() -> Any:
+        prompt_body = internal_prompt
+        if len(prompt_body) > OLLAMA_PROMPT_MAX_CHARS:
+            prompt_body = prompt_body[:OLLAMA_PROMPT_MAX_CHARS]
+        resolved_max_tokens = max(64, min(480, int(OLLAMA_MAX_TOKENS_HARD_LIMIT or 480)))
+        target_predict = int(resolved_max_tokens or 0)
+        prompt_ctx_budget = max(128, int(OLLAMA_NUM_CTX) - target_predict - int(OLLAMA_PROMPT_TOKEN_MARGIN))
+        approx_prompt_tokens = max(1, int(math.ceil(len(prompt_body) / 4.0)))
+        if approx_prompt_tokens > prompt_ctx_budget:
+            allowed_chars = max(800, int(prompt_ctx_budget * 4))
+            if len(prompt_body) > allowed_chars:
+                prompt_body = prompt_body[:allowed_chars]
+
+        for model in model_candidates:
+            if _ollama_model_temporarily_missing(model):
+                continue
+            payload: Dict[str, Any] = {
+                "model": model,
+                "prompt": prompt_body,
+                "stream": True,
+                "options": {
+                    "num_ctx": int(OLLAMA_NUM_CTX),
+                    "num_thread": int(OLLAMA_NUM_THREAD),
+                    "temperature": 0.2,
+                    "num_predict": int(resolved_max_tokens),
+                },
+            }
+            if OLLAMA_REQUEST_KEEP_ALIVE:
+                payload["keep_alive"] = OLLAMA_REQUEST_KEEP_ALIVE
+            started_at = time.time()
+            try:
+                with _ollama_http.post(
+                    f"{OLLAMA_BASE_URL}/api/generate",
+                    json=payload,
+                    timeout=(connect_timeout, request_timeout),
+                    stream=True,
+                ) as response:
+                    response.raise_for_status()
+                    yield json.dumps({
+                        "type": "meta",
+                        "provider": "ollama",
+                        "model": model,
+                        "output_format": output_format,
+                    }) + "\n"
+                    for raw_line in response.iter_lines(decode_unicode=True):
+                        if not raw_line:
+                            continue
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except ValueError:
+                            continue
+                        if not isinstance(chunk, dict):
+                            continue
+                        chunk_text = chunk.get("response")
+                        if isinstance(chunk_text, str) and chunk_text:
+                            yield json.dumps({"type": "delta", "text": chunk_text}) + "\n"
+                        if bool(chunk.get("done")):
+                            duration_ms = int((time.time() - started_at) * 1000)
+                            if duration_ms >= OLLAMA_SLOW_REQUEST_MS:
+                                logger.info(
+                                    "Ollama slow stream response model=%s duration_ms=%s prompt_chars=%s num_predict=%s",
+                                    model,
+                                    duration_ms,
+                                    len(prompt_body),
+                                    int(resolved_max_tokens),
+                                )
+                            yield json.dumps({
+                                "type": "done",
+                                "provider": "ollama",
+                                "model": model,
+                                "generated_at": int(time.time() * 1000),
+                            }) + "\n"
+                            return
+            except requests.HTTPError as exc:
+                response = exc.response
+                if response is not None and response.status_code == 404:
+                    _mark_ollama_model_missing(model)
+                continue
+            except requests.RequestException as exc:
+                logger.warning("Ollama stream request failed with model %s: %s", model, exc)
+                yield json.dumps({
+                    "type": "error",
+                    "detail": f"Ollama Stream fehlgeschlagen: {exc}",
+                    "provider": "ollama",
+                    "model": model,
+                }) + "\n"
+                return
+        yield json.dumps({
+            "type": "error",
+            "detail": "Ollama request failed",
+            "provider": "ollama",
+            "model": "",
+        }) + "\n"
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
 
 
 @app.post("/api/offer_ai_text")

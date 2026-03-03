@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BrainCircuit, ExternalLink, KeyRound, ShieldAlert, Sparkles, Wrench } from "lucide-react";
 
 const YOPASS_URL = "https://share.quansatech.at";
@@ -6,16 +6,17 @@ const API = "/api";
 
 const defaultDraft = {
   prompt: "",
-  content: "",
   outputFormat: "markdown",
 };
 
 export default function ToolsView() {
   const [aiDraft, setAiDraft] = useState(defaultDraft);
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiStatus, setAiStatus] = useState("Bereit.");
   const [aiResult, setAiResult] = useState("");
   const [aiMeta, setAiMeta] = useState(null);
   const [toast, setToast] = useState("");
+  const abortRef = useRef(null);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -23,39 +24,143 @@ export default function ToolsView() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+    };
+  }, []);
+
   const runInternalAi = async () => {
     const prompt = String(aiDraft.prompt || "").trim();
-    const content = String(aiDraft.content || "").trim();
     if (!prompt) {
       setToast("Bitte Prompt eingeben.");
       return;
     }
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
     setAiBusy(true);
+    setAiResult("");
+    setAiMeta(null);
+    setAiStatus("Verbinde mit interner KI…");
     try {
-      const response = await fetch(`${API}/tools/internal_ai_prompt`, {
+      const response = await fetch(`${API}/tools/internal_ai_prompt_stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           prompt,
-          content,
           output_format: aiDraft.outputFormat,
         }),
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data?.detail || "ai_request_failed");
-      setAiResult(String(data?.text || "").trim());
-      setAiMeta({
-        model: String(data?.model || "").trim(),
-        provider: String(data?.provider || "").trim(),
-        generatedAt: Number(data?.generated_at || 0),
-      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data?.detail || "ai_request_failed");
+      }
+      if (!response.body) {
+        throw new Error("stream_unavailable");
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let receivedText = false;
+
+      const handleLine = (line) => {
+        const trimmed = String(line || "").trim();
+        if (!trimmed) return false;
+        let payload = null;
+        try {
+          payload = JSON.parse(trimmed);
+        } catch {
+          return false;
+        }
+        if (!payload || typeof payload !== "object") return false;
+        if (payload.type === "meta") {
+          setAiMeta({
+            model: String(payload.model || "").trim(),
+            provider: String(payload.provider || "ollama").trim(),
+            generatedAt: 0,
+          });
+          setAiStatus(
+            payload.model
+              ? `KI streamt mit ${String(payload.model).trim()}…`
+              : "KI streamt…",
+          );
+          return false;
+        }
+        if (payload.type === "delta") {
+          const chunk = String(payload.text || "");
+          if (!chunk) return false;
+          receivedText = true;
+          setAiResult((prev) => prev + chunk);
+          setAiStatus("Antwort streamt…");
+          return false;
+        }
+        if (payload.type === "done") {
+          setAiMeta((prev) => ({
+            model: String(payload.model || prev?.model || "").trim(),
+            provider: String(payload.provider || prev?.provider || "ollama").trim(),
+            generatedAt: Number(payload.generated_at || 0),
+          }));
+          setAiStatus(receivedText ? "Fertig." : "Fertig ohne Inhalt.");
+          return true;
+        }
+        if (payload.type === "error") {
+          throw new Error(payload.detail || "ai_stream_failed");
+        }
+        return false;
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        let newlineIndex = buffer.indexOf("\n");
+        while (newlineIndex >= 0) {
+          const line = buffer.slice(0, newlineIndex);
+          buffer = buffer.slice(newlineIndex + 1);
+          if (handleLine(line)) {
+            await reader.cancel();
+            abortRef.current = null;
+            setAiBusy(false);
+            return;
+          }
+          newlineIndex = buffer.indexOf("\n");
+        }
+        if (done) {
+          const tail = buffer.trim();
+          if (tail) {
+            handleLine(tail);
+          }
+          break;
+        }
+      }
+      if (!receivedText) {
+        setAiStatus("Fertig ohne Inhalt.");
+      } else if (aiStatus !== "Fertig.") {
+        setAiStatus("Fertig.");
+      }
     } catch (error) {
+      if (error?.name === "AbortError") {
+        setAiStatus("Abgebrochen.");
+        return;
+      }
       setAiResult("");
       setAiMeta(null);
+      setAiStatus("Fehlgeschlagen.");
       setToast(error?.message ? String(error.message) : "KI-Anfrage fehlgeschlagen.");
     } finally {
+      abortRef.current = null;
       setAiBusy(false);
     }
+  };
+
+  const cancelInternalAi = () => {
+    if (!abortRef.current) return;
+    abortRef.current.abort();
   };
 
   const copyResult = async () => {
@@ -146,12 +251,25 @@ export default function ToolsView() {
                       <Sparkles size={13} />
                       {aiBusy ? "Verarbeite…" : "Intern auswerten"}
                     </button>
+                    {aiBusy ? (
+                      <button
+                        type="button"
+                        onClick={cancelInternalAi}
+                        className="rounded-full border border-rose-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-50"
+                      >
+                        Abbrechen
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => {
+                        if (abortRef.current) {
+                          abortRef.current.abort();
+                        }
                         setAiDraft(defaultDraft);
                         setAiResult("");
                         setAiMeta(null);
+                        setAiStatus("Bereit.");
                       }}
                       className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
                     >
@@ -162,16 +280,44 @@ export default function ToolsView() {
               </div>
 
               <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                <label className="block">
-                  <span className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Rohdaten / Kontext</span>
-                  <textarea
-                    value={aiDraft.content}
-                    onChange={(event) => setAiDraft((prev) => ({ ...prev, content: event.target.value }))}
-                    placeholder={"Beliebiger interner Inhalt, z. B. CSV, Passwortliste, Notizen, Rohtext, Log-Auszug..."}
-                    className="mt-1 min-h-[320px] w-full rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 font-mono text-[13px] text-sand-900 outline-none focus:border-sand-300"
-                    spellCheck={false}
-                  />
-                </label>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Status</p>
+                <div
+                  className={`mt-2 rounded-2xl border px-3 py-3 text-sm ${
+                    aiBusy
+                      ? "border-sky-200 bg-sky-50 text-sky-800"
+                      : aiStatus === "Fehlgeschlagen."
+                      ? "border-rose-200 bg-rose-50 text-rose-700"
+                      : "border-sand-200 bg-sand-50 text-sand-700"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`h-2.5 w-2.5 rounded-full ${
+                        aiBusy
+                          ? "animate-pulse bg-sky-500"
+                          : aiStatus === "Fertig."
+                          ? "bg-emerald-500"
+                          : aiStatus === "Fehlgeschlagen."
+                          ? "bg-rose-500"
+                          : "bg-sand-300"
+                      }`}
+                    />
+                    <span>{aiStatus}</span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-sand-500">
+                    <span className="rounded-full border border-sand-200 bg-white/70 px-2.5 py-1">
+                      Ausgabe {aiDraft.outputFormat}
+                    </span>
+                    <span className="rounded-full border border-sand-200 bg-white/70 px-2.5 py-1">
+                      Zeichen {aiResult.length}
+                    </span>
+                    {aiMeta?.model ? (
+                      <span className="rounded-full border border-sand-200 bg-white/70 px-2.5 py-1">
+                        Modell {aiMeta.model}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             </div>
 
