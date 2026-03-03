@@ -79,6 +79,20 @@ export default function ToolsView() {
           return false;
         }
         if (!payload || typeof payload !== "object") return false;
+        if (payload.type === "status") {
+          const detail = String(payload.detail || "").trim();
+          if (detail) {
+            setAiStatus(detail.endsWith("…") || detail.endsWith(".") ? detail : `${detail}…`);
+          }
+          if (payload.model) {
+            setAiMeta((prev) => ({
+              model: String(payload.model || prev?.model || "").trim(),
+              provider: String(prev?.provider || "ollama").trim(),
+              generatedAt: Number(prev?.generatedAt || 0),
+            }));
+          }
+          return false;
+        }
         if (payload.type === "meta") {
           setAiMeta({
             model: String(payload.model || "").trim(),
@@ -148,9 +162,7 @@ export default function ToolsView() {
         setAiStatus("Abgebrochen.");
         return;
       }
-      setAiResult("");
-      setAiMeta(null);
-      setAiStatus("Fehlgeschlagen.");
+      setAiStatus(error?.message ? `Fehlgeschlagen: ${String(error.message)}` : "Fehlgeschlagen.");
       setToast(error?.message ? String(error.message) : "KI-Anfrage fehlgeschlagen.");
     } finally {
       abortRef.current = null;

@@ -14535,6 +14535,11 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
     request_timeout = max(int(INTERNAL_AI_STREAM_TIMEOUT_SECONDS), int(OLLAMA_TIMEOUT_SECONDS or 0), 30)
 
     def stream() -> Any:
+        yield json.dumps({
+            "type": "status",
+            "stage": "connecting",
+            "detail": "Verbinde mit interner KI",
+        }) + "\n"
         prompt_body = internal_prompt
         if len(prompt_body) > OLLAMA_PROMPT_MAX_CHARS:
             prompt_body = prompt_body[:OLLAMA_PROMPT_MAX_CHARS]
@@ -14565,6 +14570,12 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
                 payload["keep_alive"] = OLLAMA_REQUEST_KEEP_ALIVE
             started_at = time.time()
             try:
+                yield json.dumps({
+                    "type": "status",
+                    "stage": "model_request",
+                    "detail": f"Modell {model} wird angefragt",
+                    "model": model,
+                }) + "\n"
                 with _ollama_http.post(
                     f"{OLLAMA_BASE_URL}/api/generate",
                     json=payload,
@@ -14631,7 +14642,14 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
             "model": "",
         }) + "\n"
 
-    return StreamingResponse(stream(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/offer_ai_text")
