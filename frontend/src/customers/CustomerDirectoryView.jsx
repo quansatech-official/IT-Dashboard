@@ -1366,6 +1366,8 @@ export default function CustomerDirectoryView() {
     return map;
   }, [pbxEntries]);
   const isC2DReady = telephonyHealthy && extensions.length > 0;
+  const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
+  const editCustomer = customers.find((customer) => customer.id === editCustomerId) || null;
 
   useEffect(() => {
     if (!toast) return;
@@ -2199,8 +2201,6 @@ export default function CustomerDirectoryView() {
     }
   }, [sortedCustomers, activeId]);
 
-  const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
-  const editCustomer = customers.find((customer) => customer.id === editCustomerId) || null;
   const activeCustomerLabel = String(activeCustomer?.name || "").trim();
   const autoContractTitle = buildDefaultContractTitle(
     activeContractTemplate?.title,
