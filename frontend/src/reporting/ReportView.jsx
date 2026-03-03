@@ -245,10 +245,6 @@ const parseActionFromText = (rawText) => {
   return fields;
 };
 
-const THIRD_PARTY_BLOCK_TITLE = "Sicherheitsreport";
-const SECURITY_REPORT_PICK = "security_report";
-
-
 const buildSentInfo = ({ sentAt, sentVia, openedAt, openedCount }) => {
   if (!sentAt) return "Nicht gesendet";
   const sentAtText = sentAt ? new Date(sentAt).toLocaleString("de-DE") : "";
@@ -845,18 +841,6 @@ export default function ReportView() {
 
   const addFromCatalog = () => {
     const pick = catalogPick || normalizeId(catalogItems[0]?.id ?? "");
-    if (pick === SECURITY_REPORT_PICK) {
-      addAction({
-        action_type: "security_report",
-        title: THIRD_PARTY_BLOCK_TITLE,
-        priority: "Hinweis",
-        custom_text:
-          "Die Schwachstellen der angezeigten Programme werden bereits aktiv ausgenutzt.",
-        custom_html: "",
-        custom_data: { includeMicrosoft: false, rawItems: [], items: [] }
-      });
-      return;
-    }
     const item = catalogItems.find((entry) => normalizeId(entry.id) === pick);
     if (item) {
       const { id, ...payload } = item;
@@ -1812,9 +1796,6 @@ export default function ReportView() {
                     onChange={(event) => setCatalogPick(event.target.value)}
                     className="rounded-full border border-sand-200 px-4 py-2 text-sm bg-white"
                   >
-                    <option value={SECURITY_REPORT_PICK}>
-                      Sicherheitsreport (HTML + Text)
-                    </option>
                     {Object.entries(
                       catalogItems.reduce((groups, item) => {
                         const key = (item.group || item.system || "Allgemein").trim() || "Allgemein";

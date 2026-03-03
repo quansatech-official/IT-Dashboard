@@ -57,65 +57,6 @@ export const renderReportHTML = (report, options = {}) => {
     return `<span style="display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; border: 1px solid ${style.border}; background: ${style.bg}; color: ${style.text};">${label}</span>`;
   };
   const actionBlockContent = (action) => {
-    if (action.action_type === "security_report") {
-      const customText = String(action.custom_text || "").trim();
-      const items = Array.isArray(action.custom_data?.items) ? action.custom_data.items : [];
-      const renderChipList = (list, title) => {
-        if (!list.length) return "";
-        return `<div style="margin-top: 10px;">
-          <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">${escapeHTML(
-            title
-          )}</div>
-          <div style="margin-top: 8px;">
-            ${list
-              .map((entry, index) => {
-                const name = escapeHTML(entry.name || "Programm");
-                const prio = entry.priority ? escapeHTML(entry.priority) : "Priorität n/a";
-                const versionFrom = entry.versionFrom ? escapeHTML(entry.versionFrom) : "";
-                const versionLine = versionFrom
-                  ? `<div style="font-size:11px; color:#64748b; margin-top:2px;">von ${versionFrom}</div>`
-                  : "";
-                return `<div style="display:flex; align-items:center; justify-content:space-between; border:1px solid #e2e8f0; background:#ffffff; border-radius:12px; padding:8px 12px; margin-bottom:8px; font-size:12px; color:#334155;">
-                  <div style="display:flex; align-items:center; gap:10px;">
-                    <span style="font-size:11px; font-weight:600; color:#94a3b8;">${index + 1}.</span>
-                    <div><strong>${name}</strong>${versionLine}</div>
-                  </div>
-                  <span style="font-size:11px; color:#64748b;">${prio}</span>
-                </div>`;
-              })
-              .join("")}
-          </div>
-        </div>`;
-      };
-      return `
-        <table style="width: 100%; border-collapse: collapse;">
-          <tr>
-            <td style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif;">
-              <table style="width: 100%; border-collapse: collapse;">
-                <tr>
-                  <td style="font-weight: 600; font-size: 12px; line-height: 1.35;">${escapeHTML(
-                    action.title || "Sicherheitsreport"
-                  )}</td>
-                  <td align="right" style="vertical-align: top;">${priorityBadge("Hinweis")}</td>
-                </tr>
-              </table>
-              ${
-                customText
-                  ? `<div style="margin-top: 8px; font-size: 13px; color:#3f3a33;">${escapeHTML(
-                      customText
-                    )}</div>`
-                  : ""
-              }
-              ${
-                items.length
-                  ? `${renderChipList(items, "Programme mit Updatebedarf")}`
-                  : `<div style="margin-top: 10px; font-size: 12px; color:#6b665f;">Keine Einträge erkannt.</div>`
-              }
-            </td>
-          </tr>
-        </table>
-      `;
-    }
     return `
       <table style="width: 100%; border-collapse: collapse;">
         <tr>
@@ -367,26 +308,9 @@ export const buildPlainText = (report) => {
 
   lines.push("Maßnahmen:");
 
-  report.actions.forEach((action, idx) => {
-    if (action.action_type === "security_report") {
-      const items = Array.isArray(action.custom_data?.items) ? action.custom_data.items : [];
-      lines.push(
-        "",
-        `${idx + 1}. ${action.title || "Sicherheitsreport"}`
-      );
-      if (action.custom_text) {
-        lines.push(action.custom_text);
-      }
-      if (items.length) {
-        lines.push("Programme mit Updatebedarf:");
-        items.forEach((item) => {
-          const name = item.name || "Programm";
-          const suffix = item.versionFrom ? ` (von ${item.versionFrom})` : "";
-          lines.push(`- ${name}${suffix}`);
-        });
-      }
-      return;
-    }
+  report.actions
+    .filter((action) => action.action_type !== "security_report")
+    .forEach((action, idx) => {
     lines.push(
       "",
       `${idx + 1}. ${action.title} (${action.system}, ${action.priority})`,
@@ -394,7 +318,7 @@ export const buildPlainText = (report) => {
       `Auswirkung: ${action.impact}`,
       `Dauer: ${action.duration} | Kosten: ${action.cost}`
     );
-  });
+    });
 
   lines.push(
     "",
