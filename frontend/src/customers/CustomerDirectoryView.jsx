@@ -277,6 +277,45 @@ const normalizeContractVariableDefinitions = (definitionsInput, variablesInput) 
   );
 };
 
+const defaultContractTemplates = {
+  wartung: {
+    title: "IT-Service- und Wartungsvertrag",
+    description: "Servicevertrag fuer laufende Betreuung, Wartung und definierte Inklusivstunden.",
+    doc_type: "wartung",
+    body_template: ""
+  },
+  monitoring: {
+    title: "IT-Monitoringvertrag",
+    description: "Template fuer Ueberwachung, Alarmierung und regelmaessige Betriebsinformationen.",
+    doc_type: "monitoring",
+    body_template: ""
+  },
+  avv_dsgvo: {
+    title: "Vereinbarung zur Auftragsverarbeitung (Art. 28 DSGVO)",
+    description: "Rechtliches Datenschutz-Template zur Auftragsverarbeitung.",
+    doc_type: "avv_dsgvo",
+    body_template: ""
+  }
+};
+
+const normalizeContractTemplates = (input) => {
+  const merged = { ...defaultContractTemplates };
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    Object.entries(input).forEach(([rawKey, rawValue]) => {
+      const key = normalizeContractDocumentType(rawKey);
+      if (!key) return;
+      const entry = rawValue && typeof rawValue === "object" ? rawValue : {};
+      merged[key] = {
+        title: String(entry.title || merged[key]?.title || key).trim() || key,
+        description: String(entry.description || merged[key]?.description || "").trim(),
+        doc_type: String(entry.doc_type || merged[key]?.doc_type || "").trim(),
+        body_template: String(entry.body_template || "")
+      };
+    });
+  }
+  return merged;
+};
+
 const buildEditableContractVariableValues = (definitions, sourceValues = {}) => {
   const normalizedSource = {};
   if (sourceValues && typeof sourceValues === "object" && !Array.isArray(sourceValues)) {
@@ -470,6 +509,12 @@ const parseOptionalMoneyInput = (value) => {
   return parsed;
 };
 
+const formatMoneyInputValue = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return "";
+  return number.toFixed(2);
+};
+
 const formatHours = (value, fractionDigits = 2) => {
   const hours = Number(value || 0);
   if (!Number.isFinite(hours)) return "0,00 h";
@@ -572,8 +617,23 @@ const contractTypeLabel = (value) => {
   if (type === "avv_dsgvo") return "AVV / DSGVO";
   return "Wartungsvertrag";
 };
-const buildDefaultContractTitle = (docType, customerLabel) => {
-  const base = contractTypeLabel(docType);
+const resolveContractBaseType = (templateKey, templateEntry, fallback = "wartung") => {
+  const explicitType = normalizeContractDocumentType(templateEntry?.doc_type || "");
+  if (["wartung", "monitoring", "avv_dsgvo"].includes(explicitType)) return explicitType;
+  const directType = normalizeContractDocumentType(templateKey);
+  if (["wartung", "monitoring", "avv_dsgvo"].includes(directType)) return directType;
+  const raw = String(templateKey || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (raw.startsWith("wartung_")) return "wartung";
+  if (raw.startsWith("monitoring_")) return "monitoring";
+  if (raw.startsWith("avv_dsgvo_") || raw.startsWith("avv_") || raw.startsWith("dsgvo_")) return "avv_dsgvo";
+  return fallback;
+};
+const buildDefaultContractTitle = (templateTitle, customerLabel, docType = "wartung") => {
+  const base = String(templateTitle || "").trim() || contractTypeLabel(docType);
   const name = String(customerLabel || "").trim();
   return name ? `${base} ${name}` : base;
 };
@@ -895,12 +955,18 @@ export default function CustomerDirectoryView() {
   const [generatedContract, setGeneratedContract] = useState(null);
   const [editingContractId, setEditingContractId] = useState(null);
   const [contractAdvancedOpen, setContractAdvancedOpen] = useState(false);
+  const [contractPriceTouched, setContractPriceTouched] = useState({
+    monthly: false,
+    yearly: false
+  });
   const [contractTitleAuto, setContractTitleAuto] = useState(true);
+  const [contractTemplates, setContractTemplates] = useState(normalizeContractTemplates(null));
   const [contractVariableDefinitions, setContractVariableDefinitions] = useState({});
   const [contractVariableValues, setContractVariableValues] = useState({});
   const [contractDraft, setContractDraft] = useState({
     title: "",
     docType: "wartung",
+    templateKey: "wartung",
     validFrom: "",
     runtimeMonths: "12",
     terminationNoticeMonths: "3",
@@ -1050,6 +1116,7 @@ export default function CustomerDirectoryView() {
       .getAiPrompts()
       .then((data) => {
         if (!active) return;
+        setContractTemplates(normalizeContractTemplates(data?.contract_templates));
         const nextDefinitions = normalizeContractVariableDefinitions(
           data?.contract_variable_definitions,
           data?.contract_variables
@@ -1058,6 +1125,7 @@ export default function CustomerDirectoryView() {
       })
       .catch(() => {
         if (!active) return;
+        setContractTemplates(normalizeContractTemplates(null));
         setContractVariableDefinitions({});
       });
     return () => {
@@ -1099,12 +1167,40 @@ export default function CustomerDirectoryView() {
     [contractTariffs, calcInput.tariffId]
   );
 
+  const contractTemplateOptions = useMemo(() => {
+    const order = new Map([
+      ["wartung", 0],
+      ["monitoring", 1],
+      ["avv_dsgvo", 2]
+    ]);
+    return Object.entries(contractTemplates || {})
+      .map(([key, entry]) => {
+        const templateEntry = entry && typeof entry === "object" ? entry : {};
+        return {
+          key,
+          title: String(templateEntry?.title || key).trim() || key,
+          description: String(templateEntry?.description || "").trim(),
+          docType: resolveContractBaseType(key, templateEntry),
+          hasBodyTemplate: Boolean(String(templateEntry?.body_template || "").trim())
+        };
+      })
+      .sort((a, b) => {
+        const orderDiff = (order.get(a.docType) ?? 99) - (order.get(b.docType) ?? 99);
+        if (orderDiff !== 0) return orderDiff;
+        return a.title.localeCompare(b.title, "de");
+      });
+  }, [contractTemplates]);
+
+  const activeContractTemplate =
+    contractTemplateOptions.find((item) => item.key === contractDraft.templateKey) || contractTemplateOptions[0] || null;
+  const activeContractBaseType = activeContractTemplate?.docType || contractDraft.docType || "wartung";
+
   const tariffCategoryForContractType = useMemo(() => {
-    const type = String(contractDraft.docType || "wartung").trim().toLowerCase();
+    const type = String(activeContractBaseType || "wartung").trim().toLowerCase();
     if (type === "wartung") return "wartung";
     if (type === "monitoring") return "monitoring";
     return "";
-  }, [contractDraft.docType]);
+  }, [activeContractBaseType]);
 
   const filteredActiveTariffs = useMemo(() => {
     const activeTariffs = (contractTariffs || []).filter((item) => Boolean(item?.is_active));
@@ -1129,8 +1225,8 @@ export default function CustomerDirectoryView() {
   }, [filteredActiveTariffs, tariffCategoryForContractType]);
 
   const supportsHoursBudget = useMemo(
-    () => ["wartung", "monitoring"].includes(String(contractDraft.docType || "").trim().toLowerCase()),
-    [contractDraft.docType]
+    () => ["wartung", "monitoring"].includes(String(activeContractBaseType || "").trim().toLowerCase()),
+    [activeContractBaseType]
   );
 
   const monthlyHoursIncluded = useMemo(
@@ -1205,19 +1301,23 @@ export default function CustomerDirectoryView() {
       (
         yearlyOverride !== null
           ? yearlyOverride
-          : monthlyOverride !== null
-          ? monthlyFinal * 12
-          : yearlyAutoRounded
+          : monthlyFinal * 12
       ).toFixed(2)
     );
+    const monthlyDelta = Number((monthlyFinal - monthlyAutoRounded).toFixed(2));
+    const yearlyDelta = Number((yearlyFinal - yearlyAutoRounded).toFixed(2));
 
     return {
       monthly: monthlyFinal,
       yearly: yearlyFinal,
       monthlyAuto: monthlyAutoRounded,
       yearlyAuto: yearlyAutoRounded,
-      monthlyOverridden: monthlyOverride !== null,
-      yearlyOverridden: yearlyOverride !== null,
+      monthlyOverridden: Math.abs(monthlyDelta) >= 0.01,
+      yearlyOverridden: Math.abs(yearlyDelta) >= 0.01,
+      monthlyHasInput: monthlyOverride !== null,
+      yearlyHasInput: yearlyOverride !== null,
+      monthlyDelta,
+      yearlyDelta,
       tariffMonthly: Number(tariffMonthly.toFixed(2)),
       hourlyMonthly: Number(hourlyMonthly.toFixed(2)),
       hourlyRate
@@ -1231,11 +1331,38 @@ export default function CustomerDirectoryView() {
   ]);
 
   useEffect(() => {
+    const suggestedMonthlyInput = formatMoneyInputValue(contractTotals.monthlyAuto);
+    setContractDraft((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      if (!contractPriceTouched.monthly && next.monthlyTotalOverride !== suggestedMonthlyInput) {
+        next.monthlyTotalOverride = suggestedMonthlyInput;
+        changed = true;
+      }
+      const baseMonthly =
+        parseOptionalMoneyInput(!contractPriceTouched.monthly ? suggestedMonthlyInput : next.monthlyTotalOverride) ??
+        contractTotals.monthlyAuto;
+      const derivedYearlyInput = formatMoneyInputValue(baseMonthly * 12);
+      if (!contractPriceTouched.yearly && next.yearlyTotalOverride !== derivedYearlyInput) {
+        next.yearlyTotalOverride = derivedYearlyInput;
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [
+    contractDraft.monthlyTotalOverride,
+    contractPriceTouched.monthly,
+    contractPriceTouched.yearly,
+    contractTotals.monthlyAuto
+  ]);
+
+  useEffect(() => {
     setGeneratedContract(null);
   }, [
     activeId,
     contractDraft.title,
     contractDraft.docType,
+    contractDraft.templateKey,
     contractDraft.validFrom,
     contractDraft.runtimeMonths,
     contractDraft.terminationNoticeMonths,
@@ -1287,7 +1414,7 @@ export default function CustomerDirectoryView() {
   const generateContractPreview = async (openModal = true) => {
     if (!activeId) return null;
     if (tariffSelectionMissing) {
-      setToast("Für Wartung/Monitoring muss ein Tarif gewählt werden.");
+      setToast("Für Wartung/Monitoring muss eine Preisvorlage gewählt werden.");
       return null;
     }
     if (contractRuntimeInvalid) {
@@ -1299,7 +1426,8 @@ export default function CustomerDirectoryView() {
     try {
       const preview = await api.previewCustomerContract(activeId, {
         title: String(contractDraft.title || "").trim(),
-        doc_type: String(contractDraft.docType || "wartung"),
+        doc_type: String(activeContractBaseType || "wartung"),
+        template_key: String(activeContractTemplate?.key || contractDraft.templateKey || "wartung"),
         note: "",
         valid_from: String(contractDraft.validFrom || ""),
         runtime_months: runtimeMonthsValue,
@@ -1369,7 +1497,7 @@ export default function CustomerDirectoryView() {
   const saveGeneratedContract = async () => {
     if (!activeId) return;
     if (tariffSelectionMissing) {
-      setToast("Für Wartung/Monitoring muss ein Tarif gewählt werden.");
+      setToast("Für Wartung/Monitoring muss eine Preisvorlage gewählt werden.");
       return;
     }
     if (contractRuntimeInvalid) {
@@ -1387,12 +1515,12 @@ export default function CustomerDirectoryView() {
         : null;
       const payload = {
         title: String(source.title || contractDraft.title || "Vertrag").trim(),
-        doc_type: String(source.doc_type || contractDraft.docType || "wartung"),
+        doc_type: String(source.doc_type || activeContractBaseType || "wartung"),
         file_name: String(source.file_name || "vertrag.pdf"),
         mime_type: "application/pdf",
         content_base64: contentBase64,
         html_content: String(source.html || ""),
-        template_key: String(source.template_key || contractDraft.docType || "wartung"),
+        template_key: String(source.template_key || activeContractTemplate?.key || contractDraft.templateKey || "wartung"),
         tariff_id: selectedTariffId,
         monthly_hours_included: Number(source?.meta?.monthly_hours_included ?? monthlyHoursIncluded),
         valid_from: String(source?.meta?.valid_from || contractDraft.validFrom || ""),
@@ -1403,6 +1531,19 @@ export default function CustomerDirectoryView() {
         auto_extension_months: Number(
           source?.meta?.auto_extension_months ?? autoExtensionMonthsValue
         ),
+        servers: Number(source?.meta?.servers ?? contractPreview.counts.servers ?? 0),
+        clients: Number(source?.meta?.clients ?? contractPreview.counts.clients ?? 0),
+        network_devices: Number(source?.meta?.network_devices ?? contractPreview.counts.networkDevices ?? 0),
+        iot_devices: Number(source?.meta?.iot_devices ?? contractPreview.counts.iotDevices ?? 0),
+        monthly_total: Number(source?.meta?.monthly_total ?? contractTotals.monthly),
+        yearly_total: Number(source?.meta?.yearly_total ?? contractTotals.yearly),
+        suggested_monthly_total: Number(
+          source?.meta?.suggested_monthly_total ?? contractTotals.monthlyAuto
+        ),
+        suggested_yearly_total: Number(
+          source?.meta?.suggested_yearly_total ?? contractTotals.yearlyAuto
+        ),
+        contract_variable_values: contractVariableValues,
         note: "",
         status: "proposal"
       };
@@ -1485,46 +1626,77 @@ export default function CustomerDirectoryView() {
     setContractCalcModalOpen(false);
     setEditingContractId(null);
     setContractAdvancedOpen(false);
+    setContractPriceTouched({ monthly: false, yearly: false });
     setContractTitleAuto(true);
   };
 
   const openContractProposalEditor = (item) => {
     if (!item) return;
-    const docType = String(item?.doc_type || item?.template_key || "wartung").trim().toLowerCase() || "wartung";
+    const docType = String(item?.doc_type || "wartung").trim().toLowerCase() || "wartung";
+    const templateKey = String(item?.template_key || "").trim() || docType;
     const preferredTariffCategory = docType === "monitoring" ? "monitoring" : docType === "wartung" ? "wartung" : "";
-    const matchingTariff = preferredTariffCategory
+    const savedCounts = item?.counts && typeof item.counts === "object" ? item.counts : {};
+    const savedPricing = item?.pricing && typeof item.pricing === "object" ? item.pricing : {};
+    const savedVariableValues =
+      item?.contract_variable_values && typeof item.contract_variable_values === "object"
+        ? item.contract_variable_values
+        : {};
+    const savedTariffId = Number(item?.tariff?.id || 0) || null;
+    const matchingTariff = savedTariffId
+      ? (contractTariffs || []).find((tariff) => Number(tariff?.id) === savedTariffId) || null
+      : preferredTariffCategory
       ? (contractTariffs || []).find(
           (tariff) =>
             Boolean(tariff?.is_active) &&
             String(tariff?.category || "").trim().toLowerCase() === preferredTariffCategory
-        )
+        ) || null
       : null;
-    if (matchingTariff?.id) {
-      setCalcInput((prev) => ({ ...prev, tariffId: matchingTariff.id }));
-    }
+    setCalcInput((prev) => ({
+      ...prev,
+      tariffId: matchingTariff?.id ?? null,
+      servers: String(Number(savedCounts?.servers || 0)),
+      clients: String(Number(savedCounts?.clients || 0)),
+      networkDevices: String(Number(savedCounts?.network_devices || 0)),
+      iotDevices: String(Number(savedCounts?.iot_devices || 0))
+    }));
     setEditingContractId(Number(item.id || 0) || null);
     setContractDraft({
       title: String(item?.title || "").trim(),
       docType,
+      templateKey,
       validFrom: String(item?.valid_from || "").trim() || todayInputValue(),
       runtimeMonths: String(Number(item?.runtime_months || 12) || 12),
       terminationNoticeMonths: String(Number(item?.termination_notice_months || 3) || 3),
       autoExtensionMonths: String(Number(item?.auto_extension_months || 12) || 12),
       monthlyHoursIncluded: String(Number(item?.monthly_hours_included || 0)),
-      monthlyTotalOverride: "",
-      yearlyTotalOverride: ""
+      monthlyTotalOverride: formatMoneyInputValue(savedPricing?.monthly_total),
+      yearlyTotalOverride: formatMoneyInputValue(savedPricing?.yearly_total)
     });
     setGeneratedContract({
       title: String(item?.title || "").trim() || "Vertrag",
       doc_type: docType,
-      template_key: String(item?.template_key || docType || "wartung"),
+      template_key: templateKey,
       file_name: String(item?.file_name || "vertrag.pdf"),
       html: String(item?.html_content || ""),
       meta: {
         monthly_hours_included: Number(item?.monthly_hours_included || 0),
+        tariff: item?.tariff || null,
+        servers: Number(savedCounts?.servers || 0),
+        clients: Number(savedCounts?.clients || 0),
+        network_devices: Number(savedCounts?.network_devices || 0),
+        iot_devices: Number(savedCounts?.iot_devices || 0),
+        monthly_total: Number(savedPricing?.monthly_total || 0),
+        yearly_total: Number(savedPricing?.yearly_total || 0),
+        suggested_monthly_total: Number(savedPricing?.suggested_monthly_total || 0),
+        suggested_yearly_total: Number(savedPricing?.suggested_yearly_total || 0),
+        contract_variable_values: savedVariableValues
       }
     });
-    setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
+    setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions, savedVariableValues));
+    setContractPriceTouched({
+      monthly: Number(savedPricing?.monthly_total || 0) > 0,
+      yearly: Number(savedPricing?.yearly_total || 0) > 0
+    });
     setContractAdvancedOpen(true);
     setContractTitleAuto(false);
     setContractCalcModalOpen(true);
@@ -1534,6 +1706,8 @@ export default function CustomerDirectoryView() {
     if (!activeCustomer) return;
     const context = developmentByCustomerId[activeCustomer.id] || null;
     const counts = deriveContractCountsFromDevelopment(context);
+    const preferredTemplate =
+      contractTemplateOptions.find((item) => item.docType === "wartung") || contractTemplateOptions[0] || null;
     setCalcInput((prev) => ({
       ...prev,
       servers: String(counts.servers),
@@ -1546,8 +1720,13 @@ export default function CustomerDirectoryView() {
       ),
     }));
     setContractDraft({
-      title: buildDefaultContractTitle("wartung", activeCustomerLabel),
-      docType: "wartung",
+      title: buildDefaultContractTitle(
+        preferredTemplate?.title,
+        activeCustomerLabel,
+        preferredTemplate?.docType || "wartung"
+      ),
+      docType: preferredTemplate?.docType || "wartung",
+      templateKey: preferredTemplate?.key || "wartung",
       validFrom: todayInputValue(),
       runtimeMonths: "12",
       terminationNoticeMonths: "3",
@@ -1560,6 +1739,7 @@ export default function CustomerDirectoryView() {
     setGeneratedContract(null);
     setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
     setContractAdvancedOpen(false);
+    setContractPriceTouched({ monthly: false, yearly: false });
     setContractTitleAuto(true);
     setContractCalcModalOpen(true);
   };
@@ -1634,17 +1814,29 @@ export default function CustomerDirectoryView() {
   const activeCustomer = customers.find((customer) => customer.id === activeId) || null;
   const editCustomer = customers.find((customer) => customer.id === editCustomerId) || null;
   const activeCustomerLabel = String(activeCustomer?.name || "").trim();
-  const autoContractTitle = buildDefaultContractTitle(contractDraft.docType, activeCustomerLabel);
-  const applyContractTypeChange = (nextType) => {
-    const normalizedType = normalizeContractDocumentType(nextType) || "wartung";
-    const previousAutoTitle = buildDefaultContractTitle(contractDraft.docType, activeCustomerLabel);
+  const autoContractTitle = buildDefaultContractTitle(
+    activeContractTemplate?.title,
+    activeCustomerLabel,
+    activeContractBaseType
+  );
+  const applyContractTemplateChange = (nextTemplateKey) => {
+    const nextTemplate = contractTemplateOptions.find((item) => item.key === nextTemplateKey) || null;
+    if (!nextTemplate) return;
+    const previousAutoTitle = buildDefaultContractTitle(
+      activeContractTemplate?.title,
+      activeCustomerLabel,
+      activeContractBaseType
+    );
     const currentTitle = String(contractDraft.title || "").trim();
     const shouldUpdateTitle = contractTitleAuto || !currentTitle || currentTitle === previousAutoTitle;
     setContractDraft((prev) => ({
       ...prev,
-      docType: normalizedType,
-      title: shouldUpdateTitle ? buildDefaultContractTitle(normalizedType, activeCustomerLabel) : prev.title,
-      monthlyHoursIncluded: normalizedType === "avv_dsgvo" ? "0" : prev.monthlyHoursIncluded
+      docType: nextTemplate.docType,
+      templateKey: nextTemplate.key,
+      title: shouldUpdateTitle
+        ? buildDefaultContractTitle(nextTemplate.title, activeCustomerLabel, nextTemplate.docType)
+        : prev.title,
+      monthlyHoursIncluded: nextTemplate.docType === "avv_dsgvo" ? "0" : prev.monthlyHoursIncluded
     }));
     if (shouldUpdateTitle) {
       setContractTitleAuto(true);
@@ -1891,6 +2083,12 @@ export default function CustomerDirectoryView() {
   const renderContractListItem = (item) => {
     const status = String(item?.status || "active").toLowerCase();
     const monthlyHoursIncluded = Number(item?.monthly_hours_included || 0);
+    const pricing = item?.pricing && typeof item.pricing === "object" ? item.pricing : {};
+    const counts = item?.counts && typeof item.counts === "object" ? item.counts : {};
+    const monthlyTotal = Number(pricing?.monthly_total || 0);
+    const suggestedMonthlyTotal = Number(pricing?.suggested_monthly_total || 0);
+    const hasPricing = monthlyTotal > 0 || suggestedMonthlyTotal > 0;
+    const pricingDiff = Number((monthlyTotal - suggestedMonthlyTotal).toFixed(2));
     const timeline = contractTimelineFromItem(item);
     const cancellationDeadlineDays = daysUntilTimestamp(timeline.cancellationDeadlineAt);
     const renewalDays = daysUntilTimestamp(timeline.nextRenewalAt);
@@ -1911,6 +2109,34 @@ export default function CustomerDirectoryView() {
         </div>
         {monthlyHoursIncluded > 0 ? (
           <p className="mt-1 text-[11px] text-sand-600">Inklusivstunden: {formatHours(monthlyHoursIncluded)}</p>
+        ) : null}
+        {hasPricing ? (
+          <div className="mt-1.5 rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[11px] font-semibold text-sand-800">
+                Individualpreis: {formatEurPrecise(monthlyTotal || suggestedMonthlyTotal)}
+                <span className="text-sand-500"> / Monat</span>
+              </p>
+              {Math.abs(pricingDiff) >= 0.01 ? (
+                <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+                  Vorschlag {formatEurPrecise(suggestedMonthlyTotal)}
+                </span>
+              ) : (
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700">
+                  Preis entspricht Vorschlag
+                </span>
+              )}
+            </div>
+            {(Number(counts?.servers || 0) > 0 ||
+              Number(counts?.clients || 0) > 0 ||
+              Number(counts?.network_devices || 0) > 0 ||
+              Number(counts?.iot_devices || 0) > 0) ? (
+              <p className="mt-1 text-[11px] text-sand-600">
+                Bestand: {Number(counts?.servers || 0)} Server · {Number(counts?.clients || 0)} Clients ·{" "}
+                {Number(counts?.network_devices || 0)} Netzwerk · {Number(counts?.iot_devices || 0)} IoT
+              </p>
+            ) : null}
+          </div>
         ) : null}
         {cancellationDeadlineDays !== null && !isCancelled ? (
           <p className={`mt-1 text-[11px] ${cancellationDeadlineDays <= 14 ? "text-amber-700" : "text-sand-600"}`}>
@@ -2845,12 +3071,6 @@ export default function CustomerDirectoryView() {
   };
 
   const renderContractCalculationContent = () => {
-    const contractTypeOptions = [
-      { value: "wartung", label: "Wartung" },
-      { value: "monitoring", label: "Monitoring" },
-      { value: "avv_dsgvo", label: "AVV / DSGVO" }
-    ];
-
     return (
       <div className="space-y-3">
         <div className="rounded-2xl border border-sand-200 bg-gradient-to-br from-white via-sand-50 to-sand-100 p-4">
@@ -2861,7 +3081,7 @@ export default function CustomerDirectoryView() {
                 {editingContractId ? "Vertragsvorschlag aktualisieren" : "Neuen Vertrag einfacher anlegen"}
               </h4>
               <p className="mt-1 text-sm text-sand-600">
-                Typ, Tarif und Startdatum prüfen. Titel und Standardlaufzeit werden automatisch vorbelegt.
+                Template, Preisvorschlag und Startdatum prüfen. Titel, Preis und Standardlaufzeit werden automatisch vorbelegt.
               </p>
             </div>
             <button
@@ -2874,22 +3094,39 @@ export default function CustomerDirectoryView() {
           </div>
           <div className="mt-3 space-y-3">
             <div>
-              <span className="text-[10px] uppercase tracking-wide text-sand-500">1) Vertragstyp</span>
-              <div className="mt-1.5 flex flex-wrap gap-2">
-                {contractTypeOptions.map((option) => {
-                  const active = contractDraft.docType === option.value;
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">1) Template</span>
+              <div className="mt-1.5 grid gap-2 md:grid-cols-3">
+                {contractTemplateOptions.map((option) => {
+                  const active = activeContractTemplate?.key === option.key;
                   return (
                     <button
-                      key={option.value}
+                      key={option.key}
                       type="button"
-                      onClick={() => applyContractTypeChange(option.value)}
-                      className={`rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-wide ${
+                      onClick={() => applyContractTemplateChange(option.key)}
+                      className={`rounded-2xl border px-3 py-3 text-left ${
                         active
                           ? "border-sand-900 bg-sand-900 text-white"
                           : "border-sand-200 bg-white text-sand-700 hover:bg-sand-100"
                       }`}
                     >
-                      {option.label}
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide">{option.title}</p>
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${
+                            active ? "border-white/30 text-white" : "border-sand-200 text-sand-500"
+                          }`}
+                        >
+                          {contractTypeLabel(option.docType)}
+                        </span>
+                      </div>
+                      <p className={`mt-1 text-xs ${active ? "text-sand-200" : "text-sand-500"}`}>
+                        {option.description || "Ohne Kurzbeschreibung"}
+                      </p>
+                      {!option.hasBodyTemplate ? (
+                        <p className={`mt-2 text-[10px] ${active ? "text-amber-200" : "text-amber-700"}`}>
+                          Template ohne Inhalt
+                        </p>
+                      ) : null}
                     </button>
                   );
                 })}
@@ -2897,7 +3134,7 @@ export default function CustomerDirectoryView() {
             </div>
             <div className="grid gap-2 md:grid-cols-2">
               <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Tarif</span>
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Preisvorlage</span>
                 <select
                   value={calcInput.tariffId || ""}
                   onChange={(event) =>
@@ -2908,7 +3145,7 @@ export default function CustomerDirectoryView() {
                 >
                   <option value="">
                     {tariffRequired
-                      ? `Tarif für ${contractTypeLabel(contractDraft.docType)} wählen`
+                      ? `Preisvorlage für ${contractTypeLabel(activeContractBaseType)} wählen`
                       : "Für AVV / DSGVO nicht erforderlich"}
                   </option>
                   {filteredActiveTariffs.map((item) => (
@@ -2953,6 +3190,50 @@ export default function CustomerDirectoryView() {
                 placeholder={autoContractTitle}
               />
             </label>
+            {editableContractVariables.length ? (
+              <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Template-Variablen</p>
+                    <p className="mt-1 text-[11px] text-sand-600">
+                      Kundenspezifische Inhalte direkt im Schnellstart anpassen.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
+                      setGeneratedContract(null);
+                    }}
+                    className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    Vorschläge laden
+                  </button>
+                </div>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  {editableContractVariables.map((item) => (
+                    <label key={item.key} className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                        {item.label}
+                        <span className="ml-1 text-sand-400">({item.key})</span>
+                      </span>
+                      <input
+                        value={String(contractVariableValues[item.key] ?? "")}
+                        onChange={(event) => {
+                          setContractVariableValues((prev) => ({
+                            ...prev,
+                            [item.key]: event.target.value
+                          }));
+                          setGeneratedContract(null);
+                        }}
+                        placeholder={item.suggestedValue || "-"}
+                        className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {supportsHoursBudget ? (
               <label className="block md:max-w-xs">
                 <span className="text-[10px] uppercase tracking-wide text-sand-500">Inklusivstunden / Monat</span>
@@ -2984,7 +3265,7 @@ export default function CustomerDirectoryView() {
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
               {tariffSelectionMissing ? (
-                <span className="text-rose-600">Wartungs- und Monitoringverträge benötigen einen Tarif.</span>
+                <span className="text-rose-600">Wartungs- und Monitoringverträge benötigen eine Preisvorlage.</span>
               ) : null}
               {contractRuntimeInvalid ? (
                 <span className="text-rose-600">Kündigungsfrist darf die Laufzeit nicht überschreiten.</span>
@@ -3073,7 +3354,7 @@ export default function CustomerDirectoryView() {
                 </p>
               </div>
               <span className="text-[11px] text-sand-500">
-                Grundlage: {selectedTariff ? selectedTariff.name : tariffRequired ? "Tarif fehlt" : "Ohne Tarif"}
+                Grundlage: {selectedTariff ? selectedTariff.name : tariffRequired ? "Preisvorlage fehlt" : "Ohne Tarif"}
               </span>
             </div>
             <div className="mt-3 grid gap-2 md:grid-cols-3">
@@ -3124,47 +3405,6 @@ export default function CustomerDirectoryView() {
                 />
               </label>
             </div>
-            {editableContractVariables.length ? (
-              <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-2.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[10px] uppercase tracking-wide text-sand-500">
-                    Individuelle Vertragsvariablen
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
-                      setGeneratedContract(null);
-                    }}
-                    className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    Vorschläge laden
-                  </button>
-                </div>
-                <div className="mt-2 grid gap-2 md:grid-cols-2">
-                  {editableContractVariables.map((item) => (
-                    <label key={item.key} className="block">
-                      <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                        {item.label}
-                        <span className="ml-1 text-sand-400">({item.key})</span>
-                      </span>
-                      <input
-                        value={String(contractVariableValues[item.key] ?? "")}
-                        onChange={(event) => {
-                          setContractVariableValues((prev) => ({
-                            ...prev,
-                            [item.key]: event.target.value
-                          }));
-                          setGeneratedContract(null);
-                        }}
-                        placeholder={item.suggestedValue || "-"}
-                        className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
-                      />
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ) : null}
           </div>
         ) : null}
 
@@ -3174,12 +3414,12 @@ export default function CustomerDirectoryView() {
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Preis & Aktion</p>
               <p className="mt-1 text-sm text-sand-600">
                 {tariffRequired
-                  ? "Preis wird aus Tarif, Geräteanzahl und Stundenbudget berechnet. Individualpreise kannst du hier direkt übersteuern."
+                  ? "Der Tarif liefert den Vorschlag. Gespeichert wird immer dein individueller Preis."
                   : "AVV / DSGVO wird ohne Tarif kalkuliert."}
               </p>
             </div>
             <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[11px] text-sand-600">
-              {contractTypeLabel(contractDraft.docType)}
+              {contractTypeLabel(activeContractBaseType)}
             </span>
           </div>
           <div
@@ -3188,21 +3428,23 @@ export default function CustomerDirectoryView() {
             }`}
           >
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Monatspreis final</p>
+              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Individualpreis pro Monat</p>
               <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.monthly)}</p>
               <p className="mt-1 text-[11px] text-emerald-800">
+                Vorschlag: {formatEurPrecise(contractTotals.monthlyAuto)}
                 {contractTotals.monthlyOverridden
-                  ? `Manuell überschrieben (Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}).`
-                  : "Automatisch aus Tarifkalkulation übernommen."}
+                  ? ` · Abweichung ${formatEurPrecise(Math.abs(contractTotals.monthlyDelta))}`
+                  : " · entspricht Vorschlag"}
               </p>
             </div>
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Jahrespreis final</p>
+              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Individualpreis pro Jahr</p>
               <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.yearly)}</p>
               <p className="mt-1 text-[11px] text-emerald-800">
+                Vorschlag: {formatEurPrecise(contractTotals.yearlyAuto)}
                 {contractTotals.yearlyOverridden
-                  ? `Manuell überschrieben (Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}).`
-                  : "Automatisch aus Tarifkalkulation übernommen."}
+                  ? ` · Abweichung ${formatEurPrecise(Math.abs(contractTotals.yearlyDelta))}`
+                  : " · entspricht Vorschlag"}
               </p>
             </div>
             {supportsHoursBudget ? (
@@ -3219,33 +3461,35 @@ export default function CustomerDirectoryView() {
           <div className="mt-3 grid gap-2 md:grid-cols-2">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                Individualpreis pro Monat (optional)
+                Individualpreis pro Monat
               </span>
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={contractDraft.monthlyTotalOverride}
-                onChange={(event) =>
-                  setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: event.target.value }))
-                }
-                placeholder={`Auto: ${formatEurPrecise(contractTotals.monthlyAuto)}`}
+                onChange={(event) => {
+                  setContractDraft((prev) => ({ ...prev, monthlyTotalOverride: event.target.value }));
+                  setContractPriceTouched((prev) => ({ ...prev, monthly: true }));
+                }}
+                placeholder={`Vorschlag: ${formatEurPrecise(contractTotals.monthlyAuto)}`}
                 className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
               />
             </label>
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                Individualpreis pro Jahr (optional)
+                Individualpreis pro Jahr
               </span>
               <input
                 type="number"
                 min="0"
                 step="0.01"
                 value={contractDraft.yearlyTotalOverride}
-                onChange={(event) =>
-                  setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }))
-                }
-                placeholder={`Auto: ${formatEurPrecise(contractTotals.yearlyAuto)}`}
+                onChange={(event) => {
+                  setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }));
+                  setContractPriceTouched((prev) => ({ ...prev, yearly: true }));
+                }}
+                placeholder={`Vorschlag: ${formatEurPrecise(contractTotals.yearlyAuto)}`}
                 className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
               />
             </label>
@@ -3260,17 +3504,18 @@ export default function CustomerDirectoryView() {
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
+                setContractPriceTouched({ monthly: false, yearly: false });
                 setContractDraft((prev) => ({
                   ...prev,
                   monthlyTotalOverride: "",
                   yearlyTotalOverride: ""
-                }))
-              }
-              disabled={!contractDraft.monthlyTotalOverride && !contractDraft.yearlyTotalOverride}
+                }));
+              }}
+              disabled={!contractPriceTouched.monthly && !contractPriceTouched.yearly}
               className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Endpreis zurücksetzen
+              Preisvorschlag übernehmen
             </button>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">

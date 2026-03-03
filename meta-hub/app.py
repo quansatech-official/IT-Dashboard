@@ -2205,6 +2205,16 @@ def _refresh_ai_preanalysis() -> bool:
                     continue
                 sources = data.get("sources") if isinstance(data.get("sources"), dict) else {}
                 generated_at = _safe_int(data.get("generated_at"), default=int(time.time() * 1000))
+                provider = str(data.get("provider") or "ollama").strip().lower() or "ollama"
+                used_fallback = bool(data.get("used_fallback"))
+                timeout_seconds = _safe_int(data.get("timeout_seconds"))
+                if used_fallback:
+                    logger.info(
+                        "AI preanalysis fallback stored for customer=%s mode=%s provider=%s",
+                        customer_id,
+                        mode,
+                        provider,
+                    )
                 results.append(
                     (
                         int(customer_id),
@@ -2214,6 +2224,9 @@ def _refresh_ai_preanalysis() -> bool:
                             "sources": sources,
                             "generatedAt": generated_at,
                             "tone": str(data.get("tone") or "sachlich"),
+                            "provider": provider,
+                            "usedFallback": used_fallback,
+                            "timeoutSeconds": timeout_seconds,
                         },
                     )
                 )
@@ -2434,6 +2447,7 @@ def get_health() -> Dict[str, Any]:
             "aiPreanalysisLastRefreshAt": int(_state.get("aiLastRefreshAt") or 0),
             "aiPreanalysisLastDurationMs": int(_state.get("aiLastDurationMs") or 0),
             "aiPreanalysisLastError": str(_state.get("aiLastError") or ""),
+            "aiBackendCooldownUntil": int(_state.get("aiBackendCooldownUntil") or 0),
             "aiPreanalysisModes": list(AI_PREANALYSIS_MODES),
             "count": int((payload or {}).get("count") or 0) if isinstance(payload, dict) else 0,
         }

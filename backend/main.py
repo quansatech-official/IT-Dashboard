@@ -93,6 +93,14 @@ OLLAMA_PROMPT_TOKEN_MARGIN = max(
     64,
     int(os.environ.get("OLLAMA_PROMPT_TOKEN_MARGIN") or "96"),
 )
+CUSTOMER_DEVELOPMENT_AI_TIMEOUT_SECONDS = max(
+    5,
+    int(os.environ.get("CUSTOMER_DEVELOPMENT_AI_TIMEOUT_SECONDS") or "35"),
+)
+CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS = max(
+    3,
+    int(os.environ.get("CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS") or "20"),
+)
 DB_STARTUP_RETRY_ATTEMPTS = max(
     1,
     int(os.environ.get("DB_STARTUP_RETRY_ATTEMPTS") or "30"),
@@ -167,6 +175,7 @@ _ollama_response_cache_lock = threading.Lock()
 _ollama_missing_model_until_ms: Dict[str, int] = {}
 _ollama_missing_model_lock = threading.Lock()
 MODEL_PREF_CUSTOMER_RANKING = os.environ.get("OLLAMA_MODEL_PREF_CUSTOMER_RANKING") or OLLAMA_MODEL
+MODEL_PREF_CUSTOMER_DEVELOPMENT = os.environ.get("OLLAMA_MODEL_PREF_CUSTOMER_DEVELOPMENT") or OLLAMA_MODEL
 MODEL_PREF_TASK_DRAFT = os.environ.get("OLLAMA_MODEL_PREF_TASK_DRAFT") or OLLAMA_MODEL
 MODEL_PREF_ACTION = os.environ.get("OLLAMA_MODEL_PREF_ACTION") or OLLAMA_MODEL
 MODEL_PREF_OFFER_TEXT = os.environ.get("OLLAMA_MODEL_PREF_OFFER_TEXT") or OLLAMA_MODEL
@@ -688,6 +697,7 @@ class CustomerContractDocument(Base):
     termination_notice_months = Column(Integer, default=3)
     auto_extension_months = Column(Integer, default=12)
     note = Column(Text, default="")
+    snapshot_json = Column(Text, default="{}")
     cancel_reason = Column(Text, default="")
     cancelled_at = Column(BigInteger, default=0)
     cancelled_effective_at = Column(BigInteger, default=0)
@@ -1236,6 +1246,8 @@ def _ensure_customer_contract_documents_columns() -> None:
         statements.append("ALTER TABLE customer_contract_documents ADD COLUMN termination_notice_months INTEGER DEFAULT 3")
     if "auto_extension_months" not in columns:
         statements.append("ALTER TABLE customer_contract_documents ADD COLUMN auto_extension_months INTEGER DEFAULT 12")
+    if "snapshot_json" not in columns:
+        statements.append("ALTER TABLE customer_contract_documents ADD COLUMN snapshot_json TEXT DEFAULT '{}'")
     if "cancelled_effective_at" not in columns:
         statements.append("ALTER TABLE customer_contract_documents ADD COLUMN cancelled_effective_at BIGINT DEFAULT 0")
     if "stop_service_immediately" not in columns:
@@ -1689,6 +1701,15 @@ class CustomerContractDocumentCreate(BaseModel):
     termination_notice_months: Optional[int] = 3
     auto_extension_months: Optional[int] = 12
     note: Optional[str] = ""
+    monthly_total: Optional[float] = None
+    yearly_total: Optional[float] = None
+    suggested_monthly_total: Optional[float] = None
+    suggested_yearly_total: Optional[float] = None
+    servers: Optional[int] = 0
+    clients: Optional[int] = 0
+    network_devices: Optional[int] = 0
+    iot_devices: Optional[int] = 0
+    contract_variable_values: Optional[Dict[str, str]] = None
     status: Optional[str] = "active"
 
 
@@ -1701,6 +1722,7 @@ class CustomerContractStatusUpdate(BaseModel):
 class CustomerContractPreviewRequest(BaseModel):
     title: Optional[str] = ""
     doc_type: Optional[str] = "wartung"
+    template_key: Optional[str] = ""
     note: Optional[str] = ""
     tariff_id: Optional[int] = None
     calculation_id: Optional[int] = None
@@ -2560,12 +2582,37 @@ def _extract_sevdesk_unity_id(row: Optional[Dict[str, Any]]) -> Optional[int]:
     return _parse_int(row.get("unity_id"))
 
 
-def _is_service_invoice_position(
+def _sevdesk_invoice_position_text(row: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    return _clean_invoice_position_text(
+        f"{row.get('name') or ''} {row.get('text') or ''}"
+    ).lower()
+
+
+def _is_travel_invoice_position(row: Optional[Dict[str, Any]]) -> bool:
+    text = _sevdesk_invoice_position_text(row)
+    if not text:
+        return False
+    travel_keywords = (
+        "anfahrt",
+        "fahrt",
+        "fahrzeit",
+        "kilometer",
+        "km-pauschale",
+        "reisekosten",
+    )
+    return any(keyword in text for keyword in travel_keywords)
+
+
+def _is_worktime_invoice_position(
     row: Optional[Dict[str, Any]],
     *,
     config: Optional[SevdeskConfig] = None,
 ) -> bool:
     if not isinstance(row, dict):
+        return False
+    if _is_travel_invoice_position(row):
         return False
     unity_id = _extract_sevdesk_unity_id(row)
     service_unity_ids = {
@@ -2578,13 +2625,13 @@ def _is_service_invoice_position(
     }
     if unity_id and unity_id in service_unity_ids:
         return True
-    text = _clean_invoice_position_text(
-        f"{row.get('name') or ''} {row.get('text') or ''}"
-    ).lower()
+    text = _sevdesk_invoice_position_text(row)
     if not text:
         return False
-    service_keywords = (
+    worktime_keywords = (
         "arbeitszeit",
+        "arbeitsstunde",
+        "arbeitsstunden",
         "dienstleistung",
         "leistung",
         "support",
@@ -2593,8 +2640,31 @@ def _is_service_invoice_position(
         "remote",
         "vor ort",
         "vor-ort",
-        "anfahrt",
+        "installation",
+        "einrichtung",
+        "konfiguration",
+        "techniker",
+        "stunden",
+        "stunde",
+        "std.",
+        "h ",
     )
+    return any(keyword in text for keyword in worktime_keywords)
+
+
+def _is_service_invoice_position(
+    row: Optional[Dict[str, Any]],
+    *,
+    config: Optional[SevdeskConfig] = None,
+) -> bool:
+    if _is_worktime_invoice_position(row, config=config):
+        return True
+    if _is_travel_invoice_position(row):
+        return True
+    text = _sevdesk_invoice_position_text(row)
+    if not text:
+        return False
+    service_keywords = ("servicepauschale", "wartungspauschale", "monitoring", "managed service")
     return any(keyword in text for keyword in service_keywords)
 
 
@@ -2609,11 +2679,9 @@ def _is_material_invoice_position(
     device_unity_id = getattr(config, "device_unity_id", None)
     if unity_id and device_unity_id and unity_id == device_unity_id:
         return True
-    if _is_service_invoice_position(row, config=config):
+    if _is_worktime_invoice_position(row, config=config) or _is_travel_invoice_position(row):
         return False
-    text = _clean_invoice_position_text(
-        f"{row.get('name') or ''} {row.get('text') or ''}"
-    ).lower()
+    text = _sevdesk_invoice_position_text(row)
     if not text:
         return False
     material_keywords = (
@@ -4099,6 +4167,8 @@ def _default_contract_templates_v1() -> Dict[str, Dict[str, str]]:
     return {
         "wartung": {
             "title": "Wartungsvertrag",
+            "description": "Klassischer Wartungsvertrag mit laufender Betreuung und Stundenbudget.",
+            "doc_type": "wartung",
             "header_html": "",
             "footer_html": "",
             "body_template": (
@@ -4183,6 +4253,8 @@ def _default_contract_templates_v1() -> Dict[str, Dict[str, str]]:
         },
         "monitoring": {
             "title": "Monitoringvertrag",
+            "description": "Technische Ueberwachung mit Alarmierung und Monitoring-Berichten.",
+            "doc_type": "monitoring",
             "header_html": "",
             "footer_html": "",
             "body_template": (
@@ -4263,6 +4335,8 @@ def _default_contract_templates_v1() -> Dict[str, Dict[str, str]]:
         },
         "avv_dsgvo": {
             "title": "Auftragsverarbeitungsvertrag (DSGVO)",
+            "description": "Datenschutzrechtliches Template fuer Auftragsverarbeitung nach Art. 28 DSGVO.",
+            "doc_type": "avv_dsgvo",
             "header_html": "",
             "footer_html": "",
             "body_template": (
@@ -4318,6 +4392,8 @@ def _default_contract_templates_v2() -> Dict[str, Dict[str, str]]:
     return {
         "wartung": {
             "title": "IT-Service- und Wartungsvertrag",
+            "description": "Servicevertrag fuer laufende Betreuung, Wartung und definierte Inklusivstunden.",
+            "doc_type": "wartung",
             "header_html": "",
             "footer_html": "",
             "body_template": (
@@ -4387,6 +4463,8 @@ def _default_contract_templates_v2() -> Dict[str, Dict[str, str]]:
         },
         "monitoring": {
             "title": "IT-Monitoringvertrag",
+            "description": "Template fuer Ueberwachung, Alarmierung und regelmaessige Betriebsinformationen.",
+            "doc_type": "monitoring",
             "header_html": "",
             "footer_html": "",
             "body_template": (
@@ -4456,6 +4534,8 @@ def _default_contract_templates_v2() -> Dict[str, Dict[str, str]]:
         },
         "avv_dsgvo": {
             "title": "Vereinbarung zur Auftragsverarbeitung (Art. 28 DSGVO)",
+            "description": "Rechtliches Datenschutz-Template zur Auftragsverarbeitung.",
+            "doc_type": "avv_dsgvo",
             "header_html": "",
             "footer_html": "",
             "body_template": (
@@ -4520,8 +4600,11 @@ def _default_contract_templates_v2() -> Dict[str, Dict[str, str]]:
 
 def _normalize_contract_template_entry(raw: Any) -> Dict[str, str]:
     entry = raw if isinstance(raw, dict) else {}
+    raw_doc_type = str(entry.get("doc_type") or "").strip()
     return {
         "title": str(entry.get("title") or "").strip(),
+        "description": str(entry.get("description") or "").strip(),
+        "doc_type": _normalize_contract_doc_type(raw_doc_type, default="") if raw_doc_type else "",
         "header_html": str(entry.get("header_html") or ""),
         "body_template": str(entry.get("body_template") or ""),
         "footer_html": str(entry.get("footer_html") or ""),
@@ -4660,7 +4743,31 @@ def _normalize_contract_doc_type(value: Any, *, default: str = "wartung") -> str
     if not raw:
         return default
     key = CONTRACT_DOC_TYPE_ALIASES.get(raw, raw)
+    if key.startswith("wartung_"):
+        return "wartung"
+    if key.startswith("monitoring_"):
+        return "monitoring"
+    if key.startswith("avv_dsgvo_") or key.startswith("avv_") or key.startswith("dsgvo_"):
+        return "avv_dsgvo"
     return key if key in ALLOWED_CONTRACT_DOC_TYPES else default
+
+
+def _normalize_contract_template_key(value: Any, *, fallback: str = "wartung") -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+    return normalized or fallback
+
+
+def _resolve_contract_doc_type_from_template(
+    template_key: Any,
+    template_entry: Optional[Dict[str, Any]] = None,
+    *,
+    default: str = "wartung",
+) -> str:
+    if isinstance(template_entry, dict):
+        explicit = _normalize_contract_doc_type(template_entry.get("doc_type"), default="")
+        if explicit:
+            return explicit
+    return _normalize_contract_doc_type(template_key, default=default)
 
 
 def _normalize_contract_variable_key(value: Any) -> str:
@@ -4779,6 +4886,8 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
     merged_contract_templates: Dict[str, Dict[str, str]] = {}
     keys: Set[str] = set()
     keys.update([str(key).strip() for key in contract_defaults.keys() if str(key).strip()])
+    if isinstance(contract_data, dict):
+        keys.update([str(key).strip() for key in contract_data.keys() if str(key).strip()])
     for key in sorted(keys):
         default_entry = contract_defaults.get(key) if isinstance(contract_defaults.get(key), dict) else {}
         current_entry = contract_data.get(key) if isinstance(contract_data, dict) else {}
@@ -4796,6 +4905,13 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
             current_entry = {}
         merged_contract_templates[key] = {
             "title": str(current_entry.get("title") or default_entry.get("title") or "").strip(),
+            "description": str(
+                current_entry.get("description") or default_entry.get("description") or ""
+            ).strip(),
+            "doc_type": _normalize_contract_doc_type(
+                current_entry.get("doc_type") or default_entry.get("doc_type"),
+                default=_normalize_contract_doc_type(key, default=""),
+            ),
             "header_html": str(current_entry.get("header_html") or default_entry.get("header_html") or ""),
             "body_template": str(
                 current_entry.get("body_template") or default_entry.get("body_template") or ""
@@ -5596,6 +5712,23 @@ def _safe_nonnegative_int(value: Any) -> int:
         return 0
 
 
+def _parse_json_object(value: Any, fallback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    fallback_value = dict(fallback or {})
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return fallback_value
+        try:
+            loaded = json.loads(raw)
+        except Exception:
+            return fallback_value
+        if isinstance(loaded, dict):
+            return loaded
+    return fallback_value
+
+
 def serialize_contract_tariff(tariff: ContractTariff) -> Dict[str, Any]:
     return {
         "id": tariff.id,
@@ -5731,6 +5864,13 @@ def _build_contract_timeline(item: CustomerContractDocument) -> Dict[str, Any]:
 
 def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict[str, Any]:
     timeline = _build_contract_timeline(item)
+    snapshot_payload = _parse_json_object(getattr(item, "snapshot_json", "{}"))
+    pricing_payload = _parse_json_object(snapshot_payload.get("pricing"))
+    counts_payload = _parse_json_object(snapshot_payload.get("counts"))
+    tariff_payload = snapshot_payload.get("tariff")
+    if not isinstance(tariff_payload, dict):
+        tariff_payload = None
+    contract_variable_values = _parse_json_object(snapshot_payload.get("contract_variable_values"))
     return {
         "id": item.id,
         "customer_id": item.customer_id,
@@ -5745,6 +5885,22 @@ def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict
         "runtime_months": int(_safe_nonnegative_int(getattr(item, "runtime_months", 12) or 12)),
         "termination_notice_months": int(_safe_nonnegative_int(getattr(item, "termination_notice_months", 3) or 3)),
         "auto_extension_months": int(_safe_nonnegative_int(getattr(item, "auto_extension_months", 12) or 12)),
+        "tariff": tariff_payload,
+        "counts": {
+            "servers": int(_safe_nonnegative_int(counts_payload.get("servers"))),
+            "clients": int(_safe_nonnegative_int(counts_payload.get("clients"))),
+            "network_devices": int(_safe_nonnegative_int(counts_payload.get("network_devices"))),
+            "iot_devices": int(_safe_nonnegative_int(counts_payload.get("iot_devices"))),
+        },
+        "pricing": {
+            "monthly_total": round(float(pricing_payload.get("monthly_total") or 0.0), 2),
+            "yearly_total": round(float(pricing_payload.get("yearly_total") or 0.0), 2),
+            "suggested_monthly_total": round(float(pricing_payload.get("suggested_monthly_total") or 0.0), 2),
+            "suggested_yearly_total": round(float(pricing_payload.get("suggested_yearly_total") or 0.0), 2),
+            "individual_price_applied": bool(pricing_payload.get("individual_price_applied", False)),
+        },
+        "contract_variable_values": contract_variable_values,
+        "snapshot": snapshot_payload,
         "has_html": bool(str(item.html_content or "").strip()),
         "html_content": item.html_content or "",
         "note": item.note or "",
@@ -10567,12 +10723,51 @@ def _customer_development_ai_fallback(context: Dict[str, Any], mode: str) -> str
     )
 
 
+def _generate_customer_development_ai_text(
+    *,
+    context: Dict[str, Any],
+    prompt: str,
+    mode: str,
+    timeout_seconds: Optional[int] = None,
+) -> Tuple[str, bool, int]:
+    mode_key = str(mode or "summary").strip().lower()
+    resolved_timeout = max(
+        3,
+        int(
+            timeout_seconds
+            if timeout_seconds is not None
+            else CUSTOMER_DEVELOPMENT_AI_TIMEOUT_SECONDS
+        ),
+    )
+    text_result = _ollama_generate_text(
+        prompt,
+        model_candidates=_resolve_ollama_models(
+            MODEL_PREF_CUSTOMER_DEVELOPMENT,
+            MODEL_PREF_ACTION,
+            MODEL_PREF_TASK_DRAFT,
+        ),
+        timeout=resolved_timeout,
+        max_tokens=_customer_development_ai_max_tokens(mode_key),
+    ).strip()
+    if text_result:
+        return text_result, False, resolved_timeout
+    resolved_customer_id = _safe_int(context.get("customerId"))
+    logger.info(
+        "Customer development AI fallback used customer_id=%s mode=%s timeout_seconds=%s",
+        resolved_customer_id if resolved_customer_id > 0 else "n/a",
+        mode_key,
+        resolved_timeout,
+    )
+    return _customer_development_ai_fallback(context, mode_key), True, resolved_timeout
+
+
 def _build_customer_development_ai_response(
     *,
     context: Dict[str, Any],
     mode: str,
     tone: str,
     customer_id: Optional[int] = None,
+    timeout_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     mode_key = str(mode or "summary").strip().lower()
     if mode_key not in {
@@ -10590,13 +10785,12 @@ def _build_customer_development_ai_response(
     tone_value = str(tone or "sachlich")
     ai_sources = _customer_development_ai_sources(context)
     prompt = _customer_development_ai_prompt(context, mode=mode_key, tone=tone_value)
-    text_result = _ollama_generate_text(
-        prompt,
-        model_candidates=_resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT),
-        max_tokens=_customer_development_ai_max_tokens(mode_key),
-    ).strip()
-    if not text_result:
-        text_result = _customer_development_ai_fallback(context, mode_key)
+    text_result, used_fallback, resolved_timeout = _generate_customer_development_ai_text(
+        context=context,
+        prompt=prompt,
+        mode=mode_key,
+        timeout_seconds=timeout_seconds,
+    )
     resolved_customer_id = int(customer_id) if customer_id is not None else _safe_int(context.get("customerId"))
     return {
         "customer_id": resolved_customer_id if resolved_customer_id > 0 else None,
@@ -10604,6 +10798,9 @@ def _build_customer_development_ai_response(
         "tone": tone_value,
         "text": text_result,
         "sources": ai_sources,
+        "provider": "fallback" if used_fallback else "ollama",
+        "used_fallback": bool(used_fallback),
+        "timeout_seconds": int(resolved_timeout),
         "generated_at": int(time.time() * 1000),
     }
 
@@ -11305,19 +11502,21 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest, request: 
             + "\n".join([f"- {name} ({count}x)" for name, count in signal_lines])
             + "\nAntwort als reiner Text, kein JSON, kein Markdown."
         )
-        text_result = _ollama_generate_text(
-            prompt,
-            model_candidates=_resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT),
-            max_tokens=_customer_development_ai_max_tokens(mode),
-        ).strip()
-        if not text_result:
-            text_result = _customer_development_ai_fallback(top[0], mode)
+        text_result, used_fallback, resolved_timeout = _generate_customer_development_ai_text(
+            context=top[0],
+            prompt=prompt,
+            mode=mode,
+            timeout_seconds=CUSTOMER_DEVELOPMENT_AI_TIMEOUT_SECONDS,
+        )
         return {
             "customer_id": None,
             "mode": mode,
             "tone": str(data.tone or "sachlich"),
             "text": text_result,
             "sources": aggregated_sources,
+            "provider": "fallback" if used_fallback else "ollama",
+            "used_fallback": bool(used_fallback),
+            "timeout_seconds": int(resolved_timeout),
             "generated_at": int(time.time() * 1000),
         }
 
@@ -11338,6 +11537,7 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest, request: 
         mode=mode,
         tone=str(data.tone or "sachlich"),
         customer_id=int(data.customer_id) if data.customer_id is not None else None,
+        timeout_seconds=CUSTOMER_DEVELOPMENT_AI_TIMEOUT_SECONDS,
     )
 
 
@@ -11353,6 +11553,7 @@ def customer_development_ai_assist_context(data: CustomerDevelopmentAiInternalRe
         mode=str(data.mode or "summary"),
         tone=str(data.tone or "sachlich"),
         customer_id=int(data.customer_id) if data.customer_id is not None else None,
+        timeout_seconds=CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS,
     )
 
 
@@ -12101,17 +12302,18 @@ def get_customer_metrics(customer_id: int):
                             for row in position_rows:
                                 amount = _parse_sevdesk_amount(row)
                                 quantity = _parse_float(row.get("quantity"), default=0.0)
-                                position_text = _clean_invoice_position_text(
-                                    f"{row.get('name') or ''} {row.get('text') or ''}"
-                                ).lower()
-                                is_travel = "anfahrt" in position_text or "fahrt" in position_text
+                                is_worktime = _is_worktime_invoice_position(row, config=sevdesk_config)
+                                is_travel = _is_travel_invoice_position(row)
                                 if _is_material_invoice_position(row, config=sevdesk_config):
                                     material_revenue += amount
                                     continue
-                                if _is_service_invoice_position(row, config=sevdesk_config):
+                                if is_worktime:
                                     service_revenue += amount
                                     if quantity > 0 and not is_travel:
                                         work_hours += quantity
+                                    continue
+                                if _is_service_invoice_position(row, config=sevdesk_config):
+                                    service_revenue += amount
                         period_stats[period_key]["workHours"] = round(work_hours, 2)
                         period_stats[period_key]["materialRevenueEur"] = round(material_revenue, 2)
                         period_stats[period_key]["serviceRevenueEur"] = round(service_revenue, 2)
@@ -14734,9 +14936,22 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         settings = _get_settings(db)
         prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
         templates = prompts.get("contract_templates") or {}
-        template_key = _normalize_contract_doc_type(data.doc_type, default="wartung")
-        is_service_contract = template_key in {"wartung", "monitoring"}
-        template_entry = templates.get(template_key) or templates.get("wartung") or {}
+        requested_template_key = _normalize_contract_template_key(
+            data.template_key or data.doc_type or "wartung",
+            fallback="wartung",
+        )
+        template_entry = templates.get(requested_template_key) if isinstance(templates, dict) else None
+        if not isinstance(template_entry, dict):
+            fallback_doc_type = _normalize_contract_doc_type(data.doc_type or requested_template_key, default="wartung")
+            requested_template_key = (
+                fallback_doc_type
+                if isinstance(templates, dict) and isinstance(templates.get(fallback_doc_type), dict)
+                else "wartung"
+            )
+            template_entry = templates.get(requested_template_key) or templates.get("wartung") or {}
+        template_key = requested_template_key
+        doc_type_value = _resolve_contract_doc_type_from_template(template_key, template_entry, default="wartung")
+        is_service_contract = doc_type_value in {"wartung", "monitoring"}
         template_title = str(template_entry.get("title") or "Vertrag")
         template_header_html = str(prompts.get("contract_header_html") or template_entry.get("header_html") or "")
         title = str(data.title or "").strip() or template_title
@@ -14809,7 +15024,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             tariff = tariff_candidate
         if is_service_contract and tariff:
             tariff_category = str(tariff.category or "").strip().lower()
-            if tariff_category and tariff_category != template_key:
+            if tariff_category and tariff_category != doc_type_value:
                 raise HTTPException(400, "tariff category does not match contract type")
             suggested_monthly_total = _calc_contract_total_monthly(
                 tariff,
@@ -14826,6 +15041,9 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             if data.yearly_total is None:
                 yearly_total = monthly_total * 12.0 if data.monthly_total is not None else suggested_yearly_total
             service_scope = f"Tarif: {str(tariff.name or 'Service').strip()}."
+        else:
+            suggested_monthly_total = float(monthly_total or 0.0)
+            suggested_yearly_total = float(yearly_total or 0.0)
         if is_service_contract and not tariff:
             raise HTTPException(400, "tariff_id is required for wartung/monitoring contracts")
         hourly_price = _safe_nonnegative_float(tariff.hourly_price if is_service_contract and tariff else 0.0)
@@ -14968,7 +15186,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         file_name = f"{safe_name}.pdf"
         return {
             "title": title,
-            "doc_type": template_key,
+            "doc_type": doc_type_value,
             "template_key": template_key,
             "file_name": file_name,
             "html": html,
@@ -14985,10 +15203,14 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 "iot_devices": iot_devices,
                 "monthly_total": round(float(monthly_total or 0.0), 2),
                 "yearly_total": round(float(yearly_total or 0.0), 2),
+                "suggested_monthly_total": round(float(suggested_monthly_total or 0.0), 2),
+                "suggested_yearly_total": round(float(suggested_yearly_total or 0.0), 2),
                 "monthly_hours_included": round(float(monthly_hours_included or 0.0), 2),
                 "placeholder_keys": template_placeholder_keys,
                 "unresolved_placeholders": unresolved_placeholder_keys,
                 "tariff": serialize_contract_tariff(tariff) if tariff else None,
+                "template_title": template_title,
+                "template_description": str(template_entry.get("description") or "").strip(),
                 "individual_variables": individual_variables,
                 "contract_variable_values": applied_individual_values,
             },
@@ -15001,6 +15223,8 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
         customer = db.query(Customer).get(customer_id)
         if not customer:
             raise HTTPException(404, "Customer not found")
+        prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
+        templates = prompts.get("contract_templates") or {}
         title = str(data.title or "").strip()
         file_name = str(data.file_name or "").strip()
         content_base64 = str(data.content_base64 or "").strip()
@@ -15019,14 +15243,23 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
         if termination_notice_months > runtime_months:
             raise HTTPException(400, "termination_notice_months must not exceed runtime_months")
         valid_from = str(data.valid_from or "").strip()
-        doc_type_value = _normalize_contract_doc_type(data.doc_type, default="wartung")
-        template_key_value = _normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value)
-        if not str(data.doc_type or "").strip():
-            doc_type_value = template_key_value
-        is_service_contract = template_key_value in {"wartung", "monitoring"}
+        template_key_value = _normalize_contract_template_key(
+            data.template_key or data.doc_type or "wartung",
+            fallback="wartung",
+        )
+        template_entry = templates.get(template_key_value) if isinstance(templates, dict) else {}
+        doc_type_value = _normalize_contract_doc_type(data.doc_type, default="")
+        if not doc_type_value:
+            doc_type_value = _resolve_contract_doc_type_from_template(
+                template_key_value,
+                template_entry if isinstance(template_entry, dict) else None,
+                default="wartung",
+            )
+        is_service_contract = doc_type_value in {"wartung", "monitoring"}
         monthly_hours_included = _safe_nonnegative_float(data.monthly_hours_included or 0.0)
         if not is_service_contract:
             monthly_hours_included = 0.0
+        tariff = None
         if is_service_contract:
             if not data.tariff_id:
                 raise HTTPException(400, "tariff_id is required for wartung/monitoring contracts")
@@ -15034,8 +15267,69 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             if not tariff:
                 raise HTTPException(404, "Tariff not found")
             tariff_category = str(tariff.category or "").strip().lower()
-            if tariff_category and tariff_category != template_key_value:
+            if tariff_category and tariff_category != doc_type_value:
                 raise HTTPException(400, "tariff category does not match contract type")
+        servers = _safe_nonnegative_int(data.servers)
+        clients = _safe_nonnegative_int(data.clients)
+        network_devices = _safe_nonnegative_int(data.network_devices)
+        iot_devices = _safe_nonnegative_int(data.iot_devices)
+        suggested_monthly_total = (
+            _calc_contract_total_monthly(
+                tariff,
+                servers=servers,
+                clients=clients,
+                network_devices=network_devices,
+                iot_devices=iot_devices,
+                monthly_hours_included=monthly_hours_included,
+            )
+            if is_service_contract and tariff
+            else _safe_nonnegative_float(data.suggested_monthly_total)
+        )
+        suggested_yearly_total = (
+            suggested_monthly_total * 12.0
+            if is_service_contract and tariff
+            else _safe_nonnegative_float(
+                data.suggested_yearly_total
+                if data.suggested_yearly_total is not None
+                else suggested_monthly_total * 12.0
+            )
+        )
+        monthly_total = (
+            _safe_nonnegative_float(data.monthly_total)
+            if data.monthly_total is not None
+            else suggested_monthly_total
+        )
+        yearly_total = (
+            _safe_nonnegative_float(data.yearly_total)
+            if data.yearly_total is not None
+            else monthly_total * 12.0
+        )
+        contract_variable_values = {
+            str(key): str(value or "")
+            for key, value in (data.contract_variable_values or {}).items()
+            if str(key or "").strip()
+        }
+        snapshot_payload = {
+            "template_key": template_key_value,
+            "tariff": serialize_contract_tariff(tariff) if tariff else None,
+            "counts": {
+                "servers": servers,
+                "clients": clients,
+                "network_devices": network_devices,
+                "iot_devices": iot_devices,
+            },
+            "pricing": {
+                "monthly_total": round(float(monthly_total or 0.0), 2),
+                "yearly_total": round(float(yearly_total or 0.0), 2),
+                "suggested_monthly_total": round(float(suggested_monthly_total or 0.0), 2),
+                "suggested_yearly_total": round(float(suggested_yearly_total or 0.0), 2),
+                "monthly_hours_included": round(float(monthly_hours_included or 0.0), 2),
+                "individual_price_applied": round(float(monthly_total or 0.0), 2)
+                != round(float(suggested_monthly_total or 0.0), 2)
+                or round(float(yearly_total or 0.0), 2) != round(float(suggested_yearly_total or 0.0), 2),
+            },
+            "contract_variable_values": contract_variable_values,
+        }
         # Validate base64 payload.
         try:
             base64.b64decode(content_base64, validate=True)
@@ -15057,6 +15351,7 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             termination_notice_months=termination_notice_months,
             auto_extension_months=auto_extension_months,
             note=str(data.note or "").strip(),
+            snapshot_json=json.dumps(snapshot_payload),
             created_at=int(time.time() * 1000),
         )
         db.add(row)
@@ -15071,6 +15366,8 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
         customer = db.query(Customer).get(customer_id)
         if not customer:
             raise HTTPException(404, "Customer not found")
+        prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
+        templates = prompts.get("contract_templates") or {}
         row = (
             db.query(CustomerContractDocument)
             .filter(
@@ -15102,14 +15399,23 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
         if termination_notice_months > runtime_months:
             raise HTTPException(400, "termination_notice_months must not exceed runtime_months")
         valid_from = str(data.valid_from or "").strip()
-        doc_type_value = _normalize_contract_doc_type(data.doc_type, default="wartung")
-        template_key_value = _normalize_contract_doc_type(data.template_key or doc_type_value, default=doc_type_value)
-        if not str(data.doc_type or "").strip():
-            doc_type_value = template_key_value
-        is_service_contract = template_key_value in {"wartung", "monitoring"}
+        template_key_value = _normalize_contract_template_key(
+            data.template_key or data.doc_type or row.template_key or row.doc_type or "wartung",
+            fallback="wartung",
+        )
+        template_entry = templates.get(template_key_value) if isinstance(templates, dict) else {}
+        doc_type_value = _normalize_contract_doc_type(data.doc_type, default="")
+        if not doc_type_value:
+            doc_type_value = _resolve_contract_doc_type_from_template(
+                template_key_value,
+                template_entry if isinstance(template_entry, dict) else None,
+                default="wartung",
+            )
+        is_service_contract = doc_type_value in {"wartung", "monitoring"}
         monthly_hours_included = _safe_nonnegative_float(data.monthly_hours_included or 0.0)
         if not is_service_contract:
             monthly_hours_included = 0.0
+        tariff = None
         if is_service_contract:
             if not data.tariff_id:
                 raise HTTPException(400, "tariff_id is required for wartung/monitoring contracts")
@@ -15117,8 +15423,69 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
             if not tariff:
                 raise HTTPException(404, "Tariff not found")
             tariff_category = str(tariff.category or "").strip().lower()
-            if tariff_category and tariff_category != template_key_value:
+            if tariff_category and tariff_category != doc_type_value:
                 raise HTTPException(400, "tariff category does not match contract type")
+        servers = _safe_nonnegative_int(data.servers)
+        clients = _safe_nonnegative_int(data.clients)
+        network_devices = _safe_nonnegative_int(data.network_devices)
+        iot_devices = _safe_nonnegative_int(data.iot_devices)
+        suggested_monthly_total = (
+            _calc_contract_total_monthly(
+                tariff,
+                servers=servers,
+                clients=clients,
+                network_devices=network_devices,
+                iot_devices=iot_devices,
+                monthly_hours_included=monthly_hours_included,
+            )
+            if is_service_contract and tariff
+            else _safe_nonnegative_float(data.suggested_monthly_total)
+        )
+        suggested_yearly_total = (
+            suggested_monthly_total * 12.0
+            if is_service_contract and tariff
+            else _safe_nonnegative_float(
+                data.suggested_yearly_total
+                if data.suggested_yearly_total is not None
+                else suggested_monthly_total * 12.0
+            )
+        )
+        monthly_total = (
+            _safe_nonnegative_float(data.monthly_total)
+            if data.monthly_total is not None
+            else suggested_monthly_total
+        )
+        yearly_total = (
+            _safe_nonnegative_float(data.yearly_total)
+            if data.yearly_total is not None
+            else monthly_total * 12.0
+        )
+        contract_variable_values = {
+            str(key): str(value or "")
+            for key, value in (data.contract_variable_values or {}).items()
+            if str(key or "").strip()
+        }
+        snapshot_payload = {
+            "template_key": template_key_value,
+            "tariff": serialize_contract_tariff(tariff) if tariff else None,
+            "counts": {
+                "servers": servers,
+                "clients": clients,
+                "network_devices": network_devices,
+                "iot_devices": iot_devices,
+            },
+            "pricing": {
+                "monthly_total": round(float(monthly_total or 0.0), 2),
+                "yearly_total": round(float(yearly_total or 0.0), 2),
+                "suggested_monthly_total": round(float(suggested_monthly_total or 0.0), 2),
+                "suggested_yearly_total": round(float(suggested_yearly_total or 0.0), 2),
+                "monthly_hours_included": round(float(monthly_hours_included or 0.0), 2),
+                "individual_price_applied": round(float(monthly_total or 0.0), 2)
+                != round(float(suggested_monthly_total or 0.0), 2)
+                or round(float(yearly_total or 0.0), 2) != round(float(suggested_yearly_total or 0.0), 2),
+            },
+            "contract_variable_values": contract_variable_values,
+        }
         try:
             base64.b64decode(content_base64, validate=True)
         except Exception:
@@ -15138,6 +15505,7 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
         row.termination_notice_months = termination_notice_months
         row.auto_extension_months = auto_extension_months
         row.note = str(data.note or "").strip()
+        row.snapshot_json = json.dumps(snapshot_payload)
         row.cancel_reason = ""
         row.cancelled_at = 0
         row.cancelled_effective_at = 0

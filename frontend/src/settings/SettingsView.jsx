@@ -151,9 +151,24 @@ const loadCachedSmtp = () => {
 };
 
 const defaultContractTemplates = {
-  wartung: { title: "IT-Service- und Wartungsvertrag", body_template: "" },
-  monitoring: { title: "IT-Monitoringvertrag", body_template: "" },
-  avv_dsgvo: { title: "Vereinbarung zur Auftragsverarbeitung (Art. 28 DSGVO)", body_template: "" }
+  wartung: {
+    title: "IT-Service- und Wartungsvertrag",
+    description: "Servicevertrag fuer laufende Betreuung, Wartung und definierte Inklusivstunden.",
+    doc_type: "wartung",
+    body_template: ""
+  },
+  monitoring: {
+    title: "IT-Monitoringvertrag",
+    description: "Template fuer Ueberwachung, Alarmierung und regelmaessige Betriebsinformationen.",
+    doc_type: "monitoring",
+    body_template: ""
+  },
+  avv_dsgvo: {
+    title: "Vereinbarung zur Auftragsverarbeitung (Art. 28 DSGVO)",
+    description: "Rechtliches Datenschutz-Template zur Auftragsverarbeitung.",
+    doc_type: "avv_dsgvo",
+    body_template: ""
+  }
 };
 const defaultContractVariables = {
   provider_name: "Unternehmen aus Einstellungen",
@@ -185,6 +200,11 @@ const defaultContractVariables = {
   service_scope: "Wartung und Monitoring laut Tarif.",
   note_block: "Hinweis: Monatliche Leistungserbringung nach Vereinbarung."
 };
+const contractTemplateDocTypeOptions = [
+  { value: "wartung", label: "Wartung" },
+  { value: "monitoring", label: "Monitoring" },
+  { value: "avv_dsgvo", label: "AVV / DSGVO" }
+];
 const normalizeContractVariableKey = (rawKey) =>
   String(rawKey || "")
     .trim()
@@ -209,6 +229,8 @@ const normalizeContractTemplates = (input) => {
       const row = value && typeof value === "object" ? value : {};
       merged[key] = {
         title: String(row.title || merged[key]?.title || "").trim(),
+        description: String(row.description || merged[key]?.description || "").trim(),
+        doc_type: String(row.doc_type || merged[key]?.doc_type || "wartung").trim() || "wartung",
         body_template: String(row.body_template || "")
       };
     });
@@ -557,7 +579,12 @@ export default function SettingsView() {
     contract_variable_definitions: normalizeContractVariableDefinitions(null, null),
     contract_variables: normalizeContractVariables(null)
   });
-  const [contractTemplateDraft, setContractTemplateDraft] = useState({ key: "", title: "" });
+  const [contractTemplateDraft, setContractTemplateDraft] = useState({
+    key: "",
+    title: "",
+    description: "",
+    doc_type: "wartung"
+  });
   const [contractVariableDraft, setContractVariableDraft] = useState({
     key: "",
     value: "",
@@ -1080,13 +1107,15 @@ export default function SettingsView() {
           ...(prev.contract_templates || {}),
           [key]: {
             title: String(contractTemplateDraft.title || key).trim(),
+            description: String(contractTemplateDraft.description || "").trim(),
+            doc_type: String(contractTemplateDraft.doc_type || "wartung").trim() || "wartung",
             body_template: ""
           }
         }
       };
     });
     setSelectedContractTemplateKey(key);
-    setContractTemplateDraft({ key: "", title: "" });
+    setContractTemplateDraft({ key: "", title: "", description: "", doc_type: "wartung" });
   };
 
   const removeContractTemplate = (key) => {
@@ -1153,6 +1182,8 @@ export default function SettingsView() {
     : (contractTemplateEntries[0]?.[0] || "");
   const activeContractTemplate = aiPrompts.contract_templates?.[activeContractTemplateKey] || {
     title: "",
+    description: "",
+    doc_type: "wartung",
     body_template: "",
   };
   const baseContractPreviewVars = { ...defaultContractVariables };
@@ -2389,6 +2420,109 @@ export default function SettingsView() {
                         className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
                       />
                       <div />
+                    </div>
+                    <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-3">
+                      <p className="text-[11px] uppercase tracking-wide text-sand-500">Neues Template anlegen</p>
+                      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[160px_1fr_180px]">
+                        <input
+                          value={contractTemplateDraft.key}
+                          onChange={(event) =>
+                            setContractTemplateDraft((prev) => ({ ...prev, key: event.target.value }))
+                          }
+                          placeholder="template_key"
+                          className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                        />
+                        <input
+                          value={contractTemplateDraft.title}
+                          onChange={(event) =>
+                            setContractTemplateDraft((prev) => ({ ...prev, title: event.target.value }))
+                          }
+                          placeholder="Titel"
+                          className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                        />
+                        <select
+                          value={contractTemplateDraft.doc_type}
+                          onChange={(event) =>
+                            setContractTemplateDraft((prev) => ({ ...prev, doc_type: event.target.value }))
+                          }
+                          className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                        >
+                          {contractTemplateDocTypeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                        <input
+                          value={contractTemplateDraft.description}
+                          onChange={(event) =>
+                            setContractTemplateDraft((prev) => ({ ...prev, description: event.target.value }))
+                          }
+                          placeholder="Kurzbeschreibung fuer Picker"
+                          className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                        />
+                        <button
+                          type="button"
+                          onClick={addContractTemplate}
+                          className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                        >
+                          Template hinzufügen
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[1fr_220px_auto]">
+                      <input
+                        value={activeContractTemplate?.description || ""}
+                        onChange={(event) => {
+                          if (!activeContractTemplateKey) return;
+                          setAiPrompts((prev) => ({
+                            ...prev,
+                            contract_templates: {
+                              ...prev.contract_templates,
+                              [activeContractTemplateKey]: {
+                                ...(prev.contract_templates?.[activeContractTemplateKey] || {}),
+                                description: event.target.value
+                              }
+                            }
+                          }));
+                        }}
+                        placeholder="Kurzbeschreibung"
+                        className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                      />
+                      <select
+                        value={activeContractTemplate?.doc_type || "wartung"}
+                        onChange={(event) => {
+                          if (!activeContractTemplateKey) return;
+                          setAiPrompts((prev) => ({
+                            ...prev,
+                            contract_templates: {
+                              ...prev.contract_templates,
+                              [activeContractTemplateKey]: {
+                                ...(prev.contract_templates?.[activeContractTemplateKey] || {}),
+                                doc_type: event.target.value
+                              }
+                            }
+                          }));
+                        }}
+                        className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                      >
+                        {contractTemplateDocTypeOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => activeContractTemplateKey && removeContractTemplate(activeContractTemplateKey)}
+                        disabled={!activeContractTemplateKey || Object.keys(defaultContractTemplates).includes(activeContractTemplateKey)}
+                        className="inline-flex items-center justify-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Trash2 size={10} />
+                        Löschen
+                      </button>
                     </div>
                     <div className="mt-3">
                       <p className="text-[11px] uppercase tracking-wide text-sand-500">HTML Designer (Body)</p>
