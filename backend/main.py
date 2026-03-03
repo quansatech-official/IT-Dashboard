@@ -2590,6 +2590,25 @@ def _sevdesk_invoice_position_text(row: Optional[Dict[str, Any]]) -> str:
     ).lower()
 
 
+def _sevdesk_invoice_position_name(row: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    return _clean_invoice_position_text(row.get("name")).lower()
+
+
+def _sevdesk_invoice_position_body(row: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    return _clean_invoice_position_text(row.get("text")).lower()
+
+
+def _is_explicit_worktime_position_label(text: Any) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    return bool(re.match(r"^arbeitszeit(?:\*|[\s:/._-]|$)", normalized))
+
+
 def _is_travel_invoice_position(row: Optional[Dict[str, Any]]) -> bool:
     text = _sevdesk_invoice_position_text(row)
     if not text:
@@ -2614,42 +2633,13 @@ def _is_worktime_invoice_position(
         return False
     if _is_travel_invoice_position(row):
         return False
-    unity_id = _extract_sevdesk_unity_id(row)
-    service_unity_ids = {
-        value
-        for value in (
-            getattr(config, "service_unity_id", None),
-            getattr(config, "unity_id", None),
-        )
-        if value
-    }
-    if unity_id and unity_id in service_unity_ids:
+    name = _sevdesk_invoice_position_name(row)
+    if _is_explicit_worktime_position_label(name):
         return True
-    text = _sevdesk_invoice_position_text(row)
-    if not text:
+    if name:
         return False
-    worktime_keywords = (
-        "arbeitszeit",
-        "arbeitsstunde",
-        "arbeitsstunden",
-        "dienstleistung",
-        "leistung",
-        "support",
-        "wartung",
-        "service",
-        "remote",
-        "vor ort",
-        "vor-ort",
-        "installation",
-        "einrichtung",
-        "konfiguration",
-        "techniker",
-        "stunden",
-        "stunde",
-        "std.",
-        "h ",
-    )
-    return any(keyword in text for keyword in worktime_keywords)
+    body = _sevdesk_invoice_position_body(row)
+    return _is_explicit_worktime_position_label(body)
 
 
 def _is_service_invoice_position(

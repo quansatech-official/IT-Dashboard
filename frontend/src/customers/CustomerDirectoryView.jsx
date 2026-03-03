@@ -3,6 +3,7 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import {
   BadgeCheck,
+  BarChart3,
   Building2,
   BookPlus,
   Eye,
@@ -2241,14 +2242,177 @@ export default function CustomerDirectoryView() {
     );
   };
 
+  const renderCustomerKpiTab = () => (
+    <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-xs uppercase tracking-[0.3em] text-sand-500">KPI</p>
+          <p className="mt-1 text-sm text-sand-600">
+            Aufwand, Kommunikation, Zeitraum und kundenbezogene Steuerung.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setMetricsReloadTick((prev) => prev + 1)}
+          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+        >
+          Aktualisieren
+        </button>
+      </div>
+      {metricsStatus === "loading" ? (
+        <p className="mt-3 text-xs text-sand-500">Lade Kennzahlen…</p>
+      ) : null}
+      {metricsStatus === "error" ? (
+        <p className="mt-3 text-xs text-rose-600">Kennzahlen konnten nicht geladen werden.</p>
+      ) : null}
+      {metricsStatus === "ready" && selectedCustomerMetrics ? (
+        <div className="mt-3 space-y-3">
+          <div className="grid gap-2 md:grid-cols-4">
+            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufwand Monat</p>
+              <p className="text-sm font-semibold text-sand-900">{formatHours(monthlyConsumedHours)}</p>
+            </div>
+            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Kommunikation 30T</p>
+              <p className="text-sm font-semibold text-sand-900">
+                {Number(selectedCustomerMetrics.totalCalls || 0)} Calls
+              </p>
+              <p className="text-[11px] text-sand-600">
+                {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst
+              </p>
+            </div>
+            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Last</p>
+              <p className="text-sm font-semibold text-sand-900">
+                {Number(selectedCustomerMetrics.openTasks || 0)} Aufgaben
+              </p>
+              <p className="text-[11px] text-sand-600">{formatHours(openEffortHours, 1)} offen</p>
+            </div>
+            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Anfahrt</p>
+              <p className="text-sm font-semibold text-sand-900">
+                {travelRoundTripKm > 0
+                  ? `${travelRoundTripKm.toLocaleString("de-DE", {
+                      minimumFractionDigits: 1,
+                      maximumFractionDigits: 1
+                    })} km`
+                  : "n/a"}
+              </p>
+              <p className="text-[11px] text-sand-600">
+                {selectedCustomerMetrics.mileageEur !== null &&
+                typeof selectedCustomerMetrics.mileageEur !== "undefined"
+                  ? `${formatEurPrecise(selectedCustomerMetrics.mileageEur)} Vorschlag`
+                  : "kein Vorschlag"}
+              </p>
+            </div>
+          </div>
+          <p className="text-[11px] text-sand-600">
+            Monat: Aufgabe {formatHours(monthlyTaskHours, 1)} · Telefon {formatHours(monthlyTelephonyHours, 1)} ·
+            Gesprächszeit 30T {formatHours(Number(selectedCustomerMetrics.totalMinutes || 0) / 60, 1)}.
+          </p>
+          <p className="text-[11px] text-sand-600">
+            Betreuungsaktivität 30T: {Number(selectedCustomerMetrics.totalCalls || 0)} Calls ·{" "}
+            {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst ·{" "}
+            {Number(selectedCustomerMetrics.openTasks || 0)} offene Aufgaben.
+          </p>
+          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Statistik Zeitraum</p>
+                <p className="text-[11px] text-sand-600">
+                  Arbeitszeit, Material und Umsatz als Volumenindikator.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {["currentYear", "lastYear"].map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setCustomerStatsPeriod(key)}
+                    className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
+                      customerStatsPeriod === key
+                        ? "border-sand-900 bg-sand-900 text-white"
+                        : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                    }`}
+                  >
+                    {periodStats?.[key]?.label || (key === "currentYear" ? "Lfd. Jahr" : "Vorjahr")}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-3">
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Arbeitszeit</p>
+                <p className="text-sm font-semibold text-sand-900">
+                  {selectedPeriodStats?.workHours === null || typeof selectedPeriodStats?.workHours === "undefined"
+                    ? "n/a"
+                    : formatHours(selectedPeriodStats.workHours)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Material</p>
+                <p className="text-sm font-semibold text-sand-900">
+                  {selectedPeriodStats?.materialRevenueEur === null ||
+                  typeof selectedPeriodStats?.materialRevenueEur === "undefined"
+                    ? "n/a"
+                    : formatEurPrecise(selectedPeriodStats.materialRevenueEur)}
+                </p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamtumsatz</p>
+                <p className="text-sm font-semibold text-sand-900">
+                  {selectedPeriodStats?.totalRevenueEur === null ||
+                  typeof selectedPeriodStats?.totalRevenueEur === "undefined"
+                    ? "n/a"
+                    : formatEurPrecise(selectedPeriodStats.totalRevenueEur)}
+                </p>
+              </div>
+            </div>
+            <p className="mt-2 text-[11px] text-sand-600">
+              {selectedPeriodStats?.invoiceCount
+                ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum.`
+                : "Keine bezahlten sevdesk-Rechnungen im Zeitraum."}
+            </p>
+          </div>
+          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Steuerung (kundenbezogen)</p>
+              <span className="text-[10px] text-sand-500">Owner-Detail: KPI</span>
+            </div>
+            <div className="mt-1.5 grid gap-1.5 md:grid-cols-2">
+              <p className="text-[11px] text-sand-700">
+                <span className="text-sand-500">Profitabilität:</span> {customerSteering.profitabilityLabel}
+              </p>
+              <p className={`text-[11px] ${customerSteering.communicationGap ? "text-amber-700" : "text-sand-700"}`}>
+                <span className="text-sand-500">Kommunikationslücke:</span> {customerSteering.communicationLabel}
+              </p>
+              <p className={`text-[11px] ${contractTimeBudget?.hasServiceContract && contractTimeBudget?.isOverrun ? "text-rose-700" : "text-sand-700"}`}>
+                <span className="text-sand-500">SLA:</span> {customerSteering.slaLabel}
+              </p>
+              <p className={`text-[11px] ${contractControlStats.renewalsDueSoon ? "text-amber-700" : "text-sand-700"}`}>
+                <span className="text-sand-500">Vertragsfälligkeit:</span> {customerSteering.renewalLabel}
+              </p>
+            </div>
+            <p className="mt-1.5 text-[11px] font-semibold text-sand-900">
+              Nächste konkrete Aktion: {customerSteering.nextAction}
+            </p>
+          </div>
+        </div>
+      ) : null}
+      {metricsStatus === "ready" && !selectedCustomerMetrics ? (
+        <p className="mt-3 text-xs text-sand-500">Keine Kennzahlen für diesen Kunden verfügbar.</p>
+      ) : null}
+    </div>
+  );
+
   useEffect(() => {
-    if (!activeCustomer?.id) {
+    if (!metricsCustomerId) {
       setMetrics(null);
       return;
     }
     let active = true;
     setMetricsStatus("loading");
-    fetch(`${API}/customers/${activeCustomer.id}/metrics`)
+    fetch(`${API}/customers/${metricsCustomerId}/metrics`)
       .then((res) => {
         if (!res.ok) throw new Error("metrics_failed");
         return res.json();
@@ -2266,7 +2430,7 @@ export default function CustomerDirectoryView() {
     return () => {
       active = false;
     };
-  }, [activeCustomer?.id, metricsReloadTick]);
+  }, [metricsCustomerId, metricsReloadTick]);
 
   useEffect(() => {
     if (!activeCustomer?.name) {
@@ -3695,6 +3859,18 @@ export default function CustomerDirectoryView() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setSettingsTab("kpi")}
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                    settingsTab === "kpi"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white hover:bg-sand-100"
+                  }`}
+                >
+                  <BarChart3 size={12} />
+                  KPI
+                </button>
+                <button
+                  type="button"
                   onClick={() => setSettingsTab("development")}
                   className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
                     settingsTab === "development"
@@ -3823,152 +3999,6 @@ export default function CustomerDirectoryView() {
                   </select>
                 </label>
               </div>
-              <div className="mt-2 rounded-xl border border-sand-200 bg-white p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[10px] uppercase tracking-wide text-sand-500">Kundenkennzahlen</p>
-                  <span className="text-[11px] text-sand-500">Aufwand · Kommunikation</span>
-                </div>
-                {metricsStatus === "loading" ? (
-                  <p className="mt-1.5 text-xs text-sand-500">Lade Kennzahlen…</p>
-                ) : null}
-                {metricsStatus === "error" ? (
-                  <p className="mt-1.5 text-xs text-rose-600">Kennzahlen konnten nicht geladen werden.</p>
-                ) : null}
-                {metricsStatus === "ready" && selectedCustomerMetrics ? (
-                  <>
-                    <div className="mt-2 grid gap-2 md:grid-cols-4">
-                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufwand Monat</p>
-                        <p className="text-sm font-semibold text-sand-900">{formatHours(monthlyConsumedHours)}</p>
-                      </div>
-                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Kommunikation 30T</p>
-                        <p className="text-sm font-semibold text-sand-900">
-                          {Number(selectedCustomerMetrics.totalCalls || 0)} Calls
-                        </p>
-                        <p className="text-[11px] text-sand-600">
-                          {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Last</p>
-                        <p className="text-sm font-semibold text-sand-900">
-                          {Number(selectedCustomerMetrics.openTasks || 0)} Aufgaben
-                        </p>
-                        <p className="text-[11px] text-sand-600">{formatHours(openEffortHours, 1)} offen</p>
-                      </div>
-                      <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Anfahrt</p>
-                        <p className="text-sm font-semibold text-sand-900">
-                          {travelRoundTripKm > 0
-                            ? `${travelRoundTripKm.toLocaleString("de-DE", {
-                                minimumFractionDigits: 1,
-                                maximumFractionDigits: 1
-                              })} km`
-                            : "n/a"}
-                        </p>
-                        <p className="text-[11px] text-sand-600">
-                          {selectedCustomerMetrics.mileageEur !== null &&
-                          typeof selectedCustomerMetrics.mileageEur !== "undefined"
-                            ? `${formatEurPrecise(selectedCustomerMetrics.mileageEur)} Vorschlag`
-                            : "kein Vorschlag"}
-                        </p>
-                      </div>
-                    </div>
-                    <p className="mt-2 text-[11px] text-sand-600">
-                      Monat: Aufgabe {formatHours(monthlyTaskHours, 1)} · Telefon {formatHours(monthlyTelephonyHours, 1)} ·
-                      Gesprächszeit 30T {formatHours(Number(selectedCustomerMetrics.totalMinutes || 0) / 60, 1)}.
-                    </p>
-                    <p className="mt-1 text-[11px] text-sand-600">
-                      Betreuungsaktivität 30T: {Number(selectedCustomerMetrics.totalCalls || 0)} Calls ·{" "}
-                      {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst ·{" "}
-                      {Number(selectedCustomerMetrics.openTasks || 0)} offene Aufgaben.
-                    </p>
-                    <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2.5 py-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Statistik Zeitraum</p>
-                          <p className="text-[11px] text-sand-600">
-                            Arbeitszeit, Material und Umsatz als Volumenindikator.
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-1">
-                          {["currentYear", "lastYear"].map((key) => (
-                            <button
-                              key={key}
-                              type="button"
-                              onClick={() => setCustomerStatsPeriod(key)}
-                              className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
-                                customerStatsPeriod === key
-                                  ? "border-sand-900 bg-sand-900 text-white"
-                                  : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
-                              }`}
-                            >
-                              {periodStats?.[key]?.label || (key === "currentYear" ? "Lfd. Jahr" : "Vorjahr")}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="mt-2 grid gap-2 md:grid-cols-3">
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Arbeitszeit</p>
-                          <p className="text-sm font-semibold text-sand-900">
-                            {selectedPeriodStats?.workHours === null || typeof selectedPeriodStats?.workHours === "undefined"
-                              ? "n/a"
-                              : formatHours(selectedPeriodStats.workHours)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Material</p>
-                          <p className="text-sm font-semibold text-sand-900">
-                            {selectedPeriodStats?.materialRevenueEur === null ||
-                            typeof selectedPeriodStats?.materialRevenueEur === "undefined"
-                              ? "n/a"
-                              : formatEurPrecise(selectedPeriodStats.materialRevenueEur)}
-                          </p>
-                        </div>
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamtumsatz</p>
-                          <p className="text-sm font-semibold text-sand-900">
-                            {selectedPeriodStats?.totalRevenueEur === null ||
-                            typeof selectedPeriodStats?.totalRevenueEur === "undefined"
-                              ? "n/a"
-                              : formatEurPrecise(selectedPeriodStats.totalRevenueEur)}
-                          </p>
-                        </div>
-                      </div>
-                      <p className="mt-2 text-[11px] text-sand-600">
-                        {selectedPeriodStats?.invoiceCount
-                          ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum.`
-                          : "Keine bezahlten sevdesk-Rechnungen im Zeitraum."}
-                      </p>
-                    </div>
-                    <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2.5 py-2">
-                      <div className="flex flex-wrap items-center justify-between gap-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Steuerung (kundenbezogen)</p>
-                        <span className="text-[10px] text-sand-500">Owner-Detail: Kundenstamm</span>
-                      </div>
-                      <div className="mt-1.5 grid gap-1.5 md:grid-cols-2">
-                        <p className="text-[11px] text-sand-700">
-                          <span className="text-sand-500">Profitabilität:</span> {customerSteering.profitabilityLabel}
-                        </p>
-                        <p className={`text-[11px] ${customerSteering.communicationGap ? "text-amber-700" : "text-sand-700"}`}>
-                          <span className="text-sand-500">Kommunikationslücke:</span> {customerSteering.communicationLabel}
-                        </p>
-                        <p className={`text-[11px] ${contractTimeBudget?.hasServiceContract && contractTimeBudget?.isOverrun ? "text-rose-700" : "text-sand-700"}`}>
-                          <span className="text-sand-500">SLA:</span> {customerSteering.slaLabel}
-                        </p>
-                        <p className={`text-[11px] ${contractControlStats.renewalsDueSoon ? "text-amber-700" : "text-sand-700"}`}>
-                          <span className="text-sand-500">Vertragsfälligkeit:</span> {customerSteering.renewalLabel}
-                        </p>
-                      </div>
-                      <p className="mt-1.5 text-[11px] font-semibold text-sand-900">
-                        Nächste konkrete Aktion: {customerSteering.nextAction}
-                      </p>
-                    </div>
-                  </>
-                ) : null}
-              </div>
               <div className="mt-2 grid gap-2 md:grid-cols-2">
                 <label className="block md:col-span-2">
                   <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
@@ -4081,6 +4111,7 @@ export default function CustomerDirectoryView() {
               </div>
                 </>
               ) : null}
+              {settingsTab === "kpi" ? renderCustomerKpiTab() : null}
               {settingsTab === "development" ? (
                 <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
                   <CustomerDevelopmentCustomerTab
