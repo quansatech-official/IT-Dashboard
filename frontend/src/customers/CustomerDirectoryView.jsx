@@ -88,6 +88,30 @@ const api = {
         String(status || "").trim() ? `?status=${encodeURIComponent(String(status || "").trim())}` : ""
       }`
     ).then((r) => r.json()),
+  getCustomerPrepaidHours: (customerId) =>
+    fetch(`${API}/customers/${customerId}/prepaid_hours`).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "prepaid_hours_load_failed");
+      return data;
+    }),
+  createCustomerPrepaidHoursEntry: (customerId, payload) =>
+    fetch(`${API}/customers/${customerId}/prepaid_hours/entries`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "prepaid_hours_create_failed");
+      return data;
+    }),
+  deleteCustomerPrepaidHoursEntry: (customerId, entryId) =>
+    fetch(`${API}/customers/${customerId}/prepaid_hours/entries/${entryId}`, {
+      method: "DELETE"
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "prepaid_hours_delete_failed");
+      return data;
+    }),
   listCustomerDevelopment: (includeInactive = true, refresh = false) =>
     fetch(
       `${API}/customer_development?include_inactive=${includeInactive ? "1" : "0"}&refresh=${refresh ? "1" : "0"}`
@@ -961,6 +985,22 @@ export default function CustomerDirectoryView() {
   const [calcImportStatus, setCalcImportStatus] = useState("idle");
   const [customerContracts, setCustomerContracts] = useState([]);
   const [contractsStatus, setContractsStatus] = useState("idle");
+  const [prepaidHoursData, setPrepaidHoursData] = useState(null);
+  const [prepaidHoursStatus, setPrepaidHoursStatus] = useState("idle");
+  const [prepaidHoursReloadTick, setPrepaidHoursReloadTick] = useState(0);
+  const [prepaidHoursBusy, setPrepaidHoursBusy] = useState(false);
+  const [prepaidHoursPurchaseDraft, setPrepaidHoursPurchaseDraft] = useState({
+    hours: "",
+    label: "",
+    note: "",
+    effectiveAt: todayInputValue()
+  });
+  const [prepaidHoursDebitDraft, setPrepaidHoursDebitDraft] = useState({
+    hours: "",
+    taskId: "",
+    note: "",
+    effectiveAt: todayInputValue()
+  });
   const [contractPreviewStatus, setContractPreviewStatus] = useState("idle");
   const [contractSaveStatus, setContractSaveStatus] = useState("idle");
   const [generatedContract, setGeneratedContract] = useState(null);
@@ -1166,6 +1206,44 @@ export default function CustomerDirectoryView() {
       active = false;
     };
   }, [activeId]);
+
+  useEffect(() => {
+    setPrepaidHoursData(null);
+    setPrepaidHoursStatus("idle");
+    setPrepaidHoursPurchaseDraft({
+      hours: "",
+      label: "",
+      note: "",
+      effectiveAt: todayInputValue()
+    });
+    setPrepaidHoursDebitDraft({
+      hours: "",
+      taskId: "",
+      note: "",
+      effectiveAt: todayInputValue()
+    });
+  }, [editCustomer?.id]);
+
+  useEffect(() => {
+    if (settingsTab !== "contracts" || !editCustomer?.id) return;
+    let active = true;
+    setPrepaidHoursStatus("loading");
+    api
+      .getCustomerPrepaidHours(editCustomer.id)
+      .then((payload) => {
+        if (!active) return;
+        setPrepaidHoursData(payload && typeof payload === "object" ? payload : null);
+        setPrepaidHoursStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setPrepaidHoursData(null);
+        setPrepaidHoursStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [editCustomer?.id, prepaidHoursReloadTick, settingsTab]);
 
   const parseCount = (value) => {
     const parsed = Number.parseInt(String(value || "0"), 10);
@@ -1767,6 +1845,67 @@ export default function CustomerDirectoryView() {
     }
   };
 
+  const createPrepaidHoursEntry = async (entryType) => {
+    const customerId = Number(editCustomer?.id || 0);
+    if (!customerId) return;
+    const isPurchase = entryType === "purchase";
+    const draft = isPurchase ? prepaidHoursPurchaseDraft : prepaidHoursDebitDraft;
+    const hoursValue = parseHoursInput(draft.hours);
+    if (hoursValue <= 0) {
+      setToast("Bitte Stunden > 0 eingeben.");
+      return;
+    }
+    setPrepaidHoursBusy(true);
+    try {
+      await api.createCustomerPrepaidHoursEntry(customerId, {
+        entry_type: isPurchase ? "purchase" : "debit",
+        hours: hoursValue,
+        label: isPurchase ? String(draft.label || "").trim() : "",
+        note: String(draft.note || "").trim(),
+        task_id: isPurchase ? null : Number(draft.taskId || 0) || null,
+        effective_at: toTimestampMs(draft.effectiveAt) || Date.now()
+      });
+      setPrepaidHoursReloadTick((prev) => prev + 1);
+      if (isPurchase) {
+        setPrepaidHoursPurchaseDraft({
+          hours: "",
+          label: "",
+          note: "",
+          effectiveAt: todayInputValue()
+        });
+        setToast("Stundenkauf gespeichert.");
+      } else {
+        setPrepaidHoursDebitDraft({
+          hours: "",
+          taskId: "",
+          note: "",
+          effectiveAt: todayInputValue()
+        });
+        setToast("Abbuchung gespeichert.");
+      }
+    } catch (error) {
+      setToast(error?.message ? String(error.message) : "Buchung fehlgeschlagen.");
+    } finally {
+      setPrepaidHoursBusy(false);
+    }
+  };
+
+  const deletePrepaidHoursEntry = async (entryId) => {
+    const customerId = Number(editCustomer?.id || 0);
+    if (!customerId || !entryId) return;
+    if (!window.confirm("Buchung wirklich löschen?")) return;
+    setPrepaidHoursBusy(true);
+    try {
+      await api.deleteCustomerPrepaidHoursEntry(customerId, entryId);
+      setPrepaidHoursReloadTick((prev) => prev + 1);
+      setToast("Buchung gelöscht.");
+    } catch (error) {
+      setToast(error?.message ? String(error.message) : "Löschen fehlgeschlagen.");
+    } finally {
+      setPrepaidHoursBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (!customers.length) {
       setActiveId(null);
@@ -1890,6 +2029,19 @@ export default function CustomerDirectoryView() {
     periodStats?.[customerStatsPeriod] && typeof periodStats[customerStatsPeriod] === "object"
       ? periodStats[customerStatsPeriod]
       : null;
+  const prepaidHoursSummary =
+    prepaidHoursData && typeof prepaidHoursData === "object" ? prepaidHoursData : null;
+  const prepaidHoursEntries = Array.isArray(prepaidHoursSummary?.entries) ? prepaidHoursSummary.entries : [];
+  const prepaidHoursTaskOptions = Array.isArray(prepaidHoursSummary?.taskOptions)
+    ? prepaidHoursSummary.taskOptions
+    : [];
+  const prepaidHoursBalance = Number(prepaidHoursSummary?.balanceHours || 0);
+  const prepaidHoursPurchaseValue = parseHoursInput(prepaidHoursPurchaseDraft.hours);
+  const prepaidHoursDebitValue = parseHoursInput(prepaidHoursDebitDraft.hours);
+  const selectedPrepaidTask = prepaidHoursTaskOptions.find(
+    (item) => Number(item?.id || 0) === Number(prepaidHoursDebitDraft.taskId || 0)
+  ) || null;
+  const projectedPrepaidBalance = Number((prepaidHoursBalance - prepaidHoursDebitValue).toFixed(2));
   const monthlyActivity =
     selectedCustomerMetrics?.monthlyActivity && typeof selectedCustomerMetrics.monthlyActivity === "object"
       ? selectedCustomerMetrics.monthlyActivity
@@ -2113,6 +2265,286 @@ export default function CustomerDirectoryView() {
       active = false;
     };
   }, [settingsTab, editCustomer?.id]);
+
+  const renderPrepaidHoursContainer = () => (
+    <div className="rounded-xl border border-sand-200 bg-white p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] uppercase tracking-wide text-sand-500">Vorausstunden</p>
+          <p className="mt-1 text-[11px] text-sand-600">
+            Stundenkäufe und Abbuchungen bleiben manuell. Aufgaben werden nur als Referenz verknüpft.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setPrepaidHoursReloadTick((prev) => prev + 1)}
+          className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+        >
+          Aktualisieren
+        </button>
+      </div>
+      {prepaidHoursStatus === "loading" ? (
+        <p className="mt-2 text-xs text-sand-500">Lade Vorausstunden…</p>
+      ) : null}
+      {prepaidHoursStatus === "error" ? (
+        <p className="mt-2 text-xs text-rose-600">Vorausstunden konnten nicht geladen werden.</p>
+      ) : null}
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+          <p className="text-[10px] uppercase tracking-wide text-sand-500">Gekauft</p>
+          <p className="text-sm font-semibold text-sand-900">{formatHours(prepaidHoursSummary?.purchasedHours || 0)}</p>
+        </div>
+        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+          <p className="text-[10px] uppercase tracking-wide text-sand-500">Abgebucht</p>
+          <p className="text-sm font-semibold text-sand-900">{formatHours(prepaidHoursSummary?.debitedHours || 0)}</p>
+        </div>
+        <div
+          className={`rounded-lg border px-2.5 py-1.5 ${
+            prepaidHoursBalance < 0 ? "border-rose-200 bg-rose-50" : "border-emerald-200 bg-emerald-50"
+          }`}
+        >
+          <p className="text-[10px] uppercase tracking-wide text-sand-500">Rest</p>
+          <p className={`text-sm font-semibold ${prepaidHoursBalance < 0 ? "text-rose-700" : "text-emerald-700"}`}>
+            {formatHours(prepaidHoursBalance)}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-3 xl:grid-cols-2">
+        <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
+          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stunden kaufen</p>
+          <div className="mt-2 grid gap-2 md:grid-cols-3">
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</span>
+              <input
+                type="number"
+                min="0"
+                step="0.25"
+                value={prepaidHoursPurchaseDraft.hours}
+                onChange={(event) =>
+                  setPrepaidHoursPurchaseDraft((prev) => ({ ...prev, hours: event.target.value }))
+                }
+                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block md:col-span-2">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Bezeichnung</span>
+              <input
+                value={prepaidHoursPurchaseDraft.label}
+                onChange={(event) =>
+                  setPrepaidHoursPurchaseDraft((prev) => ({ ...prev, label: event.target.value }))
+                }
+                placeholder="z. B. 10h Paket März"
+                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          <div className="mt-2 grid gap-2 md:grid-cols-[180px_minmax(0,1fr)]">
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Datum</span>
+              <input
+                type="date"
+                value={prepaidHoursPurchaseDraft.effectiveAt}
+                onChange={(event) =>
+                  setPrepaidHoursPurchaseDraft((prev) => ({ ...prev, effectiveAt: event.target.value }))
+                }
+                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
+              <input
+                value={prepaidHoursPurchaseDraft.note}
+                onChange={(event) =>
+                  setPrepaidHoursPurchaseDraft((prev) => ({ ...prev, note: event.target.value }))
+                }
+                placeholder="optional"
+                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[11px] text-sand-600">
+              Nach Speicherung verfügbar: {formatHours(prepaidHoursBalance + prepaidHoursPurchaseValue)}
+            </p>
+            <button
+              type="button"
+              onClick={() => createPrepaidHoursEntry("purchase")}
+              disabled={prepaidHoursBusy || prepaidHoursPurchaseValue <= 0}
+              className="rounded-full border border-sand-900 bg-sand-900 px-3 py-1.5 text-[10px] uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Stundenkauf speichern
+            </button>
+          </div>
+        </div>
+        <div className="rounded-xl border border-sand-200 bg-sand-50 p-3">
+          <p className="text-[10px] uppercase tracking-wide text-sand-500">Manuell abbuchen</p>
+          <div className="mt-2 grid gap-2 md:grid-cols-[120px_minmax(0,1fr)]">
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</span>
+              <input
+                type="number"
+                min="0"
+                step="0.25"
+                value={prepaidHoursDebitDraft.hours}
+                onChange={(event) =>
+                  setPrepaidHoursDebitDraft((prev) => ({ ...prev, hours: event.target.value }))
+                }
+                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500">Aufgabe</span>
+                {selectedPrepaidTask ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPrepaidHoursDebitDraft((prev) => ({
+                        ...prev,
+                        hours: String(selectedPrepaidTask.remaining_hours || selectedPrepaidTask.elapsed_hours || "")
+                      }))
+                    }
+                    className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                  >
+                    Rest übernehmen
+                  </button>
+                ) : null}
+              </div>
+              <select
+                value={prepaidHoursDebitDraft.taskId}
+                onChange={(event) =>
+                  setPrepaidHoursDebitDraft((prev) => ({ ...prev, taskId: event.target.value }))
+                }
+                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+              >
+                <option value="">Ohne Aufgabenbezug</option>
+                {prepaidHoursTaskOptions.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {`${item.title} · ${formatHours(item.elapsed_hours || 0)} · gebucht ${formatHours(
+                      item.booked_hours || 0
+                    )}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="mt-2 grid gap-2 md:grid-cols-[180px_minmax(0,1fr)]">
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Datum</span>
+              <input
+                type="date"
+                value={prepaidHoursDebitDraft.effectiveAt}
+                onChange={(event) =>
+                  setPrepaidHoursDebitDraft((prev) => ({ ...prev, effectiveAt: event.target.value }))
+                }
+                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wide text-sand-500">Bemerkung</span>
+              <input
+                value={prepaidHoursDebitDraft.note}
+                onChange={(event) =>
+                  setPrepaidHoursDebitDraft((prev) => ({ ...prev, note: event.target.value }))
+                }
+                placeholder="wofür abgebucht wurde"
+                className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
+          {selectedPrepaidTask ? (
+            <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2.5 py-2 text-[11px] text-sand-600">
+              <p className="font-semibold text-sand-800">{selectedPrepaidTask.title}</p>
+              <p className="mt-0.5">
+                Erfasst {formatHours(selectedPrepaidTask.elapsed_hours || 0)} · bereits gebucht{" "}
+                {formatHours(selectedPrepaidTask.booked_hours || 0)} · Rest{" "}
+                {formatHours(selectedPrepaidTask.remaining_hours || 0)}
+              </p>
+              {selectedPrepaidTask.details ? <p className="mt-0.5">{selectedPrepaidTask.details}</p> : null}
+            </div>
+          ) : null}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className={`text-[11px] ${projectedPrepaidBalance < 0 ? "text-rose-700" : "text-sand-600"}`}>
+              Saldo nach Buchung: {formatHours(projectedPrepaidBalance)}
+            </p>
+            <button
+              type="button"
+              onClick={() => createPrepaidHoursEntry("debit")}
+              disabled={prepaidHoursBusy || prepaidHoursDebitValue <= 0}
+              className="rounded-full border border-sand-900 bg-sand-900 px-3 py-1.5 text-[10px] uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Manuell abbuchen
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[10px] uppercase tracking-wide text-sand-500">Historie</p>
+          <span className="text-[11px] text-sand-500">{prepaidHoursEntries.length} Buchungen</span>
+        </div>
+        <div className="mt-2 space-y-2 max-h-64 overflow-auto pr-1">
+          {prepaidHoursEntries.map((entry) => (
+            <div
+              key={entry.id}
+              className={`rounded-lg border px-2.5 py-2 ${
+                entry.entry_type === "debit" ? "border-rose-200 bg-white" : "border-emerald-200 bg-white"
+              }`}
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                        entry.entry_type === "debit"
+                          ? "border-rose-200 bg-rose-50 text-rose-700"
+                          : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      }`}
+                    >
+                      {entry.entry_type_label}
+                    </span>
+                    <p className="text-sm font-semibold text-sand-900">{entry.label || "Buchung"}</p>
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-sand-500">
+                    {formatDateTime(entry.effective_at || entry.created_at)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <p
+                    className={`text-sm font-semibold ${
+                      entry.entry_type === "debit" ? "text-rose-700" : "text-emerald-700"
+                    }`}
+                  >
+                    {entry.entry_type === "debit" ? "-" : "+"}
+                    {formatHours(entry.hours || 0)}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => deletePrepaidHoursEntry(entry.id)}
+                    className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1.5 text-sand-500 hover:bg-sand-100"
+                    title="Buchung löschen"
+                    aria-label="Buchung löschen"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+              {entry.task_title ? (
+                <p className="mt-1 text-[11px] text-sand-700">
+                  Aufgabe: {entry.task_title}
+                  {entry.task_elapsed_hours > 0 ? ` · Erfasst ${formatHours(entry.task_elapsed_hours)}` : ""}
+                </p>
+              ) : null}
+              {entry.note ? <p className="mt-1 text-[11px] text-sand-600">{entry.note}</p> : null}
+            </div>
+          ))}
+          {!prepaidHoursEntries.length && prepaidHoursStatus !== "loading" ? (
+            <p className="text-xs text-sand-500">Noch keine Stundenkäufe oder Abbuchungen vorhanden.</p>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
 
   const renderContractListItem = (item) => {
     const status = String(item?.status || "active").toLowerCase();
@@ -4464,6 +4896,7 @@ export default function CustomerDirectoryView() {
                       ) : null}
                     </div>
                   ) : null}
+                  {renderPrepaidHoursContainer()}
                   {contractsStatus === "loading" ? <p className="text-xs text-sand-500">Lade Verträge…</p> : null}
                   {contractsStatus === "error" ? <p className="text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
                   <div className="space-y-2 max-h-64 overflow-auto pr-1">

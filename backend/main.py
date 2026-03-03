@@ -706,6 +706,22 @@ class CustomerContractDocument(Base):
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
+class CustomerPrepaidHoursEntry(Base):
+    __tablename__ = "customer_prepaid_hours_entries"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    entry_type = Column(String, default="purchase")
+    hours = Column(Float, default=0.0)
+    label = Column(String, default="")
+    note = Column(Text, default="")
+    task_id = Column(Integer, ForeignKey("day_tasks.id"), nullable=True)
+    task_title_snapshot = Column(String, default="")
+    task_elapsed_hours_snapshot = Column(Float, default=0.0)
+    effective_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
 def _run_db_startup_step(step_name: str, callback: Callable[[], None]) -> None:
     attempts = max(1, int(DB_STARTUP_RETRY_ATTEMPTS or 1))
     delay_seconds = max(0.5, float(DB_STARTUP_RETRY_DELAY_SECONDS or 0.5))
@@ -1743,6 +1759,15 @@ class CustomerContractPreviewRequest(BaseModel):
     termination_notice_months: Optional[int] = 3
     auto_extension_months: Optional[int] = 12
     contract_variable_values: Optional[Dict[str, str]] = None
+
+
+class CustomerPrepaidHoursEntryCreate(BaseModel):
+    entry_type: Optional[str] = "purchase"
+    hours: float
+    label: Optional[str] = ""
+    note: Optional[str] = ""
+    task_id: Optional[int] = None
+    effective_at: Optional[int] = 0
 
 
 class InfraDiscoveryItem(BaseModel):
@@ -5906,6 +5931,168 @@ def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict
         "stop_service_immediately": bool(getattr(item, "stop_service_immediately", False)),
         "created_at": int(item.created_at or 0),
         "timeline": timeline,
+    }
+
+
+def _day_task_elapsed_hours(task: Optional[DayTask], now_ms: Optional[int] = None) -> float:
+    if not task:
+        return 0.0
+    elapsed_ms = int(task.elapsed or 0)
+    start_time = int(task.startTime or 0)
+    window_end = int(now_ms or int(time.time() * 1000))
+    if bool(task.running) and start_time > 0 and window_end > start_time:
+        elapsed_ms += max(0, window_end - start_time)
+    if elapsed_ms <= 0:
+        return 0.0
+    return round(elapsed_ms / 3_600_000.0, 2)
+
+
+def _normalize_prepaid_hours_entry_type(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"purchase", "credit", "buy", "hours_buy"}:
+        return "purchase"
+    if raw in {"debit", "consume", "book", "deduct"}:
+        return "debit"
+    return ""
+
+
+def _prepaid_hours_signed_hours(entry: CustomerPrepaidHoursEntry) -> float:
+    amount = round(float(entry.hours or 0.0), 2)
+    if _normalize_prepaid_hours_entry_type(getattr(entry, "entry_type", "")) == "debit":
+        return round(-amount, 2)
+    return amount
+
+
+def serialize_customer_prepaid_hours_entry(
+    item: CustomerPrepaidHoursEntry,
+    *,
+    task: Optional[DayTask] = None,
+    now_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    entry_type = _normalize_prepaid_hours_entry_type(getattr(item, "entry_type", "")) or "purchase"
+    task_title = str(getattr(item, "task_title_snapshot", "") or "").strip()
+    task_status = ""
+    task_elapsed_hours = round(float(getattr(item, "task_elapsed_hours_snapshot", 0.0) or 0.0), 2)
+    if task:
+        task_title = str(task.title or "").strip() or task_title
+        task_status = str(task.status or "").strip().lower()
+        task_elapsed_hours = _day_task_elapsed_hours(task, now_ms=now_ms)
+    hours_value = round(float(item.hours or 0.0), 2)
+    signed_hours = round(-hours_value, 2) if entry_type == "debit" else hours_value
+    label = str(getattr(item, "label", "") or "").strip()
+    if not label:
+        label = "Stundenkauf" if entry_type == "purchase" else (task_title or "Manuelle Abbuchung")
+    return {
+        "id": int(item.id or 0),
+        "customer_id": int(item.customer_id or 0),
+        "entry_type": entry_type,
+        "entry_type_label": "Kauf" if entry_type == "purchase" else "Abbuchung",
+        "hours": hours_value,
+        "signed_hours": signed_hours,
+        "label": label,
+        "note": str(getattr(item, "note", "") or ""),
+        "task_id": int(item.task_id or 0) if getattr(item, "task_id", None) else None,
+        "task_title": task_title,
+        "task_status": task_status,
+        "task_elapsed_hours": task_elapsed_hours,
+        "effective_at": int(getattr(item, "effective_at", 0) or 0),
+        "created_at": int(getattr(item, "created_at", 0) or 0),
+    }
+
+
+def _build_customer_prepaid_hours_payload(db, customer: Customer) -> Dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    entry_rows = (
+        db.query(CustomerPrepaidHoursEntry)
+        .filter(CustomerPrepaidHoursEntry.customer_id == customer.id)
+        .order_by(
+            CustomerPrepaidHoursEntry.effective_at.desc(),
+            CustomerPrepaidHoursEntry.created_at.desc(),
+            CustomerPrepaidHoursEntry.id.desc(),
+        )
+        .all()
+    )
+    task_filters = _customer_task_filter(customer)
+    task_rows: List[DayTask] = []
+    if task_filters:
+        task_rows = (
+            db.query(DayTask)
+            .filter(or_(*task_filters))
+            .order_by(DayTask.completed_at.desc(), DayTask.created_at.desc(), DayTask.id.desc())
+            .limit(120)
+            .all()
+        )
+    task_by_id: Dict[int, DayTask] = {
+        int(task.id): task for task in task_rows if getattr(task, "id", None) is not None
+    }
+    referenced_task_ids = [
+        int(item.task_id)
+        for item in entry_rows
+        if getattr(item, "task_id", None) is not None and int(item.task_id or 0) > 0
+    ]
+    missing_task_ids = [task_id for task_id in referenced_task_ids if task_id not in task_by_id]
+    if missing_task_ids:
+        extra_rows = db.query(DayTask).filter(DayTask.id.in_(missing_task_ids)).all()
+        for task in extra_rows:
+            if getattr(task, "id", None) is None:
+                continue
+            task_by_id[int(task.id)] = task
+            task_rows.append(task)
+    booked_hours_by_task: Dict[int, float] = {}
+    purchased_hours = 0.0
+    debited_hours = 0.0
+    for item in entry_rows:
+        amount = round(float(item.hours or 0.0), 2)
+        if _normalize_prepaid_hours_entry_type(item.entry_type) == "debit":
+            debited_hours += amount
+            if getattr(item, "task_id", None):
+                task_id = int(item.task_id or 0)
+                if task_id > 0:
+                    booked_hours_by_task[task_id] = round(booked_hours_by_task.get(task_id, 0.0) + amount, 2)
+        else:
+            purchased_hours += amount
+    serialized_entries = [
+        serialize_customer_prepaid_hours_entry(item, task=task_by_id.get(int(item.task_id or 0)), now_ms=now_ms)
+        for item in entry_rows
+    ]
+    task_options = []
+    seen_task_ids: Set[int] = set()
+    for task in task_rows:
+        task_id = int(task.id or 0)
+        if task_id <= 0 or task_id in seen_task_ids:
+            continue
+        seen_task_ids.add(task_id)
+        elapsed_hours = _day_task_elapsed_hours(task, now_ms=now_ms)
+        booked_hours = round(booked_hours_by_task.get(task_id, 0.0), 2)
+        task_options.append(
+            {
+                "id": task_id,
+                "title": str(task.title or "").strip() or "Aufgabe",
+                "status": str(task.status or "").strip().lower(),
+                "time_enabled": bool(task.time_enabled),
+                "elapsed_hours": elapsed_hours,
+                "booked_hours": booked_hours,
+                "remaining_hours": round(max(0.0, elapsed_hours - booked_hours), 2),
+                "details": str(task.details or "").strip(),
+                "created_at": int(task.created_at or 0),
+                "completed_at": int(task.completed_at or 0),
+            }
+        )
+    task_options.sort(
+        key=lambda item: (
+            -int(item.get("completed_at") or 0),
+            -int(item.get("created_at") or 0),
+            -int(item.get("id") or 0),
+        )
+    )
+    balance_hours = round(purchased_hours - debited_hours, 2)
+    return {
+        "customerId": int(customer.id),
+        "purchasedHours": round(purchased_hours, 2),
+        "debitedHours": round(debited_hours, 2),
+        "balanceHours": balance_hours,
+        "entries": serialized_entries,
+        "taskOptions": task_options,
     }
 
 
@@ -14954,6 +15141,99 @@ def create_customer_contract_calculation(customer_id: int, data: CustomerContrac
         db.commit()
         db.refresh(row)
         return serialize_customer_contract_calculation(row)
+
+
+@app.get("/api/customers/{customer_id}/prepaid_hours")
+def get_customer_prepaid_hours(customer_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        return _build_customer_prepaid_hours_payload(db, customer)
+
+
+@app.post("/api/customers/{customer_id}/prepaid_hours/entries")
+def create_customer_prepaid_hours_entry(customer_id: int, data: CustomerPrepaidHoursEntryCreate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        entry_type = _normalize_prepaid_hours_entry_type(data.entry_type)
+        if entry_type not in {"purchase", "debit"}:
+            raise HTTPException(400, "entry_type must be purchase or debit")
+        hours_value = round(float(_safe_nonnegative_float(data.hours)), 2)
+        if hours_value <= 0:
+            raise HTTPException(400, "hours must be greater than 0")
+        now_ms = int(time.time() * 1000)
+        effective_at = int(data.effective_at or 0)
+        if effective_at <= 0:
+            effective_at = now_ms
+        label = str(data.label or "").strip()
+        note = str(data.note or "").strip()
+        task = None
+        task_title_snapshot = ""
+        task_elapsed_hours_snapshot = 0.0
+        task_id_value: Optional[int] = None
+        if data.task_id:
+            task = db.query(DayTask).get(int(data.task_id))
+            if not task:
+                raise HTTPException(404, "Task not found")
+            task_filters = _customer_task_filter(customer)
+            belongs_to_customer = False
+            if task_filters:
+                task_name = str(task.customer or "").strip().lower()
+                task_number = str(task.customer_number or "").strip()
+                customer_name = str(customer.name or "").strip().lower()
+                customer_number = str(customer.creditor_number or "").strip()
+                belongs_to_customer = (
+                    (customer_name and task_name == customer_name)
+                    or (customer_number and task_number == customer_number)
+                )
+            if not belongs_to_customer:
+                raise HTTPException(400, "Task does not belong to customer")
+            task_id_value = int(task.id)
+            task_title_snapshot = str(task.title or "").strip()
+            task_elapsed_hours_snapshot = _day_task_elapsed_hours(task, now_ms=now_ms)
+        if entry_type == "purchase":
+            task_id_value = None
+            task_title_snapshot = ""
+            task_elapsed_hours_snapshot = 0.0
+        if not label:
+            label = "Stundenkauf" if entry_type == "purchase" else (task_title_snapshot or "Manuelle Abbuchung")
+        row = CustomerPrepaidHoursEntry(
+            customer_id=customer.id,
+            entry_type=entry_type,
+            hours=hours_value,
+            label=label,
+            note=note,
+            task_id=task_id_value,
+            task_title_snapshot=task_title_snapshot,
+            task_elapsed_hours_snapshot=task_elapsed_hours_snapshot,
+            effective_at=effective_at,
+            created_at=now_ms,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_prepaid_hours_entry(row, task=task, now_ms=now_ms)
+
+
+@app.delete("/api/customers/{customer_id}/prepaid_hours/entries/{entry_id}")
+def delete_customer_prepaid_hours_entry(customer_id: int, entry_id: int):
+    with SessionLocal() as db:
+        row = (
+            db.query(CustomerPrepaidHoursEntry)
+            .filter(
+                CustomerPrepaidHoursEntry.id == entry_id,
+                CustomerPrepaidHoursEntry.customer_id == customer_id,
+            )
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "Prepaid hours entry not found")
+        db.delete(row)
+        db.commit()
+        return {"status": "deleted", "id": int(entry_id)}
 
 
 @app.get("/api/customers/{customer_id}/contracts")
