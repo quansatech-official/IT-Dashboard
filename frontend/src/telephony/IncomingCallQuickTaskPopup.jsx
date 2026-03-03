@@ -307,6 +307,7 @@ export default function IncomingCallQuickTaskPopup() {
   const onPointerDownHandle = (event) => {
     if (typeof window === "undefined") return;
     if (window.innerWidth < 1024) return;
+    if (event.target?.closest?.("button, input, textarea, a")) return;
     dragRef.current = {
       active: true,
       pointerId: event.pointerId,
@@ -365,6 +366,7 @@ export default function IncomingCallQuickTaskPopup() {
         </div>
         <button
           type="button"
+          onPointerDown={(event) => event.stopPropagation()}
           onClick={closePopup}
           className="rounded-full border border-white/50 bg-white/50 p-1 text-sand-700 hover:bg-white/80"
           title="Schließen"
@@ -393,14 +395,23 @@ export default function IncomingCallQuickTaskPopup() {
                 ? "Polling-Fallback aktiv."
                 : "Verbindung wird aufgebaut...")}
         </p>
-        <button
-          type="button"
-          onClick={createQuickTask}
-          disabled={!title.trim() || saving}
-          className="inline-flex items-center gap-1 rounded-full border border-sand-900 bg-sand-900 px-3 py-1.5 text-[10px] uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Save size={12} /> Speichern
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={closePopup}
+            className="inline-flex items-center gap-1 rounded-full border border-white/60 bg-white/55 px-3 py-1.5 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-white/80"
+          >
+            <X size={12} /> Schließen
+          </button>
+          <button
+            type="button"
+            onClick={createQuickTask}
+            disabled={!title.trim() || saving}
+            className="inline-flex items-center gap-1 rounded-full border border-sand-900 bg-sand-900 px-3 py-1.5 text-[10px] uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Save size={12} /> Speichern
+          </button>
+        </div>
       </div>
     </div>
   );
