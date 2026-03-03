@@ -73,6 +73,10 @@ OLLAMA_MAX_TOKENS_HARD_LIMIT = max(
     64,
     int(os.environ.get("OLLAMA_MAX_TOKENS_HARD_LIMIT") or "320"),
 )
+INTERNAL_AI_MAX_TOKENS = max(
+    128,
+    int(os.environ.get("INTERNAL_AI_MAX_TOKENS") or "1200"),
+)
 OLLAMA_SLOW_REQUEST_MS = max(
     500,
     int(os.environ.get("OLLAMA_SLOW_REQUEST_MS") or "25000"),
@@ -2268,7 +2272,10 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
 
 
 def _internal_ai_prompt_limit_chars() -> int:
-    resolved_max_tokens = max(64, min(480, int(OLLAMA_MAX_TOKENS_HARD_LIMIT or 480)))
+    resolved_max_tokens = max(
+        128,
+        min(int(INTERNAL_AI_MAX_TOKENS), int(OLLAMA_MAX_TOKENS_HARD_LIMIT or INTERNAL_AI_MAX_TOKENS)),
+    )
     prompt_ctx_budget = max(
         128,
         int(OLLAMA_NUM_CTX) - int(resolved_max_tokens) - int(OLLAMA_PROMPT_TOKEN_MARGIN),
@@ -14574,7 +14581,7 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
         internal_prompt,
         model_candidates=model_candidates,
         temperature=0.2,
-        max_tokens=480,
+        max_tokens=int(INTERNAL_AI_MAX_TOKENS),
         timeout=max(10, min(180, OLLAMA_TIMEOUT_SECONDS)),
         use_cache=False,
     )
@@ -14610,7 +14617,10 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
         prompt_body = internal_prompt
         if len(prompt_body) > OLLAMA_PROMPT_MAX_CHARS:
             prompt_body = prompt_body[:OLLAMA_PROMPT_MAX_CHARS]
-        resolved_max_tokens = max(64, min(480, int(OLLAMA_MAX_TOKENS_HARD_LIMIT or 480)))
+        resolved_max_tokens = max(
+            128,
+            min(int(INTERNAL_AI_MAX_TOKENS), int(OLLAMA_MAX_TOKENS_HARD_LIMIT or INTERNAL_AI_MAX_TOKENS)),
+        )
         target_predict = int(resolved_max_tokens or 0)
         prompt_ctx_budget = max(128, int(OLLAMA_NUM_CTX) - target_predict - int(OLLAMA_PROMPT_TOKEN_MARGIN))
         approx_prompt_tokens = max(1, int(math.ceil(len(prompt_body) / 4.0)))
