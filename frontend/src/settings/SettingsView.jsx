@@ -211,6 +211,38 @@ const normalizeContractVariableKey = (rawKey) =>
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, "_")
     .replace(/^_+|_+$/g, "");
+const RESERVED_CONTRACT_PLACEHOLDERS = new Set([
+  "provider_name",
+  "provider_address",
+  "provider_email",
+  "provider_contact_line",
+  "customer_name",
+  "customer_number",
+  "customer_short_code",
+  "customer_email",
+  "customer_street",
+  "customer_postal_code",
+  "customer_city",
+  "customer_country",
+  "customer_address",
+  "generated_at",
+  "valid_from",
+  "contract_start",
+  "runtime_months",
+  "minimum_term_months",
+  "extension_period",
+  "auto_extension_months",
+  "termination_notice_months",
+  "termination_notice",
+  "servers",
+  "clients",
+  "network_devices",
+  "iot_devices",
+  "monthly_total",
+  "yearly_total",
+  "monthly_hours_included",
+  "service_scope",
+]);
 const parseBooleanFlag = (value, fallback = false) => {
   if (typeof value === "boolean") return value;
   const raw = String(value ?? "")
@@ -231,7 +263,9 @@ const normalizeContractTemplates = (input) => {
         title: String(row.title || merged[key]?.title || "").trim(),
         description: String(row.description || merged[key]?.description || "").trim(),
         doc_type: String(row.doc_type || merged[key]?.doc_type || "wartung").trim() || "wartung",
-        body_template: String(row.body_template || "")
+        body_template: String(row.body_template || ""),
+        header_html: String(row.header_html || ""),
+        footer_html: String(row.footer_html || "")
       };
     });
   }
@@ -243,7 +277,7 @@ const normalizeContractVariables = (input) => {
   if (input && typeof input === "object" && !Array.isArray(input)) {
     Object.entries(input).forEach(([rawKey, rawValue]) => {
       const key = normalizeContractVariableKey(rawKey);
-      if (!key) return;
+      if (!key || RESERVED_CONTRACT_PLACEHOLDERS.has(key)) return;
       merged[key] = String(rawValue || "");
     });
   }
@@ -263,7 +297,7 @@ const normalizeContractVariableDefinitions = (definitionsInput, variablesInput) 
   if (definitionsInput && typeof definitionsInput === "object" && !Array.isArray(definitionsInput)) {
     Object.entries(definitionsInput).forEach(([rawKey, rawValue]) => {
       const key = normalizeContractVariableKey(rawKey);
-      if (!key) return;
+      if (!key || RESERVED_CONTRACT_PLACEHOLDERS.has(key)) return;
       const existing = merged[key] || { value: "", customer_editable: false, label: key };
       if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) {
         const value = rawValue.value ?? rawValue.default ?? rawValue.suggested_value ?? existing.value;
@@ -302,7 +336,7 @@ const flattenContractVariableDefinitions = (definitions) => {
   const out = {};
   Object.entries(definitions).forEach(([rawKey, rawValue]) => {
     const key = normalizeContractVariableKey(rawKey);
-    if (!key) return;
+    if (!key || RESERVED_CONTRACT_PLACEHOLDERS.has(key)) return;
     const entry = rawValue && typeof rawValue === "object" ? rawValue : {};
     out[key] = String(entry.value || "");
   });
@@ -2549,102 +2583,11 @@ export default function SettingsView() {
                   </div>
 
                   <div className="rounded-xl border border-sand-200 bg-white p-3">
-                    <p className="text-[11px] uppercase tracking-wide text-sand-500">Template-Variablen</p>
+                    <p className="text-[11px] uppercase tracking-wide text-sand-500">Vertragsvariablen</p>
                     <p className="mt-1 text-[11px] text-sand-500">
-                      Eigene Platzhalter als <code>{"{variable_name}"}</code> definieren und im Template verwenden.
+                      Freie Platzhalter im Template werden automatisch erkannt und im Kundenstamm pro Vertrag individuell gepflegt.
+                      Globale Beispielwerte werden hier nicht mehr verwaltet.
                     </p>
-                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[180px_1fr_auto_auto]">
-                      <input
-                        value={contractVariableDraft.key}
-                        onChange={(event) =>
-                          setContractVariableDraft((prev) => ({ ...prev, key: event.target.value }))
-                        }
-                        placeholder="variable_name"
-                        className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                      />
-                      <input
-                        value={contractVariableDraft.value}
-                        onChange={(event) =>
-                          setContractVariableDraft((prev) => ({ ...prev, value: event.target.value }))
-                        }
-                        placeholder="Beispielwert"
-                        className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                      />
-                      <label className="inline-flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(contractVariableDraft.customerEditable)}
-                          onChange={(event) =>
-                            setContractVariableDraft((prev) => ({
-                              ...prev,
-                              customerEditable: event.target.checked
-                            }))
-                          }
-                        />
-                        individuell
-                      </label>
-                      <button
-                        type="button"
-                        onClick={addContractVariable}
-                        className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                      >
-                        Hinzufügen
-                      </button>
-                    </div>
-                    <div className="mt-3 space-y-2 max-h-56 overflow-auto pr-1">
-                      {contractVariableEntries.map(([key, value]) => (
-                        <div
-                          key={key}
-                          className="grid grid-cols-1 gap-2 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2 md:grid-cols-[180px_1fr_auto_auto]"
-                        >
-                          <input
-                            value={key}
-                            readOnly
-                            className="rounded-xl border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-700"
-                          />
-                          <input
-                            value={String(value?.value || "")}
-                            onChange={(event) =>
-                              updateContractVariableDefinitions((prevDefinitions) => ({
-                                ...(prevDefinitions || {}),
-                                [key]: {
-                                  ...(prevDefinitions?.[key] || {}),
-                                  value: event.target.value
-                                }
-                              }))
-                            }
-                            className="rounded-xl border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-800"
-                          />
-                          <label className="inline-flex items-center gap-1 rounded-xl border border-sand-200 bg-white px-2 py-1 text-[10px] text-sand-700">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(value?.customer_editable)}
-                              onChange={(event) =>
-                                updateContractVariableDefinitions((prevDefinitions) => ({
-                                  ...(prevDefinitions || {}),
-                                  [key]: {
-                                    ...(prevDefinitions?.[key] || {}),
-                                    customer_editable: event.target.checked
-                                  }
-                                }))
-                              }
-                            />
-                            individuell
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => removeContractVariable(key)}
-                            className="inline-flex items-center justify-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                          >
-                            <Trash2 size={10} />
-                            Löschen
-                          </button>
-                        </div>
-                      ))}
-                      {!contractVariableEntries.length ? (
-                        <p className="text-xs text-sand-500">Noch keine eigenen Variablen hinterlegt.</p>
-                      ) : null}
-                    </div>
                   </div>
 
                   <div className="rounded-xl border border-sand-200 bg-white p-3">

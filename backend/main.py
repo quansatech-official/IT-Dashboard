@@ -2378,6 +2378,7 @@ def _ollama_generate(
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
     use_cache: bool = True,
+    raw: bool = False,
 ) -> Tuple[Dict[str, Any], str]:
     request_timeout = max(1, int(timeout or OLLAMA_TIMEOUT_SECONDS))
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
@@ -2432,6 +2433,8 @@ def _ollama_generate(
             "prompt": prompt_text,
             "stream": bool(OLLAMA_STREAM_ENABLED),
         }
+        if raw:
+            payload["raw"] = True
         if response_format:
             payload["format"] = response_format
         options: Dict[str, Any] = {
@@ -4918,7 +4921,7 @@ def _normalize_contract_variable_definitions(
     if isinstance(fallback_values, dict):
         for raw_key, raw_value in fallback_values.items():
             key = _normalize_contract_variable_key(raw_key)
-            if not key:
+            if not key or key in _CONTRACT_RUNTIME_PLACEHOLDERS:
                 continue
             merged[key] = {
                 "value": str(raw_value or ""),
@@ -4928,7 +4931,7 @@ def _normalize_contract_variable_definitions(
     if isinstance(raw_definitions, dict):
         for raw_key, raw_value in raw_definitions.items():
             key = _normalize_contract_variable_key(raw_key)
-            if not key:
+            if not key or key in _CONTRACT_RUNTIME_PLACEHOLDERS:
                 continue
             current = merged.get(key) or {
                 "value": "",
@@ -4977,7 +4980,7 @@ def _flatten_contract_variable_definitions(
         return out
     for raw_key, raw_entry in definitions.items():
         key = _normalize_contract_variable_key(raw_key)
-        if not key:
+        if not key or key in _CONTRACT_RUNTIME_PLACEHOLDERS:
             continue
         entry = raw_entry if isinstance(raw_entry, dict) else {}
         out[key] = str(entry.get("value") or "")
@@ -5043,6 +5046,7 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
             ),
             "footer_html": str(current_entry.get("footer_html") or default_entry.get("footer_html") or ""),
         }
+    
     defaults_contract_variables = (
         defaults.get("contract_variables") if isinstance(defaults.get("contract_variables"), dict) else {}
     )
@@ -14584,6 +14588,7 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
         max_tokens=int(INTERNAL_AI_MAX_TOKENS),
         timeout=max(10, min(180, OLLAMA_TIMEOUT_SECONDS)),
         use_cache=False,
+        raw=True,
     )
     response_text = str(payload.get("response") or "").strip()
     if not response_text:
@@ -14636,6 +14641,7 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
                 "model": model,
                 "prompt": prompt_body,
                 "stream": True,
+                "raw": True,
                 "options": {
                     "num_ctx": int(OLLAMA_NUM_CTX),
                     "num_thread": int(OLLAMA_NUM_THREAD),
@@ -15725,21 +15731,6 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             "liability_limit": "gemäß AGB",
             "note_block": note_block,
         }
-        prompt_contract_variables = (
-            prompts.get("contract_variables") if isinstance(prompts.get("contract_variables"), dict) else {}
-        )
-        for raw_key, raw_value in prompt_contract_variables.items():
-            key = _normalize_contract_variable_key(raw_key)
-            if not key:
-                continue
-            if key in _CONTRACT_RUNTIME_PLACEHOLDERS:
-                continue
-            placeholder_values[key] = str(raw_value or "")
-        prompt_contract_variable_definitions = (
-            prompts.get("contract_variable_definitions")
-            if isinstance(prompts.get("contract_variable_definitions"), dict)
-            else {}
-        )
         request_contract_variable_values = (
             data.contract_variable_values if isinstance(data.contract_variable_values, dict) else {}
         )
@@ -15749,39 +15740,36 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
             if not key:
                 continue
             request_contract_variable_values_normalized[key] = str(raw_value or "")
-        individual_variables: List[Dict[str, Any]] = []
-        applied_individual_values: Dict[str, str] = {}
-        for raw_key, raw_entry in prompt_contract_variable_definitions.items():
-            key = _normalize_contract_variable_key(raw_key)
-            if not key:
-                continue
-            entry = raw_entry if isinstance(raw_entry, dict) else {}
-            suggested_value = str(entry.get("value") or "")
-            customer_editable = _to_bool_flag(entry.get("customer_editable"), default=False)
-            label = str(entry.get("label") or key).strip() or key
-            value = suggested_value
-            if customer_editable and key in request_contract_variable_values_normalized:
-                value = request_contract_variable_values_normalized[key]
-            placeholder_values[key] = value
-            if customer_editable:
-                applied_individual_values[key] = value
-                individual_variables.append(
-                    {
-                        "key": key,
-                        "label": label,
-                        "suggested_value": suggested_value,
-                        "value": value,
-                        "customer_editable": True,
-                    }
-                )
-        individual_variables = sorted(
-            individual_variables,
-            key=lambda entry: str(entry.get("label") or entry.get("key") or "").lower(),
-        )
         template_placeholder_keys = _extract_contract_placeholders(
             template_header_html,
             body_template,
             template_footer_html,
+        )
+        custom_template_variable_keys = sorted(
+            [
+                key
+                for key in template_placeholder_keys
+                if key not in placeholder_values and key not in _CONTRACT_FALLBACK_VALUES
+            ]
+        )
+        individual_variables: List[Dict[str, Any]] = []
+        applied_individual_values: Dict[str, str] = {}
+        for key in custom_template_variable_keys:
+            value = request_contract_variable_values_normalized.get(key, "")
+            placeholder_values[key] = value
+            applied_individual_values[key] = value
+            individual_variables.append(
+                {
+                    "key": key,
+                    "label": key,
+                    "suggested_value": "",
+                    "value": value,
+                    "customer_editable": True,
+                }
+            )
+        individual_variables = sorted(
+            individual_variables,
+            key=lambda entry: str(entry.get("label") or entry.get("key") or "").lower(),
         )
         unresolved_placeholder_keys = [
             key
@@ -15862,7 +15850,15 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             data.template_key or data.doc_type or "wartung",
             fallback="wartung",
         )
-        template_entry = templates.get(template_key_value) if isinstance(templates, dict) else {}
+        template_entry = templates.get(template_key_value) if isinstance(templates, dict) else None
+        if not isinstance(template_entry, dict):
+            fallback_doc_type = _normalize_contract_doc_type(data.doc_type or template_key_value, default="wartung")
+            template_key_value = (
+                fallback_doc_type
+                if isinstance(templates, dict) and isinstance(templates.get(fallback_doc_type), dict)
+                else "wartung"
+            )
+            template_entry = templates.get(template_key_value) or templates.get("wartung") or {}
         doc_type_value = _normalize_contract_doc_type(data.doc_type, default="")
         if not doc_type_value:
             doc_type_value = _resolve_contract_doc_type_from_template(
@@ -15919,11 +15915,12 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
             if data.yearly_total is not None
             else monthly_total * 12.0
         )
-        contract_variable_values = {
-            str(key): str(value or "")
-            for key, value in (data.contract_variable_values or {}).items()
-            if str(key or "").strip()
-        }
+        contract_variable_values: Dict[str, str] = {}
+        for raw_key, raw_value in (data.contract_variable_values or {}).items():
+            key = _normalize_contract_variable_key(raw_key)
+            if not key or key in _CONTRACT_RUNTIME_PLACEHOLDERS:
+                continue
+            contract_variable_values[key] = str(raw_value or "")
         snapshot_payload = {
             "template_key": template_key_value,
             "tariff": serialize_contract_tariff(tariff) if tariff else None,
@@ -16018,7 +16015,18 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
             data.template_key or data.doc_type or row.template_key or row.doc_type or "wartung",
             fallback="wartung",
         )
-        template_entry = templates.get(template_key_value) if isinstance(templates, dict) else {}
+        template_entry = templates.get(template_key_value) if isinstance(templates, dict) else None
+        if not isinstance(template_entry, dict):
+            fallback_doc_type = _normalize_contract_doc_type(
+                data.doc_type or template_key_value or row.doc_type,
+                default="wartung",
+            )
+            template_key_value = (
+                fallback_doc_type
+                if isinstance(templates, dict) and isinstance(templates.get(fallback_doc_type), dict)
+                else "wartung"
+            )
+            template_entry = templates.get(template_key_value) or templates.get("wartung") or {}
         doc_type_value = _normalize_contract_doc_type(data.doc_type, default="")
         if not doc_type_value:
             doc_type_value = _resolve_contract_doc_type_from_template(
@@ -16075,11 +16083,12 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
             if data.yearly_total is not None
             else monthly_total * 12.0
         )
-        contract_variable_values = {
-            str(key): str(value or "")
-            for key, value in (data.contract_variable_values or {}).items()
-            if str(key or "").strip()
-        }
+        contract_variable_values: Dict[str, str] = {}
+        for raw_key, raw_value in (data.contract_variable_values or {}).items():
+            key = _normalize_contract_variable_key(raw_key)
+            if not key or key in _CONTRACT_RUNTIME_PLACEHOLDERS:
+                continue
+            contract_variable_values[key] = str(raw_value or "")
         snapshot_payload = {
             "template_key": template_key_value,
             "tariff": serialize_contract_tariff(tariff) if tariff else None,

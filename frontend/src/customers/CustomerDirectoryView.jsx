@@ -262,6 +262,39 @@ const normalizeContractVariableKey = (rawKey) =>
     .replace(/[^a-z0-9_]+/g, "_")
     .replace(/^_+|_+$/g, "");
 
+const RESERVED_CONTRACT_PLACEHOLDERS = new Set([
+  "provider_name",
+  "provider_address",
+  "provider_email",
+  "provider_contact_line",
+  "customer_name",
+  "customer_number",
+  "customer_short_code",
+  "customer_email",
+  "customer_street",
+  "customer_postal_code",
+  "customer_city",
+  "customer_country",
+  "customer_address",
+  "generated_at",
+  "valid_from",
+  "contract_start",
+  "runtime_months",
+  "minimum_term_months",
+  "extension_period",
+  "auto_extension_months",
+  "termination_notice_months",
+  "termination_notice",
+  "servers",
+  "clients",
+  "network_devices",
+  "iot_devices",
+  "monthly_total",
+  "yearly_total",
+  "monthly_hours_included",
+  "service_scope",
+]);
+
 const parseBooleanFlag = (value, fallback = false) => {
   if (typeof value === "boolean") return value;
   const raw = String(value ?? "")
@@ -277,7 +310,7 @@ const normalizeContractVariableDefinitions = (definitionsInput, variablesInput) 
   if (variablesInput && typeof variablesInput === "object" && !Array.isArray(variablesInput)) {
     Object.entries(variablesInput).forEach(([rawKey, rawValue]) => {
       const key = normalizeContractVariableKey(rawKey);
-      if (!key) return;
+      if (!key || RESERVED_CONTRACT_PLACEHOLDERS.has(key)) return;
       merged[key] = {
         value: String(rawValue || ""),
         label: key,
@@ -288,7 +321,7 @@ const normalizeContractVariableDefinitions = (definitionsInput, variablesInput) 
   if (definitionsInput && typeof definitionsInput === "object" && !Array.isArray(definitionsInput)) {
     Object.entries(definitionsInput).forEach(([rawKey, rawValue]) => {
       const key = normalizeContractVariableKey(rawKey);
-      if (!key) return;
+      if (!key || RESERVED_CONTRACT_PLACEHOLDERS.has(key)) return;
       const existing = merged[key] || { value: "", label: key, customerEditable: false };
       if (rawValue && typeof rawValue === "object" && !Array.isArray(rawValue)) {
         const value = rawValue.value ?? rawValue.default ?? rawValue.suggested_value ?? existing.value;
@@ -345,11 +378,27 @@ const normalizeContractTemplates = (input) => {
         title: String(entry.title || merged[key]?.title || key).trim() || key,
         description: String(entry.description || merged[key]?.description || "").trim(),
         doc_type: String(entry.doc_type || merged[key]?.doc_type || "").trim(),
-        body_template: String(entry.body_template || "")
+        body_template: String(entry.body_template || ""),
+        header_html: String(entry.header_html || ""),
+        footer_html: String(entry.footer_html || "")
       };
     });
   }
   return merged;
+};
+
+const extractContractTemplateVariables = (...fragments) => {
+  const found = new Set();
+  fragments.forEach((fragment) => {
+    const text = String(fragment || "");
+    const matches = text.match(/\{([a-zA-Z0-9_]+)\}/g) || [];
+    matches.forEach((match) => {
+      const key = normalizeContractVariableKey(match.slice(1, -1));
+      if (!key || RESERVED_CONTRACT_PLACEHOLDERS.has(key)) return;
+      found.add(key);
+    });
+  });
+  return Array.from(found).sort((a, b) => String(a || "").localeCompare(String(b || ""), "de"));
 };
 
 const buildEditableContractVariableValues = (definitions, sourceValues = {}) => {
@@ -357,7 +406,7 @@ const buildEditableContractVariableValues = (definitions, sourceValues = {}) => 
   if (sourceValues && typeof sourceValues === "object" && !Array.isArray(sourceValues)) {
     Object.entries(sourceValues).forEach(([rawKey, rawValue]) => {
       const key = normalizeContractVariableKey(rawKey);
-      if (!key) return;
+      if (!key || RESERVED_CONTRACT_PLACEHOLDERS.has(key)) return;
       normalizedSource[key] = String(rawValue || "");
     });
   }
@@ -1438,11 +1487,7 @@ export default function CustomerDirectoryView() {
       .then((data) => {
         if (!active) return;
         setContractTemplates(normalizeContractTemplates(data?.contract_templates));
-        const nextDefinitions = normalizeContractVariableDefinitions(
-          data?.contract_variable_definitions,
-          data?.contract_variables
-        );
-        setContractVariableDefinitions(nextDefinitions);
+        setContractVariableDefinitions({});
       })
       .catch(() => {
         if (!active) return;
@@ -1540,6 +1585,7 @@ export default function CustomerDirectoryView() {
           title: String(templateEntry?.title || key).trim() || key,
           description: String(templateEntry?.description || "").trim(),
           docType: resolveContractBaseType(key, templateEntry),
+          body_template: String(templateEntry?.body_template || ""),
           hasBodyTemplate: Boolean(String(templateEntry?.body_template || "").trim())
         };
       })
@@ -1568,6 +1614,7 @@ export default function CustomerDirectoryView() {
       (item) => String(item?.category || "").trim().toLowerCase() === tariffCategoryForContractType
     );
   }, [contractTariffs, tariffCategoryForContractType]);
+
   const tariffRequired = Boolean(tariffCategoryForContractType);
   const tariffSelectionMissing = tariffRequired && !selectedTariff;
 
@@ -1606,15 +1653,28 @@ export default function CustomerDirectoryView() {
   }, [contractDraft.autoExtensionMonths]);
   const contractRuntimeInvalid = terminationNoticeMonthsValue > runtimeMonthsValue;
   const contractGenerationBlocked = tariffSelectionMissing || contractRuntimeInvalid;
+  useEffect(() => {
+    const variableKeys = extractContractTemplateVariables(activeContractTemplate?.body_template || "");
+    const nextDefinitions = Object.fromEntries(
+      variableKeys.map((key) => [
+        key,
+        {
+          value: "",
+          label: key,
+          customerEditable: true
+        }
+      ])
+    );
+    setContractVariableDefinitions(nextDefinitions);
+  }, [activeContractTemplate]);
+
   const editableContractVariables = useMemo(
     () =>
-      Object.entries(contractVariableDefinitions || {})
-        .filter(([, entry]) => Boolean(entry?.customerEditable))
-        .map(([key, entry]) => ({
-          key,
-          label: String(entry?.label || key),
-          suggestedValue: String(entry?.value || "")
-        })),
+      Object.entries(contractVariableDefinitions || {}).map(([key, entry]) => ({
+        key,
+        label: String(entry?.label || key),
+        suggestedValue: String(entry?.value || "")
+      })),
     [contractVariableDefinitions]
   );
 
