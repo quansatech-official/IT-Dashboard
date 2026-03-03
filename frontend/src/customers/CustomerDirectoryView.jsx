@@ -645,6 +645,34 @@ const blobToBase64 = async (blob) => {
   return window.btoa(binary);
 };
 
+const downloadBlob = (blob, filename) => {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(objectUrl);
+};
+
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const buildPrepaidHoursPdfFilename = (customer) => {
+  const base = String(customer?.name || "kunde")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `${base || "kunde"}_vorausstunden.pdf`;
+};
+
 const contractTypeLabel = (value) => {
   const type = normalizeContractDocumentType(value) || "wartung";
   if (type === "monitoring") return "Monitoringvertrag";
@@ -739,6 +767,213 @@ const formatCallDuration = (value) => {
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
+};
+
+const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, generatedAt = Date.now() }) => {
+  const summary =
+    prepaidHoursSummary && typeof prepaidHoursSummary === "object" && !Array.isArray(prepaidHoursSummary)
+      ? prepaidHoursSummary
+      : null;
+  const entries = Array.isArray(summary?.entries) ? summary.entries : [];
+  const addressParts = [
+    String(customer?.street || "").trim(),
+    [String(customer?.postalCode || "").trim(), String(customer?.city || "").trim()].filter(Boolean).join(" "),
+    String(customer?.country || "").trim()
+  ].filter(Boolean);
+  const rows = entries.length
+    ? entries
+        .map((entry) => {
+          const isDebit = String(entry?.entry_type || "").toLowerCase() === "debit";
+          const label = String(entry?.label || "").trim() || "Buchung";
+          const detailParts = [];
+          if (entry?.task_title) detailParts.push(`Aufgabe: ${String(entry.task_title).trim()}`);
+          if (entry?.note) detailParts.push(String(entry.note).trim());
+          return `
+            <tr>
+              <td>${escapeHtml(formatDateTime(entry?.effective_at || entry?.created_at))}</td>
+              <td>${escapeHtml(isDebit ? "Abbuchung" : "Kauf")}</td>
+              <td>${escapeHtml(label)}</td>
+              <td>${escapeHtml(detailParts.join(" · ") || "-")}</td>
+              <td style="text-align:right; color:${isDebit ? "#a63d40" : "#256f52"}; font-weight:700;">
+                ${escapeHtml(`${isDebit ? "-" : "+"}${formatHours(entry?.hours || 0)}`)}
+              </td>
+            </tr>
+          `;
+        })
+        .join("")
+    : `
+        <tr>
+          <td colspan="5" style="text-align:center; color:#6b7280; padding:18px 12px;">
+            Noch keine Stundenkäufe oder Abbuchungen vorhanden.
+          </td>
+        </tr>
+      `;
+  return `
+    <style>
+      @page {
+        size: A4;
+        margin: 16mm 14mm;
+      }
+      body {
+        font-family: "Aptos", "Segoe UI", sans-serif;
+        color: #1f2937;
+      }
+      .sheet {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+      .hero {
+        background: linear-gradient(135deg, #17324d 0%, #285b78 60%, #d8e8ef 100%);
+        border-radius: 18px;
+        color: #f8fafc;
+        padding: 20px 22px;
+      }
+      .hero h1 {
+        font-size: 26px;
+        line-height: 1.15;
+        margin: 6px 0 0;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.28em;
+        margin: 0;
+        opacity: 0.8;
+        text-transform: uppercase;
+      }
+      .hero-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .hero-chip {
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 999px;
+        font-size: 11px;
+        padding: 5px 10px;
+      }
+      .section {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 18px;
+        padding: 18px;
+      }
+      .section-title {
+        color: #64748b;
+        font-size: 11px;
+        letter-spacing: 0.22em;
+        margin: 0 0 14px;
+        text-transform: uppercase;
+      }
+      .grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .metric {
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 14px 16px;
+      }
+      .metric-label {
+        color: #64748b;
+        font-size: 10px;
+        letter-spacing: 0.16em;
+        margin: 0 0 6px;
+        text-transform: uppercase;
+      }
+      .metric-value {
+        color: #111827;
+        font-size: 20px;
+        font-weight: 700;
+        margin: 0;
+      }
+      .muted {
+        color: #6b7280;
+        font-size: 12px;
+        line-height: 1.5;
+        margin: 6px 0 0;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      th,
+      td {
+        border-bottom: 1px solid #e5e7eb;
+        font-size: 12px;
+        padding: 10px 8px;
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        color: #64748b;
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .footer {
+        color: #94a3b8;
+        font-size: 11px;
+        text-align: right;
+      }
+    </style>
+    <div class="sheet">
+      <section class="hero">
+        <p class="eyebrow">Vorausstunden</p>
+        <h1>${escapeHtml(String(customer?.name || "Unbenannter Kunde").trim() || "Unbenannter Kunde")}</h1>
+        <div class="hero-meta">
+          <span class="hero-chip">Nr. ${escapeHtml(String(customer?.creditorNumber || "ohne").trim() || "ohne")}</span>
+          ${
+            addressParts.length
+              ? `<span class="hero-chip">${escapeHtml(addressParts.join(", "))}</span>`
+              : ""
+          }
+          <span class="hero-chip">Stand ${escapeHtml(formatDateTime(generatedAt))}</span>
+        </div>
+      </section>
+
+      <section class="section">
+        <p class="section-title">Saldo</p>
+        <div class="grid">
+          <div class="metric">
+            <p class="metric-label">Gekauft</p>
+            <p class="metric-value">${escapeHtml(formatHours(summary?.purchasedHours || 0))}</p>
+          </div>
+          <div class="metric">
+            <p class="metric-label">Abgebucht</p>
+            <p class="metric-value">${escapeHtml(formatHours(summary?.debitedHours || 0))}</p>
+          </div>
+          <div class="metric">
+            <p class="metric-label">Rest</p>
+            <p class="metric-value">${escapeHtml(formatHours(summary?.balanceHours || 0))}</p>
+            <p class="muted">${escapeHtml(`${entries.length} Buchungen in der Historie`)}</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <p class="section-title">Historie</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Datum</th>
+              <th>Typ</th>
+              <th>Bezeichnung</th>
+              <th>Bemerkung / Bezug</th>
+              <th style="text-align:right;">Stunden</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </section>
+
+      <p class="footer">QT Workbench · Vorausstunden-Export ${escapeHtml(formatDateTime(generatedAt))}</p>
+    </div>
+  `;
 };
 
 const normalizeEmailDirection = (entry) => {
@@ -971,8 +1206,10 @@ export default function CustomerDirectoryView() {
   const [previewModal, setPreviewModal] = useState({
     open: false,
     title: "",
-    html: ""
+    html: "",
+    filename: ""
   });
+  const [previewPdfBusy, setPreviewPdfBusy] = useState(false);
   const [contractTariffs, setContractTariffs] = useState([]);
   const [contractTariffsStatus, setContractTariffsStatus] = useState("idle");
   const [calcInput, setCalcInput] = useState({
@@ -1552,7 +1789,8 @@ export default function CustomerDirectoryView() {
         setPreviewModal({
           open: true,
           title: preview?.title || "Vertragsvorschau",
-          html: preview?.html || ""
+          html: preview?.html || "",
+          filename: ""
         });
       }
       setTimeout(() => setContractPreviewStatus("idle"), 1800);
@@ -2266,6 +2504,35 @@ export default function CustomerDirectoryView() {
     };
   }, [settingsTab, editCustomer?.id]);
 
+  const openPrepaidHoursPdfPreview = () => {
+    if (!editCustomer || !prepaidHoursSummary) return;
+    setPreviewModal({
+      open: true,
+      title: `Vorausstunden ${editCustomer.name || "Kunde"}`,
+      html: buildPrepaidHoursPdfHtml({
+        customer: editCustomer,
+        prepaidHoursSummary,
+        generatedAt: Date.now()
+      }),
+      filename: buildPrepaidHoursPdfFilename(editCustomer)
+    });
+  };
+
+  const downloadPreviewModalPdf = async () => {
+    const html = String(previewModal?.html || "").trim();
+    const filename = String(previewModal?.filename || "").trim();
+    if (!html || !filename) return;
+    setPreviewPdfBusy(true);
+    try {
+      const pdfBlob = await api.buildPdf(html, filename);
+      downloadBlob(pdfBlob, filename);
+    } catch {
+      setToast("PDF-Erzeugung fehlgeschlagen.");
+    } finally {
+      setPreviewPdfBusy(false);
+    }
+  };
+
   const renderPrepaidHoursContainer = () => (
     <div className="rounded-xl border border-sand-200 bg-white p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2275,13 +2542,24 @@ export default function CustomerDirectoryView() {
             Stundenkäufe und Abbuchungen bleiben manuell. Aufgaben werden nur als Referenz verknüpft.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setPrepaidHoursReloadTick((prev) => prev + 1)}
-          className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-        >
-          Aktualisieren
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={openPrepaidHoursPdfPreview}
+            disabled={!prepaidHoursSummary || prepaidHoursStatus === "loading" || prepaidHoursStatus === "error"}
+            className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Eye size={11} className="inline mr-1" />
+            PDF Vorschau
+          </button>
+          <button
+            type="button"
+            onClick={() => setPrepaidHoursReloadTick((prev) => prev + 1)}
+            className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+          >
+            Aktualisieren
+          </button>
+        </div>
       </div>
       {prepaidHoursStatus === "loading" ? (
         <p className="mt-2 text-xs text-sand-500">Lade Vorausstunden…</p>
@@ -2631,7 +2909,8 @@ export default function CustomerDirectoryView() {
               setPreviewModal({
                 open: true,
                 title: item.title || "Vertrag",
-                html: String(item.html_content || "<p>Keine Vorschau hinterlegt.</p>")
+                html: String(item.html_content || "<p>Keine Vorschau hinterlegt.</p>"),
+                filename: ""
               })
             }
             className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
@@ -3085,13 +3364,15 @@ export default function CustomerDirectoryView() {
       setPreviewModal({
         open: true,
         title: normalized.period || "Bericht",
-        html: renderReportHTML(normalized)
+        html: renderReportHTML(normalized),
+        filename: ""
       });
     } catch (error) {
       setPreviewModal({
         open: true,
         title: "Bericht",
-        html: "<p>Vorschau konnte nicht geladen werden.</p>"
+        html: "<p>Vorschau konnte nicht geladen werden.</p>",
+        filename: ""
       });
     }
   };
@@ -3169,7 +3450,8 @@ export default function CustomerDirectoryView() {
     setPreviewModal({
       open: true,
       title: "Lieferschein",
-      html: renderDeliveryHtml(note)
+      html: renderDeliveryHtml(note),
+      filename: ""
     });
   };
 
@@ -4309,12 +4591,24 @@ export default function CustomerDirectoryView() {
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Vorschau</p>
                 <h3 className="text-lg font-display">{previewModal.title}</h3>
               </div>
-              <button
-                onClick={() => setPreviewModal({ open: false, title: "", html: "" })}
-                className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-              >
-                Schließen
-              </button>
+              <div className="flex items-center gap-2">
+                {previewModal.filename ? (
+                  <button
+                    type="button"
+                    onClick={downloadPreviewModalPdf}
+                    disabled={previewPdfBusy}
+                    className="rounded-full border border-sand-200 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {previewPdfBusy ? "PDF…" : "PDF laden"}
+                  </button>
+                ) : null}
+                <button
+                  onClick={() => setPreviewModal({ open: false, title: "", html: "", filename: "" })}
+                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Schließen
+                </button>
+              </div>
             </div>
             <div className="max-h-[70vh] overflow-y-auto p-6 bg-sand-50">
               <div className="bg-white border border-sand-200 rounded-2xl p-4">
