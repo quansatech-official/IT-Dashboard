@@ -6,7 +6,6 @@ const API = "/api";
 
 const defaultDraft = {
   prompt: "",
-  outputFormat: "markdown",
   model: "",
 };
 
@@ -92,7 +91,6 @@ export default function ToolsView() {
         signal: controller.signal,
         body: JSON.stringify({
           prompt,
-          output_format: aiDraft.outputFormat,
           model: aiDraft.model,
         }),
       });
@@ -267,31 +265,19 @@ export default function ToolsView() {
             </p>
           </div>
 
-          <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)]">
-            <div className="space-y-3">
-              <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                <label className="block">
+          <div className="grid items-stretch gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,0.95fr)]">
+            <div className="flex min-h-[640px] flex-col gap-3">
+              <div className="flex flex-1 flex-col rounded-2xl border border-sand-200 bg-white p-3">
+                <label className="flex flex-1 flex-col">
                   <span className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Prompt</span>
                   <textarea
                     value={aiDraft.prompt}
                     onChange={(event) => setAiDraft((prev) => ({ ...prev, prompt: event.target.value }))}
                     placeholder="z. B. Bereite diese Passwortliste als Tabelle mit Spalten Kunde, System, Benutzer, Passwort, Notiz auf."
-                    className="mt-1 min-h-[92px] w-full rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-900 outline-none focus:border-sand-300"
+                    className="mt-1 min-h-[320px] flex-1 w-full rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-900 outline-none focus:border-sand-300"
                   />
                 </label>
-                <div className="mt-3 grid gap-3 md:grid-cols-[180px_220px_minmax(0,1fr)]">
-                  <label className="block">
-                    <span className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Ausgabeformat</span>
-                    <select
-                      value={aiDraft.outputFormat}
-                      onChange={(event) => setAiDraft((prev) => ({ ...prev, outputFormat: event.target.value }))}
-                      className="mt-1 w-full rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm"
-                    >
-                      <option value="markdown">Markdown</option>
-                      <option value="table">Tabelle</option>
-                      <option value="text">Text</option>
-                    </select>
-                  </label>
+                <div className="mt-3 grid gap-3 md:grid-cols-[220px]">
                   <label className="block">
                     <span className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Modell</span>
                     <select
@@ -308,48 +294,48 @@ export default function ToolsView() {
                       ))}
                     </select>
                   </label>
-                  <div className="flex flex-wrap items-end gap-2">
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={runInternalAi}
+                    disabled={aiBusy}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Sparkles size={13} />
+                    {aiBusy ? "Verarbeite…" : "Intern auswerten"}
+                  </button>
+                  {aiBusy ? (
                     <button
                       type="button"
-                      onClick={runInternalAi}
-                      disabled={aiBusy}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={cancelInternalAi}
+                      className="rounded-full border border-rose-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-50"
                     >
-                      <Sparkles size={13} />
-                      {aiBusy ? "Verarbeite…" : "Intern auswerten"}
+                      Abbrechen
                     </button>
-                    {aiBusy ? (
-                      <button
-                        type="button"
-                        onClick={cancelInternalAi}
-                        className="rounded-full border border-rose-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-50"
-                      >
-                        Abbrechen
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (abortRef.current) {
-                          abortRef.current.abort();
-                        }
-                        setAiDraft(defaultDraft);
-                        setAiResult("");
-                        setAiMeta(null);
-                        setAiStatus("Bereit.");
-                      }}
-                      className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                    >
-                      Zurücksetzen
-                    </button>
-                  </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (abortRef.current) {
+                        abortRef.current.abort();
+                      }
+                      setAiDraft(defaultDraft);
+                      setAiResult("");
+                      setAiMeta(null);
+                      setAiStatus("Bereit.");
+                    }}
+                    className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                  >
+                    Zurücksetzen
+                  </button>
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-sand-200 bg-white p-3">
+              <div className="rounded-2xl border border-sand-200 bg-white px-3 py-2.5">
                 <p className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Status</p>
                 <div
-                  className={`mt-2 rounded-2xl border px-3 py-3 text-sm ${
+                  className={`mt-1.5 rounded-2xl border px-3 py-2 text-sm ${
                     aiBusy
                       ? "border-sky-200 bg-sky-50 text-sky-800"
                       : aiStatus === "Fehlgeschlagen."
@@ -357,7 +343,7 @@ export default function ToolsView() {
                       : "border-sand-200 bg-sand-50 text-sand-700"
                   }`}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span
                       className={`h-2.5 w-2.5 rounded-full ${
                         aiBusy
@@ -366,15 +352,10 @@ export default function ToolsView() {
                           ? "bg-emerald-500"
                           : aiStatus === "Fehlgeschlagen."
                           ? "bg-rose-500"
-                          : "bg-sand-300"
+                        : "bg-sand-300"
                       }`}
                     />
-                    <span>{aiStatus}</span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-sand-500">
-                    <span className="rounded-full border border-sand-200 bg-white/70 px-2.5 py-1">
-                      Ausgabe {aiDraft.outputFormat}
-                    </span>
+                    <span className="font-medium">{aiStatus}</span>
                     <span className="rounded-full border border-sand-200 bg-white/70 px-2.5 py-1">
                       Modell {aiDraft.model || "Standard"}
                     </span>

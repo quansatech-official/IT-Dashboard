@@ -1827,7 +1827,6 @@ class CustomerDevelopmentAiInternalRequest(BaseModel):
 class InternalAiPromptRequest(BaseModel):
     prompt: str
     content: Optional[str] = ""
-    output_format: Optional[str] = "markdown"
     model: Optional[str] = ""
 
 
@@ -14526,31 +14525,9 @@ def generate_action(data: ActionAiRequest):
     return action
 
 
-def _normalize_internal_ai_output_format(value: Any) -> str:
-    output_format = str(value or "markdown").strip().lower()
-    if output_format not in {"markdown", "text", "table"}:
-        return "markdown"
-    return output_format
-
-
-def _build_internal_ai_prompt(prompt_text: str, content_text: str, output_format: str) -> str:
-    format_hint = {
-        "text": "Gib die Antwort als klar strukturierten Fließtext ohne JSON aus.",
-        "table": "Wenn sinnvoll, gib das Ergebnis als Markdown-Tabelle aus. Ergänze nur kurze Nachbemerkungen.",
-        "markdown": "Gib die Antwort als gut lesbares Markdown aus. Tabellen sind erlaubt, wenn sie helfen.",
-    }.get(output_format, "Gib die Antwort als gut lesbares Markdown aus.")
-    return (
-        "Du bist ein internes Quansatech-Arbeitstool fuer freie Datenaufbereitung.\n"
-        "Die Eingaben koennen sensible interne Daten enthalten.\n"
-        "Nutze ausschliesslich die vom Benutzer gelieferten Inhalte und erfinde keine fehlenden Fakten.\n"
-        "Wenn Daten unklar oder lueckenhaft sind, benenne die Unsicherheit knapp.\n"
-        "Arbeite praezise, kompakt und direkt nutzbar.\n"
-        f"{format_hint}\n\n"
-        "AUFGABE:\n"
-        f"{prompt_text}\n\n"
-        "DATEN:\n"
-        f"{content_text or '(keine zusaetzlichen Daten)'}"
-    )
+def _build_internal_ai_prompt(prompt_text: str, content_text: str) -> str:
+    del content_text
+    return prompt_text
 
 
 @app.get("/api/tools/internal_ai_models")
@@ -14576,10 +14553,9 @@ def tools_internal_ai_models():
 def tools_internal_ai_prompt(data: InternalAiPromptRequest):
     prompt_text = str(data.prompt or "").strip()
     content_text = str(data.content or "").strip()
-    output_format = _normalize_internal_ai_output_format(data.output_format)
     if not prompt_text:
         raise HTTPException(400, "prompt required")
-    internal_prompt = _build_internal_ai_prompt(prompt_text, content_text, output_format)
+    internal_prompt = _build_internal_ai_prompt(prompt_text, content_text)
 
     model_candidates = _resolve_internal_ai_tool_models(data.model)
     payload, used_model = _ollama_generate(
@@ -14597,7 +14573,6 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
         "text": response_text,
         "provider": "ollama",
         "model": used_model or "",
-        "output_format": output_format,
         "generated_at": int(time.time() * 1000),
     }
 
@@ -14606,11 +14581,10 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
 def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
     prompt_text = str(data.prompt or "").strip()
     content_text = str(data.content or "").strip()
-    output_format = _normalize_internal_ai_output_format(data.output_format)
     if not prompt_text:
         raise HTTPException(400, "prompt required")
 
-    internal_prompt = _build_internal_ai_prompt(prompt_text, content_text, output_format)
+    internal_prompt = _build_internal_ai_prompt(prompt_text, content_text)
     model_candidates = _resolve_internal_ai_tool_models(data.model)
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
     request_timeout = max(int(INTERNAL_AI_STREAM_TIMEOUT_SECONDS), int(OLLAMA_TIMEOUT_SECONDS or 0), 30)
@@ -14668,7 +14642,6 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
                         "type": "meta",
                         "provider": "ollama",
                         "model": model,
-                        "output_format": output_format,
                     }) + "\n"
                     for raw_line in response.iter_lines(decode_unicode=True):
                         if not raw_line:
