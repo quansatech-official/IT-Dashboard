@@ -6,6 +6,8 @@ import {
   BarChart3,
   Building2,
   BookPlus,
+  ChevronLeft,
+  ChevronRight,
   Eye,
   FileDown,
   Mail,
@@ -40,6 +42,13 @@ const api = {
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
   remove: (id) => fetch(`${API}/customers/${id}`, { method: "DELETE" }),
+  getCustomerMetrics: (customerId, kpiMonthOffset = 0) =>
+    fetch(
+      `${API}/customers/${customerId}/metrics?kpi_month_offset=${encodeURIComponent(String(kpiMonthOffset || 0))}`
+    ).then(async (r) => {
+      if (!r.ok) throw new Error("metrics_failed");
+      return r.json();
+    }),
   getMetricsSettings: () => fetch(`${API}/customer_metrics_settings`).then((r) => r.json()),
   saveMetricsSettings: (payload) =>
     fetch(`${API}/customer_metrics_settings`, {
@@ -910,6 +919,7 @@ export default function CustomerDirectoryView() {
   const [metrics, setMetrics] = useState(null);
   const [metricsStatus, setMetricsStatus] = useState("idle");
   const [metricsReloadTick, setMetricsReloadTick] = useState(0);
+  const [kpiMonthOffset, setKpiMonthOffset] = useState(0);
   const [importPreview, setImportPreview] = useState(null);
   const [importApplyCreate, setImportApplyCreate] = useState(true);
   const [importApplyUpdate, setImportApplyUpdate] = useState(true);
@@ -1865,9 +1875,6 @@ export default function CustomerDirectoryView() {
       return status === "active" && (type === "wartung" || type === "monitoring");
     });
   }, [contractTimeBudget?.activeBudgetContractsCount, customerContracts]);
-  const monthlyTaskHours = Number(contractTimeBudget?.taskHours || 0);
-  const monthlyTelephonyHours = Number(contractTimeBudget?.telephonyHours || 0);
-  const monthlyConsumedHours = Number(contractTimeBudget?.consumedHours || 0);
   const openEffortHours = Number(selectedCustomerMetrics?.openTimeMinutes || 0) / 60;
   const travelRoundTripKm = Number(
     selectedCustomerMetrics?.distanceRoundTripKm ||
@@ -1883,6 +1890,32 @@ export default function CustomerDirectoryView() {
     periodStats?.[customerStatsPeriod] && typeof periodStats[customerStatsPeriod] === "object"
       ? periodStats[customerStatsPeriod]
       : null;
+  const monthlyActivity =
+    selectedCustomerMetrics?.monthlyActivity && typeof selectedCustomerMetrics.monthlyActivity === "object"
+      ? selectedCustomerMetrics.monthlyActivity
+      : null;
+  const selectedMonthOffset = Number(monthlyActivity?.monthOffset ?? kpiMonthOffset);
+  const selectedMonthLabel = String(monthlyActivity?.monthLabel || "Aktueller Monat");
+  const selectedMonthTaskHours = Number(monthlyActivity?.taskHours ?? contractTimeBudget?.taskHours ?? 0);
+  const selectedMonthTaskRevenue = Number(monthlyActivity?.taskRevenueEur || 0);
+  const selectedMonthTaskCount = Number(monthlyActivity?.taskCount || 0);
+  const selectedMonthTelephonyHours = Number(
+    monthlyActivity?.telephonyHours ?? contractTimeBudget?.telephonyHours ?? 0
+  );
+  const selectedMonthTelephonyMinutes = Number(monthlyActivity?.telephonyMinutes || 0);
+  const selectedMonthCallCount = Number(monthlyActivity?.callCount || 0);
+  const selectedMonthMissedCalls = Number(monthlyActivity?.missedCalls || 0);
+  const selectedMonthConsumedHours = Number(
+    monthlyActivity?.consumedHours ?? contractTimeBudget?.consumedHours ?? 0
+  );
+  const selectedMonthConsumedRevenue = Number(monthlyActivity?.consumedRevenueEur || 0);
+  const thirtyDayTotalCalls = Number(selectedCustomerMetrics?.totalCalls || 0);
+  const thirtyDayMissedCalls = Number(selectedCustomerMetrics?.missedCalls || 0);
+  const thirtyDayAnsweredCalls = Math.max(0, thirtyDayTotalCalls - thirtyDayMissedCalls);
+  const thirtyDayTalkHours = Number(selectedCustomerMetrics?.totalMinutes || 0) / 60;
+  const thirtyDayMissRate = thirtyDayTotalCalls > 0 ? Math.round((thirtyDayMissedCalls / thirtyDayTotalCalls) * 100) : 0;
+  const canShowNewerMonth = selectedMonthOffset < 0;
+  const canShowOlderMonth = selectedMonthOffset > -120;
   const totalCustomers = customers.length;
   const inactiveCustomers = customers.filter(
     (customer) => String(customer.status || "active").toLowerCase() === "inactive"
@@ -2245,12 +2278,7 @@ export default function CustomerDirectoryView() {
   const renderCustomerKpiTab = () => (
     <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-sand-500">KPI</p>
-          <p className="mt-1 text-sm text-sand-600">
-            Aufwand, Kommunikation, Zeitraum und kundenbezogene Steuerung.
-          </p>
-        </div>
+        <p className="text-xs uppercase tracking-[0.3em] text-sand-500">KPI</p>
         <button
           type="button"
           onClick={() => setMetricsReloadTick((prev) => prev + 1)}
@@ -2267,37 +2295,79 @@ export default function CustomerDirectoryView() {
       ) : null}
       {metricsStatus === "ready" && selectedCustomerMetrics ? (
         <div className="mt-3 space-y-3">
-          <div className="grid gap-2 md:grid-cols-4">
-            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufwand Monat</p>
-              <p className="text-sm font-semibold text-sand-900">{formatHours(monthlyConsumedHours)}</p>
+          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Monats-KPI</p>
+              <div className="flex flex-wrap items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setKpiMonthOffset((prev) => Math.max(-120, prev - 1))}
+                  disabled={!canShowOlderMonth || metricsStatus === "loading"}
+                  className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Vorheriger Monat"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <div className="min-w-[9rem] rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-center text-[11px] font-semibold text-sand-900">
+                  {selectedMonthLabel}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setKpiMonthOffset((prev) => Math.min(0, prev + 1))}
+                  disabled={!canShowNewerMonth || metricsStatus === "loading"}
+                  className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Nächster Monat"
+                >
+                  <ChevronRight size={14} />
+                </button>
+                {selectedMonthOffset !== 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setKpiMonthOffset(0)}
+                    className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+                  >
+                    Aktuell
+                  </button>
+                ) : null}
+              </div>
             </div>
-            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Kommunikation 30T</p>
-              <p className="text-sm font-semibold text-sand-900">
-                {Number(selectedCustomerMetrics.totalCalls || 0)} Calls
-              </p>
-              <p className="text-[11px] text-sand-600">
-                {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst
-              </p>
+            <div className="mt-2 grid gap-2 md:grid-cols-3">
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Arbeitszeit</p>
+                <p className="text-sm font-semibold text-sand-900">{formatHours(selectedMonthTaskHours)}</p>
+                <p className="text-[11px] text-sand-600">
+                  {formatEurPrecise(selectedMonthTaskRevenue)} · {selectedMonthTaskCount} Aufgaben
+                </p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Telefon</p>
+                <p className="text-sm font-semibold text-sand-900">{formatHours(selectedMonthTelephonyHours)}</p>
+                <p className="text-[11px] text-sand-600">
+                  {selectedMonthCallCount} Calls · {selectedMonthMissedCalls} verpasst ·{" "}
+                  {selectedMonthTelephonyMinutes.toLocaleString("de-DE", {
+                    minimumFractionDigits: 1,
+                    maximumFractionDigits: 1
+                  })} min
+                </p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamt</p>
+                <p className="text-sm font-semibold text-sand-900">{formatHours(selectedMonthConsumedHours)}</p>
+                <p className="text-[11px] text-sand-600">{formatEurPrecise(selectedMonthConsumedRevenue)}</p>
+              </div>
             </div>
-            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Last</p>
-              <p className="text-sm font-semibold text-sand-900">
-                {Number(selectedCustomerMetrics.openTasks || 0)} Aufgaben
-              </p>
-              <p className="text-[11px] text-sand-600">{formatHours(openEffortHours, 1)} offen</p>
-            </div>
-            <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Anfahrt</p>
-              <p className="text-sm font-semibold text-sand-900">
-                {travelRoundTripKm > 0
-                  ? `${travelRoundTripKm.toLocaleString("de-DE", {
-                      minimumFractionDigits: 1,
-                      maximumFractionDigits: 1
-                    })} km`
-                  : "n/a"}
-              </p>
+            <div className="mt-2 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Anfahrt aktuell</p>
+                <p className="text-sm font-semibold text-sand-900">
+                  {travelRoundTripKm > 0
+                    ? `${travelRoundTripKm.toLocaleString("de-DE", {
+                        minimumFractionDigits: 1,
+                        maximumFractionDigits: 1
+                      })} km`
+                    : "n/a"}
+                </p>
+              </div>
               <p className="text-[11px] text-sand-600">
                 {selectedCustomerMetrics.mileageEur !== null &&
                 typeof selectedCustomerMetrics.mileageEur !== "undefined"
@@ -2306,23 +2376,68 @@ export default function CustomerDirectoryView() {
               </p>
             </div>
           </div>
-          <p className="text-[11px] text-sand-600">
-            Monat: Aufgabe {formatHours(monthlyTaskHours, 1)} · Telefon {formatHours(monthlyTelephonyHours, 1)} ·
-            Gesprächszeit 30T {formatHours(Number(selectedCustomerMetrics.totalMinutes || 0) / 60, 1)}.
-          </p>
-          <p className="text-[11px] text-sand-600">
-            Betreuungsaktivität 30T: {Number(selectedCustomerMetrics.totalCalls || 0)} Calls ·{" "}
-            {Number(selectedCustomerMetrics.missedCalls || 0)} verpasst ·{" "}
-            {Number(selectedCustomerMetrics.openTasks || 0)} offene Aufgaben.
-          </p>
           <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Statistik Zeitraum</p>
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Betreuungsaktivität 30T</p>
+              <p className="text-[11px] font-medium text-sand-700">{thirtyDayMissRate}% Miss-Quote</p>
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-4">
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Calls</p>
+                <p className="text-sm font-semibold text-sand-900">{thirtyDayTotalCalls}</p>
+                <p className="text-[11px] text-sand-600">{thirtyDayAnsweredCalls} angenommen</p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Verpasst</p>
+                <p className="text-sm font-semibold text-rose-700">{thirtyDayMissedCalls}</p>
+                <p className="text-[11px] text-sand-600">Erreichbarkeit im 30T-Fenster</p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesprächszeit</p>
+                <p className="text-sm font-semibold text-sand-900">{formatHours(thirtyDayTalkHours, 1)}</p>
                 <p className="text-[11px] text-sand-600">
-                  Arbeitszeit, Material und Umsatz als Volumenindikator.
+                  {Number(selectedCustomerMetrics.totalMinutes || 0).toLocaleString("de-DE", {
+                    minimumFractionDigits: 1,
+                    maximumFractionDigits: 1
+                  })} min
                 </p>
               </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Aufgaben</p>
+                <p className="text-sm font-semibold text-sand-900">{Number(selectedCustomerMetrics.openTasks || 0)}</p>
+                <p className="text-[11px] text-sand-600">
+                  {formatHours(openEffortHours, 1)} offen · {formatEurPrecise(selectedCustomerMetrics.estimatedRevenueEur)}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-sand-500">
+                <span>Erreichbarkeit</span>
+                <span>
+                  {thirtyDayAnsweredCalls} angenommen · {thirtyDayMissedCalls} verpasst
+                </span>
+              </div>
+              <div className="mt-1 flex h-2 overflow-hidden rounded-full bg-sand-100">
+                {thirtyDayTotalCalls > 0 ? (
+                  <>
+                    <div
+                      className="bg-emerald-500"
+                      style={{ width: `${(thirtyDayAnsweredCalls / thirtyDayTotalCalls) * 100}%` }}
+                    />
+                    <div
+                      className="bg-rose-400"
+                      style={{ width: `${(thirtyDayMissedCalls / thirtyDayTotalCalls) * 100}%` }}
+                    />
+                  </>
+                ) : (
+                  <div className="w-full bg-sand-200" />
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Statistik Zeitraum</p>
               <div className="flex flex-wrap items-center gap-1">
                 {["currentYear", "lastYear"].map((key) => (
                   <button
@@ -2347,6 +2462,12 @@ export default function CustomerDirectoryView() {
                   {selectedPeriodStats?.workHours === null || typeof selectedPeriodStats?.workHours === "undefined"
                     ? "n/a"
                     : formatHours(selectedPeriodStats.workHours)}
+                </p>
+                <p className="text-[11px] text-sand-600">
+                  {selectedPeriodStats?.workRevenueEur === null ||
+                  typeof selectedPeriodStats?.workRevenueEur === "undefined"
+                    ? "n/a"
+                    : formatEurPrecise(selectedPeriodStats.workRevenueEur)}
                 </p>
               </div>
               <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
@@ -2375,10 +2496,7 @@ export default function CustomerDirectoryView() {
             </p>
           </div>
           <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
-            <div className="flex flex-wrap items-center justify-between gap-1.5">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Steuerung (kundenbezogen)</p>
-              <span className="text-[10px] text-sand-500">Owner-Detail: KPI</span>
-            </div>
+            <p className="text-[10px] uppercase tracking-wide text-sand-500">Steuerung (kundenbezogen)</p>
             <div className="mt-1.5 grid gap-1.5 md:grid-cols-2">
               <p className="text-[11px] text-sand-700">
                 <span className="text-sand-500">Profitabilität:</span> {customerSteering.profitabilityLabel}
@@ -2406,17 +2524,19 @@ export default function CustomerDirectoryView() {
   );
 
   useEffect(() => {
+    setKpiMonthOffset(0);
+  }, [metricsCustomerId]);
+
+  useEffect(() => {
     if (!metricsCustomerId) {
       setMetrics(null);
+      setMetricsStatus("idle");
       return;
     }
     let active = true;
     setMetricsStatus("loading");
-    fetch(`${API}/customers/${metricsCustomerId}/metrics`)
-      .then((res) => {
-        if (!res.ok) throw new Error("metrics_failed");
-        return res.json();
-      })
+    api
+      .getCustomerMetrics(metricsCustomerId, kpiMonthOffset)
       .then((data) => {
         if (!active) return;
         setMetrics(data);
@@ -2430,7 +2550,7 @@ export default function CustomerDirectoryView() {
     return () => {
       active = false;
     };
-  }, [metricsCustomerId, metricsReloadTick]);
+  }, [kpiMonthOffset, metricsCustomerId, metricsReloadTick]);
 
   useEffect(() => {
     if (!activeCustomer?.name) {

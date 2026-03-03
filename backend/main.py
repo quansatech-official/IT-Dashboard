@@ -618,6 +618,7 @@ class PurchasingItem(Base):
     title = Column(String, default="")
     source_url = Column(String, default="")
     quantity = Column(String, default="")
+    remark = Column(String, default="")
     tracking_number = Column(String, default="")
     purchase_price = Column(String, default="")
     sale_price = Column(String, default="")
@@ -748,6 +749,8 @@ def _ensure_purchasing_items_columns() -> None:
     statements = []
     if "quantity" not in columns:
         statements.append("ALTER TABLE purchasing_items ADD COLUMN quantity VARCHAR DEFAULT ''")
+    if "remark" not in columns:
+        statements.append("ALTER TABLE purchasing_items ADD COLUMN remark VARCHAR DEFAULT ''")
     if "tracking_number" not in columns:
         statements.append("ALTER TABLE purchasing_items ADD COLUMN tracking_number VARCHAR DEFAULT ''")
     if "status" not in columns:
@@ -1448,6 +1451,7 @@ class PurchasingItemCreate(BaseModel):
     title: str
     sourceUrl: Optional[str] = ""
     quantity: Optional[str] = ""
+    remark: Optional[str] = ""
     trackingNumber: Optional[str] = ""
     purchasePrice: Optional[str] = ""
     salePrice: Optional[str] = ""
@@ -1460,6 +1464,7 @@ class PurchasingItemUpdate(BaseModel):
     title: Optional[str] = None
     sourceUrl: Optional[str] = None
     quantity: Optional[str] = None
+    remark: Optional[str] = None
     trackingNumber: Optional[str] = None
     purchasePrice: Optional[str] = None
     salePrice: Optional[str] = None
@@ -3648,6 +3653,7 @@ def serialize_purchasing_item(item: PurchasingItem) -> Dict[str, Any]:
         "title": item.title or "",
         "sourceUrl": item.source_url or "",
         "quantity": item.quantity or "",
+        "remark": item.remark or "",
         "trackingNumber": item.tracking_number or "",
         "purchasePrice": item.purchase_price or "",
         "salePrice": item.sale_price or "",
@@ -12060,13 +12066,14 @@ def delete_customer(customer_id: int):
 
 
 @app.get("/api/customers/{customer_id}/metrics")
-def get_customer_metrics(customer_id: int):
+def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
     contract_time_budget: Dict[str, Any] = {}
     with SessionLocal() as db:
         customer = db.query(Customer).get(customer_id)
         if not customer:
             raise HTTPException(404, "Customer not found")
         now_ms = int(time.time() * 1000)
+        now_dt = datetime.fromtimestamp(now_ms / 1000)
         customer_name = (customer.name or "").strip().lower()
         customer_number = (customer.creditor_number or "").strip()
         day_task_filters = []
@@ -12177,6 +12184,29 @@ def get_customer_metrics(customer_id: int):
     open_time_minutes = round(open_time_ms / 60000, 1) if open_time_ms else 0
     open_time_hours = round(open_time_ms / 3600000, 2) if open_time_ms else 0
     estimated_revenue = round(open_time_hours * hourly_rate, 2) if hourly_rate else 0
+    selected_month_offset = max(-120, min(0, int(kpi_month_offset or 0)))
+    selected_month_start_ms, selected_month_end_ms, selected_month_label = _month_bounds_with_offset(
+        now_dt,
+        selected_month_offset,
+    )
+    with SessionLocal() as db:
+        monthly_task_metrics = _customer_timed_task_metrics_window(
+            db,
+            customer,
+            selected_month_start_ms,
+            selected_month_end_ms,
+            now_ms,
+        )
+    monthly_telephony = _customer_telephony_metrics_window(
+        phone_numbers,
+        selected_month_start_ms,
+        selected_month_end_ms,
+    )
+    monthly_task_hours = round(float(monthly_task_metrics.get("hours") or 0.0), 2)
+    monthly_telephony_hours = round(float(monthly_telephony.get("minutes") or 0.0) / 60.0, 2)
+    monthly_consumed_hours = round(monthly_task_hours + monthly_telephony_hours, 2)
+    monthly_task_revenue = round(monthly_task_hours * hourly_rate, 2) if hourly_rate > 0 else 0.0
+    monthly_consumed_revenue = round(monthly_consumed_hours * hourly_rate, 2) if hourly_rate > 0 else 0.0
 
     revenue_current_year = None
     revenue_last_year = None
@@ -12188,6 +12218,7 @@ def get_customer_metrics(customer_id: int):
             "key": "currentYear",
             "label": f"Lfd. Jahr {datetime.now().year}",
             "workHours": None,
+            "workRevenueEur": None,
             "materialRevenueEur": None,
             "serviceRevenueEur": None,
             "totalRevenueEur": None,
@@ -12197,6 +12228,7 @@ def get_customer_metrics(customer_id: int):
             "key": "lastYear",
             "label": f"Vorjahr {datetime.now().year - 1}",
             "workHours": None,
+            "workRevenueEur": None,
             "materialRevenueEur": None,
             "serviceRevenueEur": None,
             "totalRevenueEur": None,
@@ -12269,6 +12301,7 @@ def get_customer_metrics(customer_id: int):
 
                     for period_key, invoice_ids in period_invoice_refs.items():
                         work_hours = 0.0
+                        work_revenue = 0.0
                         material_revenue = 0.0
                         service_revenue = 0.0
                         for invoice_id in invoice_ids:
@@ -12298,6 +12331,7 @@ def get_customer_metrics(customer_id: int):
                                     material_revenue += amount
                                     continue
                                 if is_worktime:
+                                    work_revenue += amount
                                     service_revenue += amount
                                     if quantity > 0 and not is_travel:
                                         work_hours += quantity
@@ -12305,6 +12339,7 @@ def get_customer_metrics(customer_id: int):
                                 if _is_service_invoice_position(row, config=sevdesk_config):
                                     service_revenue += amount
                         period_stats[period_key]["workHours"] = round(work_hours, 2)
+                        period_stats[period_key]["workRevenueEur"] = round(work_revenue, 2)
                         period_stats[period_key]["materialRevenueEur"] = round(material_revenue, 2)
                         period_stats[period_key]["serviceRevenueEur"] = round(service_revenue, 2)
                         total_value = period_stats[period_key].get("totalRevenueEur")
@@ -12321,6 +12356,7 @@ def get_customer_metrics(customer_id: int):
                             "key": "currentYear",
                             "label": f"Lfd. Jahr {datetime.now().year}",
                             "workHours": None,
+                            "workRevenueEur": None,
                             "materialRevenueEur": None,
                             "serviceRevenueEur": None,
                             "totalRevenueEur": None,
@@ -12330,6 +12366,7 @@ def get_customer_metrics(customer_id: int):
                             "key": "lastYear",
                             "label": f"Vorjahr {datetime.now().year - 1}",
                             "workHours": None,
+                            "workRevenueEur": None,
                             "materialRevenueEur": None,
                             "serviceRevenueEur": None,
                             "totalRevenueEur": None,
@@ -12355,6 +12392,21 @@ def get_customer_metrics(customer_id: int):
         "revenueLastYearEur": revenue_last_year,
         "revenueDeltaEur": revenue_delta,
         "revenueDeltaPct": revenue_delta_pct,
+        "monthlyActivity": {
+            "monthOffset": int(selected_month_offset),
+            "monthLabel": selected_month_label,
+            "monthStartMs": int(selected_month_start_ms),
+            "monthEndMs": int(selected_month_end_ms),
+            "taskHours": monthly_task_hours,
+            "taskRevenueEur": monthly_task_revenue,
+            "taskCount": int(monthly_task_metrics.get("count") or 0),
+            "telephonyHours": monthly_telephony_hours,
+            "telephonyMinutes": round(float(monthly_telephony.get("minutes") or 0.0), 1),
+            "callCount": int(monthly_telephony.get("calls") or 0),
+            "missedCalls": int(monthly_telephony.get("missed") or 0),
+            "consumedHours": monthly_consumed_hours,
+            "consumedRevenueEur": monthly_consumed_revenue,
+        },
         "periodStats": period_stats,
         "contractTimeBudget": contract_time_budget,
     }
@@ -12909,6 +12961,7 @@ def create_purchasing_item(data: PurchasingItemCreate):
             title=(data.title or "").strip(),
             source_url=(data.sourceUrl or "").strip(),
             quantity=(data.quantity or "").strip(),
+            remark=(data.remark or "").strip(),
             tracking_number=(data.trackingNumber or "").strip(),
             purchase_price=(data.purchasePrice or "").strip(),
             sale_price=(data.salePrice or "").strip(),
@@ -12947,6 +13000,8 @@ def update_purchasing_item(item_id: int, data: PurchasingItemUpdate):
             item.source_url = str(payload["sourceUrl"] or "").strip()
         if "quantity" in payload:
             item.quantity = str(payload["quantity"] or "").strip()
+        if "remark" in payload:
+            item.remark = str(payload["remark"] or "").strip()
         if "trackingNumber" in payload:
             item.tracking_number = str(payload["trackingNumber"] or "").strip()
         if "purchasePrice" in payload:

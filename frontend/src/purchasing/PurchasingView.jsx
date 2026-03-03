@@ -17,6 +17,7 @@ const EMPTY_DRAFT = {
   title: "",
   sourceUrl: "",
   quantity: "",
+  remark: "",
   trackingNumber: "",
   purchasePrice: "",
   salePrice: ""
@@ -136,7 +137,6 @@ export default function PurchasingView() {
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [customerOptions, setCustomerOptions] = useState([]);
   const [editingCell, setEditingCell] = useState(null);
-  const [showReceived, setShowReceived] = useState(false);
   const [customerFilter, setCustomerFilter] = useState("");
   const [queryFilter, setQueryFilter] = useState("");
   const saveTimersRef = useRef({});
@@ -188,16 +188,20 @@ export default function PurchasingView() {
     const queryNeedle = queryFilter.trim().toLowerCase();
 
     return items.filter((item) => {
-      const status = normalizeStatus(item);
-      if (!showReceived && status === "received") return false;
-
       if (customerNeedle) {
         const customer = String(item.customer || "").toLowerCase();
         if (!customer.includes(customerNeedle)) return false;
       }
 
       if (queryNeedle) {
-        const haystack = [item.title, item.customer, item.sourceUrl, item.quantity, item.trackingNumber]
+        const haystack = [
+          item.title,
+          item.customer,
+          item.sourceUrl,
+          item.quantity,
+          item.remark,
+          item.trackingNumber
+        ]
           .map((value) => String(value || "").toLowerCase())
           .join(" ");
         if (!haystack.includes(queryNeedle)) return false;
@@ -205,7 +209,7 @@ export default function PurchasingView() {
 
       return true;
     });
-  }, [items, showReceived, customerFilter, queryFilter]);
+  }, [items, customerFilter, queryFilter]);
 
   const openItems = useMemo(
     () => filteredItems.filter((item) => normalizeStatus(item) === "open"),
@@ -264,6 +268,7 @@ export default function PurchasingView() {
       title,
       sourceUrl: normalizeUrl(draft.sourceUrl),
       quantity: draft.quantity.trim(),
+      remark: draft.remark.trim(),
       trackingNumber: sanitizeTrackingNumber(draft.trackingNumber),
       purchasePrice: draft.purchasePrice.trim(),
       salePrice: draft.salePrice.trim()
@@ -441,6 +446,18 @@ export default function PurchasingView() {
             />
           </td>
           <td className="px-2 py-1.5">
+            <input
+              value={item.remark || ""}
+              onChange={(event) => updateItem(item.id, "remark", event.target.value)}
+              readOnly={!isEditing(item.id, "remark")}
+              onDoubleClick={(event) => handleCellDoubleClick(item.id, "remark", event)}
+              onBlur={() => handleCellBlur(item.id, "remark")}
+              className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
+              placeholder="Bemerkung"
+              title="Doppelklick zum Bearbeiten"
+            />
+          </td>
+          <td className="px-2 py-1.5">
             <div className="flex items-center gap-2">
               <input
                 value={item.trackingNumber || ""}
@@ -542,7 +559,7 @@ export default function PurchasingView() {
         <p className="text-xs text-sand-500">{rows.length} Einträge</p>
       </div>
       <div className="overflow-auto">
-        <table className="w-full min-w-[1540px]">
+        <table className="w-full min-w-[1700px]">
           <thead>
             <tr className="border-b border-sand-200 text-left text-xs uppercase tracking-[0.2em] text-sand-500">
               <th className="px-3 py-2 w-44">Status</th>
@@ -550,6 +567,7 @@ export default function PurchasingView() {
               <th className="px-3 py-2">Bezugsquelle</th>
               <th className="px-3 py-2">Kunde</th>
               <th className="px-2 py-2 w-24">Menge</th>
+              <th className="px-2 py-2 w-56">Bemerkung</th>
               <th className="px-2 py-2 w-72">Sendungsverfolgung</th>
               <th className="px-2 py-2 w-24">EK</th>
               <th className="px-2 py-2 w-24">VK</th>
@@ -562,7 +580,7 @@ export default function PurchasingView() {
               renderRows(rows, status)
             ) : (
               <tr>
-                <td colSpan={10} className="px-4 py-8 text-center text-sm text-sand-500">
+                <td colSpan={11} className="px-4 py-8 text-center text-sm text-sand-500">
                   Keine Einträge vorhanden.
                 </td>
               </tr>
@@ -604,7 +622,7 @@ export default function PurchasingView() {
       </div>
 
       <div className="overflow-auto bg-white">
-        <table className="w-full min-w-[1540px]">
+        <table className="w-full min-w-[1700px]">
           <thead>
             <tr className="border-b border-emerald-200 text-left text-xs uppercase tracking-[0.2em] text-emerald-700">
               <th className="px-3 py-2 w-44">Status</th>
@@ -612,6 +630,7 @@ export default function PurchasingView() {
               <th className="px-3 py-2">Bezugsquelle</th>
               <th className="px-3 py-2">Kunde</th>
               <th className="px-2 py-2 w-24">Menge</th>
+              <th className="px-2 py-2 w-56">Bemerkung</th>
               <th className="px-2 py-2 w-72">Sendungsverfolgung</th>
               <th className="px-2 py-2 w-24">EK</th>
               <th className="px-2 py-2 w-24">VK</th>
@@ -624,7 +643,7 @@ export default function PurchasingView() {
               renderRows(receivedItems, "received")
             ) : (
               <tr>
-                <td colSpan={10} className="px-4 py-8 text-center text-sm text-sand-500">
+                <td colSpan={11} className="px-4 py-8 text-center text-sm text-sand-500">
                   Keine erhaltenen Artikel vorhanden.
                 </td>
               </tr>
@@ -656,15 +675,7 @@ export default function PurchasingView() {
               <PackageCheck size={16} />
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Neuer Einkauf</p>
             </div>
-            <label className="inline-flex items-center gap-2 text-xs text-sand-600 select-none">
-              <input
-                type="checkbox"
-                checked={showReceived}
-                onChange={(event) => setShowReceived(event.target.checked)}
-                className="h-4 w-4"
-              />
-              Erhaltene einblenden
-            </label>
+            <p className="text-xs text-sand-500">Erhaltene Ware steht unten im eigenen Container.</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 border-b border-sand-200 px-4 py-2.5">
@@ -694,7 +705,7 @@ export default function PurchasingView() {
           </div>
 
           <div className="overflow-auto">
-            <table className="w-full min-w-[1540px]">
+            <table className="w-full min-w-[1700px]">
               <thead>
                 <tr className="border-b border-sand-200 text-left text-xs uppercase tracking-[0.2em] text-sand-500">
                   <th className="px-3 py-2 w-44">Status</th>
@@ -702,6 +713,7 @@ export default function PurchasingView() {
                   <th className="px-3 py-2">Bezugsquelle</th>
                   <th className="px-3 py-2">Kunde</th>
                   <th className="px-2 py-2 w-24">Menge</th>
+                  <th className="px-2 py-2 w-56">Bemerkung</th>
                   <th className="px-2 py-2 w-72">Sendungsverfolgung</th>
                   <th className="px-2 py-2 w-24">EK</th>
                   <th className="px-2 py-2 w-24">VK</th>
@@ -743,6 +755,14 @@ export default function PurchasingView() {
                       value={draft.quantity}
                       onChange={(event) => setDraft((prev) => ({ ...prev, quantity: event.target.value }))}
                       placeholder="1"
+                      className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
+                    />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input
+                      value={draft.remark}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, remark: event.target.value }))}
+                      placeholder="Bemerkung"
                       className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
                     />
                   </td>
@@ -837,7 +857,7 @@ export default function PurchasingView() {
           <Truck size={16} />
         )}
 
-        {showReceived ? renderReceivedSection() : null}
+        {renderReceivedSection()}
       </main>
     </div>
   );
