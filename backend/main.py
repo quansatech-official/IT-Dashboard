@@ -178,6 +178,22 @@ _ollama_response_cache: Dict[str, Dict[str, Any]] = {}
 _ollama_response_cache_lock = threading.Lock()
 _ollama_missing_model_until_ms: Dict[str, int] = {}
 _ollama_missing_model_lock = threading.Lock()
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return int(value)
+        text_value = str(value).strip()
+        if not text_value:
+            return default
+        return int(float(text_value))
+    except (TypeError, ValueError):
+        return default
+
+
 MODEL_PREF_CUSTOMER_RANKING = os.environ.get("OLLAMA_MODEL_PREF_CUSTOMER_RANKING") or OLLAMA_MODEL
 MODEL_PREF_CUSTOMER_DEVELOPMENT = os.environ.get("OLLAMA_MODEL_PREF_CUSTOMER_DEVELOPMENT") or OLLAMA_MODEL
 MODEL_PREF_TASK_DRAFT = os.environ.get("OLLAMA_MODEL_PREF_TASK_DRAFT") or OLLAMA_MODEL
