@@ -1804,6 +1804,12 @@ class CustomerDevelopmentAiInternalRequest(BaseModel):
     context: Dict[str, Any]
 
 
+class InternalAiPromptRequest(BaseModel):
+    prompt: str
+    content: Optional[str] = ""
+    output_format: Optional[str] = "markdown"
+
+
 class CustomerDevelopmentReportSuggestionPreviewRequest(BaseModel):
     customer_id: int
     recommendation_index: Optional[int] = 0
@@ -14436,6 +14442,56 @@ def generate_action(data: ActionAiRequest):
     if not action:
         raise HTTPException(502, "Invalid AI response")
     return action
+
+
+@app.post("/api/tools/internal_ai_prompt")
+def tools_internal_ai_prompt(data: InternalAiPromptRequest):
+    prompt_text = str(data.prompt or "").strip()
+    content_text = str(data.content or "").strip()
+    output_format = str(data.output_format or "markdown").strip().lower()
+    if not prompt_text:
+        raise HTTPException(400, "prompt required")
+    if output_format not in {"markdown", "text", "table"}:
+        output_format = "markdown"
+
+    format_hint = {
+        "text": "Gib die Antwort als klar strukturierten Fließtext ohne JSON aus.",
+        "table": "Wenn sinnvoll, gib das Ergebnis als Markdown-Tabelle aus. Ergänze nur kurze Nachbemerkungen.",
+        "markdown": "Gib die Antwort als gut lesbares Markdown aus. Tabellen sind erlaubt, wenn sie helfen.",
+    }.get(output_format, "Gib die Antwort als gut lesbares Markdown aus.")
+
+    internal_prompt = (
+        "Du bist ein internes Quansatech-Arbeitstool fuer freie Datenaufbereitung.\n"
+        "Die Eingaben koennen sensible interne Daten enthalten.\n"
+        "Nutze ausschliesslich die vom Benutzer gelieferten Inhalte und erfinde keine fehlenden Fakten.\n"
+        "Wenn Daten unklar oder lueckenhaft sind, benenne die Unsicherheit knapp.\n"
+        "Arbeite praezise, kompakt und direkt nutzbar.\n"
+        f"{format_hint}\n\n"
+        "AUFGABE:\n"
+        f"{prompt_text}\n\n"
+        "DATEN:\n"
+        f"{content_text or '(keine zusaetzlichen Daten)'}"
+    )
+
+    model_candidates = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+    payload, used_model = _ollama_generate(
+        internal_prompt,
+        model_candidates=model_candidates,
+        temperature=0.2,
+        max_tokens=480,
+        timeout=max(10, min(180, OLLAMA_TIMEOUT_SECONDS)),
+        use_cache=False,
+    )
+    response_text = str(payload.get("response") or "").strip()
+    if not response_text:
+        raise HTTPException(502, "Ollama request failed")
+    return {
+        "text": response_text,
+        "provider": "ollama",
+        "model": used_model or "",
+        "output_format": output_format,
+        "generated_at": int(time.time() * 1000),
+    }
 
 
 @app.post("/api/offer_ai_text")
