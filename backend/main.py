@@ -5013,6 +5013,40 @@ def _to_bool_flag(value: Any, *, default: bool = False) -> bool:
     return default
 
 
+_CONTRACT_RUNTIME_PLACEHOLDERS: Set[str] = {
+    "provider_name",
+    "provider_address",
+    "provider_email",
+    "provider_contact_line",
+    "customer_name",
+    "customer_number",
+    "customer_short_code",
+    "customer_email",
+    "customer_street",
+    "customer_postal_code",
+    "customer_city",
+    "customer_country",
+    "customer_address",
+    "generated_at",
+    "valid_from",
+    "contract_start",
+    "runtime_months",
+    "minimum_term_months",
+    "extension_period",
+    "auto_extension_months",
+    "termination_notice_months",
+    "termination_notice",
+    "servers",
+    "clients",
+    "network_devices",
+    "iot_devices",
+    "monthly_total",
+    "yearly_total",
+    "monthly_hours_included",
+    "service_scope",
+}
+
+
 def _normalize_contract_variable_definitions(
     raw_definitions: Any,
     fallback_values: Optional[Dict[str, Any]] = None,
@@ -5305,40 +5339,6 @@ _CONTRACT_FALLBACK_VALUES: Dict[str, str] = {
     "termination_notice": "3 Monate",
     "liability_limit": "gemäß AGB",
 }
-
-_CONTRACT_RUNTIME_PLACEHOLDERS: Set[str] = {
-    "provider_name",
-    "provider_address",
-    "provider_email",
-    "provider_contact_line",
-    "customer_name",
-    "customer_number",
-    "customer_short_code",
-    "customer_email",
-    "customer_street",
-    "customer_postal_code",
-    "customer_city",
-    "customer_country",
-    "customer_address",
-    "generated_at",
-    "valid_from",
-    "contract_start",
-    "runtime_months",
-    "minimum_term_months",
-    "extension_period",
-    "auto_extension_months",
-    "termination_notice_months",
-    "termination_notice",
-    "servers",
-    "clients",
-    "network_devices",
-    "iot_devices",
-    "monthly_total",
-    "yearly_total",
-    "monthly_hours_included",
-    "service_scope",
-}
-
 
 def _render_contract_template(template: str, values: Dict[str, str]) -> str:
     rendered = _render_prompt(template or "", values)
