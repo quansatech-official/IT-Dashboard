@@ -144,6 +144,10 @@ CUSTOMER_CVE_EMPTY_CACHE_TTL_MS = 3 * 60 * 1000
 RECENT_WORK_SUMMARY_CACHE_TTL_MS = 15 * 60 * 1000
 NVD_LOOKUP_CACHE_TTL_MS = 12 * 60 * 60 * 1000
 OSV_LOOKUP_CACHE_TTL_MS = 12 * 60 * 60 * 1000
+TRACKING_STATUS_CACHE_TTL_MS = max(
+    60 * 1000,
+    int(os.environ.get("TRACKING_STATUS_CACHE_TTL_MS") or str(15 * 60 * 1000)),
+)
 CVE_LOOKUP_BUDGET_SECONDS = max(5, int(os.environ.get("CVE_LOOKUP_BUDGET_SECONDS") or "45"))
 CVE_LOOKUP_MAX_UNIQUE = max(20, int(os.environ.get("CVE_LOOKUP_MAX_UNIQUE") or "120"))
 CVE_LOOKUP_MAX_WORKERS = max(2, min(16, int(os.environ.get("CVE_LOOKUP_MAX_WORKERS") or "8")))
@@ -156,9 +160,11 @@ _tactical_site_lookup_cache: Dict[str, Dict[str, Any]] = {}
 _tactical_software_endpoint_cache: Dict[str, Dict[str, Any]] = {}
 _nvd_lookup_cache: Dict[str, Dict[str, Any]] = {}
 _osv_lookup_cache: Dict[str, Dict[str, Any]] = {}
+_tracking_status_cache: Dict[str, Dict[str, Any]] = {}
 _nvd_lookup_lock = threading.Lock()
 _osv_lookup_lock = threading.Lock()
 _tactical_software_endpoint_lock = threading.Lock()
+_tracking_status_cache_lock = threading.Lock()
 
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -1508,6 +1514,10 @@ class PurchasingItemUpdate(BaseModel):
     trackingNumber: Optional[str] = None
     purchasePrice: Optional[str] = None
     salePrice: Optional[str] = None
+
+
+class PurchasingTrackingStatusLookup(BaseModel):
+    trackingNumbers: Optional[List[str]] = None
 
 
 class KnowledgeArticleCreate(BaseModel):
@@ -13230,6 +13240,163 @@ def update_pinboard(note_id: int, data: PinNoteUpdate):
 
 
 # ================= PURCHASING =================
+_PARCELSAPP_TRACKING_URL = "https://parcelsapp.com/api/v2/parcels"
+_TRACKING_ERROR_LABELS = {
+    "NO_TRACKER": "Kein passender Lieferdienst erkannt",
+    "NO_DATA": "Noch keine Sendungsdaten vorhanden",
+    "DOWN": "Tracking-Dienst derzeit nicht erreichbar",
+    "BUSY": "Tracking-Dienst ist ausgelastet",
+    "PARSER": "Tracking-Antwort konnte nicht gelesen werden",
+    "CAPTCHA": "Automatischer Abruf vom Lieferdienst blockiert",
+    "RELOAD": "Status aktuell nicht abrufbar (erneut versuchen)",
+    "MAINTENANCE": "Tracking-Dienst in Wartung",
+    "IP_BLOCKED": "Tracking-Dienst blockiert den Abruf",
+    "INVALID_TRACKING_NUMBER": "Trackingnummer ungültig",
+}
+
+
+def _sanitize_tracking_number(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).upper()
+
+
+def _resolve_tracking_provider(number: str) -> Tuple[str, str]:
+    if re.fullmatch(r"1Z[0-9A-Z]{16}", number):
+        return "UPS", "ups"
+    if re.match(r"^(JJD|JVGL|00340434)", number):
+        return "DHL", "dhl"
+    if re.fullmatch(r"[A-Z]{2}\d{9}[A-Z]{2}", number):
+        return "Post / UPU", ""
+    if re.fullmatch(r"\d{12,22}", number):
+        return "Automatisch", ""
+    return "Unbekannt", ""
+
+
+def _extract_latest_status_text(payload: Dict[str, Any]) -> str:
+    states = payload.get("states")
+    if isinstance(states, list) and states:
+        latest = states[0] if isinstance(states[0], dict) else {}
+        candidates = (
+            latest.get("status"),
+            latest.get("description"),
+            latest.get("text"),
+            latest.get("note"),
+            latest.get("state"),
+            payload.get("final_status"),
+            payload.get("status"),
+        )
+        for candidate in candidates:
+            text_value = str(candidate or "").strip()
+            if text_value:
+                return text_value
+    for candidate in (payload.get("final_status"), payload.get("status")):
+        text_value = str(candidate or "").strip()
+        if text_value:
+            return text_value
+    return ""
+
+
+def _fetch_parcelsapp_tracking_payload(
+    tracking_number: str,
+    provider_slug: str,
+) -> Dict[str, Any]:
+    headers = {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    payload: Dict[str, Any] = {
+        "trackingId": tracking_number,
+        "carrier": "Auto-Detect",
+        "language": "de",
+        "country": "Germany",
+        "platform": "web-desktop",
+    }
+    if provider_slug:
+        payload["slug"] = provider_slug
+    response = requests.post(
+        _PARCELSAPP_TRACKING_URL,
+        data=payload,
+        headers=headers,
+        timeout=12,
+    )
+    response.raise_for_status()
+    parsed = response.json()
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
+
+
+def _lookup_tracking_status(tracking_number: str) -> Dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    with _tracking_status_cache_lock:
+        cached = _tracking_status_cache.get(tracking_number)
+        if cached and now_ms - int(cached.get("checkedAt") or 0) < TRACKING_STATUS_CACHE_TTL_MS:
+            return cached
+
+    provider_label, provider_slug = _resolve_tracking_provider(tracking_number)
+    payload: Dict[str, Any] = {}
+    status_kind = "unknown"
+    status_text = ""
+    error_code = ""
+    source = "parcelsapp"
+    try:
+        payload = _fetch_parcelsapp_tracking_payload(tracking_number, provider_slug)
+        error_code = str(payload.get("error") or "").strip().upper()
+        status_text = _extract_latest_status_text(payload)
+        if error_code:
+            status_kind = "error"
+            if not status_text:
+                status_text = _TRACKING_ERROR_LABELS.get(error_code, f"Tracking-Fehler: {error_code}")
+        elif status_text:
+            status_kind = "ok"
+        else:
+            status_text = "Status derzeit nicht verfügbar"
+    except requests.RequestException as exc:
+        status_kind = "error"
+        status_text = "Tracking-Dienst nicht erreichbar"
+        error_code = str(exc.__class__.__name__)
+        source = "fallback"
+    except ValueError:
+        status_kind = "error"
+        status_text = "Ungültige Tracking-Antwort"
+        error_code = "INVALID_RESPONSE"
+        source = "fallback"
+
+    result = {
+        "trackingNumber": tracking_number,
+        "provider": provider_label,
+        "status": status_kind,
+        "statusText": status_text,
+        "errorCode": error_code,
+        "checkedAt": now_ms,
+        "source": source,
+    }
+    with _tracking_status_cache_lock:
+        _tracking_status_cache[tracking_number] = result
+    return result
+
+
+@app.post("/api/purchasing_tracking_status")
+def get_purchasing_tracking_status(data: PurchasingTrackingStatusLookup):
+    normalized_numbers: List[str] = []
+    seen: Set[str] = set()
+    for raw_number in data.trackingNumbers or []:
+        tracking_number = _sanitize_tracking_number(raw_number)
+        if not tracking_number or tracking_number in seen:
+            continue
+        seen.add(tracking_number)
+        normalized_numbers.append(tracking_number)
+        if len(normalized_numbers) >= 100:
+            break
+
+    statuses = {number: _lookup_tracking_status(number) for number in normalized_numbers}
+    return {"statuses": statuses}
+
+
 @app.get("/api/purchasing_items")
 def get_purchasing_items():
     with SessionLocal() as db:

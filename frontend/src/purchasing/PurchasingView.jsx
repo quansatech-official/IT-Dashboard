@@ -114,6 +114,12 @@ const fetchJson = async (url, options) => {
 
 const api = {
   list: () => fetchJson(`${API}/purchasing_items`),
+  lookupTrackingStatus: (trackingNumbers) =>
+    fetchJson(`${API}/purchasing_tracking_status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trackingNumbers })
+    }),
   create: (payload) =>
     fetchJson(`${API}/purchasing_items`, {
       method: "POST",
@@ -139,8 +145,10 @@ export default function PurchasingView() {
   const [editingCell, setEditingCell] = useState(null);
   const [customerFilter, setCustomerFilter] = useState("");
   const [queryFilter, setQueryFilter] = useState("");
+  const [trackingStatuses, setTrackingStatuses] = useState({});
   const saveTimersRef = useRef({});
   const pendingPatchesRef = useRef({});
+  const requestedTrackingRef = useRef(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -168,6 +176,39 @@ export default function PurchasingView() {
       Object.values(saveTimersRef.current).forEach((timer) => clearTimeout(timer));
     };
   }, []);
+
+  const trackingNumbers = useMemo(() => {
+    const unique = new Set();
+    items.forEach((item) => {
+      const trackingNumber = sanitizeTrackingNumber(item.trackingNumber);
+      if (trackingNumber) unique.add(trackingNumber);
+    });
+    return Array.from(unique);
+  }, [items]);
+
+  useEffect(() => {
+    const missingNumbers = trackingNumbers.filter(
+      (trackingNumber) => !requestedTrackingRef.current.has(trackingNumber)
+    );
+    if (!missingNumbers.length) return;
+
+    missingNumbers.forEach((trackingNumber) => requestedTrackingRef.current.add(trackingNumber));
+    let cancelled = false;
+    api
+      .lookupTrackingStatus(missingNumbers)
+      .then((response) => {
+        if (cancelled) return;
+        const statuses = response?.statuses;
+        if (!statuses || typeof statuses !== "object") return;
+        setTrackingStatuses((previous) => ({ ...previous, ...statuses }));
+      })
+      .catch((error) => {
+        console.error("Purchasing tracking lookup failed", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [trackingNumbers]);
 
   const totals = useMemo(() => {
     return items.reduce(
@@ -334,6 +375,9 @@ export default function PurchasingView() {
       const sale = parsePrice(item.salePrice);
       const margin = sale - purchase;
       const trackingInfo = resolveTrackingInfo(item.trackingNumber);
+      const trackingKey = sanitizeTrackingNumber(item.trackingNumber);
+      const trackingStatus = trackingKey ? trackingStatuses[trackingKey] : null;
+      const trackingStatusText = trackingStatus?.statusText || "Status wird geladen ...";
       return (
         <tr key={item.id} className="border-b border-sand-200 align-top">
           <td className="px-3 py-1.5">
@@ -487,6 +531,15 @@ export default function PurchasingView() {
             {trackingInfo.provider ? (
               <p className="mt-0.5 text-[10px] text-sand-500">
                 Auflösung: {trackingInfo.provider}
+              </p>
+            ) : null}
+            {item.trackingNumber ? (
+              <p
+                className={`text-[10px] ${
+                  trackingStatus?.status === "error" ? "text-amber-700" : "text-sand-500"
+                }`}
+              >
+                Letzter Status: {trackingStatusText}
               </p>
             ) : null}
           </td>
