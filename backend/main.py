@@ -361,6 +361,12 @@ class CustomerInventoryEvent(Base):
     device_label = Column(String, default="")
     event_type = Column(String, default="wartung")
     event_date = Column(String, default="")
+    cancellation_date = Column(String, default="")
+    provider = Column(String, default="")
+    billing_cycle = Column(String, default="monthly")
+    reminder_days = Column(Integer, default=60)
+    is_external = Column(Boolean, default=False)
+    is_recurring = Column(Boolean, default=False)
     note = Column(Text, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
@@ -1275,6 +1281,34 @@ def _ensure_infra_discovery_columns() -> None:
 
 _run_db_startup_step("ensure_infra_discovery_columns", _ensure_infra_discovery_columns)
 
+
+def _ensure_customer_inventory_events_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("customer_inventory_events"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("customer_inventory_events")}
+    statements = []
+    if "cancellation_date" not in columns:
+        statements.append("ALTER TABLE customer_inventory_events ADD COLUMN cancellation_date VARCHAR DEFAULT ''")
+    if "provider" not in columns:
+        statements.append("ALTER TABLE customer_inventory_events ADD COLUMN provider VARCHAR DEFAULT ''")
+    if "billing_cycle" not in columns:
+        statements.append("ALTER TABLE customer_inventory_events ADD COLUMN billing_cycle VARCHAR DEFAULT 'monthly'")
+    if "reminder_days" not in columns:
+        statements.append("ALTER TABLE customer_inventory_events ADD COLUMN reminder_days INTEGER DEFAULT 60")
+    if "is_external" not in columns:
+        statements.append("ALTER TABLE customer_inventory_events ADD COLUMN is_external BOOLEAN DEFAULT FALSE")
+    if "is_recurring" not in columns:
+        statements.append("ALTER TABLE customer_inventory_events ADD COLUMN is_recurring BOOLEAN DEFAULT FALSE")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_run_db_startup_step("ensure_customer_inventory_events_columns", _ensure_customer_inventory_events_columns)
+
 def _ensure_customer_contract_documents_columns() -> None:
     inspector = inspect(engine)
     if not inspector.has_table("customer_contract_documents"):
@@ -1442,6 +1476,12 @@ class CustomerInventoryEventCreate(BaseModel):
     device_label: Optional[str] = ""
     event_type: Optional[str] = "wartung"
     event_date: Optional[str] = ""
+    cancellation_date: Optional[str] = ""
+    provider: Optional[str] = ""
+    billing_cycle: Optional[str] = "monthly"
+    reminder_days: Optional[int] = 60
+    is_external: Optional[bool] = False
+    is_recurring: Optional[bool] = False
     note: Optional[str] = ""
 
 
@@ -1449,6 +1489,12 @@ class CustomerInventoryEventUpdate(BaseModel):
     device_label: Optional[str] = None
     event_type: Optional[str] = None
     event_date: Optional[str] = None
+    cancellation_date: Optional[str] = None
+    provider: Optional[str] = None
+    billing_cycle: Optional[str] = None
+    reminder_days: Optional[int] = None
+    is_external: Optional[bool] = None
+    is_recurring: Optional[bool] = None
     note: Optional[str] = None
 
 
@@ -3830,12 +3876,19 @@ def serialize_delivery_note(note: DeliveryNote) -> Dict[str, Any]:
 
 
 def serialize_customer_inventory_event(item: CustomerInventoryEvent) -> Dict[str, Any]:
+    cancellation_date = str(item.cancellation_date or item.event_date or "").strip()
     return {
         "id": item.id,
         "customer_id": item.customer_id,
         "device_label": item.device_label or "",
         "event_type": item.event_type or "wartung",
         "event_date": item.event_date or "",
+        "cancellation_date": cancellation_date,
+        "provider": item.provider or "",
+        "billing_cycle": item.billing_cycle or "monthly",
+        "reminder_days": int(item.reminder_days or 0),
+        "is_external": bool(item.is_external),
+        "is_recurring": bool(item.is_recurring),
         "note": item.note or "",
         "created_at": int(item.created_at or 0),
         "updated_at": int(item.updated_at or 0),
@@ -3871,6 +3924,43 @@ def _normalize_phone_for_store(phone: Optional[str]) -> str:
     if not normalized:
         return str(phone or "").strip()
     return f"+{normalized}"
+
+
+_INVENTORY_EVENT_BILLING_CYCLES = {"monthly", "quarterly", "yearly", "biyearly", "custom"}
+
+
+def _normalize_inventory_event_billing_cycle(value: Any, default: str = "monthly") -> str:
+    normalized = re.sub(r"[^a-z]+", "", str(value or "").strip().lower())
+    if normalized in _INVENTORY_EVENT_BILLING_CYCLES:
+        return normalized
+    return default
+
+
+def _normalize_inventory_event_date(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        try:
+            datetime.strptime(raw, "%Y-%m-%d")
+            return raw
+        except ValueError:
+            return raw
+    for fmt in ("%d.%m.%Y", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return raw
+
+
+def _normalize_inventory_event_reminder_days(value: Any, default: int = 60) -> int:
+    days = _safe_int(value, default=default)
+    if days < 0:
+        return 0
+    if days > 3650:
+        return 3650
+    return days
 
 
 def _geocode(address: str) -> Optional[tuple[float, float]]:
@@ -12867,11 +12957,26 @@ def create_customer_inventory_event(customer_id: int, data: CustomerInventoryEve
             raise HTTPException(404, "Customer not found")
         now_ms = int(time.time() * 1000)
         event_type = str(data.event_type or "wartung").strip().lower() or "wartung"
+        cancellation_date = _normalize_inventory_event_date(data.cancellation_date or data.event_date)
+        event_date = _normalize_inventory_event_date(data.event_date or cancellation_date)
+        if not cancellation_date and event_date:
+            cancellation_date = event_date
+        if not event_date and cancellation_date:
+            event_date = cancellation_date
+        is_recurring = bool(data.is_recurring)
+        if event_type.startswith("contract_"):
+            is_recurring = True
         row = CustomerInventoryEvent(
             customer_id=customer_id,
             device_label=str(data.device_label or "").strip(),
             event_type=event_type,
-            event_date=str(data.event_date or "").strip(),
+            event_date=event_date,
+            cancellation_date=cancellation_date,
+            provider=str(data.provider or "").strip(),
+            billing_cycle=_normalize_inventory_event_billing_cycle(data.billing_cycle),
+            reminder_days=_normalize_inventory_event_reminder_days(data.reminder_days),
+            is_external=bool(data.is_external),
+            is_recurring=is_recurring,
             note=str(data.note or "").strip(),
             created_at=now_ms,
             updated_at=now_ms,
@@ -12897,8 +13002,29 @@ def update_customer_inventory_event(customer_id: int, event_id: int, data: Custo
             row.device_label = str(updates.get("device_label") or "").strip()
         if "event_type" in updates:
             row.event_type = str(updates.get("event_type") or "wartung").strip().lower() or "wartung"
-        if "event_date" in updates:
-            row.event_date = str(updates.get("event_date") or "").strip()
+            if row.event_type.startswith("contract_") and "is_recurring" not in updates:
+                row.is_recurring = True
+        if "event_date" in updates or "cancellation_date" in updates:
+            raw_event_date = updates.get("event_date") if "event_date" in updates else updates.get("cancellation_date")
+            raw_cancellation_date = updates.get("cancellation_date") if "cancellation_date" in updates else updates.get("event_date")
+            event_date = _normalize_inventory_event_date(raw_event_date)
+            cancellation_date = _normalize_inventory_event_date(raw_cancellation_date)
+            if not cancellation_date and event_date:
+                cancellation_date = event_date
+            if not event_date and cancellation_date:
+                event_date = cancellation_date
+            row.event_date = event_date
+            row.cancellation_date = cancellation_date
+        if "provider" in updates:
+            row.provider = str(updates.get("provider") or "").strip()
+        if "billing_cycle" in updates:
+            row.billing_cycle = _normalize_inventory_event_billing_cycle(updates.get("billing_cycle"))
+        if "reminder_days" in updates:
+            row.reminder_days = _normalize_inventory_event_reminder_days(updates.get("reminder_days"))
+        if "is_external" in updates:
+            row.is_external = bool(updates.get("is_external"))
+        if "is_recurring" in updates:
+            row.is_recurring = bool(updates.get("is_recurring"))
         if "note" in updates:
             row.note = str(updates.get("note") or "").strip()
         row.updated_at = int(time.time() * 1000)

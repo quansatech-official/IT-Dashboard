@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Boxes, Check, RefreshCw, ScanSearch, Search, Server, Wifi } from "lucide-react";
+import { Boxes, CalendarClock, Check, Pencil, Plus, RefreshCw, ScanSearch, Search, Server, Trash2, Wifi } from "lucide-react";
 
 const API = "/api";
 
@@ -35,6 +35,102 @@ const formatLastSeen = (value) => {
 
 const compactText = (value) => String(value || "").trim();
 
+const CONTRACT_TYPE_OPTIONS = [
+  { value: "contract_o365", label: "Microsoft 365 / SaaS" },
+  { value: "contract_external", label: "Externer Vertrag" },
+  { value: "contract_other", label: "Sonstiger Vertrag" }
+];
+
+const BILLING_CYCLE_OPTIONS = [
+  { value: "monthly", label: "Monatlich" },
+  { value: "quarterly", label: "Quartalsweise" },
+  { value: "yearly", label: "Jaehrlich" },
+  { value: "biyearly", label: "Halbjaehrlich" },
+  { value: "custom", label: "Individuell" }
+];
+
+const getContractTypeLabel = (type) => {
+  const key = compactText(type).toLowerCase();
+  const hit = CONTRACT_TYPE_OPTIONS.find((entry) => entry.value === key);
+  if (hit) return hit.label;
+  return "Wiederkehrender Vertrag";
+};
+
+const getBillingCycleLabel = (value) => {
+  const key = compactText(value).toLowerCase();
+  const hit = BILLING_CYCLE_OPTIONS.find((entry) => entry.value === key);
+  if (hit) return hit.label;
+  return "Individuell";
+};
+
+const normalizeContractTypeValue = (value) => {
+  const key = compactText(value).toLowerCase();
+  return CONTRACT_TYPE_OPTIONS.some((entry) => entry.value === key) ? key : "contract_other";
+};
+
+const normalizeBillingCycleValue = (value) => {
+  const key = compactText(value).toLowerCase();
+  return BILLING_CYCLE_OPTIONS.some((entry) => entry.value === key) ? key : "monthly";
+};
+
+const createContractDraft = () => ({
+  device_label: "",
+  event_type: "contract_o365",
+  provider: "",
+  billing_cycle: "monthly",
+  cancellation_date: "",
+  reminder_days: "60",
+  is_external: false,
+  note: ""
+});
+
+const normalizeIsoDate = (value) => {
+  const text = compactText(value);
+  if (!text) return "";
+  const hit = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!hit) return "";
+  const parsed = Date.parse(`${hit[1]}-${hit[2]}-${hit[3]}T00:00:00`);
+  if (Number.isNaN(parsed)) return "";
+  return `${hit[1]}-${hit[2]}-${hit[3]}`;
+};
+
+const toDateLabel = (value) => {
+  const iso = normalizeIsoDate(value);
+  if (!iso) return "n/a";
+  const parsed = Date.parse(`${iso}T00:00:00`);
+  if (Number.isNaN(parsed)) return "n/a";
+  return new Date(parsed).toLocaleDateString("de-DE");
+};
+
+const toPositiveInt = (value, fallback = 60) => {
+  const parsed = Number.parseInt(String(value || "").trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (parsed < 0) return 0;
+  if (parsed > 3650) return 3650;
+  return parsed;
+};
+
+const subDaysIso = (isoDate, days) => {
+  const normalized = normalizeIsoDate(isoDate);
+  if (!normalized) return "";
+  const [year, month, day] = normalized.split("-").map((part) => Number.parseInt(part, 10));
+  const cursor = new Date(year, month - 1, day);
+  if (!Number.isFinite(cursor.getTime())) return "";
+  cursor.setDate(cursor.getDate() - Math.max(0, toPositiveInt(days, 0)));
+  const y = String(cursor.getFullYear()).padStart(4, "0");
+  const m = String(cursor.getMonth() + 1).padStart(2, "0");
+  const d = String(cursor.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+const parseIsoMs = (isoDate) => {
+  const normalized = normalizeIsoDate(isoDate);
+  if (!normalized) return 0;
+  const parsed = Date.parse(`${normalized}T00:00:00`);
+  if (Number.isNaN(parsed)) return 0;
+  return parsed;
+};
+
 export default function CustomerInventoryTab({ customerId }) {
   const [context, setContext] = useState(null);
   const [status, setStatus] = useState("idle");
@@ -45,6 +141,20 @@ export default function CustomerInventoryTab({ customerId }) {
   const [stateBusyKey, setStateBusyKey] = useState("");
   const [stateError, setStateError] = useState("");
   const [noteDrafts, setNoteDrafts] = useState({});
+  const [contractRows, setContractRows] = useState([]);
+  const [contractsStatus, setContractsStatus] = useState("idle");
+  const [contractsError, setContractsError] = useState("");
+  const [contractBusy, setContractBusy] = useState(false);
+  const [editingContractId, setEditingContractId] = useState(null);
+  const [contractDraft, setContractDraft] = useState(createContractDraft);
+
+  const recurringContractTypeSet = useMemo(
+    () =>
+      new Set(
+        CONTRACT_TYPE_OPTIONS.map((entry) => String(entry?.value || "").trim().toLowerCase()).filter(Boolean)
+      ),
+    []
+  );
 
   const load = async (refresh = false) => {
     if (!customerId) return;
@@ -117,6 +227,111 @@ export default function CustomerInventoryTab({ customerId }) {
     }
   };
 
+  const loadContracts = async () => {
+    if (!customerId) return;
+    setContractsStatus("loading");
+    setContractsError("");
+    try {
+      const response = await fetch(`${API}/customers/${customerId}/inventory_events`);
+      if (!response.ok) throw new Error("inventory_contracts_load_failed");
+      const data = await response.json();
+      const rows = (Array.isArray(data) ? data : []).filter((row) => {
+        const type = compactText(row?.event_type).toLowerCase();
+        return Boolean(row?.is_recurring) || type.startsWith("contract_") || recurringContractTypeSet.has(type);
+      });
+      setContractRows(rows);
+      setContractsStatus("ready");
+    } catch {
+      setContractRows([]);
+      setContractsStatus("error");
+      setContractsError("Wiederkehrende Vertraege konnten nicht geladen werden.");
+    }
+  };
+
+  const resetContractDraft = () => {
+    setEditingContractId(null);
+    setContractDraft(createContractDraft());
+  };
+
+  const saveContract = async () => {
+    if (!customerId) return;
+    const label = compactText(contractDraft.device_label);
+    const cancellationDate = normalizeIsoDate(contractDraft.cancellation_date);
+    if (!label) {
+      setContractsError("Bitte mindestens einen Vertragsnamen eintragen.");
+      return;
+    }
+    if (!cancellationDate) {
+      setContractsError("Bitte ein gueltiges Kuendigungsdatum setzen.");
+      return;
+    }
+    setContractBusy(true);
+    setContractsError("");
+    const payload = {
+      device_label: label,
+      event_type: normalizeContractTypeValue(contractDraft.event_type),
+      provider: compactText(contractDraft.provider),
+      billing_cycle: normalizeBillingCycleValue(contractDraft.billing_cycle),
+      cancellation_date: cancellationDate,
+      event_date: cancellationDate,
+      reminder_days: toPositiveInt(contractDraft.reminder_days, 60),
+      is_external: Boolean(contractDraft.is_external),
+      is_recurring: true,
+      note: compactText(contractDraft.note)
+    };
+    try {
+      const url = editingContractId
+        ? `${API}/customers/${customerId}/inventory_events/${editingContractId}`
+        : `${API}/customers/${customerId}/inventory_events`;
+      const method = editingContractId ? "PATCH" : "POST";
+      const response = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error("inventory_contract_save_failed");
+      await loadContracts();
+      resetContractDraft();
+    } catch {
+      setContractsError("Vertrag konnte nicht gespeichert werden.");
+    } finally {
+      setContractBusy(false);
+    }
+  };
+
+  const editContract = (row) => {
+    if (!row?.id) return;
+    setEditingContractId(row.id);
+    setContractDraft({
+      device_label: compactText(row.device_label),
+      event_type: normalizeContractTypeValue(row.event_type || "contract_other"),
+      provider: compactText(row.provider),
+      billing_cycle: normalizeBillingCycleValue(row.billing_cycle || "monthly"),
+      cancellation_date: normalizeIsoDate(row.cancellation_date || row.event_date),
+      reminder_days: String(toPositiveInt(row.reminder_days, 60)),
+      is_external: Boolean(row.is_external),
+      note: compactText(row.note)
+    });
+    setContractsError("");
+  };
+
+  const deleteContract = async (eventId) => {
+    if (!customerId || !eventId) return;
+    if (!window.confirm("Wiederkehrenden Vertrag wirklich entfernen?")) return;
+    setContractBusy(true);
+    setContractsError("");
+    try {
+      const response = await fetch(`${API}/customers/${customerId}/inventory_events/${eventId}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("inventory_contract_delete_failed");
+      if (editingContractId === eventId) resetContractDraft();
+      await loadContracts();
+    } catch {
+      setContractsError("Vertrag konnte nicht geloescht werden.");
+    } finally {
+      setContractBusy(false);
+    }
+  };
+
   const upsertDeviceState = async ({ source, deviceKey, label, retired, note }) => {
     if (!customerId || !source || !deviceKey) return;
     const busyKey = `${source}:${deviceKey}`;
@@ -157,8 +372,13 @@ export default function CustomerInventoryTab({ customerId }) {
     setDiscoveryRun({ status: "idle", message: "", error: "" });
     setStateError("");
     setNoteDrafts({});
+    setContractsError("");
+    setContractRows([]);
+    setContractsStatus("idle");
+    resetContractDraft();
     load(false);
     loadDeviceStates();
+    loadContracts();
   }, [customerId]);
 
   const managed = useMemo(() => (Array.isArray(context?.managedInfrastructureDevices) ? context.managedInfrastructureDevices : []), [context]);
@@ -294,6 +514,40 @@ export default function CustomerInventoryTab({ customerId }) {
   const totalRetired = unifiedDevices.filter((entry) => entry.retired).length;
   const totalInactive = unifiedDevices.filter((entry) => entry.inactive).length;
   const totalActive = Math.max(0, totalDevices - totalRetired - totalInactive);
+
+  const sortedContracts = useMemo(() => {
+    const rows = Array.isArray(contractRows) ? contractRows.slice() : [];
+    rows.sort((a, b) => {
+      const aDate = parseIsoMs(a?.cancellation_date || a?.event_date);
+      const bDate = parseIsoMs(b?.cancellation_date || b?.event_date);
+      if (!aDate && bDate) return 1;
+      if (aDate && !bDate) return -1;
+      if (aDate && bDate && aDate !== bDate) return aDate - bDate;
+      return compactText(a?.device_label).localeCompare(compactText(b?.device_label), "de", { sensitivity: "base" });
+    });
+    return rows;
+  }, [contractRows]);
+
+  const contractsWithSteering = useMemo(() => {
+    const nowMs = Date.now();
+    return sortedContracts.map((row) => {
+      const cancellationDate = normalizeIsoDate(row?.cancellation_date || row?.event_date);
+      const reminderDays = toPositiveInt(row?.reminder_days, 60);
+      const steeringDate = subDaysIso(cancellationDate, reminderDays);
+      const steeringDue = Boolean(parseIsoMs(steeringDate) && parseIsoMs(steeringDate) <= nowMs);
+      const cancellationDue = Boolean(parseIsoMs(cancellationDate) && parseIsoMs(cancellationDate) <= nowMs);
+      return {
+        ...row,
+        cancellationDate,
+        reminderDays,
+        steeringDate,
+        steeringDue,
+        cancellationDue
+      };
+    });
+  }, [sortedContracts]);
+
+  const upcomingContractCount = contractsWithSteering.filter((row) => row.steeringDue && !row.cancellationDue).length;
 
   const saveNote = async (entry) => {
     const noteKey = `${entry.source}:${entry.deviceKey}`;
@@ -510,6 +764,198 @@ export default function CustomerInventoryTab({ customerId }) {
               {totalDevices ? "Keine Geräte für den aktuellen Filter gefunden." : "Noch keine Geräte vorhanden."}
             </p>
           )}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-sand-200 bg-white">
+        <div className="border-b border-sand-200 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs uppercase tracking-[0.25em] text-sand-500">Wiederkehrende Vertraege</p>
+              <p className="text-sm font-semibold text-sand-900">Kuendigungs- und Vorlaufsteuerung</p>
+            </div>
+            {upcomingContractCount > 0 ? (
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
+                {upcomingContractCount} im Vorlauf
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="space-y-2 border-b border-sand-200 px-3 py-3">
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            <input
+              value={contractDraft.device_label}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, device_label: event.target.value }))}
+              placeholder="Vertragsname, z. B. Microsoft 365 Business Premium"
+              className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs"
+            />
+            <input
+              value={contractDraft.provider}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, provider: event.target.value }))}
+              placeholder="Anbieter, z. B. Microsoft, A1, Lease-Partner"
+              className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs"
+            />
+            <select
+              value={contractDraft.event_type}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, event_type: event.target.value }))}
+              className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs"
+            >
+              {CONTRACT_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={contractDraft.billing_cycle}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, billing_cycle: event.target.value }))}
+              className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs"
+            >
+              {BILLING_CYCLE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            <label className="flex items-center gap-2 rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-700">
+              <span className="text-sand-500">Kuendigungsdatum</span>
+              <input
+                type="date"
+                value={contractDraft.cancellation_date}
+                onChange={(event) => setContractDraft((prev) => ({ ...prev, cancellation_date: event.target.value }))}
+                className="min-w-0 flex-1 bg-transparent outline-none"
+              />
+            </label>
+            <label className="flex items-center gap-2 rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-700">
+              <span className="text-sand-500">Vorlauf (Tage)</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={contractDraft.reminder_days}
+                onChange={(event) => setContractDraft((prev) => ({ ...prev, reminder_days: event.target.value }))}
+                className="min-w-0 flex-1 bg-transparent text-right outline-none"
+              />
+            </label>
+            <label className="inline-flex items-center gap-2 rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-700">
+              <input
+                type="checkbox"
+                checked={Boolean(contractDraft.is_external)}
+                onChange={(event) => setContractDraft((prev) => ({ ...prev, is_external: event.target.checked }))}
+                className="h-3.5 w-3.5 rounded border-sand-300"
+              />
+              Externer Vertrag
+            </label>
+            <input
+              value={contractDraft.note}
+              onChange={(event) => setContractDraft((prev) => ({ ...prev, note: event.target.value }))}
+              placeholder="Notiz (optional)"
+              className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[11px] text-sand-500">
+              Steuerungsstart: {toDateLabel(subDaysIso(contractDraft.cancellation_date, contractDraft.reminder_days))}
+            </p>
+            <div className="flex items-center gap-2">
+              {editingContractId ? (
+                <button
+                  type="button"
+                  onClick={resetContractDraft}
+                  disabled={contractBusy}
+                  className="rounded-lg border border-sand-300 bg-white px-2.5 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Bearbeitung verwerfen
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={saveContract}
+                disabled={contractBusy}
+                className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {editingContractId ? <Check size={13} /> : <Plus size={13} />}
+                {editingContractId ? "Vertrag speichern" : "Vertrag erfassen"}
+              </button>
+            </div>
+          </div>
+          {contractsError ? <p className="text-xs text-rose-600">{contractsError}</p> : null}
+        </div>
+
+        <div className="divide-y divide-sand-200">
+          {contractsStatus === "loading" ? <p className="px-3 py-3 text-xs text-sand-500">Lade Vertraege…</p> : null}
+          {contractsStatus === "error" ? <p className="px-3 py-3 text-xs text-rose-600">{contractsError}</p> : null}
+          {contractsStatus !== "loading" && contractsWithSteering.length === 0 ? (
+            <p className="px-3 py-3 text-xs text-sand-500">Noch keine wiederkehrenden Vertraege hinterlegt.</p>
+          ) : null}
+          {contractsWithSteering.map((row, index) => {
+            const rowBackground = index % 2 === 0 ? "bg-white" : "bg-sand-50/70";
+            return (
+              <div key={`contract:${row.id}`} className={`${rowBackground} px-3 py-2`}>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-[220px] flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <CalendarClock size={13} className="text-sand-500" />
+                      <p className="text-sm font-semibold text-sand-900">{compactText(row.device_label) || "Vertrag"}</p>
+                      <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
+                        {getContractTypeLabel(row.event_type)}
+                      </span>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                          row.is_external
+                            ? "border-amber-200 bg-amber-50 text-amber-700"
+                            : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        }`}
+                      >
+                        {row.is_external ? "Extern" : "Intern"}
+                      </span>
+                      {row.cancellationDue ? (
+                        <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
+                          Kuendigung faellig
+                        </span>
+                      ) : row.steeringDue ? (
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+                          Vorlauf aktiv
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-0.5 text-xs text-sand-600">
+                      Anbieter: {compactText(row.provider) || "n/a"} · Intervall: {getBillingCycleLabel(row.billing_cycle)}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-sand-500">
+                      Kuendigungsdatum: {toDateLabel(row.cancellationDate)} · Steuerung ab: {toDateLabel(row.steeringDate)} (
+                      {row.reminderDays} Tage Vorlauf)
+                    </p>
+                    {compactText(row.note) ? <p className="mt-0.5 text-[11px] text-sand-500">Notiz: {compactText(row.note)}</p> : null}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => editContract(row)}
+                      disabled={contractBusy}
+                      className="inline-flex items-center gap-1 rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Pencil size={12} />
+                      Bearbeiten
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteContract(row.id)}
+                      disabled={contractBusy}
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Trash2 size={12} />
+                      Loeschen
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
