@@ -46,6 +46,18 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     }).then((r) => r.json()),
+  estimateTaskScope: (id, payload) =>
+    fetch(`${API}/day_tasks/${id}/scope_estimate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {})
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(data?.detail || "Arbeitsumfang konnte nicht analysiert werden.");
+      }
+      return data;
+    }),
   createGroup: (payload) =>
     fetch(`${API}/day_task_groups`, {
       method: "POST",
@@ -190,6 +202,11 @@ export default function DayPlanView() {
   });
   const [sevdeskDraftMetrics, setSevdeskDraftMetrics] = useState(null);
   const [sevdeskDraftMetricsStatus, setSevdeskDraftMetricsStatus] = useState("idle");
+  const [sevdeskDraftEstimate, setSevdeskDraftEstimate] = useState(null);
+  const [sevdeskDraftEstimateStatus, setSevdeskDraftEstimateStatus] = useState({
+    state: "idle",
+    error: ""
+  });
   const [collapsedTimers, setCollapsedTimers] = useState(() => {
     if (typeof window === "undefined") return {};
     try {
@@ -211,6 +228,7 @@ export default function DayPlanView() {
   const emailDropGuardRef = useRef(0);
   const emailDropBadgeRef = useRef(null);
   const sevdeskDraftMetricsRequestRef = useRef(0);
+  const sevdeskDraftEstimateRequestRef = useRef(0);
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
   const taskHighlightTimeoutsRef = useRef({});
   const [highlightedTaskIds, setHighlightedTaskIds] = useState({});
@@ -688,13 +706,32 @@ export default function DayPlanView() {
 
   const openSevdeskDraft = async (task) => {
     const latestDefaults = (await refreshSevdeskDefaults()) || sevdeskDefaults;
+    const nextDraftForm = buildSevdeskDraftDefaults(task, latestDefaults);
     setSevdeskDraftTask(task);
-    setSevdeskDraftForm(buildSevdeskDraftDefaults(task, latestDefaults));
+    setSevdeskDraftForm(nextDraftForm);
     setSevdeskDraftStatus({ state: "idle", error: "" });
     setSevdeskDraftAdvancedOpen(false);
     setSevdeskDraftMetrics(null);
     setSevdeskDraftMetricsStatus("idle");
+    setSevdeskDraftEstimate(null);
+    setSevdeskDraftEstimateStatus({ state: "loading", error: "" });
     setSevdeskDraftOpen(true);
+    const estimateRequestId = Date.now() + Math.random();
+    sevdeskDraftEstimateRequestRef.current = estimateRequestId;
+    api.estimateTaskScope(task.id, { text: nextDraftForm.text || "" })
+      .then((data) => {
+        if (sevdeskDraftEstimateRequestRef.current !== estimateRequestId) return;
+        setSevdeskDraftEstimate(data || null);
+        setSevdeskDraftEstimateStatus({ state: "ready", error: "" });
+      })
+      .catch((error) => {
+        if (sevdeskDraftEstimateRequestRef.current !== estimateRequestId) return;
+        setSevdeskDraftEstimate(null);
+        setSevdeskDraftEstimateStatus({
+          state: "error",
+          error: error?.message || "Arbeitsumfang konnte nicht analysiert werden."
+        });
+      });
     const matchedCustomer = findCustomerByTaskName(task?.customer);
     const customerId = Number(matchedCustomer?.id || 0);
     if (!customerId) return;
@@ -725,8 +762,31 @@ export default function DayPlanView() {
     });
   };
 
+  const refreshSevdeskDraftEstimate = async (textOverride) => {
+    if (!sevdeskDraftTask) return;
+    const requestId = Date.now() + Math.random();
+    sevdeskDraftEstimateRequestRef.current = requestId;
+    setSevdeskDraftEstimateStatus({ state: "loading", error: "" });
+    try {
+      const data = await api.estimateTaskScope(sevdeskDraftTask.id, {
+        text: textOverride !== undefined ? textOverride : sevdeskDraftForm?.text || ""
+      });
+      if (sevdeskDraftEstimateRequestRef.current !== requestId) return;
+      setSevdeskDraftEstimate(data || null);
+      setSevdeskDraftEstimateStatus({ state: "ready", error: "" });
+    } catch (error) {
+      if (sevdeskDraftEstimateRequestRef.current !== requestId) return;
+      setSevdeskDraftEstimate(null);
+      setSevdeskDraftEstimateStatus({
+        state: "error",
+        error: error?.message || "Arbeitsumfang konnte nicht analysiert werden."
+      });
+    }
+  };
+
   const closeSevdeskDraft = () => {
     sevdeskDraftMetricsRequestRef.current += 1;
+    sevdeskDraftEstimateRequestRef.current += 1;
     setSevdeskDraftOpen(false);
     setSevdeskDraftTask(null);
     setSevdeskDraftForm(null);
@@ -734,6 +794,8 @@ export default function DayPlanView() {
     setSevdeskDraftAiLoading(false);
     setSevdeskDraftMetrics(null);
     setSevdeskDraftMetricsStatus("idle");
+    setSevdeskDraftEstimate(null);
+    setSevdeskDraftEstimateStatus({ state: "idle", error: "" });
   };
 
   const submitSevdeskDraft = async () => {
@@ -832,6 +894,7 @@ export default function DayPlanView() {
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.text) {
         updateSevdeskDraftForm("text", data.text);
+        refreshSevdeskDraftEstimate(data.text);
       }
     } finally {
       setSevdeskDraftAiLoading(false);
@@ -2606,9 +2669,16 @@ export default function DayPlanView() {
         draftCheck={sevdeskDraftCheck}
         travelMetrics={sevdeskDraftMetrics}
         travelStatus={sevdeskDraftMetricsStatus}
+        scopeEstimate={sevdeskDraftEstimate}
+        scopeEstimateStatus={sevdeskDraftEstimateStatus}
         onClose={closeSevdeskDraft}
         onSubmit={submitSevdeskDraft}
         onGenerateAi={generateSevdeskDraftText}
+        onRefreshScopeEstimate={() => refreshSevdeskDraftEstimate()}
+        onApplyScopeEstimate={() => {
+          if (!sevdeskDraftEstimate?.estimated_hours) return;
+          updateSevdeskDraftForm("quantity", String(sevdeskDraftEstimate.estimated_hours));
+        }}
         onToggleAdvanced={() => setSevdeskDraftAdvancedOpen((current) => !current)}
         onChange={updateSevdeskDraftForm}
       />
@@ -2728,14 +2798,20 @@ function FakturaTaskModal({
   draftCheck,
   travelMetrics,
   travelStatus,
+  scopeEstimate,
+  scopeEstimateStatus,
   onClose,
   onSubmit,
   onGenerateAi,
+  onRefreshScopeEstimate,
+  onApplyScopeEstimate,
   onToggleAdvanced,
   onChange
 }) {
   if (!open || !task || !form) return null;
   const isSaving = status?.state === "saving";
+  const isScopeEstimateLoading = scopeEstimateStatus?.state === "loading";
+  const hasScopeEstimateError = scopeEstimateStatus?.state === "error";
   const hasCustomerNumber = String(form.customer_number || "").trim().length > 0;
   const hasDraft = Boolean(draftCheck?.hasDraft);
   const contactFound = draftCheck?.contactFound !== false;
@@ -2746,6 +2822,28 @@ function FakturaTaskModal({
       (Number(travelMetrics?.distanceKm || 0) > 0 ? Number(travelMetrics.distanceKm) * 2 : 0)
   );
   const hasMileageSuggestion = Number.isFinite(mileageEur) && mileageEur > 0;
+  const formatHourValue = (value) => {
+    const numeric = Number(value || 0);
+    if (!Number.isFinite(numeric)) return "-";
+    return numeric.toLocaleString("de-DE", {
+      minimumFractionDigits: numeric % 1 === 0 ? 0 : 2,
+      maximumFractionDigits: 2
+    });
+  };
+  const confidenceLabel =
+    scopeEstimate?.confidence === "high"
+      ? "Hohe Sicherheit"
+      : scopeEstimate?.confidence === "medium"
+      ? "Mittlere Sicherheit"
+      : "Niedrige Sicherheit";
+  const comparisonToneClass =
+    scopeEstimate?.comparison === "within"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : scopeEstimate?.comparison === "below"
+      ? "border-sky-200 bg-sky-50 text-sky-700"
+      : scopeEstimate?.comparison === "above"
+      ? "border-amber-200 bg-amber-50 text-amber-700"
+      : "border-sand-200 bg-sand-50 text-sand-600";
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
       <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
@@ -2869,6 +2967,100 @@ function FakturaTaskModal({
                   }`}
                 >
                   {form.include_mileage ? "Anfahrt aktiv" : "Zur Rechnung hinzufügen"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+          {isScopeEstimateLoading ? (
+            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 inline-flex items-center gap-2">
+              <Loader2 size={14} className="animate-spin" />
+              KI analysiert Arbeitsumfang und vergleicht mit der erfassten Zeit...
+            </div>
+          ) : null}
+          {hasScopeEstimateError ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-700">
+              <div>{scopeEstimateStatus?.error || "Arbeitsumfang konnte nicht analysiert werden."}</div>
+              <button
+                type="button"
+                onClick={onRefreshScopeEstimate}
+                className="mt-2 inline-flex items-center gap-1 rounded-full border border-rose-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+              >
+                <Sparkles size={12} />
+                Erneut analysieren
+              </button>
+            </div>
+          ) : null}
+          {!isScopeEstimateLoading && !hasScopeEstimateError && scopeEstimate ? (
+            <div className="rounded-2xl border border-sky-200 bg-sky-50/70 px-3 py-3 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-[10px] uppercase tracking-[0.3em] text-sky-700">KI Arbeitsumfang</p>
+                  <p className="mt-1 text-sm text-sand-900">{scopeEstimate.summary}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sky-700">
+                    {confidenceLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onRefreshScopeEstimate}
+                    className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sky-700 hover:bg-sky-100"
+                  >
+                    <Sparkles size={12} />
+                    Neu analysieren
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3 text-xs text-sand-600">
+                <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">KI Schätzung</p>
+                  <p className="mt-1 text-lg font-semibold text-sand-900">
+                    {formatHourValue(scopeEstimate.estimated_hours)} h
+                  </p>
+                  <p className="text-[11px] text-sand-500">
+                    Range {formatHourValue(scopeEstimate.estimated_min_hours)} bis{" "}
+                    {formatHourValue(scopeEstimate.estimated_max_hours)} h
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Erfasst</p>
+                  <p className="mt-1 text-lg font-semibold text-sand-900">
+                    {scopeEstimate.actual_hours > 0
+                      ? `${formatHourValue(scopeEstimate.actual_hours)} h`
+                      : "Keine Zeit"}
+                  </p>
+                  <p className="text-[11px] text-sand-500">
+                    Faktura gerundet: {formatHourValue(scopeEstimate.actual_rounded_hours)} h
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Vergleich</p>
+                  <div
+                    className={`mt-1 inline-flex rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${comparisonToneClass}`}
+                  >
+                    {scopeEstimate.comparison_label}
+                  </div>
+                  <p className="mt-2 text-[11px] text-sand-500">
+                    Abweichung zur KI-Mitte:{" "}
+                    {scopeEstimate.delta_hours > 0 ? "+" : ""}
+                    {formatHourValue(scopeEstimate.delta_hours)} h
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-sand-500">
+                <div>
+                  Quelle: {scopeEstimate.provider === "ollama" ? "KI" : "Fallback"}
+                  {scopeEstimate.provider === "ollama" && scopeEstimate.model
+                    ? ` (${scopeEstimate.model})`
+                    : ""}
+                </div>
+                <button
+                  type="button"
+                  onClick={onApplyScopeEstimate}
+                  className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sky-700 hover:bg-sky-100"
+                >
+                  <Sparkles size={12} />
+                  Schätzung als Menge übernehmen
                 </button>
               </div>
             </div>

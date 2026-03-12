@@ -2072,6 +2072,11 @@ class DayTaskEmailDraftRequest(BaseModel):
     text: Optional[str] = ""
     html: Optional[str] = ""
 
+
+class DayTaskScopeEstimateRequest(BaseModel):
+    text: Optional[str] = None
+
+
 class OfferAiRequest(BaseModel):
     mode: str
     current_text: Optional[str] = ""
@@ -2692,6 +2697,216 @@ def _build_task_position_text(task: DayTask) -> str:
         combined = f"{title}. {details}"
         return re.sub(r"\s+", " ", combined).strip()
     return title or details or ""
+
+
+def _format_hours_for_prompt(value: float) -> str:
+    rounded = round(float(value or 0.0), 2)
+    text = f"{rounded:.2f}".rstrip("0").rstrip(".")
+    return text.replace(".", ",")
+
+
+def _normalize_estimated_hours(value: Any, fallback: float) -> float:
+    parsed = _parse_float(value, default=fallback)
+    if parsed <= 0:
+        parsed = fallback
+    parsed = min(24.0, max(0.25, parsed))
+    return _round_up_to_quarter_hours(parsed)
+
+
+def _fallback_task_scope_estimate(task: DayTask, analysis_text: str) -> Dict[str, Any]:
+    text = f"{task.title or ''} {task.details or ''} {analysis_text or ''}".lower()
+    text = text.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
+
+    quick_keywords = (
+        "passwort",
+        "mailbox",
+        "drucker",
+        "konto",
+        "lizenz",
+        "freigabe",
+        "kleinanpassung",
+        "rueckruf",
+        "frage",
+    )
+    medium_keywords = (
+        "update",
+        "wartung",
+        "analyse",
+        "pruefung",
+        "stoerung",
+        "vpn",
+        "backup",
+        "office",
+        "client",
+        "arbeitsplatz",
+    )
+    large_keywords = (
+        "server",
+        "migration",
+        "umzug",
+        "netzwerk",
+        "firewall",
+        "installation",
+        "einrichtung",
+        "rollout",
+        "inbetriebnahme",
+        "projekt",
+        "umstellung",
+        "tenant",
+        "m365",
+        "exchange",
+    )
+
+    estimated_min = 0.5
+    estimated_hours = 1.0
+    estimated_max = 1.5
+    confidence = "low"
+    summary = "Aus der Aufgabenbeschreibung ergibt sich voraussichtlich ein kleiner bis mittlerer Serviceeinsatz."
+
+    if any(keyword in text for keyword in large_keywords):
+        estimated_min = 1.5
+        estimated_hours = 2.5
+        estimated_max = 4.0
+        confidence = "medium"
+        summary = "Die Beschreibung deutet auf eine groessere technische Leistung mit mehreren Arbeitsschritten hin."
+    elif any(keyword in text for keyword in medium_keywords):
+        estimated_min = 0.75
+        estimated_hours = 1.5
+        estimated_max = 2.5
+        confidence = "medium"
+        summary = "Die Beschreibung spricht fuer einen typischen Serviceeinsatz mit Analyse, Anpassung oder Nacharbeit."
+    elif any(keyword in text for keyword in quick_keywords):
+        estimated_min = 0.25
+        estimated_hours = 0.5
+        estimated_max = 1.0
+        confidence = "medium"
+        summary = "Die Beschreibung wirkt wie ein eher kurzer Servicefall mit begrenztem Umsetzungsumfang."
+
+    if len(_normalize_space(analysis_text)) > 260 and estimated_max < 4.0:
+        estimated_min = max(estimated_min, 1.0)
+        estimated_hours = max(estimated_hours, 2.0)
+        estimated_max = max(estimated_max, 3.0)
+        confidence = "medium"
+
+    return {
+        "summary": summary,
+        "estimated_min_hours": estimated_min,
+        "estimated_hours": estimated_hours,
+        "estimated_max_hours": estimated_max,
+        "confidence": confidence,
+    }
+
+
+def _estimate_task_scope(task: DayTask, analysis_text: str, actual_hours: float) -> Dict[str, Any]:
+    fallback = _fallback_task_scope_estimate(task, analysis_text)
+    content_text = _normalize_space(analysis_text)[:3000]
+    title_text = _normalize_space(task.title)
+    details_text = _normalize_space(task.details)
+    onsite_text = ""
+    if task.arrival_time or task.departure_time:
+        onsite_text = f"{task.arrival_time or '?'} bis {task.departure_time or '?'}"
+    prompt = (
+        "Du analysierst IT-Service-Aufgaben fuer die Fakturierung.\n"
+        "Schaetze den fachlich plausiblen Arbeitsumfang nur anhand der beschriebenen Leistung. "
+        "Nutze die bereits erfasste Zeit nicht als Schaetzgrundlage, sie dient nur dem spaeteren Vergleich.\n"
+        "Antworte ausschliesslich als JSON mit den Feldern summary, estimated_min_hours, "
+        "estimated_hours, estimated_max_hours, confidence.\n"
+        "summary: 1-2 kurze Saetze auf Deutsch, sachlich, ohne Aufzaehlung.\n"
+        "confidence: low, medium oder high.\n"
+        "Alle Stundenwerte als Dezimalzahl in 0,25h-Schritten. Es muss gelten: "
+        "estimated_min_hours <= estimated_hours <= estimated_max_hours.\n\n"
+        f"Titel: {title_text or 'n/a'}\n"
+        f"Details: {details_text or 'n/a'}\n"
+        f"Faktura-/Positionstext: {content_text or 'n/a'}\n"
+        f"Vor Ort Zeiten: {onsite_text or 'n/a'}\n"
+        f"Erfasste Zeit nur zum Vergleich: {_format_hours_for_prompt(actual_hours)} h"
+    )
+
+    provider = "fallback"
+    model = ""
+    loaded: Dict[str, Any] = {}
+    try:
+        model_candidates = _resolve_ollama_models(MODEL_PREF_TASK_DRAFT, MODEL_PREF_INVOICE_SUMMARY)
+        payload, model = _ollama_generate(
+            prompt,
+            model_candidates=model_candidates,
+            response_format="json",
+            temperature=0.15,
+            max_tokens=220,
+        )
+        raw = payload.get("response") if isinstance(payload, dict) else None
+        if isinstance(raw, dict):
+            loaded = raw
+        elif isinstance(raw, str):
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError:
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    loaded = json.loads(raw[start : end + 1])
+        if loaded:
+            provider = "ollama"
+    except Exception as exc:
+        logger.warning("Task scope estimate AI failed (%s): %s", model or "n/a", exc)
+
+    summary = _normalize_space(loaded.get("summary") if isinstance(loaded, dict) else "") or fallback["summary"]
+    if len(summary) > 280:
+        summary = summary[:277].rstrip(" ,;:-") + "..."
+    estimated_min = _normalize_estimated_hours(
+        loaded.get("estimated_min_hours") if isinstance(loaded, dict) else None,
+        fallback["estimated_min_hours"],
+    )
+    estimated = _normalize_estimated_hours(
+        loaded.get("estimated_hours") if isinstance(loaded, dict) else None,
+        fallback["estimated_hours"],
+    )
+    estimated_max = _normalize_estimated_hours(
+        loaded.get("estimated_max_hours") if isinstance(loaded, dict) else None,
+        fallback["estimated_max_hours"],
+    )
+    ordered = sorted([estimated_min, estimated, estimated_max])
+    estimated_min, estimated, estimated_max = ordered[0], ordered[1], ordered[2]
+
+    confidence = str(loaded.get("confidence") if isinstance(loaded, dict) else "").strip().lower()
+    if confidence not in {"low", "medium", "high"}:
+        confidence = str(fallback["confidence"]).strip().lower() or "low"
+
+    actual_hours = round(max(0.0, float(actual_hours or 0.0)), 2)
+    actual_rounded_hours = _round_up_to_quarter_hours(actual_hours) if actual_hours > 0 else 0.0
+    delta_hours = round(actual_hours - estimated, 2)
+    rounded_delta_hours = round(actual_rounded_hours - estimated, 2)
+
+    comparison = "missing_actual"
+    comparison_label = "Keine Zeit erfasst"
+    if actual_hours > 0:
+        if actual_hours < estimated_min - 0.01:
+            comparison = "below"
+            comparison_label = "Unter KI-Schaetzung"
+        elif actual_hours > estimated_max + 0.01:
+            comparison = "above"
+            comparison_label = "Ueber KI-Schaetzung"
+        else:
+            comparison = "within"
+            comparison_label = "Im erwarteten Rahmen"
+
+    return {
+        "summary": summary,
+        "estimated_min_hours": estimated_min,
+        "estimated_hours": estimated,
+        "estimated_max_hours": estimated_max,
+        "actual_hours": actual_hours,
+        "actual_rounded_hours": actual_rounded_hours,
+        "delta_hours": delta_hours,
+        "rounded_delta_hours": rounded_delta_hours,
+        "comparison": comparison,
+        "comparison_label": comparison_label,
+        "confidence": confidence,
+        "provider": provider,
+        "model": model or "",
+        "analysis_text": content_text or _build_task_position_text(task),
+        "generated_at": int(time.time() * 1000),
+    }
 
 
 def _sanitize_invoice_position_ai_text(value: Any) -> str:
@@ -13340,6 +13555,25 @@ def toggle_day_task_timer(task_id: int):
         db.commit()
         db.refresh(task)
         return serialize_day_task(task)
+
+
+@app.post("/api/day_tasks/{task_id}/scope_estimate")
+def estimate_day_task_scope(task_id: int, data: Optional[DayTaskScopeEstimateRequest] = None):
+    with SessionLocal() as db:
+        task = db.query(DayTask).get(task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        now_ms = int(time.time() * 1000)
+        elapsed_ms = int(task.elapsed or 0)
+        if task.running and task.startTime:
+            elapsed_ms = max(0, elapsed_ms + (now_ms - int(task.startTime or 0)))
+        actual_hours = elapsed_ms / 3_600_000 if elapsed_ms > 0 else 0.0
+        analysis_text = _normalize_space(
+            (data.text if data and data.text is not None else None) or _build_task_position_text(task)
+        )
+        if not analysis_text:
+            analysis_text = _normalize_space(task.title or task.details or "")
+        return _estimate_task_scope(task, analysis_text, actual_hours)
 
 # ================= PINBOARD =================
 @app.get("/api/pinboard")
