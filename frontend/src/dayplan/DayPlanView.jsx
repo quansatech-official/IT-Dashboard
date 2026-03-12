@@ -3019,13 +3019,13 @@ function FakturaTaskModal({
               </div>
             </div>
           ) : null}
-          <div className="rounded-2xl border border-sand-200 bg-sand-50/80 px-3 py-3 space-y-3">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
+          <div className="rounded-2xl border border-sand-200 bg-sand-50/80 px-3 py-2.5 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Aufwandsübersicht</p>
-                <p className="mt-1 text-sm text-sand-800">
-                  Erfasste Zeit bleibt intern zur Dokumentation erhalten. Die Rechnungsmenge ist separat.
-                </p>
+                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-600">
+                  Ist-Zeit bleibt Dokumentation
+                </span>
               </div>
               <button
                 type="button"
@@ -3033,22 +3033,31 @@ function FakturaTaskModal({
                 className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
               >
                 <Sparkles size={12} />
-                {hasScopeEstimate ? "KI neu schätzen" : "KI schätzen"}
+                {hasScopeEstimate ? "KI neu" : "KI schätzen"}
               </button>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-4 text-xs text-sand-600">
-              <div className="rounded-2xl border border-white/80 bg-white px-3 py-3">
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Tatsächlich</p>
-                <p className="mt-1 text-lg font-semibold text-sand-900">
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 text-xs text-sand-600">
+              <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
+                <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Tatsächlich</p>
+                <p className="text-base font-semibold text-sand-900">
                   {actualHours > 0 ? `${formatHourValue(actualHours)} h` : "Keine Zeit"}
                 </p>
-                <p className="text-[11px] text-sand-500">
-                  Doku gerundet: {formatHourValue(actualRoundedHours)} h
+                <p className="text-[10px] text-sand-500">
+                  Gerundet: {formatHourValue(actualRoundedHours)} h
                 </p>
+                <button
+                  type="button"
+                  onClick={onApplyActualHours}
+                  disabled={!actualRoundedHours}
+                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
+                >
+                  Übernehmen
+                </button>
               </div>
-              <div className="rounded-2xl border border-white/80 bg-white px-3 py-3">
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Mindestens wert</p>
+
+              <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
+                <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Mindestens wert</p>
                 <input
                   type="number"
                   min="0"
@@ -3060,106 +3069,99 @@ function FakturaTaskModal({
                       billing_min_hours: roundHourValue(Number(form.minimum_billable_hours || 0))
                     })
                   }
-                  className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
                   placeholder="0,75"
                 />
-                <p className="mt-1 text-[11px] text-sand-500">Interner Mindestwert in Stunden.</p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[10px] text-sand-500">Interner Mindestwert.</p>
+                  <button
+                    type="button"
+                    onClick={onApplyMinimumHours}
+                    disabled={!minimumBillableHours}
+                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
+                  >
+                    Übernehmen
+                  </button>
+                </div>
               </div>
-              <div className="rounded-2xl border border-white/80 bg-white px-3 py-3">
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Rechnungsmenge</p>
-                <p className="mt-1 text-lg font-semibold text-sand-900">
+
+              <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
+                <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Rechnungsmenge</p>
+                <p className="text-base font-semibold text-sand-900">
                   {invoiceQuantity > 0 ? `${formatHourValue(invoiceQuantity)} h` : "Nicht gesetzt"}
                 </p>
-                <p className="text-[11px] text-sand-500">
+                <p className="text-[10px] text-sand-500">
                   {documentedMaximum > 0
-                    ? `Dokumentierter Richtwert: ${formatHourValue(documentedMaximum)} h`
-                    : "Noch kein dokumentierter Richtwert"}
+                    ? `Dokumentiert: ${formatHourValue(documentedMaximum)} h`
+                    : "Kein Richtwert"}
                 </p>
+                <button
+                  type="button"
+                  onClick={onApplyDocumentedMaximum}
+                  disabled={!documentedMaximum}
+                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
+                >
+                  Max übernehmen
+                </button>
               </div>
-              <div className="rounded-2xl border border-white/80 bg-white px-3 py-3">
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">KI Schätzung</p>
+
+              <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">KI Schätzung</p>
+                  {hasScopeEstimate ? (
+                    <span className="rounded-full border border-sky-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-700">
+                      {confidenceLabel}
+                    </span>
+                  ) : null}
+                </div>
                 {hasScopeEstimate ? (
                   <>
-                    <p className="mt-1 text-lg font-semibold text-sand-900">
+                    <p className="text-base font-semibold text-sand-900">
                       {formatHourValue(scopeEstimate.estimated_hours)} h
                     </p>
-                    <p className="text-[11px] text-sand-500">
+                    <p className="text-[10px] text-sand-500">
                       {formatHourValue(scopeEstimate.estimated_min_hours)} bis{" "}
                       {formatHourValue(scopeEstimate.estimated_max_hours)} h
                     </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={onApplyScopeEstimate}
+                        className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sky-700 hover:bg-sky-100"
+                      >
+                        <Sparkles size={12} />
+                        Übernehmen
+                      </button>
+                      <span
+                        className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${comparisonToneClass}`}
+                      >
+                        {scopeEstimate.comparison_label}
+                      </span>
+                    </div>
                   </>
                 ) : (
-                  <p className="mt-1 text-sm text-sand-500">Optional per Klick abrufen.</p>
+                  <p className="text-[10px] text-sand-500">Optional per Klick abrufen.</p>
                 )}
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-sand-500">
-              <button
-                type="button"
-                onClick={onApplyActualHours}
-                disabled={!actualRoundedHours}
-                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
-              >
-                Tatsächliche Zeit übernehmen
-              </button>
-              <button
-                type="button"
-                onClick={onApplyMinimumHours}
-                disabled={!minimumBillableHours}
-                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
-              >
-                Mindestwert übernehmen
-              </button>
-              <button
-                type="button"
-                onClick={onApplyDocumentedMaximum}
-                disabled={!documentedMaximum}
-                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
-              >
-                Dokumentierten Max übernehmen
-              </button>
-              {hasScopeEstimate ? (
-                <button
-                  type="button"
-                  onClick={onApplyScopeEstimate}
-                  className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sky-700 hover:bg-sky-100"
-                >
-                  <Sparkles size={12} />
-                  KI-Schätzung übernehmen
-                </button>
-              ) : null}
-            </div>
-
             {isScopeEstimateLoading ? (
-              <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 inline-flex items-center gap-2">
+              <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 inline-flex items-center gap-2">
                 <Loader2 size={14} className="animate-spin" />
-                KI analysiert Arbeitsumfang und vergleicht mit der erfassten Zeit...
+                KI analysiert Arbeitsumfang...
               </div>
             ) : null}
             {hasScopeEstimateError ? (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
                 {scopeEstimateStatus?.error || "Arbeitsumfang konnte nicht analysiert werden."}
               </div>
             ) : null}
             {hasScopeEstimate ? (
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-sand-500">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sky-700">
-                    {confidenceLabel}
-                  </span>
-                  <span
-                    className={`inline-flex rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${comparisonToneClass}`}
-                  >
-                    {scopeEstimate.comparison_label}
-                  </span>
-                </div>
-                <div>
-                  Quelle: {scopeEstimate.provider === "ollama" ? "KI" : "Fallback"}
-                  {scopeEstimate.provider === "ollama" && scopeEstimate.model
-                    ? ` (${scopeEstimate.model})`
-                    : ""}
-                </div>
+              <div className="text-[10px] text-sand-500">
+                Quelle: {scopeEstimate.provider === "ollama" ? "KI" : "Fallback"}
+                {scopeEstimate.provider === "ollama" && scopeEstimate.model
+                  ? ` (${scopeEstimate.model})`
+                  : ""}
               </div>
             ) : null}
 

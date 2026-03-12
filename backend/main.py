@@ -105,6 +105,10 @@ CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS = max(
     3,
     int(os.environ.get("CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS") or "20"),
 )
+TASK_SCOPE_AI_TIMEOUT_SECONDS = max(
+    5,
+    int(os.environ.get("TASK_SCOPE_AI_TIMEOUT_SECONDS") or "12"),
+)
 INTERNAL_AI_STREAM_TIMEOUT_SECONDS = max(
     30,
     int(os.environ.get("INTERNAL_AI_STREAM_TIMEOUT_SECONDS") or "300"),
@@ -2456,7 +2460,17 @@ def _ollama_generate(
 ) -> Tuple[Dict[str, Any], str]:
     request_timeout = max(1, int(timeout or OLLAMA_TIMEOUT_SECONDS))
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
-    normalized_models = [str(item or "").strip() for item in model_candidates if str(item or "").strip()]
+    normalized_models = []
+    seen_models: Set[str] = set()
+    for item in model_candidates:
+        model_name = str(item or "").strip()
+        if not model_name:
+            continue
+        model_key = model_name.lower()
+        if model_key in seen_models:
+            continue
+        seen_models.add(model_key)
+        normalized_models.append(model_name)
     if not normalized_models:
         normalized_models = _resolve_ollama_models(OLLAMA_MODEL)
     cache_key = (
@@ -2810,78 +2824,35 @@ def _fallback_task_scope_estimate(task: DayTask, analysis_text: str) -> Dict[str
     }
 
 
-def _estimate_task_scope(task: DayTask, analysis_text: str, actual_hours: float) -> Dict[str, Any]:
-    fallback = _fallback_task_scope_estimate(task, analysis_text)
-    content_text = _normalize_space(analysis_text)[:3000]
-    title_text = _normalize_space(task.title)
-    details_text = _normalize_space(task.details)
-    onsite_text = ""
-    if task.arrival_time or task.departure_time:
-        onsite_text = f"{task.arrival_time or '?'} bis {task.departure_time or '?'}"
-    prompt = (
-        "Du analysierst IT-Service-Aufgaben fuer die Fakturierung.\n"
-        "Schaetze den fachlich plausiblen Arbeitsumfang nur anhand der beschriebenen Leistung. "
-        "Nutze die bereits erfasste Zeit nicht als Schaetzgrundlage, sie dient nur dem spaeteren Vergleich.\n"
-        "Antworte ausschliesslich als JSON mit den Feldern summary, estimated_min_hours, "
-        "estimated_hours, estimated_max_hours, confidence.\n"
-        "summary: 1-2 kurze Saetze auf Deutsch, sachlich, ohne Aufzaehlung.\n"
-        "confidence: low, medium oder high.\n"
-        "Alle Stundenwerte als Dezimalzahl in 0,25h-Schritten. Es muss gelten: "
-        "estimated_min_hours <= estimated_hours <= estimated_max_hours.\n\n"
-        f"Titel: {title_text or 'n/a'}\n"
-        f"Details: {details_text or 'n/a'}\n"
-        f"Faktura-/Positionstext: {content_text or 'n/a'}\n"
-        f"Vor Ort Zeiten: {onsite_text or 'n/a'}\n"
-        f"Erfasste Zeit nur zum Vergleich: {_format_hours_for_prompt(actual_hours)} h"
-    )
-
-    provider = "fallback"
-    model = ""
-    loaded: Dict[str, Any] = {}
-    try:
-        model_candidates = _resolve_ollama_models(MODEL_PREF_TASK_DRAFT, MODEL_PREF_INVOICE_SUMMARY)
-        payload, model = _ollama_generate(
-            prompt,
-            model_candidates=model_candidates,
-            response_format="json",
-            temperature=0.15,
-            max_tokens=220,
-        )
-        raw = payload.get("response") if isinstance(payload, dict) else None
-        if isinstance(raw, dict):
-            loaded = raw
-        elif isinstance(raw, str):
-            try:
-                loaded = json.loads(raw)
-            except json.JSONDecodeError:
-                start = raw.find("{")
-                end = raw.rfind("}")
-                if start != -1 and end != -1 and end > start:
-                    loaded = json.loads(raw[start : end + 1])
-        if loaded:
-            provider = "ollama"
-    except Exception as exc:
-        logger.warning("Task scope estimate AI failed (%s): %s", model or "n/a", exc)
-
-    summary = _normalize_space(loaded.get("summary") if isinstance(loaded, dict) else "") or fallback["summary"]
+def _finalize_task_scope_estimate(
+    fallback: Dict[str, Any],
+    loaded: Optional[Dict[str, Any]],
+    *,
+    actual_hours: float,
+    provider: str,
+    model: str = "",
+    analysis_text: str = "",
+) -> Dict[str, Any]:
+    loaded = loaded if isinstance(loaded, dict) else {}
+    summary = _normalize_space(loaded.get("summary")) or fallback["summary"]
     if len(summary) > 280:
         summary = summary[:277].rstrip(" ,;:-") + "..."
     estimated_min = _normalize_estimated_hours(
-        loaded.get("estimated_min_hours") if isinstance(loaded, dict) else None,
+        loaded.get("estimated_min_hours"),
         fallback["estimated_min_hours"],
     )
     estimated = _normalize_estimated_hours(
-        loaded.get("estimated_hours") if isinstance(loaded, dict) else None,
+        loaded.get("estimated_hours"),
         fallback["estimated_hours"],
     )
     estimated_max = _normalize_estimated_hours(
-        loaded.get("estimated_max_hours") if isinstance(loaded, dict) else None,
+        loaded.get("estimated_max_hours"),
         fallback["estimated_max_hours"],
     )
     ordered = sorted([estimated_min, estimated, estimated_max])
     estimated_min, estimated, estimated_max = ordered[0], ordered[1], ordered[2]
 
-    confidence = str(loaded.get("confidence") if isinstance(loaded, dict) else "").strip().lower()
+    confidence = str(loaded.get("confidence") or "").strip().lower()
     if confidence not in {"low", "medium", "high"}:
         confidence = str(fallback["confidence"]).strip().lower() or "low"
 
@@ -2917,9 +2888,72 @@ def _estimate_task_scope(task: DayTask, analysis_text: str, actual_hours: float)
         "confidence": confidence,
         "provider": provider,
         "model": model or "",
-        "analysis_text": content_text or _build_task_position_text(task),
+        "analysis_text": analysis_text,
         "generated_at": int(time.time() * 1000),
     }
+
+
+def _estimate_task_scope(task: DayTask, analysis_text: str, actual_hours: float) -> Dict[str, Any]:
+    fallback = _fallback_task_scope_estimate(task, analysis_text)
+    content_text = _normalize_space(analysis_text)[:3000]
+    title_text = _normalize_space(task.title)
+    details_text = _normalize_space(task.details)
+    onsite_text = ""
+    if task.arrival_time or task.departure_time:
+        onsite_text = f"{task.arrival_time or '?'} bis {task.departure_time or '?'}"
+    prompt = (
+        "Du analysierst IT-Service-Aufgaben fuer die Fakturierung.\n"
+        "Schaetze den fachlich plausiblen Arbeitsumfang nur anhand der beschriebenen Leistung. "
+        "Nutze die bereits erfasste Zeit nicht als Schaetzgrundlage, sie dient nur dem spaeteren Vergleich.\n"
+        "Antworte ausschliesslich als JSON mit den Feldern summary, estimated_min_hours, "
+        "estimated_hours, estimated_max_hours, confidence.\n"
+        "summary: 1-2 kurze Saetze auf Deutsch, sachlich, ohne Aufzaehlung.\n"
+        "confidence: low, medium oder high.\n"
+        "Alle Stundenwerte als Dezimalzahl in 0,25h-Schritten. Es muss gelten: "
+        "estimated_min_hours <= estimated_hours <= estimated_max_hours.\n\n"
+        f"Titel: {title_text or 'n/a'}\n"
+        f"Details: {details_text or 'n/a'}\n"
+        f"Faktura-/Positionstext: {content_text or 'n/a'}\n"
+        f"Vor Ort Zeiten: {onsite_text or 'n/a'}\n"
+        f"Erfasste Zeit nur zum Vergleich: {_format_hours_for_prompt(actual_hours)} h"
+    )
+
+    provider = "fallback"
+    model = ""
+    loaded: Dict[str, Any] = {}
+    try:
+        model_candidates = _resolve_ollama_models(MODEL_PREF_TASK_DRAFT, MODEL_PREF_INVOICE_SUMMARY)
+        payload, model = _ollama_generate(
+            prompt,
+            model_candidates=model_candidates,
+            timeout=TASK_SCOPE_AI_TIMEOUT_SECONDS,
+            response_format="json",
+            temperature=0.15,
+            max_tokens=160,
+        )
+        raw = payload.get("response") if isinstance(payload, dict) else None
+        if isinstance(raw, dict):
+            loaded = raw
+        elif isinstance(raw, str):
+            try:
+                loaded = json.loads(raw)
+            except json.JSONDecodeError:
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    loaded = json.loads(raw[start : end + 1])
+        if loaded:
+            provider = "ollama"
+    except Exception as exc:
+        logger.warning("Task scope estimate AI failed (%s): %s", model or "n/a", exc)
+    return _finalize_task_scope_estimate(
+        fallback,
+        loaded,
+        actual_hours=actual_hours,
+        provider=provider,
+        model=model,
+        analysis_text=content_text or _build_task_position_text(task),
+    )
 
 
 def _sanitize_invoice_position_ai_text(value: Any) -> str:
@@ -13591,7 +13625,19 @@ def estimate_day_task_scope(task_id: int, data: Optional[DayTaskScopeEstimateReq
         )
         if not analysis_text:
             analysis_text = _normalize_space(task.title or task.details or "")
-        return _estimate_task_scope(task, analysis_text, actual_hours)
+        try:
+            return _estimate_task_scope(task, analysis_text, actual_hours)
+        except Exception as exc:
+            logger.warning("Task scope estimate failed unexpectedly for task=%s: %s", task_id, exc)
+            fallback = _fallback_task_scope_estimate(task, analysis_text)
+            return _finalize_task_scope_estimate(
+                fallback,
+                None,
+                actual_hours=actual_hours,
+                provider="fallback",
+                model="",
+                analysis_text=analysis_text or _build_task_position_text(task),
+            )
 
 # ================= PINBOARD =================
 @app.get("/api/pinboard")
