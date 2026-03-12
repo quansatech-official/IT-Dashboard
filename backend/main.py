@@ -299,6 +299,8 @@ class DayTask(Base):
     departure_time = Column(String, default="")
     deadline = Column(String, default="")
     urgency_flag = Column(String, default="")
+    billing_note = Column(String, default="")
+    billing_min_hours = Column(Float, default=0.0)
     employee_id = Column(Integer, nullable=True)
     elapsed = Column(BigInteger, default=0)      # ms
     running = Column(Boolean, default=False)
@@ -1220,6 +1222,10 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN deadline VARCHAR DEFAULT ''")
     if "urgency_flag" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN urgency_flag VARCHAR DEFAULT ''")
+    if "billing_note" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN billing_note VARCHAR DEFAULT ''")
+    if "billing_min_hours" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN billing_min_hours DOUBLE PRECISION DEFAULT 0")
     if "employee_id" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN employee_id INTEGER")
     if "elapsed" not in columns:
@@ -1430,6 +1436,8 @@ class DayTaskCreate(BaseModel):
     departure_time: Optional[str] = ""
     deadline: Optional[str] = ""
     urgency_flag: Optional[str] = ""
+    billing_note: Optional[str] = ""
+    billing_min_hours: Optional[float] = 0
     employee_id: Optional[int] = None
     elapsed: Optional[int] = 0
     running: Optional[bool] = False
@@ -1457,6 +1465,8 @@ class DayTaskUpdate(BaseModel):
     departure_time: Optional[str] = None
     deadline: Optional[str] = None
     urgency_flag: Optional[str] = None
+    billing_note: Optional[str] = None
+    billing_min_hours: Optional[float] = None
     employee_id: Optional[int] = None
     elapsed: Optional[int] = None
     running: Optional[bool] = None
@@ -1564,6 +1574,7 @@ class PurchasingItemUpdate(BaseModel):
 
 class PurchasingTrackingStatusLookup(BaseModel):
     trackingNumbers: Optional[List[str]] = None
+    force: Optional[bool] = False
 
 
 class KnowledgeArticleCreate(BaseModel):
@@ -2144,6 +2155,8 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "departure_time": t.departure_time,
         "deadline": t.deadline,
         "urgency_flag": _normalize_urgency_flag(t.urgency_flag),
+        "billing_note": t.billing_note,
+        "billing_min_hours": round(float(t.billing_min_hours or 0.0), 2),
         "employee_id": t.employee_id,
         "elapsed": t.elapsed,
         "running": t.running,
@@ -13474,6 +13487,8 @@ def create_day_task(data: DayTaskCreate):
             departure_time=data.departure_time or "",
             deadline=data.deadline or "",
             urgency_flag=urgency_flag,
+            billing_note=data.billing_note or "",
+            billing_min_hours=max(0.0, float(data.billing_min_hours or 0.0)),
             employee_id=data.employee_id,
             elapsed=int(data.elapsed or 0),
             running=bool(data.running),
@@ -13504,6 +13519,7 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
             "departure_time",
             "deadline",
             "urgency_flag",
+            "billing_note",
         }
         payload = data.dict(exclude_unset=True)
         for field, value in payload.items():
@@ -13511,6 +13527,8 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
                 setattr(task, field, "")
             else:
                 setattr(task, field, value)
+        if "billing_min_hours" in payload:
+            task.billing_min_hours = max(0.0, float(task.billing_min_hours or 0.0))
         if "urgency_flag" in payload:
             task.urgency_flag = _normalize_urgency_flag(task.urgency_flag)
         if data.erledigt is not None and data.status is None:
@@ -13631,23 +13649,54 @@ def _resolve_tracking_provider(number: str) -> Tuple[str, str]:
     return "Unbekannt", ""
 
 
+def _extract_tracking_provider(payload: Dict[str, Any], fallback_label: str) -> str:
+    candidates: List[str] = []
+    for key in ("carrier", "carrier_name", "carrierName", "provider", "provider_name", "providerName"):
+        value = payload.get(key)
+        text_value = str(value or "").strip()
+        if text_value:
+            candidates.append(text_value)
+
+    trackers = payload.get("trackers")
+    if isinstance(trackers, list):
+        for entry in trackers[:3]:
+            if not isinstance(entry, dict):
+                continue
+            for key in ("name", "title", "label", "carrier", "provider"):
+                text_value = str(entry.get(key) or "").strip()
+                if text_value:
+                    candidates.append(text_value)
+
+    tracker = payload.get("tracker")
+    if isinstance(tracker, dict):
+        for key in ("name", "title", "label", "carrier", "provider"):
+            text_value = str(tracker.get(key) or "").strip()
+            if text_value:
+                candidates.append(text_value)
+
+    for candidate in candidates:
+        normalized = re.sub(r"\s+", " ", candidate).strip()
+        if normalized:
+            return normalized
+    return fallback_label
+
+
 def _extract_latest_status_text(payload: Dict[str, Any]) -> str:
     states = payload.get("states")
     if isinstance(states, list) and states:
-        latest = states[0] if isinstance(states[0], dict) else {}
-        candidates = (
-            latest.get("status"),
-            latest.get("description"),
-            latest.get("text"),
-            latest.get("note"),
-            latest.get("state"),
-            payload.get("final_status"),
-            payload.get("status"),
-        )
-        for candidate in candidates:
-            text_value = str(candidate or "").strip()
-            if text_value:
-                return text_value
+        for raw_state in states:
+            latest = raw_state if isinstance(raw_state, dict) else {}
+            candidates = (
+                latest.get("status"),
+                latest.get("description"),
+                latest.get("text"),
+                latest.get("note"),
+                latest.get("state"),
+            )
+            for candidate in candidates:
+                text_value = str(candidate or "").strip()
+                if text_value:
+                    return text_value
     for candidate in (payload.get("final_status"), payload.get("status")):
         text_value = str(candidate or "").strip()
         if text_value:
@@ -13690,12 +13739,13 @@ def _fetch_parcelsapp_tracking_payload(
     return {}
 
 
-def _lookup_tracking_status(tracking_number: str) -> Dict[str, Any]:
+def _lookup_tracking_status(tracking_number: str, *, force_refresh: bool = False) -> Dict[str, Any]:
     now_ms = int(time.time() * 1000)
-    with _tracking_status_cache_lock:
-        cached = _tracking_status_cache.get(tracking_number)
-        if cached and now_ms - int(cached.get("checkedAt") or 0) < TRACKING_STATUS_CACHE_TTL_MS:
-            return cached
+    if not force_refresh:
+        with _tracking_status_cache_lock:
+            cached = _tracking_status_cache.get(tracking_number)
+            if cached and now_ms - int(cached.get("checkedAt") or 0) < TRACKING_STATUS_CACHE_TTL_MS:
+                return cached
 
     provider_label, provider_slug = _resolve_tracking_provider(tracking_number)
     payload: Dict[str, Any] = {}
@@ -13705,6 +13755,7 @@ def _lookup_tracking_status(tracking_number: str) -> Dict[str, Any]:
     source = "parcelsapp"
     try:
         payload = _fetch_parcelsapp_tracking_payload(tracking_number, provider_slug)
+        provider_label = _extract_tracking_provider(payload, provider_label)
         error_code = str(payload.get("error") or "").strip().upper()
         status_text = _extract_latest_status_text(payload)
         if error_code:
@@ -13753,7 +13804,10 @@ def get_purchasing_tracking_status(data: PurchasingTrackingStatusLookup):
         if len(normalized_numbers) >= 100:
             break
 
-    statuses = {number: _lookup_tracking_status(number) for number in normalized_numbers}
+    statuses = {
+        number: _lookup_tracking_status(number, force_refresh=bool(data.force))
+        for number in normalized_numbers
+    }
     return {"statuses": statuses}
 
 

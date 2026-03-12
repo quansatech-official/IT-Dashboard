@@ -714,24 +714,8 @@ export default function DayPlanView() {
     setSevdeskDraftMetrics(null);
     setSevdeskDraftMetricsStatus("idle");
     setSevdeskDraftEstimate(null);
-    setSevdeskDraftEstimateStatus({ state: "loading", error: "" });
+    setSevdeskDraftEstimateStatus({ state: "idle", error: "" });
     setSevdeskDraftOpen(true);
-    const estimateRequestId = Date.now() + Math.random();
-    sevdeskDraftEstimateRequestRef.current = estimateRequestId;
-    api.estimateTaskScope(task.id, { text: nextDraftForm.text || "" })
-      .then((data) => {
-        if (sevdeskDraftEstimateRequestRef.current !== estimateRequestId) return;
-        setSevdeskDraftEstimate(data || null);
-        setSevdeskDraftEstimateStatus({ state: "ready", error: "" });
-      })
-      .catch((error) => {
-        if (sevdeskDraftEstimateRequestRef.current !== estimateRequestId) return;
-        setSevdeskDraftEstimate(null);
-        setSevdeskDraftEstimateStatus({
-          state: "error",
-          error: error?.message || "Arbeitsumfang konnte nicht analysiert werden."
-        });
-      });
     const matchedCustomer = findCustomerByTaskName(task?.customer);
     const customerId = Number(matchedCustomer?.id || 0);
     if (!customerId) return;
@@ -760,6 +744,31 @@ export default function DayPlanView() {
       if (!prev) return prev;
       return { ...prev, [field]: value };
     });
+  };
+
+  const persistSevdeskDraftDocumentation = async (patch) => {
+    if (!sevdeskDraftTask?.id) return;
+    try {
+      const updated = await api.update(sevdeskDraftTask.id, patch);
+      if (!updated?.id) return;
+      setTasks((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      setSevdeskDraftTask(updated);
+      setSevdeskDraftForm((prev) => {
+        if (!prev) return prev;
+        const elapsedMs = getElapsedMsForTask(updated);
+        const actualHours = elapsedMs > 0 ? Number((elapsedMs / 3_600_000).toFixed(2)) : 0;
+        return {
+          ...prev,
+          actual_hours: actualHours,
+          actual_rounded_hours: roundUpToQuarterHours(actualHours),
+          minimum_billable_hours:
+            Number(updated.billing_min_hours || 0) > 0 ? String(updated.billing_min_hours) : "",
+          billing_note: String(updated.billing_note || "")
+        };
+      });
+    } catch (error) {
+      console.error("Could not persist billing documentation", error);
+    }
   };
 
   const refreshSevdeskDraftEstimate = async (textOverride) => {
@@ -894,7 +903,6 @@ export default function DayPlanView() {
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.text) {
         updateSevdeskDraftForm("text", data.text);
-        refreshSevdeskDraftEstimate(data.text);
       }
     } finally {
       setSevdeskDraftAiLoading(false);
@@ -1213,7 +1221,10 @@ export default function DayPlanView() {
     const defaults = defaultsOverride || sevdeskDefaults;
     const elapsedMs = getElapsedMsForTask(task);
     const hours = elapsedMs > 0 ? elapsedMs / 3_600_000 : 0;
+    const actualHours = Number(hours.toFixed(2));
     const roundedHours = roundUpToQuarterHours(hours);
+    const minimumBillableHours = roundUpToQuarterHours(Number(task?.billing_min_hours || 0));
+    const suggestedQuantity = Math.max(roundedHours, minimumBillableHours);
     const unityDefault = defaults.service_unity_id || defaults.unity_id || "";
     const title = String(task?.title || "").trim();
     const details = String(task?.details || "").trim();
@@ -1223,7 +1234,11 @@ export default function DayPlanView() {
       header: "Leistungsnachweis",
       name: "Arbeitszeit",
       text: positionText,
-      quantity: roundedHours > 0 ? String(roundedHours) : "1",
+      quantity: suggestedQuantity > 0 ? String(suggestedQuantity) : "1",
+      actual_hours: actualHours,
+      actual_rounded_hours: roundedHours,
+      minimum_billable_hours: minimumBillableHours > 0 ? String(minimumBillableHours) : "",
+      billing_note: String(task?.billing_note || ""),
       price: defaults.hourly_rate_eur ? String(defaults.hourly_rate_eur) : "",
       tax_rate: defaults.default_tax_rate ? String(defaults.default_tax_rate) : "",
       unity_id: unityDefault ? String(unityDefault) : "",
@@ -2679,6 +2694,24 @@ export default function DayPlanView() {
           if (!sevdeskDraftEstimate?.estimated_hours) return;
           updateSevdeskDraftForm("quantity", String(sevdeskDraftEstimate.estimated_hours));
         }}
+        onApplyActualHours={() => {
+          const actualRoundedHours = roundUpToQuarterHours(Number(sevdeskDraftForm?.actual_rounded_hours || 0));
+          if (!actualRoundedHours) return;
+          updateSevdeskDraftForm("quantity", String(actualRoundedHours));
+        }}
+        onApplyMinimumHours={() => {
+          const minimumHours = roundUpToQuarterHours(Number(sevdeskDraftForm?.minimum_billable_hours || 0));
+          if (!minimumHours) return;
+          updateSevdeskDraftForm("quantity", String(minimumHours));
+        }}
+        onApplyDocumentedMaximum={() => {
+          const actualRoundedHours = roundUpToQuarterHours(Number(sevdeskDraftForm?.actual_rounded_hours || 0));
+          const minimumHours = roundUpToQuarterHours(Number(sevdeskDraftForm?.minimum_billable_hours || 0));
+          const documentedMaximum = Math.max(actualRoundedHours, minimumHours);
+          if (!documentedMaximum) return;
+          updateSevdeskDraftForm("quantity", String(documentedMaximum));
+        }}
+        onPersistDocumentation={persistSevdeskDraftDocumentation}
         onToggleAdvanced={() => setSevdeskDraftAdvancedOpen((current) => !current)}
         onChange={updateSevdeskDraftForm}
       />
@@ -2805,6 +2838,10 @@ function FakturaTaskModal({
   onGenerateAi,
   onRefreshScopeEstimate,
   onApplyScopeEstimate,
+  onApplyActualHours,
+  onApplyMinimumHours,
+  onApplyDocumentedMaximum,
+  onPersistDocumentation,
   onToggleAdvanced,
   onChange
 }) {
@@ -2812,6 +2849,7 @@ function FakturaTaskModal({
   const isSaving = status?.state === "saving";
   const isScopeEstimateLoading = scopeEstimateStatus?.state === "loading";
   const hasScopeEstimateError = scopeEstimateStatus?.state === "error";
+  const hasScopeEstimate = Boolean(scopeEstimate);
   const hasCustomerNumber = String(form.customer_number || "").trim().length > 0;
   const hasDraft = Boolean(draftCheck?.hasDraft);
   const contactFound = draftCheck?.contactFound !== false;
@@ -2830,6 +2868,16 @@ function FakturaTaskModal({
       maximumFractionDigits: 2
     });
   };
+  const roundHourValue = (value) => {
+    const numeric = Number(value || 0);
+    if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+    return Math.ceil(numeric * 4) / 4;
+  };
+  const actualHours = Number(form.actual_hours || 0);
+  const actualRoundedHours = roundHourValue(Number(form.actual_rounded_hours || actualHours || 0));
+  const minimumBillableHours = roundHourValue(Number(form.minimum_billable_hours || 0));
+  const invoiceQuantity = roundHourValue(Number(form.quantity || 0));
+  const documentedMaximum = Math.max(actualRoundedHours, minimumBillableHours);
   const confidenceLabel =
     scopeEstimate?.confidence === "high"
       ? "Hohe Sicherheit"
@@ -2971,100 +3019,168 @@ function FakturaTaskModal({
               </div>
             </div>
           ) : null}
-          {isScopeEstimateLoading ? (
-            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 inline-flex items-center gap-2">
-              <Loader2 size={14} className="animate-spin" />
-              KI analysiert Arbeitsumfang und vergleicht mit der erfassten Zeit...
-            </div>
-          ) : null}
-          {hasScopeEstimateError ? (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-3 text-xs text-rose-700">
-              <div>{scopeEstimateStatus?.error || "Arbeitsumfang konnte nicht analysiert werden."}</div>
+          <div className="rounded-2xl border border-sand-200 bg-sand-50/80 px-3 py-3 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Aufwandsübersicht</p>
+                <p className="mt-1 text-sm text-sand-800">
+                  Erfasste Zeit bleibt intern zur Dokumentation erhalten. Die Rechnungsmenge ist separat.
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={onRefreshScopeEstimate}
-                className="mt-2 inline-flex items-center gap-1 rounded-full border border-rose-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
               >
                 <Sparkles size={12} />
-                Erneut analysieren
+                {hasScopeEstimate ? "KI neu schätzen" : "KI schätzen"}
               </button>
             </div>
-          ) : null}
-          {!isScopeEstimateLoading && !hasScopeEstimateError && scopeEstimate ? (
-            <div className="rounded-2xl border border-sky-200 bg-sky-50/70 px-3 py-3 space-y-3">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-sky-700">KI Arbeitsumfang</p>
-                  <p className="mt-1 text-sm text-sand-900">{scopeEstimate.summary}</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sky-700">
-                    {confidenceLabel}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={onRefreshScopeEstimate}
-                    className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sky-700 hover:bg-sky-100"
-                  >
-                    <Sparkles size={12} />
-                    Neu analysieren
-                  </button>
-                </div>
+
+            <div className="grid gap-3 md:grid-cols-4 text-xs text-sand-600">
+              <div className="rounded-2xl border border-white/80 bg-white px-3 py-3">
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Tatsächlich</p>
+                <p className="mt-1 text-lg font-semibold text-sand-900">
+                  {actualHours > 0 ? `${formatHourValue(actualHours)} h` : "Keine Zeit"}
+                </p>
+                <p className="text-[11px] text-sand-500">
+                  Doku gerundet: {formatHourValue(actualRoundedHours)} h
+                </p>
               </div>
-              <div className="grid gap-3 md:grid-cols-3 text-xs text-sand-600">
-                <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-3">
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">KI Schätzung</p>
-                  <p className="mt-1 text-lg font-semibold text-sand-900">
-                    {formatHourValue(scopeEstimate.estimated_hours)} h
-                  </p>
-                  <p className="text-[11px] text-sand-500">
-                    Range {formatHourValue(scopeEstimate.estimated_min_hours)} bis{" "}
-                    {formatHourValue(scopeEstimate.estimated_max_hours)} h
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-3">
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Erfasst</p>
-                  <p className="mt-1 text-lg font-semibold text-sand-900">
-                    {scopeEstimate.actual_hours > 0
-                      ? `${formatHourValue(scopeEstimate.actual_hours)} h`
-                      : "Keine Zeit"}
-                  </p>
-                  <p className="text-[11px] text-sand-500">
-                    Faktura gerundet: {formatHourValue(scopeEstimate.actual_rounded_hours)} h
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-3">
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Vergleich</p>
-                  <div
-                    className={`mt-1 inline-flex rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${comparisonToneClass}`}
-                  >
-                    {scopeEstimate.comparison_label}
-                  </div>
-                  <p className="mt-2 text-[11px] text-sand-500">
-                    Abweichung zur KI-Mitte:{" "}
-                    {scopeEstimate.delta_hours > 0 ? "+" : ""}
-                    {formatHourValue(scopeEstimate.delta_hours)} h
-                  </p>
-                </div>
+              <div className="rounded-2xl border border-white/80 bg-white px-3 py-3">
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Mindestens wert</p>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.25"
+                  value={form.minimum_billable_hours || ""}
+                  onChange={(event) => onChange("minimum_billable_hours", event.target.value)}
+                  onBlur={() =>
+                    onPersistDocumentation({
+                      billing_min_hours: roundHourValue(Number(form.minimum_billable_hours || 0))
+                    })
+                  }
+                  className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  placeholder="0,75"
+                />
+                <p className="mt-1 text-[11px] text-sand-500">Interner Mindestwert in Stunden.</p>
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-sand-500">
-                <div>
-                  Quelle: {scopeEstimate.provider === "ollama" ? "KI" : "Fallback"}
-                  {scopeEstimate.provider === "ollama" && scopeEstimate.model
-                    ? ` (${scopeEstimate.model})`
-                    : ""}
-                </div>
+              <div className="rounded-2xl border border-white/80 bg-white px-3 py-3">
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Rechnungsmenge</p>
+                <p className="mt-1 text-lg font-semibold text-sand-900">
+                  {invoiceQuantity > 0 ? `${formatHourValue(invoiceQuantity)} h` : "Nicht gesetzt"}
+                </p>
+                <p className="text-[11px] text-sand-500">
+                  {documentedMaximum > 0
+                    ? `Dokumentierter Richtwert: ${formatHourValue(documentedMaximum)} h`
+                    : "Noch kein dokumentierter Richtwert"}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-white/80 bg-white px-3 py-3">
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">KI Schätzung</p>
+                {hasScopeEstimate ? (
+                  <>
+                    <p className="mt-1 text-lg font-semibold text-sand-900">
+                      {formatHourValue(scopeEstimate.estimated_hours)} h
+                    </p>
+                    <p className="text-[11px] text-sand-500">
+                      {formatHourValue(scopeEstimate.estimated_min_hours)} bis{" "}
+                      {formatHourValue(scopeEstimate.estimated_max_hours)} h
+                    </p>
+                  </>
+                ) : (
+                  <p className="mt-1 text-sm text-sand-500">Optional per Klick abrufen.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-sand-500">
+              <button
+                type="button"
+                onClick={onApplyActualHours}
+                disabled={!actualRoundedHours}
+                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
+              >
+                Tatsächliche Zeit übernehmen
+              </button>
+              <button
+                type="button"
+                onClick={onApplyMinimumHours}
+                disabled={!minimumBillableHours}
+                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
+              >
+                Mindestwert übernehmen
+              </button>
+              <button
+                type="button"
+                onClick={onApplyDocumentedMaximum}
+                disabled={!documentedMaximum}
+                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
+              >
+                Dokumentierten Max übernehmen
+              </button>
+              {hasScopeEstimate ? (
                 <button
                   type="button"
                   onClick={onApplyScopeEstimate}
                   className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sky-700 hover:bg-sky-100"
                 >
                   <Sparkles size={12} />
-                  Schätzung als Menge übernehmen
+                  KI-Schätzung übernehmen
                 </button>
-              </div>
+              ) : null}
             </div>
-          ) : null}
+
+            {isScopeEstimateLoading ? (
+              <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 inline-flex items-center gap-2">
+                <Loader2 size={14} className="animate-spin" />
+                KI analysiert Arbeitsumfang und vergleicht mit der erfassten Zeit...
+              </div>
+            ) : null}
+            {hasScopeEstimateError ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                {scopeEstimateStatus?.error || "Arbeitsumfang konnte nicht analysiert werden."}
+              </div>
+            ) : null}
+            {hasScopeEstimate ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-sand-500">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-sky-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sky-700">
+                    {confidenceLabel}
+                  </span>
+                  <span
+                    className={`inline-flex rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${comparisonToneClass}`}
+                  >
+                    {scopeEstimate.comparison_label}
+                  </span>
+                </div>
+                <div>
+                  Quelle: {scopeEstimate.provider === "ollama" ? "KI" : "Fallback"}
+                  {scopeEstimate.provider === "ollama" && scopeEstimate.model
+                    ? ` (${scopeEstimate.model})`
+                    : ""}
+                </div>
+              </div>
+            ) : null}
+
+            <label className="flex flex-col gap-2 text-xs text-sand-600">
+              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                Interner Abrechnungsvermerk
+              </span>
+              <textarea
+                value={form.billing_note || ""}
+                onChange={(event) => onChange("billing_note", event.target.value)}
+                onBlur={() =>
+                  onPersistDocumentation({
+                    billing_note: String(form.billing_note || "")
+                  })
+                }
+                rows={2}
+                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                placeholder="z. B. vor Ort Eskalation, mehrere Unterbrechungen, hoher Abstimmungsaufwand"
+              />
+            </label>
+          </div>
           <div className="grid gap-3 md:grid-cols-2 text-xs text-sand-600">
             <label className="flex flex-col gap-2">
               <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">

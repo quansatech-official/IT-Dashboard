@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   ExternalLink,
+  Loader2,
   PackageCheck,
   Plus,
+  RefreshCw,
   ShoppingCart,
   Trash2,
   Truck
@@ -98,6 +100,46 @@ const resolveTrackingInfo = (value) => {
   };
 };
 
+const formatTrackingCheckedAt = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "";
+  try {
+    return new Date(numeric).toLocaleString("de-DE", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  } catch (error) {
+    return "";
+  }
+};
+
+const getTrackingTone = (trackingStatus, isLoading) => {
+  if (isLoading) {
+    return {
+      badge: "Lädt",
+      className: "border-sky-200 bg-sky-50 text-sky-700"
+    };
+  }
+  if (trackingStatus?.status === "ok") {
+    return {
+      badge: "Live",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700"
+    };
+  }
+  if (trackingStatus?.status === "error") {
+    return {
+      badge: "Problem",
+      className: "border-amber-200 bg-amber-50 text-amber-700"
+    };
+  }
+  return {
+    badge: "Info",
+    className: "border-sand-200 bg-sand-50 text-sand-600"
+  };
+};
+
 const fetchJson = async (url, options) => {
   const response = await fetch(url, options);
   const text = await response.text();
@@ -114,11 +156,11 @@ const fetchJson = async (url, options) => {
 
 const api = {
   list: () => fetchJson(`${API}/purchasing_items`),
-  lookupTrackingStatus: (trackingNumbers) =>
+  lookupTrackingStatus: (trackingNumbers, options = {}) =>
     fetchJson(`${API}/purchasing_tracking_status`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ trackingNumbers })
+      body: JSON.stringify({ trackingNumbers, force: Boolean(options.force) })
     }),
   create: (payload) =>
     fetchJson(`${API}/purchasing_items`, {
@@ -146,6 +188,7 @@ export default function PurchasingView() {
   const [customerFilter, setCustomerFilter] = useState("");
   const [queryFilter, setQueryFilter] = useState("");
   const [trackingStatuses, setTrackingStatuses] = useState({});
+  const [trackingLoading, setTrackingLoading] = useState({});
   const saveTimersRef = useRef({});
   const pendingPatchesRef = useRef({});
   const requestedTrackingRef = useRef(new Set());
@@ -186,6 +229,46 @@ export default function PurchasingView() {
     return Array.from(unique);
   }, [items]);
 
+  const lookupTrackingStatuses = async (numbers, options = {}) => {
+    const normalizedNumbers = Array.from(
+      new Set(numbers.map((number) => sanitizeTrackingNumber(number)).filter(Boolean))
+    );
+    if (!normalizedNumbers.length) return;
+
+    setTrackingLoading((previous) => ({
+      ...previous,
+      ...Object.fromEntries(normalizedNumbers.map((number) => [number, true]))
+    }));
+    try {
+      const response = await api.lookupTrackingStatus(normalizedNumbers, options);
+      const statuses = response?.statuses;
+      if (!statuses || typeof statuses !== "object") return;
+      setTrackingStatuses((previous) => ({ ...previous, ...statuses }));
+    } catch (error) {
+      console.error("Purchasing tracking lookup failed", error);
+      setTrackingStatuses((previous) => {
+        const next = { ...previous };
+        normalizedNumbers.forEach((number) => {
+          next[number] = {
+            trackingNumber: number,
+            provider: previous[number]?.provider || resolveTrackingInfo(number).provider || "Unbekannt",
+            status: "error",
+            statusText: "Tracking-Abruf fehlgeschlagen",
+            errorCode: "LOOKUP_FAILED",
+            checkedAt: Date.now(),
+            source: "frontend"
+          };
+        });
+        return next;
+      });
+    } finally {
+      setTrackingLoading((previous) => ({
+        ...previous,
+        ...Object.fromEntries(normalizedNumbers.map((number) => [number, false]))
+      }));
+    }
+  };
+
   useEffect(() => {
     const missingNumbers = trackingNumbers.filter(
       (trackingNumber) => !requestedTrackingRef.current.has(trackingNumber)
@@ -193,21 +276,7 @@ export default function PurchasingView() {
     if (!missingNumbers.length) return;
 
     missingNumbers.forEach((trackingNumber) => requestedTrackingRef.current.add(trackingNumber));
-    let cancelled = false;
-    api
-      .lookupTrackingStatus(missingNumbers)
-      .then((response) => {
-        if (cancelled) return;
-        const statuses = response?.statuses;
-        if (!statuses || typeof statuses !== "object") return;
-        setTrackingStatuses((previous) => ({ ...previous, ...statuses }));
-      })
-      .catch((error) => {
-        console.error("Purchasing tracking lookup failed", error);
-      });
-    return () => {
-      cancelled = true;
-    };
+    lookupTrackingStatuses(missingNumbers);
   }, [trackingNumbers]);
 
   const totals = useMemo(() => {
@@ -377,7 +446,10 @@ export default function PurchasingView() {
       const trackingInfo = resolveTrackingInfo(item.trackingNumber);
       const trackingKey = sanitizeTrackingNumber(item.trackingNumber);
       const trackingStatus = trackingKey ? trackingStatuses[trackingKey] : null;
-      const trackingStatusText = trackingStatus?.statusText || "Status wird geladen ...";
+      const trackingStatusText = trackingStatus?.statusText || "Noch kein Tracking-Status abgefragt";
+      const trackingCheckedAt = formatTrackingCheckedAt(trackingStatus?.checkedAt);
+      const isTrackingBusy = Boolean(trackingKey && trackingLoading[trackingKey]);
+      const trackingTone = getTrackingTone(trackingStatus, isTrackingBusy);
       return (
         <tr key={item.id} className="border-b border-sand-200 align-top">
           <td className="px-3 py-1.5">
@@ -527,6 +599,18 @@ export default function PurchasingView() {
                   <ExternalLink size={12} />
                 </a>
               ) : null}
+              {trackingKey ? (
+                <button
+                  type="button"
+                  onClick={() => lookupTrackingStatuses([trackingKey], { force: true })}
+                  disabled={isTrackingBusy}
+                  className="inline-flex items-center justify-center rounded-full border border-sand-300 p-1.5 text-xs hover:bg-sand-100 disabled:cursor-wait disabled:opacity-60"
+                  title="Tracking aktualisieren"
+                  aria-label="Tracking aktualisieren"
+                >
+                  {isTrackingBusy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                </button>
+              ) : null}
             </div>
             {trackingInfo.provider ? (
               <p className="mt-0.5 text-[10px] text-sand-500">
@@ -534,13 +618,29 @@ export default function PurchasingView() {
               </p>
             ) : null}
             {item.trackingNumber ? (
-              <p
-                className={`text-[10px] ${
-                  trackingStatus?.status === "error" ? "text-amber-700" : "text-sand-500"
-                }`}
-              >
-                Letzter Status: {trackingStatusText}
-              </p>
+              <div className="mt-1 space-y-1">
+                <div
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${trackingTone.className}`}
+                >
+                  {isTrackingBusy ? <Loader2 size={10} className="animate-spin" /> : null}
+                  {trackingTone.badge}
+                </div>
+                <p
+                  className={`text-[10px] leading-4 ${
+                    trackingStatus?.status === "error" ? "text-amber-700" : "text-sand-600"
+                  }`}
+                >
+                  {trackingStatusText}
+                </p>
+                {trackingCheckedAt ? (
+                  <p className="text-[10px] text-sand-500">
+                    Zuletzt geprüft: {trackingCheckedAt}
+                  </p>
+                ) : null}
+                {trackingStatus?.provider && trackingStatus.provider !== trackingInfo.provider ? (
+                  <p className="text-[10px] text-sand-500">Dienst erkannt: {trackingStatus.provider}</p>
+                ) : null}
+              </div>
             ) : null}
           </td>
           <td className="px-2 py-1.5">
@@ -710,7 +810,7 @@ export default function PurchasingView() {
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="mx-auto w-full max-w-[1880px] px-4 py-4 md:px-6 flex items-center gap-3">
+        <div className="mx-auto flex w-full max-w-[1880px] items-center gap-3 px-4 py-4 md:px-6">
           <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
             <ShoppingCart size={18} />
           </div>
@@ -718,6 +818,21 @@ export default function PurchasingView() {
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
             <h1 className="text-2xl font-display text-sand-900">Einkauf</h1>
           </div>
+          {trackingNumbers.length ? (
+            <button
+              type="button"
+              onClick={() => lookupTrackingStatuses(trackingNumbers, { force: true })}
+              disabled={trackingNumbers.some((number) => Boolean(trackingLoading[number]))}
+              className="ml-auto inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-60"
+            >
+              {trackingNumbers.some((number) => Boolean(trackingLoading[number])) ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <RefreshCw size={14} />
+              )}
+              Trackings aktualisieren
+            </button>
+          ) : null}
         </div>
       </header>
 
