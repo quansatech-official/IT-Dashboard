@@ -22,15 +22,13 @@ import {
   buildNewsletterPlainText,
   paragraphsToHtml
 } from "./newsletterUtils";
+import NotesRichTextEditor from "../components/NotesRichTextEditor";
 
 const defaultDraft = {
   id: null,
   title: "",
   subject: "",
-  preheader: "",
   content: "",
-  cta_label: "",
-  cta_url: "",
   selected_group_ids: [],
   selected_customer_ids: [],
   manual_recipients: ""
@@ -77,36 +75,25 @@ const normalizeEmailList = (value = "") => {
     });
 };
 
-const cleanIdeaHeadline = (value = "") =>
+const escapeHtml = (value = "") =>
   String(value)
-    .replace(/^\s*(thema\s*\d+|idee\s*\d+|\d+[\).:-])\s*/i, "")
-    .trim();
-
-const htmlToEditableText = (value = "") =>
-  String(value)
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<li>/gi, "• ")
-    .replace(/<\/li>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 
 const joinContentBlocks = (...values) =>
   values
-    .map((value) => htmlToEditableText(value))
+    .map((value) => String(value || "").trim())
     .filter(Boolean)
-    .join("\n\n")
+    .join("")
     .trim();
 
 const buildDraftPayload = (draft) => ({
   ...draft,
   intro_html: "",
-  body_html: paragraphsToHtml(draft.content || ""),
+  body_html: String(draft.content || "").trim(),
   closing_html: ""
 });
 
@@ -119,12 +106,16 @@ const formatArticleDate = (value) => {
 };
 
 const buildArticleBlock = (article = {}) => {
-  const lines = [
-    String(article.title || "").trim(),
-    String(article.summary || "").trim(),
-    article.link ? `Mehr dazu: ${String(article.link).trim()}` : ""
-  ].filter(Boolean);
-  return lines.join("\n");
+  const title = escapeHtml(String(article.title || "").trim());
+  const summary = escapeHtml(String(article.summary || "").trim());
+  const link = String(article.link || "").trim();
+  return `
+    <section>
+      ${title ? `<h2>${title}</h2>` : ""}
+      ${summary ? `<p>${summary}</p>` : ""}
+      ${link ? `<p><a href="${escapeHtml(link)}" target="_blank" rel="noreferrer">Mehr dazu</a></p>` : ""}
+    </section>
+  `.trim();
 };
 
 const extractNewsletterDraftFromAi = (value = "") => {
@@ -133,22 +124,13 @@ const extractNewsletterDraftFromAi = (value = "") => {
     .map((line) => line.trimEnd());
   const nonEmpty = lines.filter((line) => line.trim());
   if (!nonEmpty.length) {
-    return { subject: "", preheader: "", content: "" };
+    return { subject: "", content: "" };
   }
   const subject = String(nonEmpty[0] || "").trim();
-  let preheader = "";
   let contentLines = lines.slice(lines.findIndex((line) => line.trim() === subject) + 1);
-  const firstContentIndex = contentLines.findIndex((line) => line.trim());
-  if (firstContentIndex >= 0) {
-    preheader = String(contentLines[firstContentIndex] || "").trim();
-    contentLines = contentLines.slice(firstContentIndex + 1);
-  } else {
-    contentLines = [];
-  }
-  const content = contentLines.join("\n").trim();
+  const content = paragraphsToHtml(contentLines.join("\n").trim());
   return {
     subject,
-    preheader,
     content
   };
 };
@@ -158,10 +140,7 @@ const mapNewsletterToDraft = (item = {}) => ({
   id: item.id ?? null,
   title: String(item.title || ""),
   subject: String(item.subject || ""),
-  preheader: String(item.preheader || ""),
   content: joinContentBlocks(item.intro_html, item.body_html, item.closing_html),
-  cta_label: String(item.cta_label || ""),
-  cta_url: String(item.cta_url || ""),
   selected_group_ids: normalizeIdList(item.selected_group_ids || []),
   selected_customer_ids: normalizeIdList(item.selected_customer_ids || []),
   manual_recipients: Array.isArray(item.recipient_emails) ? item.recipient_emails.join(", ") : ""
@@ -201,12 +180,10 @@ export default function NewsletterView() {
   const [toast, setToast] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [isRssLoading, setIsRssLoading] = useState(false);
   const [isRssSaving, setIsRssSaving] = useState(false);
   const [isRssGenerating, setIsRssGenerating] = useState(false);
   const [aiTone, setAiTone] = useState("sachlich");
-  const [aiText, setAiText] = useState("");
   const [previewModal, setPreviewModal] = useState({ open: false, title: "", html: "" });
   const [sendComposer, setSendComposer] = useState({
     open: false,
@@ -294,9 +271,9 @@ export default function NewsletterView() {
   }, []);
 
   useEffect(() => {
-    if (!rssModalOpen) return;
+    if (isLoading) return;
     loadRssArticles(selectedRssFeedId);
-  }, [rssModalOpen, selectedRssFeedId]);
+  }, [selectedRssFeedId, isLoading]);
 
   const newsletterCustomers = useMemo(
     () => customers.filter((customer) => customer.newsletter),
@@ -438,11 +415,11 @@ export default function NewsletterView() {
       const payload = {
         title: draft.title,
         subject: draft.subject,
-        preheader: draft.preheader,
+        preheader: "",
         intro_html: resolvedDraft.intro_html,
         body_html: resolvedDraft.body_html,
-        cta_label: draft.cta_label,
-        cta_url: draft.cta_url,
+        cta_label: "",
+        cta_url: "",
         closing_html: resolvedDraft.closing_html,
         selected_group_ids: draft.selected_group_ids,
         selected_customer_ids: draft.selected_customer_ids,
@@ -668,45 +645,6 @@ export default function NewsletterView() {
         : [...prev.customerIds, customerId]
     }));
 
-  const handleAiIdeas = async () => {
-    setIsGenerating(true);
-    try {
-      const res = await fetch("/api/customer_development/ai_assist", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "newsletter", tone: aiTone })
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.text) {
-        throw new Error(typeof data?.detail === "string" ? data.detail : "");
-      }
-      setAiText(String(data.text || "").trim());
-    } catch (error) {
-      setToast(`KI-Vorschläge nicht verfügbar.${error?.message ? ` (${error.message})` : ""}`);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-
-  const applyAiText = () => {
-    const lines = String(aiText || "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (!lines.length) {
-      setToast("Keine KI-Vorschläge vorhanden.");
-      return;
-    }
-    const firstLine = cleanIdeaHeadline(lines[0]);
-    setDraft((prev) => ({
-      ...prev,
-      title: prev.title || firstLine,
-      subject: prev.subject || firstLine,
-      content: prev.content || lines.join("\n")
-    }));
-    setToast("KI-Vorschlag in Entwurf übernommen.");
-  };
-
   const handleRssFeedSelect = (feed) => {
     setRssFeedForm({
       id: feed.id,
@@ -798,7 +736,7 @@ export default function NewsletterView() {
       ...prev,
       title: prev.title || (selectedRssArticles[0]?.title || ""),
       subject: prev.subject || (selectedRssArticles[0]?.title || ""),
-      content: prev.content ? `${prev.content}\n\n${block}`.trim() : block
+      content: `${prev.content || ""}${prev.content ? "\n" : ""}${block}`.trim()
     }));
     setToast(`${selectedRssArticles.length} RSS-Artikel als Baustein übernommen.`);
   };
@@ -837,13 +775,9 @@ export default function NewsletterView() {
           ...prev,
           title: prev.title || parsed.subject || selectedRssArticles[0]?.title || "",
           subject: parsed.subject || prev.subject || selectedRssArticles[0]?.title || "",
-          preheader: parsed.preheader || prev.preheader,
           content: parsed.content || generatedText
         }));
         setToast("KI-Newsletter aus RSS-Artikeln übernommen.");
-      } else {
-        setAiText(generatedText);
-        setToast("KI-Themenvorschläge aus RSS-Artikeln geladen.");
       }
     } catch (error) {
       setToast(`RSS-KI konnte nicht erstellt werden.${error?.message ? ` (${error.message})` : ""}`);
@@ -1029,11 +963,11 @@ export default function NewsletterView() {
 
       {rssModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
-          <div className="w-full max-w-7xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+          <div className="w-full max-w-4xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
             <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Popup</p>
-                <h3 className="text-lg font-display text-sand-900">RSS-Import für Newsletter</h3>
+                <h3 className="text-lg font-display text-sand-900">RSS-Feeds pflegen</h3>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -1048,13 +982,6 @@ export default function NewsletterView() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => loadRssArticles(selectedRssFeedId)}
-                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
-                >
-                  <RefreshCw size={13} /> Artikel aktualisieren
-                </button>
-                <button
-                  type="button"
                   onClick={() => setRssModalOpen(false)}
                   className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
                 >
@@ -1064,70 +991,48 @@ export default function NewsletterView() {
             </div>
 
             <div className="max-h-[80vh] overflow-y-auto bg-sand-50 p-6">
-              <div className="grid gap-5 xl:grid-cols-[0.82fr_1.18fr]">
-                <div className="space-y-4">
-                  <div className="rounded-3xl border border-sand-200 bg-white p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.24em] text-sand-500">Feed-Liste</p>
-                        <p className="text-sm text-sand-600">Quellen für Themenideen und Artikelimporte.</p>
-                      </div>
+              <div className="grid gap-5 lg:grid-cols-[0.88fr_1.12fr]">
+                <div className="space-y-2">
+                  {rssFeeds.length ? (
+                    rssFeeds.map((feed) => (
                       <button
+                        key={feed.id}
                         type="button"
-                        onClick={() => setSelectedRssFeedId("all")}
-                        className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-wide ${
-                          selectedRssFeedId === "all"
-                            ? "bg-amber-600 text-white"
-                            : "border border-sand-300 bg-white text-sand-600 hover:bg-sand-100"
+                        onClick={() => handleRssFeedSelect(feed)}
+                        className={`w-full rounded-2xl border px-4 py-3 text-left ${
+                          Number(selectedRssFeedId) === feed.id
+                            ? "border-amber-300 bg-amber-50"
+                            : "border-sand-200 bg-white hover:bg-sand-100"
                         }`}
                       >
-                        Alle Feeds
-                      </button>
-                    </div>
-                    <div className="max-h-72 space-y-2 overflow-auto pr-1">
-                      {rssFeeds.length ? (
-                        rssFeeds.map((feed) => (
-                          <button
-                            key={feed.id}
-                            type="button"
-                            onClick={() => handleRssFeedSelect(feed)}
-                            className={`w-full rounded-2xl border px-4 py-3 text-left ${
-                              Number(selectedRssFeedId) === feed.id
-                                ? "border-amber-300 bg-amber-50"
-                                : "border-sand-200 bg-sand-50 hover:bg-white"
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-sand-900">{feed.name}</p>
+                            <p className="truncate text-xs text-sand-500">{feed.url}</p>
+                            {feed.description ? <p className="mt-1 text-xs text-sand-600">{feed.description}</p> : null}
+                          </div>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                              feed.enabled ? "bg-emerald-100 text-emerald-700" : "bg-sand-200 text-sand-600"
                             }`}
                           >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold text-sand-900">{feed.name}</p>
-                                <p className="truncate text-xs text-sand-500">{feed.url}</p>
-                                {feed.description ? (
-                                  <p className="mt-1 text-xs text-sand-600">{feed.description}</p>
-                                ) : null}
-                              </div>
-                              <span
-                                className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                                  feed.enabled ? "bg-emerald-100 text-emerald-700" : "bg-sand-200 text-sand-600"
-                                }`}
-                              >
-                                {feed.enabled ? "aktiv" : "aus"}
-                              </span>
-                            </div>
-                          </button>
-                        ))
-                      ) : (
-                        <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-5 text-sm text-sand-500">
-                          Noch keine RSS-Feeds hinterlegt.
-                        </p>
-                      )}
-                    </div>
-                  </div>
+                            {feed.enabled ? "aktiv" : "aus"}
+                          </span>
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="rounded-2xl border border-dashed border-sand-300 bg-white px-4 py-5 text-sm text-sand-500">
+                      Noch keine RSS-Feeds hinterlegt.
+                    </p>
+                  )}
+                </div>
 
-                  <div className="rounded-3xl border border-sand-200 bg-white p-4">
-                    <div className="mb-4">
-                      <p className="text-xs uppercase tracking-[0.24em] text-sand-500">Feed pflegen</p>
-                    </div>
-                    <div className="space-y-4">
+                <div className="space-y-4 rounded-3xl border border-sand-200 bg-white p-4">
+                  <div className="mb-4">
+                    <p className="text-xs uppercase tracking-[0.24em] text-sand-500">Feed pflegen</p>
+                  </div>
+                  <div className="space-y-4">
                       <label className="block">
                         <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Name</span>
                         <input
@@ -1188,139 +1093,6 @@ export default function NewsletterView() {
                           <Save size={13} /> {isRssSaving ? "Speichert..." : rssFeedForm.id ? "Feed speichern" : "Feed anlegen"}
                         </button>
                       </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-4 rounded-3xl border border-sand-200 bg-white p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.24em] text-sand-500">Artikel</p>
-                      <h4 className="text-lg font-display text-sand-900">
-                        {selectedRssFeedSummary ? selectedRssFeedSummary.name : "Alle aktiven Feeds"}
-                      </h4>
-                      <p className="text-sm text-sand-600">
-                        Artikel auswählen und direkt als Baustein oder per KI in den Newsletter übernehmen.
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-600">
-                        {selectedRssArticles.length} gewählt
-                      </span>
-                      <button
-                        type="button"
-                        onClick={importSelectedRssArticles}
-                        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
-                      >
-                        <FilePlus2 size={13} /> Als Baustein
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => generateFromRssArticles("ideas")}
-                        disabled={isRssGenerating}
-                        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Sparkles size={13} /> KI-Themen
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => generateFromRssArticles("newsletter")}
-                        disabled={isRssGenerating}
-                        className="inline-flex items-center gap-2 rounded-full bg-amber-600 px-3 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Sparkles size={13} /> KI-Newsletter
-                      </button>
-                    </div>
-                  </div>
-
-                  {rssFeedResults.some((item) => item.status === "error") ? (
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                      Nicht alle Feeds konnten geladen werden. Fehlerhafte Quellen bleiben in der Liste sichtbar.
-                    </div>
-                  ) : null}
-
-                  <div className="max-h-[56vh] space-y-3 overflow-auto pr-1">
-                    {isRssLoading ? (
-                      <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-6 text-sm text-sand-500">
-                        RSS-Artikel werden geladen…
-                      </p>
-                    ) : rssArticles.length ? (
-                      rssArticles.map((article) => {
-                        const checked = selectedRssArticleIds.includes(article.id);
-                        return (
-                          <label
-                            key={article.id}
-                            className={`block cursor-pointer rounded-2xl border px-4 py-4 ${
-                              checked
-                                ? "border-amber-300 bg-amber-50"
-                                : "border-sand-200 bg-sand-50 hover:bg-white"
-                            }`}
-                          >
-                            <div className="flex items-start gap-3">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => toggleRssArticle(article.id)}
-                                className="mt-1 h-4 w-4"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500">
-                                    {article.feed_name || "Feed"}
-                                  </span>
-                                  {article.published_at ? (
-                                    <span className="text-[11px] uppercase tracking-wide text-sand-500">
-                                      {formatArticleDate(article.published_at)}
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <p className="mt-2 text-sm font-semibold text-sand-900">{article.title}</p>
-                                {article.summary ? (
-                                  <p className="mt-2 text-sm leading-6 text-sand-700">{article.summary}</p>
-                                ) : null}
-                                <div className="mt-3 flex flex-wrap items-center gap-2">
-                                  {article.link ? (
-                                    <a
-                                      href={article.link}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      onClick={(event) => event.stopPropagation()}
-                                      className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                                    >
-                                      <ExternalLink size={12} /> Artikel
-                                    </a>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    onClick={(event) => {
-                                      event.preventDefault();
-                                      event.stopPropagation();
-                                      setSelectedRssArticleIds([article.id]);
-                                      setDraft((prev) => ({
-                                        ...prev,
-                                        title: prev.title || article.title || "",
-                                        subject: prev.subject || article.title || "",
-                                        content: prev.content
-                                          ? `${prev.content}\n\n${buildArticleBlock(article)}`.trim()
-                                          : buildArticleBlock(article)
-                                      }));
-                                      setToast("RSS-Artikel in Entwurf übernommen.");
-                                    }}
-                                    className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                                  >
-                                    <FilePlus2 size={12} /> Direkt übernehmen
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          </label>
-                        );
-                      })
-                    ) : (
-                      <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-6 text-sm text-sand-500">
-                        Keine Artikel gefunden. Feed prüfen oder Artikel neu laden.
-                      </p>
-                    )}
                   </div>
                 </div>
               </div>
@@ -1352,7 +1124,7 @@ export default function NewsletterView() {
               type="button"
               onClick={() => {
                 setDraft(defaultDraft);
-                setAiText("");
+                setSelectedRssArticleIds([]);
               }}
               className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
             >
@@ -1553,16 +1325,9 @@ export default function NewsletterView() {
                 <div>
                   <h2 className="text-lg font-display text-sand-900">Inhalt</h2>
                   <p className="text-sm text-sand-600">
-                    Gesamten Newsletter als einen Text pflegen oder RSS-Artikel als Bausteine übernehmen.
+                    Newsletter direkt formatieren oder HTML einfügen.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setRssModalOpen(true)}
-                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-                >
-                  <Rss size={13} /> RSS-Import
-                </button>
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -1586,108 +1351,194 @@ export default function NewsletterView() {
                 </label>
               </div>
 
-              <label className="mt-4 block">
-                <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Preheader / Eyebrow</span>
-                <input
-                  value={draft.preheader}
-                  onChange={(event) => setDraft((prev) => ({ ...prev, preheader: event.target.value }))}
-                  className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                  placeholder="Kurzer Teaser oberhalb der Überschrift"
-                />
-              </label>
-
               <div className="mt-4 space-y-4">
                 <div>
                   <p className="mb-2 text-xs uppercase tracking-[0.24em] text-sand-500">Newsletter-Inhalt</p>
-                  <textarea
+                  <NotesRichTextEditor
                     value={draft.content}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
-                    rows={18}
-                    placeholder="Gesamten Newsletter hier als einen Text einfügen, z. B. direkt aus ChatGPT."
-                    className="w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                    onChange={(value) => setDraft((prev) => ({ ...prev, content: value }))}
+                    minHeight="420px"
+                    placeholder="Newsletter hier formatieren oder direkt als HTML einfügen."
+                    allowHtmlSource
                   />
                   <p className="mt-2 text-xs text-sand-500">
-                    Einleitung, Hauptinhalt und Schluss werden gemeinsam gepflegt und beim Versand automatisch formatiert.
+                    Der Inhalt wird direkt als HTML gespeichert. Im HTML-Modus kannst du Inhalte aus ChatGPT oder externen Vorlagen direkt einfügen.
                   </p>
                 </div>
-                <div className="grid gap-4 md:grid-cols-[minmax(0,220px)_1fr]">
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-[0.24em] text-sand-500">CTA Text</span>
-                    <input
-                      value={draft.cta_label}
-                      onChange={(event) => setDraft((prev) => ({ ...prev, cta_label: event.target.value }))}
-                      className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                      placeholder="z. B. Termin anfragen"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-[0.24em] text-sand-500">CTA URL</span>
-                    <input
-                      value={draft.cta_url}
-                      onChange={(event) => setDraft((prev) => ({ ...prev, cta_url: event.target.value }))}
-                      className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                      placeholder="https://..."
-                    />
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-              <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-display text-sand-900">KI-Themenhilfe</h2>
-                  <p className="text-sm text-sand-600">
-                    Unabhängige Themenvorschläge laden oder RSS-Artikel per KI in Themen und Entwürfe überführen.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setRssModalOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    <Rss size={13} /> RSS
-                  </button>
-                  <select
-                    value={aiTone}
-                    onChange={(event) => setAiTone(event.target.value)}
-                    className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-sand-600"
-                  >
-                    <option value="sachlich">Sachlich</option>
-                    <option value="freundlich">Freundlich</option>
-                    <option value="direkt">Direkt</option>
-                  </select>
-                  <button
-                    type="button"
-                    onClick={handleAiIdeas}
-                    disabled={isGenerating}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <Sparkles size={14} /> {isGenerating ? "Lädt..." : "Themen laden"}
-                  </button>
-                </div>
-              </div>
-              <textarea
-                value={aiText}
-                onChange={(event) => setAiText(event.target.value)}
-                rows={8}
-                placeholder="Hier erscheinen Newsletter-Ideen aus der KI."
-                className="w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-              />
-              <div className="mt-3 flex justify-end">
-                <button
-                  type="button"
-                  onClick={applyAiText}
-                  className="inline-flex items-center gap-2 rounded-full bg-amber-600 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90"
-                >
-                  <Sparkles size={14} /> In Entwurf übernehmen
-                </button>
               </div>
             </div>
           </div>
 
           <aside className="space-y-6">
+            <div className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-display text-sand-900">RSS-Import</h2>
+                  <p className="text-sm text-sand-600">Feeds laden, Artikel auswählen und direkt in den Newsletter übernehmen.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRssModalOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <Rss size={13} /> Feeds pflegen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadRssArticles(selectedRssFeedId)}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <RefreshCw size={13} /> Laden
+                  </button>
+                </div>
+              </div>
+
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedRssFeedId("all")}
+                  className={`rounded-full px-3 py-1.5 text-[11px] uppercase tracking-wide ${
+                    selectedRssFeedId === "all"
+                      ? "bg-amber-600 text-white"
+                      : "border border-sand-300 bg-white text-sand-600 hover:bg-sand-100"
+                  }`}
+                >
+                  Alle Feeds
+                </button>
+                {rssFeeds.map((feed) => (
+                  <button
+                    key={feed.id}
+                    type="button"
+                    onClick={() => setSelectedRssFeedId(feed.id)}
+                    className={`rounded-full px-3 py-1.5 text-[11px] uppercase tracking-wide ${
+                      Number(selectedRssFeedId) === feed.id
+                        ? "bg-amber-600 text-white"
+                        : "border border-sand-300 bg-white text-sand-600 hover:bg-sand-100"
+                    }`}
+                  >
+                    {feed.name}
+                  </button>
+                ))}
+              </div>
+
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-600">
+                  {selectedRssArticles.length} gewählt
+                </span>
+                <select
+                  value={aiTone}
+                  onChange={(event) => setAiTone(event.target.value)}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-sand-600"
+                >
+                  <option value="sachlich">Sachlich</option>
+                  <option value="freundlich">Freundlich</option>
+                  <option value="direkt">Direkt</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={importSelectedRssArticles}
+                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  <FilePlus2 size={13} /> Als Baustein
+                </button>
+                <button
+                  type="button"
+                  onClick={() => generateFromRssArticles("newsletter")}
+                  disabled={isRssGenerating}
+                  className="inline-flex items-center gap-2 rounded-full bg-amber-600 px-3 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Sparkles size={13} /> KI-Newsletter
+                </button>
+              </div>
+
+              {rssFeedResults.some((item) => item.status === "error") ? (
+                <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  Nicht alle Feeds konnten geladen werden. Fehlerhafte Quellen bleiben in der Feed-Pflege sichtbar.
+                </div>
+              ) : null}
+
+              <div className="max-h-[540px] space-y-3 overflow-auto pr-1">
+                {isRssLoading ? (
+                  <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-6 text-sm text-sand-500">
+                    RSS-Artikel werden geladen…
+                  </p>
+                ) : rssArticles.length ? (
+                  rssArticles.map((article) => {
+                    const checked = selectedRssArticleIds.includes(article.id);
+                    return (
+                      <label
+                        key={article.id}
+                        className={`block cursor-pointer rounded-2xl border px-4 py-4 ${
+                          checked
+                            ? "border-amber-300 bg-amber-50"
+                            : "border-sand-200 bg-sand-50 hover:bg-white"
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleRssArticle(article.id)}
+                            className="mt-1 h-4 w-4"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500">
+                                {article.feed_name || "Feed"}
+                              </span>
+                              {article.published_at ? (
+                                <span className="text-[11px] uppercase tracking-wide text-sand-500">
+                                  {formatArticleDate(article.published_at)}
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="mt-2 text-sm font-semibold text-sand-900">{article.title}</p>
+                            {article.summary ? <p className="mt-2 text-sm leading-6 text-sand-700">{article.summary}</p> : null}
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              {article.link ? (
+                                <a
+                                  href={article.link}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(event) => event.stopPropagation()}
+                                  className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                                >
+                                  <ExternalLink size={12} /> Artikel
+                                </a>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  setSelectedRssArticleIds([article.id]);
+                                  setDraft((prev) => ({
+                                    ...prev,
+                                    title: prev.title || article.title || "",
+                                    subject: prev.subject || article.title || "",
+                                    content: `${prev.content || ""}${prev.content ? "\n" : ""}${buildArticleBlock(article)}`.trim()
+                                  }));
+                                  setToast("RSS-Artikel in Entwurf übernommen.");
+                                }}
+                                className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                              >
+                                <FilePlus2 size={12} /> Direkt übernehmen
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })
+                ) : (
+                  <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-6 text-sm text-sand-500">
+                    Keine Artikel gefunden. Feed prüfen oder neu laden.
+                  </p>
+                )}
+              </div>
+            </div>
+
             <div className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
               <div className="mb-4 flex items-center justify-between">
                 <div>

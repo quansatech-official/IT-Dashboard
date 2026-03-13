@@ -43,9 +43,6 @@ export const buildNewsletterPlainText = (draft = {}) => {
     String(draft.title || "").trim(),
     htmlToText(draft.intro_html),
     htmlToText(draft.body_html),
-    draft.cta_label && draft.cta_url
-      ? `${String(draft.cta_label).trim()}: ${String(draft.cta_url).trim()}`
-      : String(draft.cta_url || "").trim(),
     htmlToText(draft.closing_html),
     [
       NEWSLETTER_FOOTER.company,
@@ -62,14 +59,10 @@ export const buildNewsletterPlainText = (draft = {}) => {
 
 export const buildNewsletterHtml = (draft = {}) => {
   const title = escapeHtml(String(draft.title || draft.subject || "Newsletter").trim() || "Newsletter");
-  const preheader = escapeHtml(String(draft.preheader || "").trim());
   const intro = String(draft.intro_html || "").trim();
   const body = String(draft.body_html || "").trim();
   const closing = String(draft.closing_html || "").trim();
-  const ctaLabel = escapeHtml(String(draft.cta_label || "").trim());
-  const ctaUrl = escapeHtml(String(draft.cta_url || "").trim());
   const logoSrc = escapeHtml(String(draft.logo_src || "/QTLogo.jpg").trim() || "/QTLogo.jpg");
-  const preheaderText = preheader || title;
   const footerCompany = escapeHtml(NEWSLETTER_FOOTER.company);
   const footerStreet = escapeHtml(NEWSLETTER_FOOTER.street);
   const footerPostalCity = escapeHtml(NEWSLETTER_FOOTER.postalCity);
@@ -79,20 +72,6 @@ export const buildNewsletterHtml = (draft = {}) => {
   const footerWebsiteLabel = escapeHtml(NEWSLETTER_FOOTER.websiteLabel);
   const footerWebsiteUrl = escapeHtml(NEWSLETTER_FOOTER.websiteUrl);
   const footerEmail = escapeHtml(NEWSLETTER_FOOTER.email);
-  const ctaBlock =
-    ctaLabel && ctaUrl
-      ? `
-        <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin-top:28px;border-collapse:collapse;">
-          <tr>
-            <td bgcolor="#1f2937" style="background-color:#1f2937;">
-              <a href="${ctaUrl}" target="_blank" style="display:inline-block;padding:13px 24px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:14px;font-weight:700;color:#ffffff;text-decoration:none;">
-                ${ctaLabel}
-              </a>
-            </td>
-          </tr>
-        </table>
-      `
-      : "";
   const introBlock = intro
     ? `<div style="font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:30px;font-weight:700;color:#000000;mso-line-height-rule:exactly;">${intro}</div>`
     : "";
@@ -103,9 +82,6 @@ export const buildNewsletterHtml = (draft = {}) => {
     ? `<div style="margin-top:24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:26px;color:#000000;mso-line-height-rule:exactly;">${closing}</div>`
     : "";
   return `
-    <div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">
-      ${preheaderText}
-    </div>
     <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#e7e7e7" style="width:100%;border-collapse:collapse;background-color:#e7e7e7;margin:0;padding:0;">
       <tr>
         <td align="center" style="padding:20px 12px 24px;">
@@ -115,11 +91,6 @@ export const buildNewsletterHtml = (draft = {}) => {
               <td>
           <![endif]-->
           <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:700px;border-collapse:collapse;">
-            <tr>
-              <td align="right" style="padding:0 6px 8px 6px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:16px;color:#7e878d;">
-                ${preheaderText}
-              </td>
-            </tr>
             <tr>
               <td bgcolor="#ffffff" style="background-color:#ffffff;border-collapse:collapse;">
                 <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
@@ -148,7 +119,6 @@ export const buildNewsletterHtml = (draft = {}) => {
                     <td style="padding:0 30px 34px 30px;font-family:Arial,Helvetica,sans-serif;">
                       ${introBlock}
                       ${bodyBlock}
-                      ${ctaBlock}
                       ${closingBlock}
                     </td>
                   </tr>
