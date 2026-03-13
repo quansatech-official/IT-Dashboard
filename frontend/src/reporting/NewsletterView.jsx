@@ -2,11 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Archive,
   Eye,
+  ExternalLink,
+  FilePlus2,
   Layers3,
   Mail,
   Pencil,
   Plus,
   RefreshCw,
+  Rss,
   Save,
   Send,
   Sparkles,
@@ -14,7 +17,6 @@ import {
   Users2
 } from "lucide-react";
 import EmailComposerModal from "../components/EmailComposerModal";
-import RichTextEditor from "../components/RichTextEditor";
 import {
   buildNewsletterHtml,
   buildNewsletterPlainText,
@@ -26,11 +28,9 @@ const defaultDraft = {
   title: "",
   subject: "",
   preheader: "",
-  intro_html: "",
-  body_html: "",
+  content: "",
   cta_label: "",
   cta_url: "",
-  closing_html: "",
   selected_group_ids: [],
   selected_customer_ids: [],
   manual_recipients: ""
@@ -41,6 +41,14 @@ const defaultGroupForm = {
   name: "",
   description: "",
   customerIds: []
+};
+
+const defaultRssFeedForm = {
+  id: null,
+  name: "",
+  url: "",
+  description: "",
+  enabled: true
 };
 
 const normalizeIdList = (values = []) => {
@@ -74,17 +82,86 @@ const cleanIdeaHeadline = (value = "") =>
     .replace(/^\s*(thema\s*\d+|idee\s*\d+|\d+[\).:-])\s*/i, "")
     .trim();
 
+const htmlToEditableText = (value = "") =>
+  String(value)
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<li>/gi, "• ")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+
+const joinContentBlocks = (...values) =>
+  values
+    .map((value) => htmlToEditableText(value))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+
+const buildDraftPayload = (draft) => ({
+  ...draft,
+  intro_html: "",
+  body_html: paragraphsToHtml(draft.content || ""),
+  closing_html: ""
+});
+
+const formatArticleDate = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "";
+  const date = new Date(numeric);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("de-DE");
+};
+
+const buildArticleBlock = (article = {}) => {
+  const lines = [
+    String(article.title || "").trim(),
+    String(article.summary || "").trim(),
+    article.link ? `Mehr dazu: ${String(article.link).trim()}` : ""
+  ].filter(Boolean);
+  return lines.join("\n");
+};
+
+const extractNewsletterDraftFromAi = (value = "") => {
+  const lines = String(value)
+    .split("\n")
+    .map((line) => line.trimEnd());
+  const nonEmpty = lines.filter((line) => line.trim());
+  if (!nonEmpty.length) {
+    return { subject: "", preheader: "", content: "" };
+  }
+  const subject = String(nonEmpty[0] || "").trim();
+  let preheader = "";
+  let contentLines = lines.slice(lines.findIndex((line) => line.trim() === subject) + 1);
+  const firstContentIndex = contentLines.findIndex((line) => line.trim());
+  if (firstContentIndex >= 0) {
+    preheader = String(contentLines[firstContentIndex] || "").trim();
+    contentLines = contentLines.slice(firstContentIndex + 1);
+  } else {
+    contentLines = [];
+  }
+  const content = contentLines.join("\n").trim();
+  return {
+    subject,
+    preheader,
+    content
+  };
+};
+
 const mapNewsletterToDraft = (item = {}) => ({
   ...defaultDraft,
   id: item.id ?? null,
   title: String(item.title || ""),
   subject: String(item.subject || ""),
   preheader: String(item.preheader || ""),
-  intro_html: String(item.intro_html || ""),
-  body_html: String(item.body_html || ""),
+  content: joinContentBlocks(item.intro_html, item.body_html, item.closing_html),
   cta_label: String(item.cta_label || ""),
   cta_url: String(item.cta_url || ""),
-  closing_html: String(item.closing_html || ""),
   selected_group_ids: normalizeIdList(item.selected_group_ids || []),
   selected_customer_ids: normalizeIdList(item.selected_customer_ids || []),
   manual_recipients: Array.isArray(item.recipient_emails) ? item.recipient_emails.join(", ") : ""
@@ -97,18 +174,37 @@ const formatDateTime = (value) => {
   return date.toLocaleString("de-DE");
 };
 
+const blobToBase64 = (blob) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+
 export default function NewsletterView() {
   const [draft, setDraft] = useState(defaultDraft);
   const [customers, setCustomers] = useState([]);
   const [groups, setGroups] = useState([]);
   const [newsletters, setNewsletters] = useState([]);
   const [groupForm, setGroupForm] = useState(defaultGroupForm);
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [rssFeeds, setRssFeeds] = useState([]);
+  const [rssFeedForm, setRssFeedForm] = useState(defaultRssFeedForm);
+  const [rssModalOpen, setRssModalOpen] = useState(false);
+  const [rssArticles, setRssArticles] = useState([]);
+  const [rssFeedResults, setRssFeedResults] = useState([]);
+  const [selectedRssFeedId, setSelectedRssFeedId] = useState("all");
+  const [selectedRssArticleIds, setSelectedRssArticleIds] = useState([]);
   const [recipientSearch, setRecipientSearch] = useState("");
   const [groupSearch, setGroupSearch] = useState("");
   const [toast, setToast] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isRssLoading, setIsRssLoading] = useState(false);
+  const [isRssSaving, setIsRssSaving] = useState(false);
+  const [isRssGenerating, setIsRssGenerating] = useState(false);
   const [aiTone, setAiTone] = useState("sachlich");
   const [aiText, setAiText] = useState("");
   const [previewModal, setPreviewModal] = useState({ open: false, title: "", html: "" });
@@ -131,15 +227,17 @@ export default function NewsletterView() {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [customersRes, groupsRes, newslettersRes] = await Promise.all([
+      const [customersRes, groupsRes, newslettersRes, rssFeedsRes] = await Promise.all([
         fetch("/api/customers"),
         fetch("/api/newsletter_groups"),
-        fetch("/api/newsletters")
+        fetch("/api/newsletters"),
+        fetch("/api/newsletter_rss_feeds")
       ]);
-      const [customersData, groupsData, newslettersData] = await Promise.all([
+      const [customersData, groupsData, newslettersData, rssFeedsData] = await Promise.all([
         customersRes.json().catch(() => []),
         groupsRes.json().catch(() => []),
-        newslettersRes.json().catch(() => [])
+        newslettersRes.json().catch(() => []),
+        rssFeedsRes.json().catch(() => [])
       ]);
       setCustomers(
         Array.isArray(customersData)
@@ -170,6 +268,20 @@ export default function NewsletterView() {
           : []
       );
       setNewsletters(Array.isArray(newslettersData) ? newslettersData : []);
+      setRssFeeds(
+        Array.isArray(rssFeedsData)
+          ? rssFeedsData
+              .map((item) => ({
+                id: Number(item.id || 0),
+                name: String(item.name || "").trim(),
+                url: String(item.url || "").trim(),
+                description: String(item.description || "").trim(),
+                enabled: item.enabled !== false
+              }))
+              .filter((item) => item.id > 0 && item.name && item.url)
+              .sort((a, b) => a.name.localeCompare(b.name, "de"))
+          : []
+      );
     } catch {
       setToast("Newsletter-Daten konnten nicht geladen werden.");
     } finally {
@@ -180,6 +292,11 @@ export default function NewsletterView() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (!rssModalOpen) return;
+    loadRssArticles(selectedRssFeedId);
+  }, [rssModalOpen, selectedRssFeedId]);
 
   const newsletterCustomers = useMemo(
     () => customers.filter((customer) => customer.newsletter),
@@ -225,8 +342,11 @@ export default function NewsletterView() {
     [customerById, resolvedCustomerIds]
   );
 
-  const previewHtml = useMemo(() => buildNewsletterHtml(draft), [draft]);
-  const previewText = useMemo(() => buildNewsletterPlainText(draft), [draft]);
+  const resolvedDraft = useMemo(() => buildDraftPayload(draft), [draft]);
+  const previewHtml = useMemo(
+    () => buildNewsletterHtml({ ...resolvedDraft, logo_src: "/QTLogo.jpg" }),
+    [resolvedDraft]
+  );
 
   const filteredRecipientCustomers = useMemo(() => {
     const needle = recipientSearch.trim().toLowerCase();
@@ -246,6 +366,16 @@ export default function NewsletterView() {
     });
   }, [groupSearch, newsletterCustomers]);
 
+  const selectedRssArticles = useMemo(() => {
+    const wanted = new Set(selectedRssArticleIds);
+    return rssArticles.filter((article) => wanted.has(article.id));
+  }, [rssArticles, selectedRssArticleIds]);
+
+  const selectedRssFeedSummary = useMemo(() => {
+    if (selectedRssFeedId === "all") return null;
+    return rssFeeds.find((feed) => feed.id === Number(selectedRssFeedId)) || null;
+  }, [rssFeeds, selectedRssFeedId]);
+
   const upsertNewsletter = (item) =>
     setNewsletters((prev) => {
       const exists = prev.some((entry) => entry.id === item.id);
@@ -264,6 +394,36 @@ export default function NewsletterView() {
         .sort((a, b) => a.name.localeCompare(b.name, "de"));
     });
 
+  const upsertRssFeed = (item) =>
+    setRssFeeds((prev) => {
+      const exists = prev.some((entry) => entry.id === item.id);
+      if (!exists) return [...prev, item].sort((a, b) => a.name.localeCompare(b.name, "de"));
+      return prev
+        .map((entry) => (entry.id === item.id ? item : entry))
+        .sort((a, b) => a.name.localeCompare(b.name, "de"));
+    });
+
+  const loadRssArticles = async (feedId = selectedRssFeedId) => {
+    setIsRssLoading(true);
+    try {
+      const query = feedId && feedId !== "all" ? `?feed_id=${encodeURIComponent(feedId)}&limit=24` : "?limit=24";
+      const res = await fetch(`/api/newsletter_rss_articles${query}`);
+      const data = await res.json().catch(() => ({ feeds: [], items: [] }));
+      if (!res.ok) {
+        throw new Error(typeof data?.detail === "string" ? data.detail : `status_${res.status}`);
+      }
+      setRssArticles(Array.isArray(data.items) ? data.items : []);
+      setRssFeedResults(Array.isArray(data.feeds) ? data.feeds : []);
+      setSelectedRssArticleIds((prev) => prev.filter((id) => (data.items || []).some((item) => item.id === id)));
+    } catch (error) {
+      setToast(`RSS-Artikel konnten nicht geladen werden.${error?.message ? ` (${error.message})` : ""}`);
+      setRssArticles([]);
+      setRssFeedResults([]);
+    } finally {
+      setIsRssLoading(false);
+    }
+  };
+
   const saveNewsletter = async () => {
     if (!draft.subject.trim()) {
       setToast("Bitte Betreff eingeben.");
@@ -279,11 +439,11 @@ export default function NewsletterView() {
         title: draft.title,
         subject: draft.subject,
         preheader: draft.preheader,
-        intro_html: draft.intro_html,
-        body_html: draft.body_html,
+        intro_html: resolvedDraft.intro_html,
+        body_html: resolvedDraft.body_html,
         cta_label: draft.cta_label,
         cta_url: draft.cta_url,
-        closing_html: draft.closing_html,
+        closing_html: resolvedDraft.closing_html,
         selected_group_ids: draft.selected_group_ids,
         selected_customer_ids: draft.selected_customer_ids,
         recipient_emails: manualRecipientList
@@ -313,13 +473,13 @@ export default function NewsletterView() {
   };
 
   const openSendComposer = (item) => {
-    const normalized = mapNewsletterToDraft(item);
+    const normalized = buildDraftPayload(mapNewsletterToDraft(item));
     setSendComposer({
       open: true,
       newsletterId: item.id,
       recipient: Array.isArray(item.recipient_emails) ? item.recipient_emails.join(", ") : resolvedRecipients.join(", "),
       subject: normalized.subject,
-      html: buildNewsletterHtml(normalized),
+      html: buildNewsletterHtml({ ...normalized, logo_src: "cid:qtlogo" }),
       text: buildNewsletterPlainText(normalized),
       isSending: false
     });
@@ -339,14 +499,39 @@ export default function NewsletterView() {
     }
     setSendComposer((prev) => ({ ...prev, isSending: true }));
     try {
+      const attachments = [];
+      let htmlForSend = String(sendComposer.html || "");
+      try {
+        const logoRes = await fetch("/QTLogo.jpg");
+        if (logoRes.ok) {
+          const logoBlob = await logoRes.blob();
+          const logoBase64 = String(await blobToBase64(logoBlob)).split(",")[1] || "";
+          if (logoBase64) {
+            attachments.push({
+              filename: "QTLogo.jpg",
+              content_base64: logoBase64,
+              content_type: "image/jpeg",
+              content_id: "qtlogo",
+              inline: true
+            });
+          } else {
+            htmlForSend = htmlForSend.replace(/cid:qtlogo/g, "/QTLogo.jpg");
+          }
+        } else {
+          htmlForSend = htmlForSend.replace(/cid:qtlogo/g, "/QTLogo.jpg");
+        }
+      } catch {
+        htmlForSend = htmlForSend.replace(/cid:qtlogo/g, "/QTLogo.jpg");
+      }
       const res = await fetch(`/api/newsletters/${sendComposer.newsletterId}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           recipient_emails: recipients,
           subject: sendComposer.subject,
-          html: sendComposer.html,
-          text: sendComposer.text
+          html: htmlForSend,
+          text: sendComposer.text,
+          attachments
         })
       });
       if (!res.ok) {
@@ -517,9 +702,154 @@ export default function NewsletterView() {
       ...prev,
       title: prev.title || firstLine,
       subject: prev.subject || firstLine,
-      body_html: prev.body_html || paragraphsToHtml(lines.join("\n"))
+      content: prev.content || lines.join("\n")
     }));
     setToast("KI-Vorschlag in Entwurf übernommen.");
+  };
+
+  const handleRssFeedSelect = (feed) => {
+    setRssFeedForm({
+      id: feed.id,
+      name: feed.name || "",
+      url: feed.url || "",
+      description: feed.description || "",
+      enabled: feed.enabled !== false
+    });
+    setSelectedRssFeedId(feed.id);
+  };
+
+  const handleRssFeedSave = async () => {
+    if (!rssFeedForm.name.trim() || !rssFeedForm.url.trim()) {
+      setToast("Bitte Feed-Name und URL eingeben.");
+      return;
+    }
+    setIsRssSaving(true);
+    try {
+      const payload = {
+        name: rssFeedForm.name,
+        url: rssFeedForm.url,
+        description: rssFeedForm.description,
+        enabled: rssFeedForm.enabled
+      };
+      const res = await fetch(
+        rssFeedForm.id ? `/api/newsletter_rss_feeds/${rssFeedForm.id}` : "/api/newsletter_rss_feeds",
+        {
+          method: rssFeedForm.id ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }
+      );
+      const saved = await res.json().catch(() => null);
+      if (!res.ok || !saved) {
+        throw new Error(typeof saved?.detail === "string" ? saved.detail : `status_${res.status}`);
+      }
+      const normalized = {
+        id: Number(saved.id || 0),
+        name: String(saved.name || "").trim(),
+        url: String(saved.url || "").trim(),
+        description: String(saved.description || "").trim(),
+        enabled: saved.enabled !== false
+      };
+      upsertRssFeed(normalized);
+      setRssFeedForm({
+        id: normalized.id,
+        name: normalized.name,
+        url: normalized.url,
+        description: normalized.description,
+        enabled: normalized.enabled
+      });
+      setSelectedRssFeedId(normalized.id);
+      setToast(rssFeedForm.id ? "RSS-Feed aktualisiert." : "RSS-Feed angelegt.");
+    } catch (error) {
+      setToast(`RSS-Feed konnte nicht gespeichert werden.${error?.message ? ` (${error.message})` : ""}`);
+    } finally {
+      setIsRssSaving(false);
+    }
+  };
+
+  const handleRssFeedDelete = async () => {
+    if (!rssFeedForm.id) return;
+    if (!window.confirm("RSS-Feed löschen?")) return;
+    try {
+      const res = await fetch(`/api/newsletter_rss_feeds/${rssFeedForm.id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+      setRssFeeds((prev) => prev.filter((feed) => feed.id !== rssFeedForm.id));
+      setRssFeedForm(defaultRssFeedForm);
+      setSelectedRssFeedId("all");
+      setSelectedRssArticleIds([]);
+      setToast("RSS-Feed gelöscht.");
+    } catch {
+      setToast("RSS-Feed konnte nicht gelöscht werden.");
+    }
+  };
+
+  const toggleRssArticle = (articleId) =>
+    setSelectedRssArticleIds((prev) =>
+      prev.includes(articleId) ? prev.filter((entry) => entry !== articleId) : [...prev, articleId]
+    );
+
+  const importSelectedRssArticles = () => {
+    if (!selectedRssArticles.length) {
+      setToast("Bitte mindestens einen RSS-Artikel wählen.");
+      return;
+    }
+    const block = selectedRssArticles.map((article) => buildArticleBlock(article)).filter(Boolean).join("\n\n");
+    setDraft((prev) => ({
+      ...prev,
+      title: prev.title || (selectedRssArticles[0]?.title || ""),
+      subject: prev.subject || (selectedRssArticles[0]?.title || ""),
+      content: prev.content ? `${prev.content}\n\n${block}`.trim() : block
+    }));
+    setToast(`${selectedRssArticles.length} RSS-Artikel als Baustein übernommen.`);
+  };
+
+  const generateFromRssArticles = async (mode) => {
+    if (!selectedRssArticles.length) {
+      setToast("Bitte mindestens einen RSS-Artikel wählen.");
+      return;
+    }
+    setIsRssGenerating(true);
+    try {
+      const res = await fetch("/api/newsletter_rss_generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          tone: aiTone,
+          articles: selectedRssArticles.map((article) => ({
+            feed_name: article.feed_name,
+            title: article.title,
+            link: article.link,
+            summary: article.summary,
+            content: article.content,
+            published_at: article.published_at
+          }))
+        })
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.text) {
+        throw new Error(typeof data?.detail === "string" ? data.detail : `status_${res.status}`);
+      }
+      const generatedText = String(data.text || "").trim();
+      if (mode === "newsletter") {
+        const parsed = extractNewsletterDraftFromAi(generatedText);
+        setDraft((prev) => ({
+          ...prev,
+          title: prev.title || parsed.subject || selectedRssArticles[0]?.title || "",
+          subject: parsed.subject || prev.subject || selectedRssArticles[0]?.title || "",
+          preheader: parsed.preheader || prev.preheader,
+          content: parsed.content || generatedText
+        }));
+        setToast("KI-Newsletter aus RSS-Artikeln übernommen.");
+      } else {
+        setAiText(generatedText);
+        setToast("KI-Themenvorschläge aus RSS-Artikeln geladen.");
+      }
+    } catch (error) {
+      setToast(`RSS-KI konnte nicht erstellt werden.${error?.message ? ` (${error.message})` : ""}`);
+    } finally {
+      setIsRssGenerating(false);
+    }
   };
 
   return (
@@ -555,6 +885,450 @@ export default function NewsletterView() {
         </div>
       ) : null}
 
+      {groupModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-6xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Popup</p>
+                <h3 className="text-lg font-display text-sand-900">Empfängergruppen pflegen</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setGroupForm(defaultGroupForm)}
+                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  <Plus size={13} /> Neue Gruppe
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGroupModalOpen(false)}
+                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Schließen
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[78vh] overflow-y-auto bg-sand-50 p-6">
+              <div className="grid gap-5 lg:grid-cols-[0.88fr_1.12fr]">
+                <div className="space-y-2">
+                  {groups.length ? (
+                    groups.map((group) => (
+                      <button
+                        key={group.id}
+                        type="button"
+                        onClick={() => handleGroupSelect(group)}
+                        className={`w-full rounded-2xl border px-4 py-3 text-left ${
+                          groupForm.id === group.id
+                            ? "border-amber-300 bg-amber-50"
+                            : "border-sand-200 bg-white hover:bg-sand-100"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-sm font-semibold text-sand-900">{group.name}</p>
+                            {group.description ? (
+                              <p className="mt-1 text-xs text-sand-600">{group.description}</p>
+                            ) : null}
+                          </div>
+                          <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500">
+                            {group.recipient_count}
+                          </span>
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="rounded-2xl border border-dashed border-sand-300 bg-white px-4 py-5 text-sm text-sand-500">
+                      Noch keine Gruppen vorhanden.
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-4 rounded-3xl border border-sand-200 bg-white p-4">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <label className="block">
+                      <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Name</span>
+                      <input
+                        value={groupForm.name}
+                        onChange={(event) => setGroupForm((prev) => ({ ...prev, name: event.target.value }))}
+                        className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                        placeholder="z. B. Wartungskunden"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Beschreibung</span>
+                      <input
+                        value={groupForm.description}
+                        onChange={(event) =>
+                          setGroupForm((prev) => ({ ...prev, description: event.target.value }))
+                        }
+                        className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                        placeholder="Optionaler Kontext"
+                      />
+                    </label>
+                  </div>
+
+                  <input
+                    value={groupSearch}
+                    onChange={(event) => setGroupSearch(event.target.value)}
+                    placeholder="Kunden für Gruppe suchen"
+                    className="w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  />
+
+                  <div className="max-h-80 space-y-2 overflow-auto pr-1">
+                    {filteredGroupCustomers.map((customer) => (
+                      <label
+                        key={customer.id}
+                        className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-3 py-3 ${
+                          groupForm.customerIds.includes(customer.id)
+                            ? "border-amber-300 bg-amber-50"
+                            : "border-sand-200 bg-sand-50"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={groupForm.customerIds.includes(customer.id)}
+                          onChange={() => toggleGroupCustomer(customer.id)}
+                          className="mt-1 h-4 w-4"
+                        />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-sand-900">{customer.name}</p>
+                          <p className="truncate text-xs text-sand-500">
+                            {customer.email || "Keine E-Mail hinterlegt"}
+                          </p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {groupForm.id ? (
+                      <button
+                        type="button"
+                        onClick={handleGroupDelete}
+                        className="inline-flex items-center gap-2 rounded-full border border-rose-300 bg-rose-50 px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                      >
+                        <Trash2 size={13} /> Löschen
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={handleGroupSave}
+                      className="inline-flex items-center gap-2 rounded-full bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90"
+                    >
+                      <Save size={13} /> {groupForm.id ? "Gruppe speichern" : "Gruppe anlegen"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {rssModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-4 py-8">
+          <div className="w-full max-w-7xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Popup</p>
+                <h3 className="text-lg font-display text-sand-900">RSS-Import für Newsletter</h3>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRssFeedForm(defaultRssFeedForm);
+                    setSelectedRssFeedId("all");
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  <Plus size={13} /> Neuer Feed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => loadRssArticles(selectedRssFeedId)}
+                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  <RefreshCw size={13} /> Artikel aktualisieren
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRssModalOpen(false)}
+                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  Schließen
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-[80vh] overflow-y-auto bg-sand-50 p-6">
+              <div className="grid gap-5 xl:grid-cols-[0.82fr_1.18fr]">
+                <div className="space-y-4">
+                  <div className="rounded-3xl border border-sand-200 bg-white p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.24em] text-sand-500">Feed-Liste</p>
+                        <p className="text-sm text-sand-600">Quellen für Themenideen und Artikelimporte.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedRssFeedId("all")}
+                        className={`rounded-full px-3 py-1 text-[11px] uppercase tracking-wide ${
+                          selectedRssFeedId === "all"
+                            ? "bg-amber-600 text-white"
+                            : "border border-sand-300 bg-white text-sand-600 hover:bg-sand-100"
+                        }`}
+                      >
+                        Alle Feeds
+                      </button>
+                    </div>
+                    <div className="max-h-72 space-y-2 overflow-auto pr-1">
+                      {rssFeeds.length ? (
+                        rssFeeds.map((feed) => (
+                          <button
+                            key={feed.id}
+                            type="button"
+                            onClick={() => handleRssFeedSelect(feed)}
+                            className={`w-full rounded-2xl border px-4 py-3 text-left ${
+                              Number(selectedRssFeedId) === feed.id
+                                ? "border-amber-300 bg-amber-50"
+                                : "border-sand-200 bg-sand-50 hover:bg-white"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-sand-900">{feed.name}</p>
+                                <p className="truncate text-xs text-sand-500">{feed.url}</p>
+                                {feed.description ? (
+                                  <p className="mt-1 text-xs text-sand-600">{feed.description}</p>
+                                ) : null}
+                              </div>
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                  feed.enabled ? "bg-emerald-100 text-emerald-700" : "bg-sand-200 text-sand-600"
+                                }`}
+                              >
+                                {feed.enabled ? "aktiv" : "aus"}
+                              </span>
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-5 text-sm text-sand-500">
+                          Noch keine RSS-Feeds hinterlegt.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl border border-sand-200 bg-white p-4">
+                    <div className="mb-4">
+                      <p className="text-xs uppercase tracking-[0.24em] text-sand-500">Feed pflegen</p>
+                    </div>
+                    <div className="space-y-4">
+                      <label className="block">
+                        <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Name</span>
+                        <input
+                          value={rssFeedForm.name}
+                          onChange={(event) => setRssFeedForm((prev) => ({ ...prev, name: event.target.value }))}
+                          className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                          placeholder="z. B. Security Blog"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Feed URL</span>
+                        <input
+                          value={rssFeedForm.url}
+                          onChange={(event) => setRssFeedForm((prev) => ({ ...prev, url: event.target.value }))}
+                          className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                          placeholder="https://..."
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Beschreibung</span>
+                        <textarea
+                          value={rssFeedForm.description}
+                          onChange={(event) =>
+                            setRssFeedForm((prev) => ({ ...prev, description: event.target.value }))
+                          }
+                          rows={3}
+                          className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                          placeholder="Optionaler Hinweis zum Feed"
+                        />
+                      </label>
+                      <label className="inline-flex items-center gap-3 rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-sm text-sand-700">
+                        <input
+                          type="checkbox"
+                          checked={rssFeedForm.enabled}
+                          onChange={(event) =>
+                            setRssFeedForm((prev) => ({ ...prev, enabled: event.target.checked }))
+                          }
+                          className="h-4 w-4"
+                        />
+                        Feed aktiv für Sammelabruf verwenden
+                      </label>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {rssFeedForm.id ? (
+                          <button
+                            type="button"
+                            onClick={handleRssFeedDelete}
+                            className="inline-flex items-center gap-2 rounded-full border border-rose-300 bg-rose-50 px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                          >
+                            <Trash2 size={13} /> Löschen
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={handleRssFeedSave}
+                          disabled={isRssSaving}
+                          className="inline-flex items-center gap-2 rounded-full bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Save size={13} /> {isRssSaving ? "Speichert..." : rssFeedForm.id ? "Feed speichern" : "Feed anlegen"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4 rounded-3xl border border-sand-200 bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.24em] text-sand-500">Artikel</p>
+                      <h4 className="text-lg font-display text-sand-900">
+                        {selectedRssFeedSummary ? selectedRssFeedSummary.name : "Alle aktiven Feeds"}
+                      </h4>
+                      <p className="text-sm text-sand-600">
+                        Artikel auswählen und direkt als Baustein oder per KI in den Newsletter übernehmen.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-600">
+                        {selectedRssArticles.length} gewählt
+                      </span>
+                      <button
+                        type="button"
+                        onClick={importSelectedRssArticles}
+                        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
+                      >
+                        <FilePlus2 size={13} /> Als Baustein
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => generateFromRssArticles("ideas")}
+                        disabled={isRssGenerating}
+                        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Sparkles size={13} /> KI-Themen
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => generateFromRssArticles("newsletter")}
+                        disabled={isRssGenerating}
+                        className="inline-flex items-center gap-2 rounded-full bg-amber-600 px-3 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Sparkles size={13} /> KI-Newsletter
+                      </button>
+                    </div>
+                  </div>
+
+                  {rssFeedResults.some((item) => item.status === "error") ? (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                      Nicht alle Feeds konnten geladen werden. Fehlerhafte Quellen bleiben in der Liste sichtbar.
+                    </div>
+                  ) : null}
+
+                  <div className="max-h-[56vh] space-y-3 overflow-auto pr-1">
+                    {isRssLoading ? (
+                      <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-6 text-sm text-sand-500">
+                        RSS-Artikel werden geladen…
+                      </p>
+                    ) : rssArticles.length ? (
+                      rssArticles.map((article) => {
+                        const checked = selectedRssArticleIds.includes(article.id);
+                        return (
+                          <label
+                            key={article.id}
+                            className={`block cursor-pointer rounded-2xl border px-4 py-4 ${
+                              checked
+                                ? "border-amber-300 bg-amber-50"
+                                : "border-sand-200 bg-sand-50 hover:bg-white"
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleRssArticle(article.id)}
+                                className="mt-1 h-4 w-4"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500">
+                                    {article.feed_name || "Feed"}
+                                  </span>
+                                  {article.published_at ? (
+                                    <span className="text-[11px] uppercase tracking-wide text-sand-500">
+                                      {formatArticleDate(article.published_at)}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <p className="mt-2 text-sm font-semibold text-sand-900">{article.title}</p>
+                                {article.summary ? (
+                                  <p className="mt-2 text-sm leading-6 text-sand-700">{article.summary}</p>
+                                ) : null}
+                                <div className="mt-3 flex flex-wrap items-center gap-2">
+                                  {article.link ? (
+                                    <a
+                                      href={article.link}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      onClick={(event) => event.stopPropagation()}
+                                      className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                                    >
+                                      <ExternalLink size={12} /> Artikel
+                                    </a>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      setSelectedRssArticleIds([article.id]);
+                                      setDraft((prev) => ({
+                                        ...prev,
+                                        title: prev.title || article.title || "",
+                                        subject: prev.subject || article.title || "",
+                                        content: prev.content
+                                          ? `${prev.content}\n\n${buildArticleBlock(article)}`.trim()
+                                          : buildArticleBlock(article)
+                                      }));
+                                      setToast("RSS-Artikel in Entwurf übernommen.");
+                                    }}
+                                    className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                                  >
+                                    <FilePlus2 size={12} /> Direkt übernehmen
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })
+                    ) : (
+                      <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-6 text-sm text-sand-500">
+                        Keine Artikel gefunden. Feed prüfen oder Artikel neu laden.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-6 py-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
@@ -562,7 +1336,7 @@ export default function NewsletterView() {
               <Mail size={18} />
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Quansatech</p>
               <h1 className="text-2xl font-display text-sand-900">Newsletter</h1>
             </div>
           </div>
@@ -638,9 +1412,18 @@ export default function NewsletterView() {
                     Gruppen wählen oder einzelne Kunden direkt ergänzen.
                   </p>
                 </div>
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-right">
-                  <p className="text-[10px] uppercase tracking-[0.24em] text-amber-700">Aufgelöst</p>
-                  <p className="text-lg font-semibold text-amber-900">{resolvedRecipients.length}</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setGroupModalOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <Layers3 size={13} /> Gruppen pflegen
+                  </button>
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-right">
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-amber-700">Aufgelöst</p>
+                    <p className="text-lg font-semibold text-amber-900">{resolvedRecipients.length}</p>
+                  </div>
                 </div>
               </div>
 
@@ -766,9 +1549,20 @@ export default function NewsletterView() {
             </div>
 
             <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-              <div className="mb-4">
-                <h2 className="text-lg font-display text-sand-900">Inhalt</h2>
-                <p className="text-sm text-sand-600">Betreff, Einleitung, Hauptinhalt und Abschluss separat pflegen.</p>
+              <div className="mb-4 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-display text-sand-900">Inhalt</h2>
+                  <p className="text-sm text-sand-600">
+                    Gesamten Newsletter als einen Text pflegen oder RSS-Artikel als Bausteine übernehmen.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRssModalOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                >
+                  <Rss size={13} /> RSS-Import
+                </button>
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
@@ -804,22 +1598,17 @@ export default function NewsletterView() {
 
               <div className="mt-4 space-y-4">
                 <div>
-                  <p className="mb-2 text-xs uppercase tracking-[0.24em] text-sand-500">Einleitung</p>
-                  <RichTextEditor
-                    value={draft.intro_html}
-                    onChange={(value) => setDraft((prev) => ({ ...prev, intro_html: value }))}
-                    placeholder="Kurze Einleitung für den Newsletter"
-                    minHeight="140px"
+                  <p className="mb-2 text-xs uppercase tracking-[0.24em] text-sand-500">Newsletter-Inhalt</p>
+                  <textarea
+                    value={draft.content}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, content: event.target.value }))}
+                    rows={18}
+                    placeholder="Gesamten Newsletter hier als einen Text einfügen, z. B. direkt aus ChatGPT."
+                    className="w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
                   />
-                </div>
-                <div>
-                  <p className="mb-2 text-xs uppercase tracking-[0.24em] text-sand-500">Hauptinhalt</p>
-                  <RichTextEditor
-                    value={draft.body_html}
-                    onChange={(value) => setDraft((prev) => ({ ...prev, body_html: value }))}
-                    placeholder="Abschnitte, Listen und Hinweise"
-                    minHeight="240px"
-                  />
+                  <p className="mt-2 text-xs text-sand-500">
+                    Einleitung, Hauptinhalt und Schluss werden gemeinsam gepflegt und beim Versand automatisch formatiert.
+                  </p>
                 </div>
                 <div className="grid gap-4 md:grid-cols-[minmax(0,220px)_1fr]">
                   <label className="block">
@@ -841,15 +1630,6 @@ export default function NewsletterView() {
                     />
                   </label>
                 </div>
-                <div>
-                  <p className="mb-2 text-xs uppercase tracking-[0.24em] text-sand-500">Abschluss</p>
-                  <RichTextEditor
-                    value={draft.closing_html}
-                    onChange={(value) => setDraft((prev) => ({ ...prev, closing_html: value }))}
-                    placeholder="Sign-off, Kontaktmöglichkeit oder kurze Schlussnotiz"
-                    minHeight="140px"
-                  />
-                </div>
               </div>
             </div>
 
@@ -857,9 +1637,18 @@ export default function NewsletterView() {
               <div className="mb-4 flex items-start justify-between gap-4">
                 <div>
                   <h2 className="text-lg font-display text-sand-900">KI-Themenhilfe</h2>
-                  <p className="text-sm text-sand-600">Unabhängige Themenvorschläge für den Newsletter laden.</p>
+                  <p className="text-sm text-sand-600">
+                    Unabhängige Themenvorschläge laden oder RSS-Artikel per KI in Themen und Entwürfe überführen.
+                  </p>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRssModalOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    <Rss size={13} /> RSS
+                  </button>
                   <select
                     value={aiTone}
                     onChange={(event) => setAiTone(event.target.value)}
@@ -923,148 +1712,10 @@ export default function NewsletterView() {
                 <div className="max-h-[820px] overflow-auto" dangerouslySetInnerHTML={{ __html: previewHtml }} />
               </div>
             </div>
-
-            <div className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Plain Text</p>
-              <textarea
-                value={previewText}
-                readOnly
-                rows={12}
-                className="mt-3 w-full rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-sm text-sand-700"
-              />
-            </div>
           </aside>
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
-          <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-display text-sand-900">Empfängergruppen</h2>
-                <p className="text-sm text-sand-600">Kunden zu Gruppen zusammenfassen und wiederverwenden.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setGroupForm(defaultGroupForm)}
-                className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
-              >
-                <Plus size={13} /> Neue Gruppe
-              </button>
-            </div>
-
-            <div className="grid gap-5 lg:grid-cols-[0.88fr_1.12fr]">
-              <div className="space-y-2">
-                {groups.length ? (
-                  groups.map((group) => (
-                    <button
-                      key={group.id}
-                      type="button"
-                      onClick={() => handleGroupSelect(group)}
-                      className={`w-full rounded-2xl border px-4 py-3 text-left ${
-                        groupForm.id === group.id
-                          ? "border-amber-300 bg-amber-50"
-                          : "border-sand-200 bg-sand-50 hover:bg-white"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="text-sm font-semibold text-sand-900">{group.name}</p>
-                          {group.description ? (
-                            <p className="mt-1 text-xs text-sand-600">{group.description}</p>
-                          ) : null}
-                        </div>
-                        <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500">
-                          {group.recipient_count}
-                        </span>
-                      </div>
-                    </button>
-                  ))
-                ) : (
-                  <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-5 text-sm text-sand-500">
-                    Noch keine Gruppen vorhanden.
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-4 rounded-3xl border border-sand-200 bg-sand-50 p-4">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Name</span>
-                    <input
-                      value={groupForm.name}
-                      onChange={(event) => setGroupForm((prev) => ({ ...prev, name: event.target.value }))}
-                      className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                      placeholder="z. B. Wartungskunden"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Beschreibung</span>
-                    <input
-                      value={groupForm.description}
-                      onChange={(event) =>
-                        setGroupForm((prev) => ({ ...prev, description: event.target.value }))
-                      }
-                      className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                      placeholder="Optionaler Kontext"
-                    />
-                  </label>
-                </div>
-
-                <input
-                  value={groupSearch}
-                  onChange={(event) => setGroupSearch(event.target.value)}
-                  placeholder="Kunden für Gruppe suchen"
-                  className="w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                />
-
-                <div className="max-h-80 space-y-2 overflow-auto pr-1">
-                  {filteredGroupCustomers.map((customer) => (
-                    <label
-                      key={customer.id}
-                      className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-3 py-3 ${
-                        groupForm.customerIds.includes(customer.id)
-                          ? "border-amber-300 bg-white"
-                          : "border-sand-200 bg-white/70"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={groupForm.customerIds.includes(customer.id)}
-                        onChange={() => toggleGroupCustomer(customer.id)}
-                        className="mt-1 h-4 w-4"
-                      />
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-sand-900">{customer.name}</p>
-                        <p className="truncate text-xs text-sand-500">
-                          {customer.email || "Keine E-Mail hinterlegt"}
-                        </p>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-
-                <div className="flex flex-wrap justify-end gap-2">
-                  {groupForm.id ? (
-                    <button
-                      type="button"
-                      onClick={handleGroupDelete}
-                      className="inline-flex items-center gap-2 rounded-full border border-rose-300 bg-rose-50 px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                    >
-                      <Trash2 size={13} /> Löschen
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={handleGroupSave}
-                    className="inline-flex items-center gap-2 rounded-full bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90"
-                  >
-                    <Save size={13} /> {groupForm.id ? "Gruppe speichern" : "Gruppe anlegen"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
+        <section>
           <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
             <div className="mb-4 flex items-start justify-between gap-4">
               <div>

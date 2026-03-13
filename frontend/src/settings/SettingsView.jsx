@@ -619,6 +619,7 @@ export default function SettingsView() {
     description: "",
     doc_type: "wartung"
   });
+  const [contractTemplateCreateOpen, setContractTemplateCreateOpen] = useState(false);
   const [contractVariableDraft, setContractVariableDraft] = useState({
     key: "",
     value: "",
@@ -1109,8 +1110,8 @@ export default function SettingsView() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contract_header_html: aiPrompts.contract_header_html || "",
-          contract_footer_html: aiPrompts.contract_footer_html || "",
+          contract_header_html: "",
+          contract_footer_html: "",
           contract_templates: aiPrompts.contract_templates,
           contract_variables: flattenContractVariableDefinitions(aiPrompts.contract_variable_definitions),
           contract_variable_definitions: aiPrompts.contract_variable_definitions
@@ -1133,8 +1134,10 @@ export default function SettingsView() {
     const rawKey = String(contractTemplateDraft.key || "").trim().toLowerCase();
     const key = rawKey.replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
     if (!key) return;
+    let created = false;
     setAiPrompts((prev) => {
       if (prev.contract_templates?.[key]) return prev;
+      created = true;
       return {
         ...prev,
         contract_templates: {
@@ -1148,8 +1151,10 @@ export default function SettingsView() {
         }
       };
     });
+    if (!created) return;
     setSelectedContractTemplateKey(key);
     setContractTemplateDraft({ key: "", title: "", description: "", doc_type: "wartung" });
+    setContractTemplateCreateOpen(false);
   };
 
   const removeContractTemplate = (key) => {
@@ -1262,9 +1267,7 @@ export default function SettingsView() {
   </head>
   <body>
     <div class="contract-preview-shell">
-      ${renderTemplatePreview(aiPrompts.contract_header_html || "")}
       ${renderTemplatePreview(activeContractTemplate?.body_template || "")}
-      ${renderTemplatePreview(aiPrompts.contract_footer_html || "")}
     </div>
   </body>
 </html>`;
@@ -2409,19 +2412,6 @@ export default function SettingsView() {
                 </p>
                 <div className="mt-3 grid grid-cols-1 gap-4">
                   <div className="rounded-xl border border-sand-200 bg-white p-3">
-                    <p className="text-[11px] uppercase tracking-wide text-sand-500">Globaler Header (für alle Verträge)</p>
-                    <div className="mt-2">
-                      <NotesRichTextEditor
-                        value={aiPrompts.contract_header_html || ""}
-                        onChange={(value) =>
-                          setAiPrompts((prev) => ({ ...prev, contract_header_html: value }))
-                        }
-                        minHeight="120px"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-sand-200 bg-white p-3">
                     <p className="text-[11px] uppercase tracking-wide text-sand-500">Template auswählen</p>
                     <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[220px_1fr_auto]">
                       <select
@@ -2453,58 +2443,17 @@ export default function SettingsView() {
                         placeholder="Titel"
                         className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
                       />
-                      <div />
-                    </div>
-                    <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-3">
-                      <p className="text-[11px] uppercase tracking-wide text-sand-500">Neues Template anlegen</p>
-                      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[160px_1fr_180px]">
-                        <input
-                          value={contractTemplateDraft.key}
-                          onChange={(event) =>
-                            setContractTemplateDraft((prev) => ({ ...prev, key: event.target.value }))
-                          }
-                          placeholder="template_key"
-                          className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                        />
-                        <input
-                          value={contractTemplateDraft.title}
-                          onChange={(event) =>
-                            setContractTemplateDraft((prev) => ({ ...prev, title: event.target.value }))
-                          }
-                          placeholder="Titel"
-                          className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                        />
-                        <select
-                          value={contractTemplateDraft.doc_type}
-                          onChange={(event) =>
-                            setContractTemplateDraft((prev) => ({ ...prev, doc_type: event.target.value }))
-                          }
-                          className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                        >
-                          {contractTemplateDocTypeOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
-                        <input
-                          value={contractTemplateDraft.description}
-                          onChange={(event) =>
-                            setContractTemplateDraft((prev) => ({ ...prev, description: event.target.value }))
-                          }
-                          placeholder="Kurzbeschreibung fuer Picker"
-                          className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
-                        />
-                        <button
-                          type="button"
-                          onClick={addContractTemplate}
-                          className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                        >
-                          Template hinzufügen
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setContractTemplateDraft({ key: "", title: "", description: "", doc_type: "wartung" });
+                          setContractTemplateCreateOpen(true);
+                        }}
+                        className="inline-flex items-center justify-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                      >
+                        <Plus size={10} />
+                        Neues Template
+                      </button>
                     </div>
                     <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[1fr_220px_auto]">
                       <input
@@ -2577,6 +2526,7 @@ export default function SettingsView() {
                             }));
                           }}
                           minHeight="200px"
+                          allowHtmlSource
                         />
                       </div>
                     </div>
@@ -2588,19 +2538,6 @@ export default function SettingsView() {
                       Freie Platzhalter im Template werden automatisch erkannt und im Kundenstamm pro Vertrag individuell gepflegt.
                       Globale Beispielwerte werden hier nicht mehr verwaltet.
                     </p>
-                  </div>
-
-                  <div className="rounded-xl border border-sand-200 bg-white p-3">
-                    <p className="text-[11px] uppercase tracking-wide text-sand-500">Globaler Footer (für alle Verträge)</p>
-                    <div className="mt-2">
-                      <NotesRichTextEditor
-                        value={aiPrompts.contract_footer_html || ""}
-                        onChange={(value) =>
-                          setAiPrompts((prev) => ({ ...prev, contract_footer_html: value }))
-                        }
-                        minHeight="100px"
-                      />
-                    </div>
                   </div>
 
                   <div className="rounded-xl border border-sand-200 bg-white p-3">
@@ -5027,6 +4964,88 @@ export default function SettingsView() {
           ) : null}
         </div>
       </main>
+      {contractTemplateCreateOpen ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-sand-900/50 px-4 py-6">
+          <div className="w-full max-w-3xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="flex items-center justify-between border-b border-sand-200 px-5 py-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Vertrags-Templates</p>
+                <h3 className="text-base font-display text-sand-900">Neues Template anlegen</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setContractTemplateDraft({ key: "", title: "", description: "", doc_type: "wartung" });
+                  setContractTemplateCreateOpen(false);
+                }}
+                className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              >
+                Schließen
+              </button>
+            </div>
+            <div className="space-y-4 px-5 py-5">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-[160px_1fr_180px]">
+                <input
+                  value={contractTemplateDraft.key}
+                  onChange={(event) =>
+                    setContractTemplateDraft((prev) => ({ ...prev, key: event.target.value }))
+                  }
+                  placeholder="template_key"
+                  className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                />
+                <input
+                  value={contractTemplateDraft.title}
+                  onChange={(event) =>
+                    setContractTemplateDraft((prev) => ({ ...prev, title: event.target.value }))
+                  }
+                  placeholder="Titel"
+                  className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                />
+                <select
+                  value={contractTemplateDraft.doc_type}
+                  onChange={(event) =>
+                    setContractTemplateDraft((prev) => ({ ...prev, doc_type: event.target.value }))
+                  }
+                  className="rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+                >
+                  {contractTemplateDocTypeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <input
+                value={contractTemplateDraft.description}
+                onChange={(event) =>
+                  setContractTemplateDraft((prev) => ({ ...prev, description: event.target.value }))
+                }
+                placeholder="Kurzbeschreibung fuer Picker"
+                className="w-full rounded-xl border border-sand-200 px-3 py-2 text-xs text-sand-800"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setContractTemplateDraft({ key: "", title: "", description: "", doc_type: "wartung" });
+                    setContractTemplateCreateOpen(false);
+                  }}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="button"
+                  onClick={addContractTemplate}
+                  className="rounded-full border border-sand-200 bg-sand-900 px-3 py-2 text-[10px] uppercase tracking-wide text-white hover:opacity-90"
+                >
+                  Template anlegen
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {contractTemplatePreviewOpen ? (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-sand-900/50 px-4 py-6">
           <div className="h-[85vh] w-full max-w-6xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">

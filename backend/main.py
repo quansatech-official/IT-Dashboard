@@ -27,12 +27,15 @@ import gzip
 import imaplib
 import ssl
 from html import escape
+from html import unescape
 from email import policy
 from email.parser import Parser
+from email.utils import parsedate_to_datetime
 import requests
 from urllib.parse import quote, urlparse
 from datetime import datetime, timedelta, timezone
 import logging
+import xml.etree.ElementTree as ET
 
 from sevdesk_service import SevdeskClient, SevdeskConfig, SevdeskError
 # ================= DATABASE =================
@@ -405,6 +408,18 @@ class Newsletter(Base):
     sent_via = Column(String, default="")
     sent_to = Column(Text, default="[]")
     recipient_count = Column(Integer, default=0)
+
+
+class NewsletterRssFeed(Base):
+    __tablename__ = "newsletter_rss_feeds"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    url = Column(Text, nullable=False)
+    description = Column(Text, default="")
+    enabled = Column(Boolean, default=True)
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
 class DeliveryNote(Base):
@@ -1790,6 +1805,36 @@ class NewsletterSendRequest(BaseModel):
     subject: Optional[str] = None
     html: str
     text: Optional[str] = None
+    attachments: Optional[List["EmailAttachment"]] = None
+
+
+class NewsletterRssFeedCreate(BaseModel):
+    name: str
+    url: str
+    description: Optional[str] = ""
+    enabled: Optional[bool] = True
+
+
+class NewsletterRssFeedUpdate(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    description: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class NewsletterRssGenerateArticle(BaseModel):
+    feed_name: Optional[str] = ""
+    title: str
+    link: Optional[str] = ""
+    summary: Optional[str] = ""
+    content: Optional[str] = ""
+    published_at: Optional[int] = 0
+
+
+class NewsletterRssGenerateRequest(BaseModel):
+    mode: str = "ideas"
+    tone: Optional[str] = "sachlich"
+    articles: List[NewsletterRssGenerateArticle]
 
 
 class IntegrationSettingsUpdate(BaseModel):
@@ -4645,6 +4690,333 @@ def serialize_newsletter(newsletter: Newsletter) -> Dict[str, Any]:
         "sent_to": _parse_json_string_list(newsletter.sent_to),
         "recipient_count": int(newsletter.recipient_count or 0),
     }
+
+
+def serialize_newsletter_rss_feed(feed: NewsletterRssFeed) -> Dict[str, Any]:
+    return {
+        "id": int(feed.id),
+        "name": str(feed.name or "").strip(),
+        "url": str(feed.url or "").strip(),
+        "description": str(feed.description or "").strip(),
+        "enabled": bool(feed.enabled),
+        "created_at": int(feed.created_at or 0),
+        "updated_at": int(feed.updated_at or 0),
+    }
+
+
+def _normalize_newsletter_rss_url(value: Any) -> str:
+    url = str(value or "").strip()
+    if not url:
+        return ""
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        url = f"https://{url.lstrip('/')}"
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return url
+
+
+def _html_to_plain_text(value: Any) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    text_value = re.sub(r"<br\s*/?>", "\n", raw, flags=re.IGNORECASE)
+    text_value = re.sub(r"</p\s*>", "\n\n", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"<li\s*>", "• ", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"</li\s*>", "\n", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"<[^>]+>", " ", text_value)
+    text_value = unescape(text_value)
+    text_value = re.sub(r"\r\n?", "\n", text_value)
+    text_value = re.sub(r"[ \t]+\n", "\n", text_value)
+    text_value = re.sub(r"\n{3,}", "\n\n", text_value)
+    text_value = re.sub(r"[ \t]{2,}", " ", text_value)
+    return text_value.strip()
+
+
+def _xml_local_name(tag: Any) -> str:
+    value = str(tag or "")
+    if "}" in value:
+        return value.split("}", 1)[1]
+    if ":" in value:
+        return value.split(":", 1)[1]
+    return value
+
+
+def _xml_first_child_text(element: Optional[ET.Element], names: List[str]) -> str:
+    if element is None:
+        return ""
+    wanted = {str(name or "").strip().lower() for name in names if str(name or "").strip()}
+    if not wanted:
+        return ""
+    for child in list(element):
+        local_name = _xml_local_name(child.tag).lower()
+        if local_name not in wanted:
+            continue
+        text_value = "".join(child.itertext()).strip()
+        if text_value:
+            return text_value
+    return ""
+
+
+def _xml_collect_child_texts(element: Optional[ET.Element], names: List[str]) -> List[str]:
+    if element is None:
+        return []
+    wanted = {str(name or "").strip().lower() for name in names if str(name or "").strip()}
+    values: List[str] = []
+    for child in list(element):
+        local_name = _xml_local_name(child.tag).lower()
+        if local_name not in wanted:
+            continue
+        text_value = "".join(child.itertext()).strip()
+        if text_value:
+            values.append(text_value)
+    return values
+
+
+def _parse_feed_datetime_to_ms(value: Any) -> int:
+    text_value = str(value or "").strip()
+    if not text_value:
+        return 0
+    try:
+        parsed = parsedate_to_datetime(text_value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        pass
+    iso_value = text_value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(iso_value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
+    except ValueError:
+        return 0
+
+
+def _parse_newsletter_rss_feed_items(
+    feed: NewsletterRssFeed,
+    xml_bytes: bytes,
+    *,
+    per_feed_limit: int = 12,
+) -> Dict[str, Any]:
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError as exc:
+        raise ValueError(f"RSS/Atom parse failed: {exc}") from exc
+
+    local_root = _xml_local_name(root.tag).lower()
+    feed_title = ""
+    entries: List[Dict[str, Any]] = []
+
+    if local_root == "rss":
+        channel = next((child for child in list(root) if _xml_local_name(child.tag).lower() == "channel"), None)
+        feed_title = _xml_first_child_text(channel, ["title"]) or str(feed.name or "").strip()
+        for item in list(channel or []):
+            if _xml_local_name(item.tag).lower() != "item":
+                continue
+            title = _xml_first_child_text(item, ["title"]) or "Artikel"
+            link = _xml_first_child_text(item, ["link"])
+            summary = _xml_first_child_text(item, ["description", "encoded", "summary"])
+            content = "\n\n".join(
+                part for part in _xml_collect_child_texts(item, ["encoded", "description", "content", "summary"]) if part
+            ).strip()
+            published_at = _parse_feed_datetime_to_ms(
+                _xml_first_child_text(item, ["pubDate", "updated", "published", "dc:date", "date"])
+            )
+            author = _xml_first_child_text(item, ["author", "creator"])
+            category_values = _xml_collect_child_texts(item, ["category"])
+            entries.append(
+                {
+                    "id": hashlib.sha1(
+                        f"{feed.id}|{link or title}|{published_at}".encode("utf-8", "ignore")
+                    ).hexdigest()[:20],
+                    "feed_id": int(feed.id),
+                    "feed_name": feed_title,
+                    "feed_url": str(feed.url or "").strip(),
+                    "title": title.strip(),
+                    "link": link.strip(),
+                    "summary": _html_to_plain_text(summary)[:2400],
+                    "content": _html_to_plain_text(content)[:12000],
+                    "author": author.strip(),
+                    "published_at": published_at,
+                    "categories": [str(value).strip() for value in category_values if str(value).strip()],
+                }
+            )
+            if len(entries) >= per_feed_limit:
+                break
+    elif local_root == "feed":
+        feed_title = _xml_first_child_text(root, ["title"]) or str(feed.name or "").strip()
+        for item in list(root):
+            if _xml_local_name(item.tag).lower() != "entry":
+                continue
+            title = _xml_first_child_text(item, ["title"]) or "Artikel"
+            link = ""
+            for child in list(item):
+                if _xml_local_name(child.tag).lower() != "link":
+                    continue
+                href = str(child.attrib.get("href") or "").strip()
+                rel = str(child.attrib.get("rel") or "alternate").strip().lower()
+                if href and rel in {"alternate", ""}:
+                    link = href
+                    break
+                if href and not link:
+                    link = href
+            summary = _xml_first_child_text(item, ["summary"])
+            content = "\n\n".join(
+                part for part in _xml_collect_child_texts(item, ["content", "summary"]) if part
+            ).strip()
+            published_at = _parse_feed_datetime_to_ms(
+                _xml_first_child_text(item, ["updated", "published"])
+            )
+            author = ""
+            for child in list(item):
+                if _xml_local_name(child.tag).lower() != "author":
+                    continue
+                author = _xml_first_child_text(child, ["name"]) or "".join(child.itertext()).strip()
+                if author:
+                    break
+            category_values = []
+            for child in list(item):
+                if _xml_local_name(child.tag).lower() != "category":
+                    continue
+                term = str(child.attrib.get("term") or "").strip()
+                label = str(child.attrib.get("label") or "").strip()
+                if term or label:
+                    category_values.append(label or term)
+            entries.append(
+                {
+                    "id": hashlib.sha1(
+                        f"{feed.id}|{link or title}|{published_at}".encode("utf-8", "ignore")
+                    ).hexdigest()[:20],
+                    "feed_id": int(feed.id),
+                    "feed_name": feed_title,
+                    "feed_url": str(feed.url or "").strip(),
+                    "title": title.strip(),
+                    "link": link.strip(),
+                    "summary": _html_to_plain_text(summary)[:2400],
+                    "content": _html_to_plain_text(content)[:12000],
+                    "author": author.strip(),
+                    "published_at": published_at,
+                    "categories": [str(value).strip() for value in category_values if str(value).strip()],
+                }
+            )
+            if len(entries) >= per_feed_limit:
+                break
+    else:
+        raise ValueError("Unsupported feed format")
+
+    entries = [entry for entry in entries if str(entry.get("title") or "").strip()]
+    return {
+        "feed": {
+            "id": int(feed.id),
+            "name": feed_title or str(feed.name or "").strip(),
+            "url": str(feed.url or "").strip(),
+        },
+        "items": entries,
+    }
+
+
+def _fetch_newsletter_rss_articles_for_feed(
+    feed: NewsletterRssFeed,
+    *,
+    per_feed_limit: int = 12,
+) -> Dict[str, Any]:
+    try:
+        response = requests.get(
+            str(feed.url or "").strip(),
+            timeout=(4, 10),
+            headers={"User-Agent": "IT-Dashboard Newsletter RSS Import/1.0"},
+        )
+        response.raise_for_status()
+        parsed = _parse_newsletter_rss_feed_items(feed, response.content, per_feed_limit=per_feed_limit)
+        return {
+            "feed": parsed.get("feed") or serialize_newsletter_rss_feed(feed),
+            "items": parsed.get("items") or [],
+            "status": "ok",
+            "error": "",
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Newsletter RSS feed fetch failed for %s: %s", feed.url, exc)
+        return {
+            "feed": serialize_newsletter_rss_feed(feed),
+            "items": [],
+            "status": "error",
+            "error": str(exc),
+        }
+
+
+def _build_newsletter_rss_source_text(articles: List[NewsletterRssGenerateArticle]) -> str:
+    blocks: List[str] = []
+    for index, article in enumerate(articles, start=1):
+        title = str(article.title or "").strip()
+        if not title:
+            continue
+        summary = _html_to_plain_text(article.summary)[:1600]
+        content = _html_to_plain_text(article.content)[:3200]
+        link = str(article.link or "").strip()
+        feed_name = str(article.feed_name or "").strip()
+        published_at = _safe_int(article.published_at, 0)
+        published_label = ""
+        if published_at > 0:
+            try:
+                published_label = datetime.fromtimestamp(published_at / 1000, tz=timezone.utc).strftime("%d.%m.%Y")
+            except (OSError, OverflowError, ValueError):
+                published_label = ""
+        parts = [f"Artikel {index}: {title}"]
+        if feed_name:
+            parts.append(f"Quelle: {feed_name}")
+        if published_label:
+            parts.append(f"Datum: {published_label}")
+        if summary:
+            parts.append(f"Kurzfassung: {summary}")
+        if content and content != summary:
+            parts.append(f"Inhalt: {content}")
+        if link:
+            parts.append(f"Link: {link}")
+        blocks.append("\n".join(parts))
+    return "\n\n".join(blocks).strip()
+
+
+def _build_newsletter_rss_prompt(mode: str, tone: str, article_count: int) -> str:
+    tone_value = str(tone or "sachlich").strip() or "sachlich"
+    mode_key = str(mode or "ideas").strip().lower()
+    if mode_key == "newsletter":
+        return (
+            "Erstelle auf Deutsch einen sofort nutzbaren Newsletter-Entwurf aus den gelieferten RSS-Artikeln. "
+            "Gib reinen Text ohne Markdown aus. "
+            "Struktur: erste Zeile = Betreff, zweite Zeile = kurzer Preheader, danach Leerzeile und dann der komplette Newsletter-Text in gut lesbaren Absätzen. "
+            "Verdichte die Inhalte, vermeide Copy-Paste aus den Artikeln und formuliere kundenorientiert mit klarer Einordnung. "
+            "Falls mehrere Artikel vorliegen, fasse sie in einem konsistenten Newsletter zusammen. "
+            f"Ton: {tone_value}. Verarbeite {article_count} Artikel."
+        )
+    return (
+        "Erstelle auf Deutsch 5 konkrete Newsletter-Themenvorschläge aus den gelieferten RSS-Artikeln. "
+        "Gib reinen Text ohne Markdown oder JSON aus. "
+        "Jeder Vorschlag in einer Zeile: Ueberschrift, danach Gedankenstrich und ein kurzer Nutzen-/Aufhaenger-Satz. "
+        f"Ton: {tone_value}. Verarbeite {article_count} Artikel."
+    )
+
+
+def _build_newsletter_rss_fallback(mode: str, articles: List[NewsletterRssGenerateArticle]) -> str:
+    cleaned = [article for article in articles if str(article.title or "").strip()]
+    if not cleaned:
+        return "Keine RSS-Artikel ausgewaehlt."
+    if str(mode or "").strip().lower() == "newsletter":
+        first = cleaned[0]
+        title = str(first.title or "Newsletter").strip()
+        summaries = []
+        for article in cleaned[:3]:
+            summary_value = _html_to_plain_text(article.summary or article.content)[:280]
+            if summary_value:
+                summaries.append(f"{article.title}: {summary_value}")
+        body = "\n\n".join(summaries) if summaries else "Aktuelle Branchenthemen kompakt fuer Ihre Kunden aufbereitet."
+        return f"{title}\nAktuelle Branchenimpulse kompakt zusammengefasst\n\n{body}".strip()
+    lines = []
+    for article in cleaned[:5]:
+        teaser = _html_to_plain_text(article.summary or article.content)[:140].rstrip(" ,;:-")
+        lines.append(f"{article.title} - {teaser or 'Aktuellen Artikel als Aufhaenger fuer den Newsletter nutzen.'}")
+    return "\n".join(lines).strip()
 
 
 def _replace_newsletter_group_members(
@@ -16038,6 +16410,164 @@ def delete_newsletter_group(group_id: int):
         return {"status": "deleted"}
 
 
+@app.get("/api/newsletter_rss_feeds")
+def get_newsletter_rss_feeds():
+    with SessionLocal() as db:
+        feeds = db.query(NewsletterRssFeed).order_by(NewsletterRssFeed.name.asc()).all()
+        return [serialize_newsletter_rss_feed(feed) for feed in feeds]
+
+
+@app.post("/api/newsletter_rss_feeds")
+def create_newsletter_rss_feed(data: NewsletterRssFeedCreate):
+    with SessionLocal() as db:
+        name = str(data.name or "").strip()
+        url = _normalize_newsletter_rss_url(data.url)
+        if not name:
+            raise HTTPException(400, "Feed name required")
+        if not url:
+            raise HTTPException(400, "Valid feed URL required")
+        now_ms = int(time.time() * 1000)
+        feed = NewsletterRssFeed(
+            name=name,
+            url=url,
+            description=str(data.description or "").strip(),
+            enabled=True if data.enabled is None else bool(data.enabled),
+            created_at=now_ms,
+            updated_at=now_ms,
+        )
+        db.add(feed)
+        db.commit()
+        db.refresh(feed)
+        return serialize_newsletter_rss_feed(feed)
+
+
+@app.patch("/api/newsletter_rss_feeds/{feed_id}")
+def update_newsletter_rss_feed(feed_id: int, data: NewsletterRssFeedUpdate):
+    with SessionLocal() as db:
+        feed = db.query(NewsletterRssFeed).get(feed_id)
+        if not feed:
+            raise HTTPException(404, "Newsletter RSS feed not found")
+        if data.name is not None:
+            name = str(data.name or "").strip()
+            if not name:
+                raise HTTPException(400, "Feed name required")
+            feed.name = name
+        if data.url is not None:
+            url = _normalize_newsletter_rss_url(data.url)
+            if not url:
+                raise HTTPException(400, "Valid feed URL required")
+            feed.url = url
+        if data.description is not None:
+            feed.description = str(data.description or "").strip()
+        if data.enabled is not None:
+            feed.enabled = bool(data.enabled)
+        feed.updated_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(feed)
+        return serialize_newsletter_rss_feed(feed)
+
+
+@app.delete("/api/newsletter_rss_feeds/{feed_id}")
+def delete_newsletter_rss_feed(feed_id: int):
+    with SessionLocal() as db:
+        feed = db.query(NewsletterRssFeed).get(feed_id)
+        if not feed:
+            raise HTTPException(404, "Newsletter RSS feed not found")
+        db.delete(feed)
+        db.commit()
+        return {"status": "deleted"}
+
+
+@app.get("/api/newsletter_rss_articles")
+def get_newsletter_rss_articles(feed_id: Optional[int] = None, limit: int = 24):
+    resolved_limit = max(1, min(int(limit or 24), 80))
+    with SessionLocal() as db:
+        query = db.query(NewsletterRssFeed)
+        if feed_id:
+            query = query.filter(NewsletterRssFeed.id == int(feed_id))
+        else:
+            query = query.filter(NewsletterRssFeed.enabled.is_(True))
+        feeds = query.order_by(NewsletterRssFeed.name.asc()).all()
+    if not feeds:
+        return {"feeds": [], "items": []}
+
+    per_feed_limit = max(3, min(15, math.ceil(resolved_limit / max(1, len(feeds))) + 2))
+    feed_results: List[Dict[str, Any]] = []
+    if len(feeds) == 1:
+        feed_results.append(_fetch_newsletter_rss_articles_for_feed(feeds[0], per_feed_limit=per_feed_limit))
+    else:
+        with ThreadPoolExecutor(max_workers=min(6, len(feeds))) as executor:
+            future_map = {
+                executor.submit(_fetch_newsletter_rss_articles_for_feed, feed, per_feed_limit=per_feed_limit): feed.id
+                for feed in feeds
+            }
+            for future in as_completed(future_map):
+                try:
+                    feed_results.append(future.result())
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Newsletter RSS aggregate fetch failed: %s", exc)
+
+    items: List[Dict[str, Any]] = []
+    seen_keys: Set[str] = set()
+    for result in feed_results:
+        for item in result.get("items") or []:
+            dedupe_key = str(item.get("link") or item.get("title") or item.get("id") or "").strip().lower()
+            if dedupe_key and dedupe_key in seen_keys:
+                continue
+            if dedupe_key:
+                seen_keys.add(dedupe_key)
+            items.append(item)
+    items.sort(
+        key=lambda item: (
+            -_safe_int(item.get("published_at"), 0),
+            str(item.get("feed_name") or "").lower(),
+            str(item.get("title") or "").lower(),
+        )
+    )
+    return {
+        "feeds": feed_results,
+        "items": items[:resolved_limit],
+    }
+
+
+@app.post("/api/newsletter_rss_generate")
+def generate_newsletter_from_rss(data: NewsletterRssGenerateRequest):
+    articles = [article for article in (data.articles or []) if str(article.title or "").strip()]
+    if not articles:
+        raise HTTPException(400, "At least one article required")
+    if len(articles) > 12:
+        articles = articles[:12]
+    mode = str(data.mode or "ideas").strip().lower()
+    if mode not in {"ideas", "newsletter"}:
+        raise HTTPException(400, "Unsupported mode")
+    source_text = _build_newsletter_rss_source_text(articles)
+    prompt_text = _build_newsletter_rss_prompt(mode, str(data.tone or "sachlich"), len(articles))
+    model_candidates = _resolve_internal_ai_tool_models(None)
+    payload, used_model = _ollama_generate(
+        _build_internal_ai_prompt(prompt_text, source_text),
+        model_candidates=model_candidates,
+        temperature=0.25 if mode == "newsletter" else 0.2,
+        max_tokens=min(900 if mode == "newsletter" else 500, int(INTERNAL_AI_MAX_TOKENS)),
+        timeout=min(int(INTERNAL_AI_TOOL_TIMEOUT_SECONDS), max(10, int(OLLAMA_TIMEOUT_SECONDS))),
+        use_cache=False,
+        raw=True,
+    )
+    response_text = str(payload.get("response") or "").strip()
+    if not response_text:
+        response_text = _build_newsletter_rss_fallback(mode, articles)
+        provider = "fallback"
+    else:
+        provider = "ollama"
+    return {
+        "mode": mode,
+        "text": response_text,
+        "provider": provider,
+        "model": used_model or "",
+        "article_count": len(articles),
+        "generated_at": int(time.time() * 1000),
+    }
+
+
 @app.get("/api/newsletters")
 def get_newsletters():
     with SessionLocal() as db:
@@ -16215,6 +16745,7 @@ def send_newsletter(newsletter_id: int, data: NewsletterSendRequest):
                     data.text or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung."
                 )
                 msg.add_alternative(data.html, subtype="html")
+                _attach_email_attachments(msg, data.attachments)
                 server.send_message(msg)
         except Exception as exc:  # noqa: BLE001
             logger.exception("SMTP newsletter send failed: %s", exc)
@@ -16825,10 +17356,10 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         doc_type_value = _resolve_contract_doc_type_from_template(template_key, template_entry, default="wartung")
         is_service_contract = doc_type_value in {"wartung", "monitoring"}
         template_title = str(template_entry.get("title") or "Vertrag")
-        template_header_html = str(prompts.get("contract_header_html") or template_entry.get("header_html") or "")
+        template_header_html = str(template_entry.get("header_html") or "")
         title = str(data.title or "").strip() or template_title
         body_template = str(template_entry.get("body_template") or "").strip()
-        template_footer_html = str(prompts.get("contract_footer_html") or template_entry.get("footer_html") or "")
+        template_footer_html = str(template_entry.get("footer_html") or "")
         if not body_template:
             raise HTTPException(400, "No contract template configured for selected type")
 

@@ -6,6 +6,18 @@ const escapeHtml = (value = "") =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
+const NEWSLETTER_FOOTER = {
+  company: "Quansatech GmbH",
+  street: "Steyrtalstraße 88",
+  postalCity: "A-4523 Neuzeug",
+  country: "Österreich",
+  phoneLabel: "Telefon",
+  phone: "+43 720 895056",
+  websiteLabel: "www.quansatech.at",
+  websiteUrl: "https://www.quansatech.at",
+  email: "office@quansatech.at"
+};
+
 const htmlToText = (value = "") =>
   String(value)
     .replace(/<br\s*\/?>/gi, "\n")
@@ -35,6 +47,15 @@ export const buildNewsletterPlainText = (draft = {}) => {
       ? `${String(draft.cta_label).trim()}: ${String(draft.cta_url).trim()}`
       : String(draft.cta_url || "").trim(),
     htmlToText(draft.closing_html),
+    [
+      NEWSLETTER_FOOTER.company,
+      NEWSLETTER_FOOTER.street,
+      NEWSLETTER_FOOTER.postalCity,
+      NEWSLETTER_FOOTER.country,
+      `${NEWSLETTER_FOOTER.phoneLabel}: ${NEWSLETTER_FOOTER.phone}`,
+      NEWSLETTER_FOOTER.websiteLabel,
+      NEWSLETTER_FOOTER.email
+    ].join("\n")
   ].filter(Boolean);
   return parts.join("\n\n").trim();
 };
@@ -47,13 +68,23 @@ export const buildNewsletterHtml = (draft = {}) => {
   const closing = String(draft.closing_html || "").trim();
   const ctaLabel = escapeHtml(String(draft.cta_label || "").trim());
   const ctaUrl = escapeHtml(String(draft.cta_url || "").trim());
+  const logoSrc = escapeHtml(String(draft.logo_src || "/QTLogo.jpg").trim() || "/QTLogo.jpg");
   const preheaderText = preheader || title;
+  const footerCompany = escapeHtml(NEWSLETTER_FOOTER.company);
+  const footerStreet = escapeHtml(NEWSLETTER_FOOTER.street);
+  const footerPostalCity = escapeHtml(NEWSLETTER_FOOTER.postalCity);
+  const footerCountry = escapeHtml(NEWSLETTER_FOOTER.country);
+  const footerPhoneLabel = escapeHtml(NEWSLETTER_FOOTER.phoneLabel);
+  const footerPhone = escapeHtml(NEWSLETTER_FOOTER.phone);
+  const footerWebsiteLabel = escapeHtml(NEWSLETTER_FOOTER.websiteLabel);
+  const footerWebsiteUrl = escapeHtml(NEWSLETTER_FOOTER.websiteUrl);
+  const footerEmail = escapeHtml(NEWSLETTER_FOOTER.email);
   const ctaBlock =
     ctaLabel && ctaUrl
       ? `
         <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin-top:28px;border-collapse:collapse;">
           <tr>
-            <td bgcolor="#ff5c3e" style="background-color:#ff5c3e;">
+            <td bgcolor="#1f2937" style="background-color:#1f2937;">
               <a href="${ctaUrl}" target="_blank" style="display:inline-block;padding:13px 24px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:14px;font-weight:700;color:#ffffff;text-decoration:none;">
                 ${ctaLabel}
               </a>
@@ -93,14 +124,22 @@ export const buildNewsletterHtml = (draft = {}) => {
               <td bgcolor="#ffffff" style="background-color:#ffffff;border-collapse:collapse;">
                 <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                   <tr>
-                    <td height="112" bgcolor="#123046" style="height:112px;background-color:#123046;line-height:112px;font-size:0;">&nbsp;</td>
+                    <td bgcolor="#f2f5f8" style="padding:26px 30px 22px 30px;background-color:#f2f5f8;">
+                      <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+                        <tr>
+                          <td align="left" valign="middle">
+                            <img src="${logoSrc}" alt="Quansatech" width="190" style="display:block;width:190px;max-width:190px;height:auto;border:0;" />
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
                   </tr>
                   <tr>
-                    <td height="8" bgcolor="#72b5cc" style="height:8px;background-color:#72b5cc;line-height:8px;font-size:0;">&nbsp;</td>
+                    <td height="6" bgcolor="#1f2937" style="height:6px;background-color:#1f2937;line-height:6px;font-size:0;">&nbsp;</td>
                   </tr>
                   <tr>
                     <td style="padding:30px 30px 18px 30px;font-family:Arial,Helvetica,sans-serif;">
-                      <div style="font-size:30px;line-height:36px;font-weight:700;color:#72b5cc;mso-line-height-rule:exactly;">
+                      <div style="font-size:30px;line-height:36px;font-weight:700;color:#1c2733;mso-line-height-rule:exactly;">
                         ${title}
                       </div>
                     </td>
@@ -121,7 +160,13 @@ export const buildNewsletterHtml = (draft = {}) => {
                         </tr>
                         <tr>
                           <td style="padding-top:18px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:22px;color:#7e878d;mso-line-height-rule:exactly;">
-                            QT Workbench Newsletter
+                            <strong style="color:#1c2733;">${footerCompany}</strong><br />
+                            ${footerStreet}<br />
+                            ${footerPostalCity}<br />
+                            ${footerCountry}<br />
+                            ${footerPhoneLabel}: ${footerPhone}<br />
+                            <a href="${footerWebsiteUrl}" target="_blank" style="color:#1c2733;text-decoration:none;">${footerWebsiteLabel}</a><br />
+                            <a href="mailto:${footerEmail}" style="color:#1c2733;text-decoration:none;">${footerEmail}</a>
                           </td>
                         </tr>
                       </table>
