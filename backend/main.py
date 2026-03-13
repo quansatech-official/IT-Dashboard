@@ -345,6 +345,56 @@ class CustomerPhone(Base):
     customer = relationship("Customer", back_populates="phones")
 
 
+class NewsletterGroup(Base):
+    __tablename__ = "newsletter_groups"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+    members = relationship(
+        "NewsletterGroupMember",
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
+
+
+class NewsletterGroupMember(Base):
+    __tablename__ = "newsletter_group_members"
+
+    id = Column(Integer, primary_key=True)
+    group_id = Column(Integer, ForeignKey("newsletter_groups.id", ondelete="CASCADE"), nullable=False, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+    group = relationship("NewsletterGroup", back_populates="members")
+    customer = relationship("Customer")
+
+
+class Newsletter(Base):
+    __tablename__ = "newsletters"
+
+    id = Column(Integer, primary_key=True)
+    guid = Column(String, default=lambda: str(uuid.uuid4()))
+    title = Column(String, default="")
+    subject = Column(String, nullable=False)
+    preheader = Column(String, default="")
+    intro_html = Column(Text, default="")
+    body_html = Column(Text, default="")
+    cta_label = Column(String, default="")
+    cta_url = Column(String, default="")
+    closing_html = Column(Text, default="")
+    audience_json = Column(Text, default="{}")
+    recipient_emails_json = Column(Text, default="[]")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    sent_at = Column(BigInteger, default=0)
+    sent_via = Column(String, default="")
+    sent_to = Column(Text, default="[]")
+    recipient_count = Column(Integer, default=0)
+
+
 class DeliveryNote(Base):
     __tablename__ = "delivery_notes"
 
@@ -1681,6 +1731,54 @@ class ReportEdit(BaseModel):
     customer_status: Optional[str] = None
     third_party_payload: Optional[Dict[str, Any]] = None
     items: Optional[List[ReportItemSchema]] = None
+
+
+class NewsletterGroupCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    customer_ids: Optional[List[int]] = None
+
+
+class NewsletterGroupUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    customer_ids: Optional[List[int]] = None
+
+
+class NewsletterSaveRequest(BaseModel):
+    title: Optional[str] = ""
+    subject: str
+    preheader: Optional[str] = ""
+    intro_html: Optional[str] = ""
+    body_html: Optional[str] = ""
+    cta_label: Optional[str] = ""
+    cta_url: Optional[str] = ""
+    closing_html: Optional[str] = ""
+    selected_group_ids: Optional[List[int]] = None
+    selected_customer_ids: Optional[List[int]] = None
+    recipient_emails: Optional[List[str]] = None
+
+
+class NewsletterUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    subject: Optional[str] = None
+    preheader: Optional[str] = None
+    intro_html: Optional[str] = None
+    body_html: Optional[str] = None
+    cta_label: Optional[str] = None
+    cta_url: Optional[str] = None
+    closing_html: Optional[str] = None
+    selected_group_ids: Optional[List[int]] = None
+    selected_customer_ids: Optional[List[int]] = None
+    recipient_emails: Optional[List[str]] = None
+
+
+class NewsletterSendRequest(BaseModel):
+    recipient_emails: Optional[List[str]] = None
+    subject: Optional[str] = None
+    html: str
+    text: Optional[str] = None
+
 
 class IntegrationSettingsUpdate(BaseModel):
     rmm_host: Optional[str] = None
@@ -4421,6 +4519,150 @@ def serialize_report(report: Report) -> Dict[str, Any]:
         "opened_count": report.opened_count,
         "items": [serialize_report_item(i) for i in report.items],
     }
+
+
+def _normalize_newsletter_customer_ids(values: Optional[List[Any]]) -> List[int]:
+    ids: List[int] = []
+    seen: Set[int] = set()
+    for value in values or []:
+        try:
+            customer_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if customer_id <= 0 or customer_id in seen:
+            continue
+        seen.add(customer_id)
+        ids.append(customer_id)
+    return ids
+
+
+def _normalize_newsletter_email_list(values: Optional[List[Any]]) -> List[str]:
+    emails: List[str] = []
+    seen: Set[str] = set()
+    for value in values or []:
+        email = str(value or "").strip()
+        if not email:
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        emails.append(email)
+    return emails
+
+
+def _parse_json_object(value: Optional[str]) -> Dict[str, Any]:
+    raw = str(value or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_json_string_list(value: Optional[str]) -> List[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return []
+    return _normalize_newsletter_email_list(parsed if isinstance(parsed, list) else [])
+
+
+def _serialize_newsletter_group_customer(customer: Customer) -> Dict[str, Any]:
+    return {
+        "id": customer.id,
+        "name": customer.name or "",
+        "email": customer.email or "",
+        "status": (customer.status or "active").strip().lower() or "active",
+        "newsletter": bool(customer.newsletter),
+    }
+
+
+def serialize_newsletter_group(group: NewsletterGroup) -> Dict[str, Any]:
+    members = []
+    for member in sorted(group.members, key=lambda item: ((item.customer.name or "").lower() if item.customer else "", item.customer_id)):
+        if not member.customer:
+            continue
+        members.append(_serialize_newsletter_group_customer(member.customer))
+    return {
+        "id": group.id,
+        "name": group.name or "",
+        "description": group.description or "",
+        "created_at": group.created_at,
+        "customer_ids": [int(member["id"]) for member in members],
+        "customers": members,
+        "recipient_count": len([item for item in members if str(item.get("email") or "").strip()]),
+    }
+
+
+def serialize_newsletter(newsletter: Newsletter) -> Dict[str, Any]:
+    audience = _parse_json_object(newsletter.audience_json)
+    return {
+        "id": newsletter.id,
+        "guid": newsletter.guid,
+        "title": newsletter.title or "",
+        "subject": newsletter.subject or "",
+        "preheader": newsletter.preheader or "",
+        "intro_html": newsletter.intro_html or "",
+        "body_html": newsletter.body_html or "",
+        "cta_label": newsletter.cta_label or "",
+        "cta_url": newsletter.cta_url or "",
+        "closing_html": newsletter.closing_html or "",
+        "selected_group_ids": _normalize_newsletter_customer_ids(audience.get("group_ids")),
+        "selected_customer_ids": _normalize_newsletter_customer_ids(audience.get("customer_ids")),
+        "recipient_emails": _parse_json_string_list(newsletter.recipient_emails_json),
+        "created_at": newsletter.created_at,
+        "updated_at": newsletter.updated_at,
+        "sent_at": newsletter.sent_at,
+        "sent_via": newsletter.sent_via or "",
+        "sent_to": _parse_json_string_list(newsletter.sent_to),
+        "recipient_count": int(newsletter.recipient_count or 0),
+    }
+
+
+def _replace_newsletter_group_members(
+    db: Session,
+    group: NewsletterGroup,
+    customer_ids: Optional[List[Any]],
+) -> None:
+    next_ids = set(_normalize_newsletter_customer_ids(customer_ids))
+    group.members.clear()
+    if not next_ids:
+        return
+    valid_ids = {
+        int(row.id)
+        for row in db.query(Customer.id).filter(Customer.id.in_(list(next_ids))).all()
+    }
+    for customer_id in sorted(valid_ids):
+        group.members.append(NewsletterGroupMember(customer_id=customer_id))
+
+
+def _resolve_newsletter_recipient_emails(
+    db: Session,
+    *,
+    selected_group_ids: Optional[List[Any]] = None,
+    selected_customer_ids: Optional[List[Any]] = None,
+    explicit_emails: Optional[List[Any]] = None,
+) -> List[str]:
+    emails = _normalize_newsletter_email_list(explicit_emails)
+    customer_ids = set(_normalize_newsletter_customer_ids(selected_customer_ids))
+    group_ids = _normalize_newsletter_customer_ids(selected_group_ids)
+    if group_ids:
+        rows = (
+            db.query(NewsletterGroupMember.customer_id)
+            .filter(NewsletterGroupMember.group_id.in_(group_ids))
+            .all()
+        )
+        customer_ids.update(int(row.customer_id) for row in rows if row.customer_id is not None)
+    if customer_ids:
+        customers = db.query(Customer).filter(Customer.id.in_(list(customer_ids))).all()
+        emails.extend(customer.email for customer in customers if str(customer.email or "").strip())
+    return _normalize_newsletter_email_list(emails)
 
 
 def _normalize_meta_hub_mailbox(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -15608,6 +15850,258 @@ def delete_report(report_id: int):
         db.delete(report)
         db.commit()
         return {"status": "deleted"}
+
+
+@app.get("/api/newsletter_groups")
+def get_newsletter_groups():
+    with SessionLocal() as db:
+        groups = db.query(NewsletterGroup).order_by(NewsletterGroup.name.asc()).all()
+        return [serialize_newsletter_group(group) for group in groups]
+
+
+@app.post("/api/newsletter_groups")
+def create_newsletter_group(data: NewsletterGroupCreate):
+    with SessionLocal() as db:
+        name = str(data.name or "").strip()
+        if not name:
+            raise HTTPException(400, "Group name required")
+        group = NewsletterGroup(
+            name=name,
+            description=str(data.description or "").strip(),
+        )
+        db.add(group)
+        db.flush()
+        _replace_newsletter_group_members(db, group, data.customer_ids)
+        db.commit()
+        db.refresh(group)
+        return serialize_newsletter_group(group)
+
+
+@app.patch("/api/newsletter_groups/{group_id}")
+def update_newsletter_group(group_id: int, data: NewsletterGroupUpdate):
+    with SessionLocal() as db:
+        group = db.query(NewsletterGroup).get(group_id)
+        if not group:
+            raise HTTPException(404, "Newsletter group not found")
+        if data.name is not None:
+            name = str(data.name or "").strip()
+            if not name:
+                raise HTTPException(400, "Group name required")
+            group.name = name
+        if data.description is not None:
+            group.description = str(data.description or "").strip()
+        if data.customer_ids is not None:
+            _replace_newsletter_group_members(db, group, data.customer_ids)
+        db.commit()
+        db.refresh(group)
+        return serialize_newsletter_group(group)
+
+
+@app.delete("/api/newsletter_groups/{group_id}")
+def delete_newsletter_group(group_id: int):
+    with SessionLocal() as db:
+        group = db.query(NewsletterGroup).get(group_id)
+        if not group:
+            raise HTTPException(404, "Newsletter group not found")
+        db.delete(group)
+        db.commit()
+        return {"status": "deleted"}
+
+
+@app.get("/api/newsletters")
+def get_newsletters():
+    with SessionLocal() as db:
+        newsletters = db.query(Newsletter).order_by(Newsletter.created_at.desc()).all()
+        return [serialize_newsletter(item) for item in newsletters]
+
+
+@app.get("/api/newsletters/{newsletter_id}")
+def get_newsletter(newsletter_id: int):
+    with SessionLocal() as db:
+        newsletter = db.query(Newsletter).get(newsletter_id)
+        if not newsletter:
+            raise HTTPException(404, "Newsletter not found")
+        return serialize_newsletter(newsletter)
+
+
+@app.post("/api/newsletters")
+def create_newsletter(data: NewsletterSaveRequest):
+    with SessionLocal() as db:
+        subject = str(data.subject or "").strip()
+        if not subject:
+            raise HTTPException(400, "Subject required")
+        recipient_emails = _resolve_newsletter_recipient_emails(
+            db,
+            selected_group_ids=data.selected_group_ids,
+            selected_customer_ids=data.selected_customer_ids,
+            explicit_emails=data.recipient_emails,
+        )
+        now_ms = int(time.time() * 1000)
+        newsletter = Newsletter(
+            guid=str(uuid.uuid4()),
+            title=str(data.title or "").strip(),
+            subject=subject,
+            preheader=str(data.preheader or "").strip(),
+            intro_html=str(data.intro_html or ""),
+            body_html=str(data.body_html or ""),
+            cta_label=str(data.cta_label or "").strip(),
+            cta_url=str(data.cta_url or "").strip(),
+            closing_html=str(data.closing_html or ""),
+            audience_json=json.dumps(
+                {
+                    "group_ids": _normalize_newsletter_customer_ids(data.selected_group_ids),
+                    "customer_ids": _normalize_newsletter_customer_ids(data.selected_customer_ids),
+                }
+            ),
+            recipient_emails_json=json.dumps(recipient_emails),
+            recipient_count=len(recipient_emails),
+            created_at=now_ms,
+            updated_at=now_ms,
+        )
+        db.add(newsletter)
+        db.commit()
+        db.refresh(newsletter)
+        return serialize_newsletter(newsletter)
+
+
+@app.put("/api/newsletters/{newsletter_id}")
+def update_newsletter(newsletter_id: int, data: NewsletterUpdateRequest):
+    with SessionLocal() as db:
+        newsletter = db.query(Newsletter).get(newsletter_id)
+        if not newsletter:
+            raise HTTPException(404, "Newsletter not found")
+        if data.title is not None:
+            newsletter.title = str(data.title or "").strip()
+        if data.subject is not None:
+            subject = str(data.subject or "").strip()
+            if not subject:
+                raise HTTPException(400, "Subject required")
+            newsletter.subject = subject
+        if data.preheader is not None:
+            newsletter.preheader = str(data.preheader or "").strip()
+        if data.intro_html is not None:
+            newsletter.intro_html = str(data.intro_html or "")
+        if data.body_html is not None:
+            newsletter.body_html = str(data.body_html or "")
+        if data.cta_label is not None:
+            newsletter.cta_label = str(data.cta_label or "").strip()
+        if data.cta_url is not None:
+            newsletter.cta_url = str(data.cta_url or "").strip()
+        if data.closing_html is not None:
+            newsletter.closing_html = str(data.closing_html or "")
+        if (
+            data.selected_group_ids is not None
+            or data.selected_customer_ids is not None
+            or data.recipient_emails is not None
+        ):
+            existing_audience = _parse_json_object(newsletter.audience_json)
+            selected_group_ids = (
+                data.selected_group_ids
+                if data.selected_group_ids is not None
+                else existing_audience.get("group_ids")
+            )
+            selected_customer_ids = (
+                data.selected_customer_ids
+                if data.selected_customer_ids is not None
+                else existing_audience.get("customer_ids")
+            )
+            explicit_emails = (
+                data.recipient_emails
+                if data.recipient_emails is not None
+                else _parse_json_string_list(newsletter.recipient_emails_json)
+            )
+            recipient_emails = _resolve_newsletter_recipient_emails(
+                db,
+                selected_group_ids=selected_group_ids,
+                selected_customer_ids=selected_customer_ids,
+                explicit_emails=explicit_emails,
+            )
+            newsletter.audience_json = json.dumps(
+                {
+                    "group_ids": _normalize_newsletter_customer_ids(selected_group_ids),
+                    "customer_ids": _normalize_newsletter_customer_ids(selected_customer_ids),
+                }
+            )
+            newsletter.recipient_emails_json = json.dumps(recipient_emails)
+            newsletter.recipient_count = len(recipient_emails)
+        newsletter.updated_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(newsletter)
+        return serialize_newsletter(newsletter)
+
+
+@app.delete("/api/newsletters/{newsletter_id}")
+def delete_newsletter(newsletter_id: int):
+    with SessionLocal() as db:
+        newsletter = db.query(Newsletter).get(newsletter_id)
+        if not newsletter:
+            raise HTTPException(404, "Newsletter not found")
+        db.delete(newsletter)
+        db.commit()
+        return {"status": "deleted"}
+
+
+@app.post("/api/newsletters/{newsletter_id}/send")
+def send_newsletter(newsletter_id: int, data: NewsletterSendRequest):
+    with SessionLocal() as db:
+        newsletter = db.query(Newsletter).get(newsletter_id)
+        if not newsletter:
+            raise HTTPException(404, "Newsletter not found")
+        settings = _get_smtp_settings(db)
+        if not settings.host or not settings.sender_email:
+            raise HTTPException(400, "SMTP settings missing")
+        recipients = _normalize_newsletter_email_list(data.recipient_emails)
+        if not recipients:
+            recipients = _parse_json_string_list(newsletter.recipient_emails_json)
+        if not recipients:
+            raise HTTPException(400, "No recipients available")
+
+        subject = str(data.subject or newsletter.subject or "").strip()
+        if not subject:
+            raise HTTPException(400, "Subject required")
+
+        from_addr = settings.sender_email
+        if settings.sender_name:
+            from_addr = f"{settings.sender_name} <{settings.sender_email}>"
+
+        import smtplib
+        from email.message import EmailMessage
+
+        if settings.use_ssl:
+            server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
+        else:
+            server = smtplib.SMTP(settings.host, settings.port or 587, timeout=20)
+        try:
+            if settings.use_tls and not settings.use_ssl:
+                server.starttls()
+            if settings.username:
+                server.login(settings.username, settings.password or "")
+            for recipient in recipients:
+                msg = EmailMessage()
+                msg["Subject"] = subject
+                msg["From"] = from_addr
+                msg["To"] = recipient
+                msg.set_content(
+                    data.text or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung."
+                )
+                msg.add_alternative(data.html, subtype="html")
+                server.send_message(msg)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("SMTP newsletter send failed: %s", exc)
+            raise HTTPException(502, f"SMTP send failed: {exc}") from exc
+        finally:
+            server.quit()
+
+        now_ms = int(time.time() * 1000)
+        newsletter.sent_at = now_ms
+        newsletter.sent_via = "smtp"
+        newsletter.sent_to = json.dumps(recipients)
+        newsletter.recipient_emails_json = json.dumps(recipients)
+        newsletter.recipient_count = len(recipients)
+        newsletter.updated_at = now_ms
+        db.commit()
+        db.refresh(newsletter)
+        return serialize_newsletter(newsletter)
 
 
 @app.get("/api/smtp_settings")
