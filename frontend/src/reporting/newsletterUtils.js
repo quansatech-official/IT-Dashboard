@@ -40,7 +40,7 @@ export const paragraphsToHtml = (value = "") =>
 
 export const buildNewsletterPlainText = (draft = {}) => {
   const parts = [
-    String(draft.title || "").trim(),
+    String(draft.subject || draft.title || "").trim(),
     htmlToText(draft.intro_html),
     htmlToText(draft.body_html),
     htmlToText(draft.closing_html),
@@ -58,7 +58,7 @@ export const buildNewsletterPlainText = (draft = {}) => {
 };
 
 export const buildNewsletterHtml = (draft = {}) => {
-  const title = escapeHtml(String(draft.title || draft.subject || "Newsletter").trim() || "Newsletter");
+  const title = escapeHtml(String(draft.subject || draft.title || "Newsletter").trim() || "Newsletter");
   const intro = String(draft.intro_html || "").trim();
   const body = String(draft.body_html || "").trim();
   const closing = String(draft.closing_html || "").trim();
@@ -95,21 +95,54 @@ export const buildNewsletterHtml = (draft = {}) => {
               <td bgcolor="#ffffff" style="background-color:#ffffff;border-collapse:collapse;">
                 <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                   <tr>
-                    <td bgcolor="#f2f5f8" style="padding:26px 30px 22px 30px;background-color:#f2f5f8;">
+                    <td bgcolor="#1c2733" style="padding:24px 30px 18px 30px;background-color:#1c2733;">
                       <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                         <tr>
                           <td align="left" valign="middle">
-                            <img src="${logoSrc}" alt="Quansatech" width="190" style="display:block;width:190px;max-width:190px;height:auto;border:0;" />
+                            <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="border-collapse:separate;">
+                              <tr>
+                                <td bgcolor="#ffffff" style="background-color:#ffffff;padding:14px 18px 12px 18px;border:1px solid #dbe4ea;">
+                                  <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+                                    <tr>
+                                      <td valign="middle">
+                                        <img
+                                          src="${logoSrc}"
+                                          alt="Quansatech"
+                                          width="220"
+                                          style="display:block;width:220px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;"
+                                        />
+                                      </td>
+                                      <td valign="middle" style="padding-left:18px;font-family:Arial,Helvetica,sans-serif;border-left:1px solid #dbe4ea;">
+                                        <div style="font-size:22px;line-height:24px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;color:#1c2733;mso-line-height-rule:exactly;">
+                                          Newsletter
+                                        </div>
+                                        <div style="padding-top:4px;font-size:12px;line-height:18px;color:#5e6a74;mso-line-height-rule:exactly;">
+                                          Quansatech Informationen
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  </table>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                          <td align="right" valign="middle" style="padding-left:16px;font-family:Arial,Helvetica,sans-serif;">
+                            <div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.28em;text-transform:uppercase;color:#dbe4ea;mso-line-height-rule:exactly;">
+                              E-Mail
+                            </div>
+                            <div style="padding-top:6px;font-size:13px;line-height:20px;color:#f2f5f8;mso-line-height-rule:exactly;">
+                              Informationen, Hinweise und Updates
+                            </div>
                           </td>
                         </tr>
                       </table>
                     </td>
                   </tr>
                   <tr>
-                    <td height="6" bgcolor="#1f2937" style="height:6px;background-color:#1f2937;line-height:6px;font-size:0;">&nbsp;</td>
+                    <td height="8" bgcolor="#c58a2d" style="height:8px;background-color:#c58a2d;line-height:8px;font-size:0;">&nbsp;</td>
                   </tr>
                   <tr>
-                    <td style="padding:30px 30px 18px 30px;font-family:Arial,Helvetica,sans-serif;">
+                    <td style="padding:34px 30px 18px 30px;font-family:Arial,Helvetica,sans-serif;">
                       <div style="font-size:30px;line-height:36px;font-weight:700;color:#1c2733;mso-line-height-rule:exactly;">
                         ${title}
                       </div>

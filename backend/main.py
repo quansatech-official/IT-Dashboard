@@ -4663,7 +4663,13 @@ def serialize_newsletter_group(group: NewsletterGroup) -> Dict[str, Any]:
         "created_at": group.created_at,
         "customer_ids": [int(member["id"]) for member in members],
         "customers": members,
-        "recipient_count": len([item for item in members if str(item.get("email") or "").strip()]),
+        "recipient_count": len(
+            [
+                item
+                for item in members
+                if item.get("newsletter") and str(item.get("email") or "").strip()
+            ]
+        ),
     }
 
 
@@ -5043,7 +5049,16 @@ def _resolve_newsletter_recipient_emails(
     selected_customer_ids: Optional[List[Any]] = None,
     explicit_emails: Optional[List[Any]] = None,
 ) -> List[str]:
-    emails = _normalize_newsletter_email_list(explicit_emails)
+    blocked_emails = {
+        str(row.email or "").strip().lower()
+        for row in db.query(Customer.email).filter(Customer.newsletter.is_(False)).all()
+        if str(row.email or "").strip()
+    }
+    emails = [
+        email
+        for email in _normalize_newsletter_email_list(explicit_emails)
+        if str(email or "").strip().lower() not in blocked_emails
+    ]
     customer_ids = set(_normalize_newsletter_customer_ids(selected_customer_ids))
     group_ids = _normalize_newsletter_customer_ids(selected_group_ids)
     if group_ids:
@@ -5054,7 +5069,11 @@ def _resolve_newsletter_recipient_emails(
         )
         customer_ids.update(int(row.customer_id) for row in rows if row.customer_id is not None)
     if customer_ids:
-        customers = db.query(Customer).filter(Customer.id.in_(list(customer_ids))).all()
+        customers = (
+            db.query(Customer)
+            .filter(Customer.id.in_(list(customer_ids)), Customer.newsletter.is_(True))
+            .all()
+        )
         emails.extend(customer.email for customer in customers if str(customer.email or "").strip())
     return _normalize_newsletter_email_list(emails)
 
@@ -16713,6 +16732,16 @@ def send_newsletter(newsletter_id: int, data: NewsletterSendRequest):
         recipients = _normalize_newsletter_email_list(data.recipient_emails)
         if not recipients:
             recipients = _parse_json_string_list(newsletter.recipient_emails_json)
+        blocked_emails = {
+            str(row.email or "").strip().lower()
+            for row in db.query(Customer.email).filter(Customer.newsletter.is_(False)).all()
+            if str(row.email or "").strip()
+        }
+        recipients = [
+            recipient
+            for recipient in recipients
+            if str(recipient or "").strip().lower() not in blocked_emails
+        ]
         if not recipients:
             raise HTTPException(400, "No recipients available")
 

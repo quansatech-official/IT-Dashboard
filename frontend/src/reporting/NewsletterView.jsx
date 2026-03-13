@@ -26,7 +26,6 @@ import NotesRichTextEditor from "../components/NotesRichTextEditor";
 
 const defaultDraft = {
   id: null,
-  title: "",
   subject: "",
   content: "",
   selected_group_ids: [],
@@ -138,8 +137,7 @@ const extractNewsletterDraftFromAi = (value = "") => {
 const mapNewsletterToDraft = (item = {}) => ({
   ...defaultDraft,
   id: item.id ?? null,
-  title: String(item.title || ""),
-  subject: String(item.subject || ""),
+  subject: String(item.subject || item.title || ""),
   content: joinContentBlocks(item.intro_html, item.body_html, item.closing_html),
   selected_group_ids: normalizeIdList(item.selected_group_ids || []),
   selected_customer_ids: normalizeIdList(item.selected_customer_ids || []),
@@ -276,13 +274,29 @@ export default function NewsletterView() {
   }, [selectedRssFeedId, isLoading]);
 
   const newsletterCustomers = useMemo(
-    () => customers.filter((customer) => customer.newsletter),
+    () => customers.filter((customer) => customer.newsletter && customer.status === "active"),
     [customers]
   );
 
-  const customerById = useMemo(
+  const allCustomersById = useMemo(
+    () => new Map(customers.map((customer) => [customer.id, customer])),
+    [customers]
+  );
+
+  const newsletterCustomerById = useMemo(
     () => new Map(newsletterCustomers.map((customer) => [customer.id, customer])),
     [newsletterCustomers]
+  );
+
+  const optedOutEmailSet = useMemo(
+    () =>
+      new Set(
+        customers
+          .filter((customer) => !customer.newsletter && customer.email)
+          .map((customer) => String(customer.email || "").trim().toLowerCase())
+          .filter(Boolean)
+      ),
+    [customers]
   );
 
   const groupCustomerIds = useMemo(() => {
@@ -306,17 +320,27 @@ export default function NewsletterView() {
 
   const resolvedRecipients = useMemo(() => {
     const emails = resolvedCustomerIds
-      .map((customerId) => customerById.get(customerId)?.email || "")
+      .map((customerId) => newsletterCustomerById.get(customerId)?.email || "")
       .filter(Boolean);
-    return normalizeEmailList([...emails, ...manualRecipientList].join(","));
-  }, [customerById, manualRecipientList, resolvedCustomerIds]);
+    return normalizeEmailList([...emails, ...manualRecipientList].join(",")).filter(
+      (email) => !optedOutEmailSet.has(String(email || "").trim().toLowerCase())
+    );
+  }, [newsletterCustomerById, manualRecipientList, optedOutEmailSet, resolvedCustomerIds]);
 
   const missingEmailCustomers = useMemo(
     () =>
       resolvedCustomerIds
-        .map((customerId) => customerById.get(customerId))
+        .map((customerId) => newsletterCustomerById.get(customerId))
         .filter((customer) => customer && !customer.email),
-    [customerById, resolvedCustomerIds]
+    [newsletterCustomerById, resolvedCustomerIds]
+  );
+
+  const optedOutCustomers = useMemo(
+    () =>
+      resolvedCustomerIds
+        .map((customerId) => allCustomersById.get(customerId))
+        .filter((customer) => customer && !customer.newsletter),
+    [allCustomersById, resolvedCustomerIds]
   );
 
   const resolvedDraft = useMemo(() => buildDraftPayload(draft), [draft]);
@@ -413,7 +437,7 @@ export default function NewsletterView() {
     setIsSaving(true);
     try {
       const payload = {
-        title: draft.title,
+        title: draft.subject,
         subject: draft.subject,
         preheader: "",
         intro_html: resolvedDraft.intro_html,
@@ -451,10 +475,15 @@ export default function NewsletterView() {
 
   const openSendComposer = (item) => {
     const normalized = buildDraftPayload(mapNewsletterToDraft(item));
+    const storedRecipients = Array.isArray(item.recipient_emails)
+      ? normalizeEmailList(item.recipient_emails.join(", ")).filter(
+          (email) => !optedOutEmailSet.has(String(email || "").trim().toLowerCase())
+        )
+      : [];
     setSendComposer({
       open: true,
       newsletterId: item.id,
-      recipient: Array.isArray(item.recipient_emails) ? item.recipient_emails.join(", ") : resolvedRecipients.join(", "),
+      recipient: storedRecipients.length ? storedRecipients.join(", ") : resolvedRecipients.join(", "),
       subject: normalized.subject,
       html: buildNewsletterHtml({ ...normalized, logo_src: "cid:qtlogo" }),
       text: buildNewsletterPlainText(normalized),
@@ -552,7 +581,7 @@ export default function NewsletterView() {
     const normalized = mapNewsletterToDraft(item);
     setPreviewModal({
       open: true,
-      title: normalized.title || normalized.subject || "Newsletter Vorschau",
+      title: normalized.subject || "Newsletter Vorschau",
       html: buildNewsletterHtml(normalized)
     });
   };
@@ -734,7 +763,6 @@ export default function NewsletterView() {
     const block = selectedRssArticles.map((article) => buildArticleBlock(article)).filter(Boolean).join("\n\n");
     setDraft((prev) => ({
       ...prev,
-      title: prev.title || (selectedRssArticles[0]?.title || ""),
       subject: prev.subject || (selectedRssArticles[0]?.title || ""),
       content: `${prev.content || ""}${prev.content ? "\n" : ""}${block}`.trim()
     }));
@@ -773,7 +801,6 @@ export default function NewsletterView() {
         const parsed = extractNewsletterDraftFromAi(generatedText);
         setDraft((prev) => ({
           ...prev,
-          title: prev.title || parsed.subject || selectedRssArticles[0]?.title || "",
           subject: parsed.subject || prev.subject || selectedRssArticles[0]?.title || "",
           content: parsed.content || generatedText
         }));
@@ -910,11 +937,11 @@ export default function NewsletterView() {
                     className="w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
                   />
 
-                  <div className="max-h-80 space-y-2 overflow-auto pr-1">
+                  <div className="max-h-80 grid gap-2 overflow-auto pr-1 md:grid-cols-2">
                     {filteredGroupCustomers.map((customer) => (
                       <label
                         key={customer.id}
-                        className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-3 py-3 ${
+                        className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 ${
                           groupForm.customerIds.includes(customer.id)
                             ? "border-amber-300 bg-amber-50"
                             : "border-sand-200 bg-sand-50"
@@ -924,11 +951,22 @@ export default function NewsletterView() {
                           type="checkbox"
                           checked={groupForm.customerIds.includes(customer.id)}
                           onChange={() => toggleGroupCustomer(customer.id)}
-                          className="mt-1 h-4 w-4"
+                          className="h-4 w-4"
                         />
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-sand-900">{customer.name}</p>
-                          <p className="truncate text-xs text-sand-500">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="truncate text-sm font-semibold text-sand-900">{customer.name}</p>
+                            <span
+                              className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                customer.email
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : "bg-sand-200 text-sand-500"
+                              }`}
+                            >
+                              {customer.email ? "Mail" : "Ohne Mail"}
+                            </span>
+                          </div>
+                          <p className="truncate text-[11px] leading-4 text-sand-500">
                             {customer.email || "Keine E-Mail hinterlegt"}
                           </p>
                         </div>
@@ -1257,13 +1295,13 @@ export default function NewsletterView() {
                     placeholder="Kunde oder E-Mail suchen"
                     className="w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
                   />
-                  <div className="max-h-72 space-y-2 overflow-auto pr-1">
+                  <div className="max-h-72 grid gap-2 overflow-auto pr-1">
                     {filteredRecipientCustomers.map((customer) => {
                       const checked = draft.selected_customer_ids.includes(customer.id);
                       return (
                         <label
                           key={customer.id}
-                          className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-3 py-3 ${
+                          className={`flex cursor-pointer items-center gap-2 rounded-xl border px-3 py-2 ${
                             checked
                               ? "border-amber-300 bg-amber-50"
                               : "border-sand-200 bg-sand-50 hover:bg-white"
@@ -1273,16 +1311,24 @@ export default function NewsletterView() {
                             type="checkbox"
                             checked={checked}
                             onChange={() => toggleDraftCustomer(customer.id)}
-                            className="mt-1 h-4 w-4"
+                            className="h-4 w-4"
                           />
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-sand-900">{customer.name}</p>
-                            <p className="truncate text-xs text-sand-500">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="truncate text-sm font-semibold text-sand-900">{customer.name}</p>
+                              <span
+                                className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                                  customer.email
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : "bg-sand-200 text-sand-500"
+                                }`}
+                              >
+                                {customer.email ? "Mail" : "Ohne Mail"}
+                              </span>
+                            </div>
+                            <p className="truncate text-[11px] leading-4 text-sand-500">
                               {customer.email || "Keine E-Mail hinterlegt"}
                             </p>
-                            {customer.status !== "active" ? (
-                              <p className="mt-1 text-[10px] uppercase tracking-wide text-rose-600">Inaktiv</p>
-                            ) : null}
                           </div>
                         </label>
                       );
@@ -1318,6 +1364,13 @@ export default function NewsletterView() {
                   {missingEmailCustomers.map((customer) => customer.name).join(", ")}
                 </div>
               ) : null}
+
+              {optedOutCustomers.length ? (
+                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  Vom Versand ausgeschlossen, da Newsletter im Kundenstamm deaktiviert ist:{" "}
+                  {optedOutCustomers.map((customer) => customer.name).join(", ")}
+                </div>
+              ) : null}
             </div>
 
             <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
@@ -1330,16 +1383,7 @@ export default function NewsletterView() {
                 </div>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="block">
-                  <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Interner Titel</span>
-                  <input
-                    value={draft.title}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, title: event.target.value }))}
-                    className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                    placeholder="z. B. Security Update März"
-                  />
-                </label>
+              <div className="grid gap-4">
                 <label className="block">
                   <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Betreff</span>
                   <input
@@ -1515,7 +1559,6 @@ export default function NewsletterView() {
                                   setSelectedRssArticleIds([article.id]);
                                   setDraft((prev) => ({
                                     ...prev,
-                                    title: prev.title || article.title || "",
                                     subject: prev.subject || article.title || "",
                                     content: `${prev.content || ""}${prev.content ? "\n" : ""}${buildArticleBlock(article)}`.trim()
                                   }));
@@ -1550,7 +1593,7 @@ export default function NewsletterView() {
                   onClick={() =>
                     setPreviewModal({
                       open: true,
-                      title: draft.title || draft.subject || "Newsletter Vorschau",
+                      title: draft.subject || "Newsletter Vorschau",
                       html: previewHtml
                     })
                   }
@@ -1591,7 +1634,7 @@ export default function NewsletterView() {
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-sand-900">
-                          {item.title || item.subject || "Newsletter"}
+                          {item.subject || item.title || "Newsletter"}
                         </p>
                         <p className="mt-1 text-xs text-sand-500">
                           Betreff: {item.subject || "ohne Betreff"}
