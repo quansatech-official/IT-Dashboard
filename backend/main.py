@@ -77,6 +77,17 @@ INTERNAL_AI_MAX_TOKENS = max(
     128,
     int(os.environ.get("INTERNAL_AI_MAX_TOKENS") or "1200"),
 )
+INTERNAL_AI_TOOL_MAX_TOKENS = max(
+    128,
+    min(
+        int(os.environ.get("INTERNAL_AI_TOOL_MAX_TOKENS") or "480"),
+        int(INTERNAL_AI_MAX_TOKENS),
+    ),
+)
+INTERNAL_AI_TOOL_TIMEOUT_SECONDS = max(
+    6,
+    int(os.environ.get("INTERNAL_AI_TOOL_TIMEOUT_SECONDS") or "18"),
+)
 OLLAMA_SLOW_REQUEST_MS = max(
     500,
     int(os.environ.get("OLLAMA_SLOW_REQUEST_MS") or "25000"),
@@ -214,6 +225,7 @@ MODEL_PREF_TASK_DRAFT = os.environ.get("OLLAMA_MODEL_PREF_TASK_DRAFT") or OLLAMA
 MODEL_PREF_ACTION = os.environ.get("OLLAMA_MODEL_PREF_ACTION") or OLLAMA_MODEL
 MODEL_PREF_OFFER_TEXT = os.environ.get("OLLAMA_MODEL_PREF_OFFER_TEXT") or OLLAMA_MODEL
 MODEL_PREF_INVOICE_SUMMARY = os.environ.get("OLLAMA_MODEL_PREF_INVOICE_SUMMARY") or OLLAMA_MODEL
+MODEL_PREF_INTERNAL_AI = os.environ.get("OLLAMA_MODEL_PREF_INTERNAL_AI") or MODEL_PREF_ACTION or OLLAMA_MODEL
 FREE_EMAIL_DOMAINS = {
     "gmail.com",
     "googlemail.com",
@@ -2429,7 +2441,12 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
         return _resolve_ollama_models(matched_model)
     if available_models:
         available_lookup = {model.lower(): model for model in available_models}
-        preferred = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+        preferred = _resolve_ollama_models(
+            MODEL_PREF_INTERNAL_AI,
+            MODEL_PREF_ACTION,
+            MODEL_PREF_TASK_DRAFT,
+            MODEL_PREF_INVOICE_SUMMARY,
+        )
         ordered: List[str] = []
         seen = set()
         for candidate in preferred:
@@ -2444,13 +2461,18 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
             ordered.append(model)
             seen.add(normalized)
         return ordered
-    return _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+    return _resolve_ollama_models(
+        MODEL_PREF_INTERNAL_AI,
+        MODEL_PREF_ACTION,
+        MODEL_PREF_TASK_DRAFT,
+        MODEL_PREF_INVOICE_SUMMARY,
+    )
 
 
 def _internal_ai_prompt_limit_chars() -> int:
     resolved_max_tokens = max(
         128,
-        min(int(INTERNAL_AI_MAX_TOKENS), int(OLLAMA_MAX_TOKENS_HARD_LIMIT or INTERNAL_AI_MAX_TOKENS)),
+        min(int(INTERNAL_AI_TOOL_MAX_TOKENS), int(OLLAMA_MAX_TOKENS_HARD_LIMIT or INTERNAL_AI_TOOL_MAX_TOKENS)),
     )
     prompt_ctx_budget = max(
         128,
@@ -15405,19 +15427,102 @@ def generate_action(data: ActionAiRequest):
         response_format="json",
         temperature=0.2,
         max_tokens=180,
+        timeout=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
     )
     if not payload:
-        raise HTTPException(502, "Ollama request failed")
+        logger.warning("AI action fallback used due to Ollama failure")
+        return _build_action_ai_fallback(text)
 
     action = parse_action_json(payload.get("response"))
     if not action:
-        raise HTTPException(502, "Invalid AI response")
+        logger.warning("AI action fallback used due to invalid AI response")
+        return _build_action_ai_fallback(text)
     return action
 
 
 def _build_internal_ai_prompt(prompt_text: str, content_text: str) -> str:
-    del content_text
-    return prompt_text
+    prompt_value = str(prompt_text or "").strip()
+    content_value = str(content_text or "").strip()
+    if not content_value:
+        return prompt_value
+    return (
+        f"{prompt_value}\n\n"
+        "Arbeitsmaterial:\n"
+        "<<<BEGINN>>>\n"
+        f"{content_value}\n"
+        "<<<ENDE>>>"
+    )
+
+
+def _build_internal_ai_fallback_text(prompt_text: str, content_text: str) -> str:
+    prompt_value = " ".join(str(prompt_text or "").split()).strip()
+    content_value = str(content_text or "").strip()
+    content_preview = content_value[:2400].strip()
+    parts = [
+        "Interne KI derzeit nicht verfuegbar.",
+        f"Arbeitsauftrag: {prompt_value or 'ohne Prompt'}",
+        "Bitte Prompt kuerzen, spaeter erneut versuchen oder ein kleineres Modell waehlen.",
+    ]
+    if content_preview:
+        parts.extend(
+            [
+                "",
+                "Arbeitsmaterial Vorschau:",
+                content_preview,
+            ]
+        )
+    return "\n".join(parts).strip()
+
+
+def _build_offer_ai_fallback_text(mode: str, current_text: str, context: str) -> str:
+    current_value = " ".join(str(current_text or "").split()).strip()
+    context_value = " ".join(str(context or "").split()).strip()
+    source_text = current_value or context_value
+    if not source_text:
+        return "Textentwurf aktuell nicht verfuegbar."
+    if mode == "position_text":
+        return source_text[:280].rstrip(" ,;:-") + "."
+    if mode == "invoice_position_text":
+        return _sanitize_invoice_position_ai_text(source_text[:280]) or "Leistung gemaess Vorgang umgesetzt."
+    if mode == "cover_intro":
+        return f"Im Folgenden erhalten Sie das passende Angebot zu den abgestimmten Leistungen. {source_text[:180].rstrip(' ,;:-')}."
+    if mode == "overview":
+        return source_text[:360].rstrip(" ,;:-") + "."
+    return source_text[:420].rstrip(" ,;:-") + "."
+
+
+def _build_action_ai_fallback(text: str) -> Dict[str, str]:
+    source = " ".join(str(text or "").split()).strip()
+    lower = source.lower()
+    system = "Allgemein"
+    if any(term in lower for term in ["backup", "veeam", "sicherung"]):
+        system = "Backup"
+    elif any(term in lower for term in ["firewall", "vpn", "fortigate", "sophos"]):
+        system = "Firewall"
+    elif any(term in lower for term in ["switch", "wlan", "netz", "router"]):
+        system = "Netzwerk"
+    elif any(term in lower for term in ["server", "hyper-v", "vmware", "esxi"]):
+        system = "Server"
+    elif any(term in lower for term in ["client", "pc", "notebook", "arbeitsplatz"]):
+        system = "Client"
+    impact = "Keine Unterbrechung"
+    if any(term in lower for term in ["update", "patch", "upgrade", "reboot", "neustart"]):
+        impact = "Wartungsfenster"
+    elif any(term in lower for term in ["pruefung", "check", "analyse", "kontrolle"]):
+        impact = "Keine Unterbrechung"
+    priority = "Planbar"
+    if any(term in lower for term in ["kritisch", "sofort", "dringend", "sicherheitsluecke", "sicherheitslücke"]):
+        priority = "Dringend"
+    title = source[:72].rstrip(" ,;:-") or "Neue Massnahme"
+    return {
+        "title": title,
+        "system": system,
+        "why_text": source[:220].rstrip(" ,;:-") or "Massnahme aus Freitext abgeleitet.",
+        "impact": impact,
+        "duration": "0,5-1,0 h" if impact == "Wartungsfenster" else "0,5 h",
+        "cost": "60-120 €" if impact == "Wartungsfenster" else "60-60 €",
+        "priority": priority,
+    }
 
 
 @app.get("/api/tools/internal_ai_models")
@@ -15454,14 +15559,19 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
         internal_prompt,
         model_candidates=model_candidates,
         temperature=0.2,
-        max_tokens=int(INTERNAL_AI_MAX_TOKENS),
-        timeout=max(10, min(180, OLLAMA_TIMEOUT_SECONDS)),
+        max_tokens=int(INTERNAL_AI_TOOL_MAX_TOKENS),
+        timeout=min(int(INTERNAL_AI_TOOL_TIMEOUT_SECONDS), max(10, int(OLLAMA_TIMEOUT_SECONDS))),
         use_cache=False,
         raw=True,
     )
     response_text = str(payload.get("response") or "").strip()
     if not response_text:
-        raise HTTPException(502, "Ollama request failed")
+        return {
+            "text": _build_internal_ai_fallback_text(prompt_text, content_text),
+            "provider": "fallback",
+            "model": used_model or "",
+            "generated_at": int(time.time() * 1000),
+        }
     return {
         "text": response_text,
         "provider": "ollama",
@@ -15480,7 +15590,14 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
     internal_prompt = _build_internal_ai_prompt(prompt_text, content_text)
     model_candidates = _resolve_internal_ai_tool_models(data.model)
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
-    request_timeout = max(int(INTERNAL_AI_STREAM_TIMEOUT_SECONDS), int(OLLAMA_TIMEOUT_SECONDS or 0), 30)
+    request_timeout = min(
+        int(INTERNAL_AI_STREAM_TIMEOUT_SECONDS),
+        max(int(INTERNAL_AI_TOOL_TIMEOUT_SECONDS), 12),
+        max(int(OLLAMA_TIMEOUT_SECONDS or 0), 12),
+    )
+    if request_timeout < 12:
+        request_timeout = 12
+    fallback_text = _build_internal_ai_fallback_text(prompt_text, content_text)
 
     def stream() -> Any:
         yield json.dumps({
@@ -15493,7 +15610,7 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
             prompt_body = prompt_body[:OLLAMA_PROMPT_MAX_CHARS]
         resolved_max_tokens = max(
             128,
-            min(int(INTERNAL_AI_MAX_TOKENS), int(OLLAMA_MAX_TOKENS_HARD_LIMIT or INTERNAL_AI_MAX_TOKENS)),
+            min(int(INTERNAL_AI_TOOL_MAX_TOKENS), int(OLLAMA_MAX_TOKENS_HARD_LIMIT or INTERNAL_AI_TOOL_MAX_TOKENS)),
         )
         target_predict = int(resolved_max_tokens or 0)
         prompt_ctx_budget = max(128, int(OLLAMA_NUM_CTX) - target_predict - int(OLLAMA_PROMPT_TOKEN_MARGIN))
@@ -15580,17 +15697,29 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
             except requests.RequestException as exc:
                 logger.warning("Ollama stream request failed with model %s: %s", model, exc)
                 yield json.dumps({
-                    "type": "error",
-                    "detail": f"Ollama Stream fehlgeschlagen: {exc}",
-                    "provider": "ollama",
+                    "type": "meta",
+                    "provider": "fallback",
                     "model": model,
+                }) + "\n"
+                yield json.dumps({"type": "delta", "text": fallback_text}) + "\n"
+                yield json.dumps({
+                    "type": "done",
+                    "provider": "fallback",
+                    "model": model,
+                    "generated_at": int(time.time() * 1000),
                 }) + "\n"
                 return
         yield json.dumps({
-            "type": "error",
-            "detail": "Ollama request failed",
-            "provider": "ollama",
+            "type": "meta",
+            "provider": "fallback",
             "model": "",
+        }) + "\n"
+        yield json.dumps({"type": "delta", "text": fallback_text}) + "\n"
+        yield json.dumps({
+            "type": "done",
+            "provider": "fallback",
+            "model": "",
+            "generated_at": int(time.time() * 1000),
         }) + "\n"
 
     return StreamingResponse(
@@ -15630,18 +15759,19 @@ def generate_offer_text(data: OfferAiRequest):
         model_candidates=model_candidates,
         temperature=0.2,
         max_tokens=220,
+        timeout=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
     )
     if not payload:
-        raise HTTPException(502, "Ollama request failed")
+        return {"text": _build_offer_ai_fallback_text(mode, current_text, context), "provider": "fallback"}
 
     text = (payload.get("response") or "").strip()
     if not text:
-        raise HTTPException(502, "Invalid AI response")
+        return {"text": _build_offer_ai_fallback_text(mode, current_text, context), "provider": "fallback"}
     if mode == "invoice_position_text":
         text = _sanitize_invoice_position_ai_text(text)
         if not text:
-            raise HTTPException(502, "Invalid AI response")
-    return {"text": text}
+            return {"text": _build_offer_ai_fallback_text(mode, current_text, context), "provider": "fallback"}
+    return {"text": text, "provider": "ollama"}
 
 # ============== REPORT CATALOG =============
 @app.get("/api/report_catalog")
