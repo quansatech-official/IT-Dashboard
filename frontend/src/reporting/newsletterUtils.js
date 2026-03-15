@@ -95,29 +95,29 @@ export const buildNewsletterHtml = (draft = {}) => {
               <td bgcolor="#ffffff" style="background-color:#ffffff;border-collapse:collapse;">
                 <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                   <tr>
-                    <td bgcolor="#1c2733" style="padding:24px 30px 18px 30px;background-color:#1c2733;">
+                    <td bgcolor="#1c2733" style="padding:22px 30px 18px 30px;background-color:#1c2733;">
                       <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                         <tr>
                           <td align="left" valign="middle">
                             <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="border-collapse:separate;">
                               <tr>
-                                <td bgcolor="#ffffff" style="background-color:#ffffff;padding:14px 18px 12px 18px;border:1px solid #dbe4ea;">
+                                <td bgcolor="#ffffff" style="background-color:#ffffff;padding:16px 20px 14px 20px;border:1px solid #dbe4ea;">
                                   <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                                     <tr>
                                       <td valign="middle">
                                         <img
                                           src="${logoSrc}"
                                           alt="Quansatech"
-                                          width="220"
-                                          style="display:block;width:220px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;"
+                                          width="260"
+                                          style="display:block;width:260px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;"
                                         />
                                       </td>
                                       <td valign="middle" style="padding-left:18px;font-family:Arial,Helvetica,sans-serif;border-left:1px solid #dbe4ea;">
-                                        <div style="font-size:22px;line-height:24px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;color:#1c2733;mso-line-height-rule:exactly;">
+                                        <div style="font-size:18px;line-height:20px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#1c2733;mso-line-height-rule:exactly;">
                                           Newsletter
                                         </div>
-                                        <div style="padding-top:4px;font-size:12px;line-height:18px;color:#5e6a74;mso-line-height-rule:exactly;">
-                                          Quansatech Informationen
+                                        <div style="padding-top:6px;font-size:12px;line-height:18px;color:#5e6a74;mso-line-height-rule:exactly;">
+                                          Stabile IT. Klare Loesungen. Persoenlich betreut.
                                         </div>
                                       </td>
                                     </tr>
@@ -125,14 +125,6 @@ export const buildNewsletterHtml = (draft = {}) => {
                                 </td>
                               </tr>
                             </table>
-                          </td>
-                          <td align="right" valign="middle" style="padding-left:16px;font-family:Arial,Helvetica,sans-serif;">
-                            <div style="font-size:11px;line-height:16px;font-weight:700;letter-spacing:0.28em;text-transform:uppercase;color:#dbe4ea;mso-line-height-rule:exactly;">
-                              E-Mail
-                            </div>
-                            <div style="padding-top:6px;font-size:13px;line-height:20px;color:#f2f5f8;mso-line-height-rule:exactly;">
-                              Informationen, Hinweise und Updates
-                            </div>
                           </td>
                         </tr>
                       </table>
