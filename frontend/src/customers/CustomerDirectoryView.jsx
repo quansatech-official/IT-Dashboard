@@ -3330,7 +3330,7 @@ export default function CustomerDirectoryView() {
           </div>
           <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">sevdesk Tags / WKR</p>
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Wiederkehrende Rechnungen</p>
               <p className="text-[11px] text-sand-500">
                 {formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)} Vorlagen
               </p>
@@ -3339,7 +3339,7 @@ export default function CustomerDirectoryView() {
               <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                 <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamt / Monat</p>
                 <p className="text-sm font-semibold text-sand-900">{formatEurPrecise(sevdeskRecurringTagsSummary?.monthlyTotalEur || 0)}</p>
-                <p className="text-[11px] text-sand-600">Monatswert aus recurring invoices</p>
+                <p className="text-[11px] text-sand-600">Monatswert aus wiederkehrenden Rechnungen</p>
               </div>
               <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                 <p className="text-[10px] uppercase tracking-wide text-sand-500">Tags</p>
@@ -3347,9 +3347,9 @@ export default function CustomerDirectoryView() {
                 <p className="text-[11px] text-sand-600">sevdesk Tag-Namen</p>
               </div>
               <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">WKR Vorlagen</p>
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Vorlagen</p>
                 <p className="text-sm font-semibold text-sand-900">{formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)}</p>
-                <p className="text-[11px] text-sand-600">aktive recurring invoices</p>
+                <p className="text-[11px] text-sand-600">aktive wiederkehrende Rechnungen</p>
               </div>
               <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                 <p className="text-[10px] uppercase tracking-wide text-sand-500">Top Tag</p>
@@ -3372,7 +3372,7 @@ export default function CustomerDirectoryView() {
                 ))}
               </div>
             ) : (
-              <p className="mt-2 text-[11px] text-sand-500">Keine getaggten recurring invoices in sevdesk gefunden.</p>
+              <p className="mt-2 text-[11px] text-sand-500">Keine getaggten wiederkehrenden Rechnungen in sevdesk gefunden.</p>
             )}
             {sevdeskRecurringTagInvoices.length ? (
               <div className="mt-3 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
@@ -5369,9 +5369,9 @@ export default function CustomerDirectoryView() {
                           <WalletCards size={15} />
                         </div>
                         <div>
-                          <p className="text-xs uppercase tracking-[0.28em] text-sky-700">sevdesk Tags</p>
+                          <p className="text-xs uppercase tracking-[0.28em] text-sky-700">Wiederkehrende Rechnungen</p>
                           <p className="mt-1 text-[11px] text-sand-600">
-                            Rein lesend aus sevdesk recurring invoices je Kunde und Tag.
+                            Rein lesend aus sevdesk: wiederkehrende Rechnungen je Kunde und Tag.
                           </p>
                         </div>
                       </div>
@@ -5381,7 +5381,7 @@ export default function CustomerDirectoryView() {
                           {formatEurPrecise(sevdeskRecurringTagsSummary?.monthlyTotalEur || 0)}
                         </p>
                         <p className="text-[11px] text-sand-500">
-                          Tags {formatNumber(sevdeskRecurringTagsSummary?.tagCount || 0)} · WKR{" "}
+                          Tags {formatNumber(sevdeskRecurringTagsSummary?.tagCount || 0)} · Vorlagen{" "}
                           {formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)}
                         </p>
                       </div>
@@ -5401,7 +5401,7 @@ export default function CustomerDirectoryView() {
                         ))}
                       </div>
                     ) : (
-                      <p className="mt-3 text-xs text-sand-500">Keine getaggten recurring invoices in sevdesk gefunden.</p>
+                      <p className="mt-3 text-xs text-sand-500">Keine getaggten wiederkehrenden Rechnungen in sevdesk gefunden.</p>
                     )}
                   </div>
                   {renderPrepaidHoursContainer()}
