@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  TrendingUp,
   BarChart3,
   Brain,
   ClipboardList,
@@ -28,7 +27,6 @@ import StatsView from "./stats/StatsView";
 import PurchasingView from "./purchasing/PurchasingView";
 import KnowledgeBaseView from "./knowledge/KnowledgeBaseView";
 import IncomingCallQuickTaskPopup from "./telephony/IncomingCallQuickTaskPopup";
-import CustomerDevelopmentView from "./customer-development/CustomerDevelopmentView";
 
 const detectDeviceClass = () => {
   if (typeof window === "undefined" || typeof navigator === "undefined") return "desktop";
@@ -146,16 +144,6 @@ export default function App() {
             <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400 px-2">
               Kundenorientierung
             </p>
-            <button
-              onClick={() => setActiveView("customer-development")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "customer-development"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <TrendingUp size={18} /> Entwicklung
-            </button>
             <button
               onClick={() => setActiveView("offers")}
               className={`w-full text-left px-4 py-3 rounded-2xl border ${
@@ -283,8 +271,6 @@ export default function App() {
             <PurchasingView />
           ) : activeView === "knowledge" ? (
             <KnowledgeBaseView />
-          ) : activeView === "customer-development" ? (
-            <CustomerDevelopmentView />
           ) : activeView === "offers" ? (
             <OffersView />
           ) : (

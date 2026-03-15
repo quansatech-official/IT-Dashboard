@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import {
-  BadgeCheck,
   BarChart3,
   Building2,
   BookPlus,
@@ -24,8 +23,6 @@ import {
 } from "lucide-react";
 import { renderReportHTML, uid } from "../reporting/utils";
 import { telephonyService } from "../telephony/telephonyService";
-import CustomerDevelopmentCustomerTab from "../customer-development/CustomerDevelopmentCustomerTab";
-import CustomerInventoryTab from "./CustomerInventoryTab";
 
 const API = "/api";
 
@@ -729,7 +726,7 @@ const buildPrepaidHoursPdfFilename = (customer) => {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-  return `${base || "kunde"}_vorausstunden.pdf`;
+  return `${base || "kunde"}_stundenkontingent.pdf`;
 };
 
 const contractTypeLabel = (value) => {
@@ -863,7 +860,7 @@ const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, logoSrc = "",
     : `
         <tr>
           <td colspan="5" style="text-align:center; color:#6b7280; padding:18px 12px;">
-            Noch keine Stundenkäufe oder Abbuchungen vorhanden.
+            Noch keine Buchungen vorhanden.
           </td>
         </tr>
       `;
@@ -997,7 +994,7 @@ const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, logoSrc = "",
     <div class="sheet">
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Quansatech · Vorausstunden</p>
+          <p class="eyebrow">Quansatech · Stundenkontingent</p>
           <h1>${escapeHtml(String(customer?.name || "Unbenannter Kunde").trim() || "Unbenannter Kunde")}</h1>
           <div class="hero-meta">
             <div class="hero-meta-line">Kundennummer ${escapeHtml(String(customer?.creditorNumber || "ohne").trim() || "ohne")}</div>
@@ -1051,7 +1048,7 @@ const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, logoSrc = "",
         </table>
       </section>
 
-      <p class="footer">QT Workbench · Vorausstunden-Export ${escapeHtml(formatDateTime(generatedAt))}</p>
+      <p class="footer">QT Workbench · Stundenkontingent-Export ${escapeHtml(formatDateTime(generatedAt))}</p>
     </div>
   `;
 };
@@ -2605,7 +2602,7 @@ export default function CustomerDirectoryView() {
     }
     setPreviewModal({
       open: true,
-      title: `Vorausstunden ${editCustomer.name || "Kunde"}`,
+      title: `Stundenkontingent ${editCustomer.name || "Kunde"}`,
       html: buildPrepaidHoursPdfHtml({
         customer: editCustomer,
         prepaidHoursSummary,
@@ -2632,16 +2629,16 @@ export default function CustomerDirectoryView() {
   };
 
   const renderPrepaidHoursContainer = () => (
-    <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-white via-sky-50/40 to-sky-100/40 p-3.5 shadow-sm">
+    <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-white via-sky-50/35 to-sky-100/35 p-3 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-start gap-2">
-          <div className="mt-0.5 rounded-xl border border-sky-200 bg-white p-2 text-sky-700">
-            <WalletCards size={15} />
+          <div className="mt-0.5 rounded-xl border border-sky-200 bg-white p-1.5 text-sky-700">
+            <WalletCards size={14} />
           </div>
           <div>
-            <p className="text-[10px] uppercase tracking-[0.24em] text-sky-700">Vorausstunden</p>
-            <p className="mt-1 text-[11px] text-sand-600">
-              Manuelle Käufe und manuelle Abbuchungen mit Aufgabenreferenz.
+            <p className="text-[10px] uppercase tracking-[0.24em] text-sky-700">Stundenkontingent</p>
+            <p className="mt-0.5 text-[11px] text-sand-600">
+              Käufe, Abbuchungen und Saldo in kompakter Ansicht.
             </p>
           </div>
         </div>
@@ -2665,12 +2662,12 @@ export default function CustomerDirectoryView() {
         </div>
       </div>
       {prepaidHoursStatus === "loading" ? (
-        <p className="mt-2 text-xs text-sand-500">Lade Vorausstunden…</p>
+        <p className="mt-2 text-xs text-sand-500">Lade Stundenkontingent…</p>
       ) : null}
       {prepaidHoursStatus === "error" ? (
-        <p className="mt-2 text-xs text-rose-600">Vorausstunden konnten nicht geladen werden.</p>
+        <p className="mt-2 text-xs text-rose-600">Stundenkontingent konnte nicht geladen werden.</p>
       ) : null}
-      <div className="mt-3 grid gap-2 md:grid-cols-3">
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-xl border border-sky-100 bg-white px-3 py-2">
           <p className="text-[10px] uppercase tracking-wide text-sand-500">Gekauft</p>
           <p className="text-sm font-semibold text-sand-900">{formatHours(prepaidHoursSummary?.purchasedHours || 0)}</p>
@@ -2689,11 +2686,20 @@ export default function CustomerDirectoryView() {
             {formatHours(prepaidHoursBalance)}
           </p>
         </div>
+        <div className="rounded-xl border border-sky-100 bg-white px-3 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-sand-500">Buchungen</p>
+          <p className="text-sm font-semibold text-sand-900">{prepaidHoursEntries.length}</p>
+        </div>
       </div>
-      <div className="mt-3 grid gap-3 xl:grid-cols-2">
-        <div className="rounded-xl border border-sky-100 bg-white p-3">
-          <p className="text-[10px] uppercase tracking-[0.18em] text-sand-500">Stunden kaufen</p>
-          <div className="mt-2 grid gap-2 md:grid-cols-[110px_minmax(0,1fr)_150px]">
+      <div className="mt-3 grid gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.15fr)]">
+        <div className="rounded-xl border border-sky-100 bg-white p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-sand-500">Kontingent erhöhen</p>
+            <p className="text-[11px] text-sand-500">
+              Neu: {formatHours(prepaidHoursBalance + prepaidHoursPurchaseValue)}
+            </p>
+          </div>
+          <div className="mt-2 grid gap-2 md:grid-cols-[96px_minmax(0,1fr)]">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</span>
               <input
@@ -2718,6 +2724,8 @@ export default function CustomerDirectoryView() {
                 className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               />
             </label>
+          </div>
+          <div className="mt-2 grid gap-2 md:grid-cols-[150px_minmax(0,1fr)]">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Datum</span>
               <input
@@ -2729,8 +2737,6 @@ export default function CustomerDirectoryView() {
                 className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               />
             </label>
-          </div>
-          <div className="mt-2 grid gap-2">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Notiz</span>
               <input
@@ -2743,10 +2749,7 @@ export default function CustomerDirectoryView() {
               />
             </label>
           </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] text-sand-600">
-              Nach Speicherung verfügbar: {formatHours(prepaidHoursBalance + prepaidHoursPurchaseValue)}
-            </p>
+          <div className="mt-2 flex justify-end">
             <button
               type="button"
               onClick={() => createPrepaidHoursEntry("purchase")}
@@ -2757,9 +2760,14 @@ export default function CustomerDirectoryView() {
             </button>
           </div>
         </div>
-        <div className="rounded-xl border border-sky-100 bg-white p-3">
-          <p className="text-[10px] uppercase tracking-[0.18em] text-sand-500">Manuell abbuchen</p>
-          <div className="mt-2 grid gap-2 md:grid-cols-[110px_150px_minmax(0,1fr)]">
+        <div className="rounded-xl border border-sky-100 bg-white p-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-sand-500">Kontingent abbuchen</p>
+            <p className={`text-[11px] ${projectedPrepaidBalance < 0 ? "text-rose-700" : "text-sand-500"}`}>
+              Saldo: {formatHours(projectedPrepaidBalance)}
+            </p>
+          </div>
+          <div className="mt-2 grid gap-2 md:grid-cols-[96px_140px_minmax(0,1fr)]">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</span>
               <input
@@ -2820,7 +2828,7 @@ export default function CustomerDirectoryView() {
               </select>
             </label>
           </div>
-          <div className="mt-2 grid gap-2">
+          <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Bemerkung</span>
               <input
@@ -2832,39 +2840,33 @@ export default function CustomerDirectoryView() {
                 className="mt-1 w-full rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-sm"
               />
             </label>
+            <button
+              type="button"
+              onClick={() => createPrepaidHoursEntry("debit")}
+              disabled={prepaidHoursBusy || prepaidHoursDebitValue <= 0}
+              className="self-end rounded-full border border-sand-900 bg-sand-900 px-3 py-1.5 text-[10px] uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Manuell abbuchen
+            </button>
           </div>
           {selectedPrepaidTask ? (
-            <div className="mt-2 rounded-lg border border-sand-200 bg-white px-2.5 py-2 text-[11px] text-sand-600">
+            <div className="mt-2 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2 text-[11px] text-sand-600">
               <p className="font-semibold text-sand-800">{selectedPrepaidTask.title}</p>
               <p className="mt-0.5">
-                Erfasst {formatHours(selectedPrepaidTask.elapsed_hours || 0)} · bereits gebucht{" "}
+                Erfasst {formatHours(selectedPrepaidTask.elapsed_hours || 0)} · gebucht{" "}
                 {formatHours(selectedPrepaidTask.booked_hours || 0)} · Rest{" "}
                 {formatHours(selectedPrepaidTask.remaining_hours || 0)}
               </p>
               {selectedPrepaidTask.details ? <p className="mt-0.5">{selectedPrepaidTask.details}</p> : null}
             </div>
           ) : null}
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <p className={`text-[11px] ${projectedPrepaidBalance < 0 ? "text-rose-700" : "text-sand-600"}`}>
-              Saldo nach Buchung: {formatHours(projectedPrepaidBalance)}
-            </p>
-            <button
-              type="button"
-              onClick={() => createPrepaidHoursEntry("debit")}
-              disabled={prepaidHoursBusy || prepaidHoursDebitValue <= 0}
-              className="rounded-full border border-sand-900 bg-sand-900 px-3 py-1.5 text-[10px] uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Manuell abbuchen
-            </button>
+        </div>
+        <div className="rounded-xl border border-sky-100 bg-white p-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] uppercase tracking-wide text-sand-500">Letzte Buchungen</p>
+            <span className="text-[11px] text-sand-500">{prepaidHoursEntries.length} gesamt</span>
           </div>
-        </div>
-      </div>
-      <div className="mt-3 rounded-xl border border-sky-100 bg-white p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[10px] uppercase tracking-wide text-sand-500">Historie</p>
-          <span className="text-[11px] text-sand-500">{prepaidHoursEntries.length} Buchungen</span>
-        </div>
-        <div className="mt-2 space-y-2 max-h-64 overflow-auto pr-1">
+          <div className="mt-2 space-y-1.5 max-h-60 overflow-auto pr-1">
           {prepaidHoursEntries.map((entry) => (
             <div
               key={entry.id}
@@ -2920,8 +2922,9 @@ export default function CustomerDirectoryView() {
             </div>
           ))}
           {!prepaidHoursEntries.length && prepaidHoursStatus !== "loading" ? (
-            <p className="text-xs text-sand-500">Noch keine Stundenkäufe oder Abbuchungen vorhanden.</p>
+            <p className="text-xs text-sand-500">Noch keine Buchungen vorhanden.</p>
           ) : null}
+          </div>
         </div>
       </div>
     </div>
@@ -4820,18 +4823,6 @@ export default function CustomerDirectoryView() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSettingsTab("development")}
-                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
-                    settingsTab === "development"
-                      ? "border-sand-900 bg-sand-900 text-white"
-                      : "border-sand-200 bg-white hover:bg-sand-100"
-                  }`}
-                >
-                  <BadgeCheck size={12} />
-                  Kundenentwicklung
-                </button>
-                <button
-                  type="button"
                   onClick={() => setSettingsTab("communication")}
                   className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
                     settingsTab === "communication"
@@ -4853,18 +4844,6 @@ export default function CustomerDirectoryView() {
                 >
                   <FileDown size={12} />
                   Verträge
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSettingsTab("inventory")}
-                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
-                    settingsTab === "inventory"
-                      ? "border-sand-900 bg-sand-900 text-white"
-                      : "border-sand-200 bg-white hover:bg-sand-100"
-                  }`}
-                >
-                  <BookPlus size={12} />
-                  Inventar
                 </button>
                 <button
                   type="button"
@@ -5061,15 +5040,6 @@ export default function CustomerDirectoryView() {
                 </>
               ) : null}
               {settingsTab === "kpi" ? renderCustomerKpiTab() : null}
-              {settingsTab === "development" ? (
-                <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
-                  <CustomerDevelopmentCustomerTab
-                    customerId={editCustomer.id}
-                    customerName={editCustomer.name || ""}
-                    customerNumber={editCustomer.creditorNumber || ""}
-                  />
-                </div>
-              ) : null}
               {settingsTab === "communication" ? (
                 <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -5314,11 +5284,6 @@ export default function CustomerDirectoryView() {
                     </div>
                   </div>
                   {renderPrepaidHoursContainer()}
-                </div>
-              ) : null}
-              {settingsTab === "inventory" ? (
-                <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
-                  <CustomerInventoryTab customerId={editCustomer.id} />
                 </div>
               ) : null}
             </div>
