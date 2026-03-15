@@ -705,27 +705,29 @@ export default function StatsView() {
                         </div>
                         <div className="rounded-2xl border border-sand-200 bg-white p-3">
                           <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Alle Kunden</p>
-                          <div className="mt-2 overflow-x-auto">
-                            <table className="min-w-full text-left text-xs">
-                              <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
+                          <div className="mt-2 max-h-[24rem] overflow-auto rounded-xl border border-sand-100">
+                            <table className="min-w-full text-left text-[11px]">
+                              <thead className="sticky top-0 z-10 bg-sand-100 text-sand-600 uppercase tracking-wide">
                                 <tr>
-                                  <th className="px-3 py-2">Kunde</th>
-                                  <th className="px-3 py-2">Tags</th>
-                                  <th className="px-3 py-2">WKR</th>
-                                  <th className="px-3 py-2">Gesamt / Monat</th>
+                                  <th className="px-2.5 py-1.5">Kunde</th>
+                                  <th className="px-2.5 py-1.5">Tags</th>
+                                  <th className="px-2.5 py-1.5">WKR</th>
+                                  <th className="px-2.5 py-1.5">Gesamt / Monat</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {recurringCustomerRows.length ? (
                                   recurringCustomerRows.map((row) => (
                                     <tr key={`recurring-cost-row-${row.contactId || row.customerName}`} className="border-t border-sand-100">
-                                      <td className="px-3 py-2 text-sand-800">
-                                        {row.customerName || "Unbekannt"}
+                                      <td className="px-2.5 py-1.5 align-top text-sand-800">
+                                        <div className="max-w-[13rem] truncate font-medium">
+                                          {row.customerName || "Unbekannt"}
+                                        </div>
                                         <div className="text-[10px] text-sand-400">
                                           {row.customerNumber || "Keine Kundennummer"}
                                         </div>
                                       </td>
-                                      <td className="px-3 py-2 text-sand-700">
+                                      <td className="px-2.5 py-1.5 align-top text-sand-700">
                                         <div className="flex flex-wrap gap-1">
                                           {(Array.isArray(row.tags) ? row.tags : []).slice(0, 4).map((entry) => (
                                             <span
@@ -737,13 +739,13 @@ export default function StatsView() {
                                           ))}
                                         </div>
                                       </td>
-                                      <td className="px-3 py-2 text-sand-700">{formatNumber(row.invoiceCount || 0)}</td>
-                                      <td className="px-3 py-2 text-sand-900 font-semibold">{formatEur(row.monthlyTotalEur || 0)}</td>
+                                      <td className="px-2.5 py-1.5 align-top text-sand-700">{formatNumber(row.invoiceCount || 0)}</td>
+                                      <td className="px-2.5 py-1.5 align-top text-sand-900 font-semibold">{formatEur(row.monthlyTotalEur || 0)}</td>
                                     </tr>
                                   ))
                                 ) : (
                                   <tr>
-                                    <td colSpan={4} className="px-3 py-4 text-sand-500">
+                                    <td colSpan={4} className="px-2.5 py-3 text-sand-500">
                                       Keine sevdesk-Tagauswertung vorhanden.
                                     </td>
                                   </tr>

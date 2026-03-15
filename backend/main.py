@@ -4268,6 +4268,7 @@ def _build_sevdesk_stats(
     customer_payment_stats = customer_payment_data.get("rows") or []
     customer_payment_summary = customer_payment_data.get("summary") or {}
     recurring_tag_overview = _build_sevdesk_recurring_tag_overview(client, recurring_invoices)
+    recurring_customer_rows = recurring_tag_overview.get("customerRows") or []
 
     contact_ids: set[str] = set()
     for bucket in top_customers.values():
@@ -4284,6 +4285,10 @@ def _build_sevdesk_stats(
         contact_id = str(item.get("contactId") or "").strip()
         if contact_id and (item.get("name") or "").startswith("Kontakt #"):
             contact_ids.add(contact_id)
+    for item in recurring_customer_rows:
+        contact_id = str(item.get("contactId") or "").strip()
+        if contact_id and (item.get("customerName") or "").startswith("Kontakt #"):
+            contact_ids.add(contact_id)
     if contact_ids:
         names_map = _resolve_sevdesk_contact_names_batch(client, contact_ids)
         for contact_id, contact_name in names_map.items():
@@ -4294,6 +4299,9 @@ def _build_sevdesk_stats(
             for item in customer_payment_stats:
                 if str(item.get("contactId") or "") == contact_id:
                     item["name"] = contact_name
+            for item in recurring_customer_rows:
+                if str(item.get("contactId") or "") == contact_id:
+                    item["customerName"] = contact_name
 
     return {
         "connected": True,
