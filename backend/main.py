@@ -4220,6 +4220,7 @@ def _build_sevdesk_stats(
         due_sum = round(sum(_parse_sevdesk_amount(item) for item in due_invoices), 2)
 
     all_invoices = client.list_invoices(max_pages=max(1, invoices_max_pages))
+    recurring_invoices = client.list_recurring_invoices(max_pages=max(1, invoices_max_pages))
     start_month = datetime(now_dt.year, now_dt.month, 1)
     start_half_year = now_dt - timedelta(days=182)
     start_current_year = datetime(now_dt.year, 1, 1)
@@ -4266,7 +4267,7 @@ def _build_sevdesk_stats(
     customer_payment_data = _build_customer_payment_stats(all_invoices, now_dt)
     customer_payment_stats = customer_payment_data.get("rows") or []
     customer_payment_summary = customer_payment_data.get("summary") or {}
-    recurring_tag_overview = _build_sevdesk_recurring_tag_overview(client, all_invoices)
+    recurring_tag_overview = _build_sevdesk_recurring_tag_overview(client, recurring_invoices)
 
     contact_ids: set[str] = set()
     for bucket in top_customers.values():
@@ -7805,7 +7806,7 @@ def _empty_sevdesk_customer_recurring_tags() -> Dict[str, Any]:
 def _build_customer_sevdesk_recurring_tags(client: SevdeskClient, contact_id: int) -> Dict[str, Any]:
     if int(contact_id or 0) <= 0:
         return _empty_sevdesk_customer_recurring_tags()
-    invoices = client.list_invoices(
+    invoices = client.list_recurring_invoices(
         params={"contact[id]": int(contact_id), "contact[objectName]": "Contact"},
         max_pages=25,
     )

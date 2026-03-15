@@ -647,35 +647,38 @@ export default function StatsView() {
                     <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50/70 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
-                          <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">sevdesk Tags / WKR</p>
+                          <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Wiederkehrende Rechnungen</p>
                           <p className="mt-1 text-[11px] text-sand-600">
                             Nur sevdesk: wiederkehrende Rechnungen je Kunde und Tag, auf Monatswert normalisiert.
                           </p>
                         </div>
                         <div className="text-[11px] text-sand-500">
-                          Kunden: {formatNumber(recurringTags?.customersCount || 0)} · WKR-Vorlagen:{" "}
+                          Kunden: {formatNumber(recurringTags?.customersCount || 0)} · Vorlagen:{" "}
                           {formatNumber(recurringTags?.invoiceCount || 0)}
                         </div>
                       </div>
                       <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                         <StatCard
-                          title="WKR / Monat"
+                          title="Wiederkehrend / Monat"
                           value={formatEur(recurringTags?.monthlyTotalEur || 0)}
                           subtitle="Monatswert aus accountIntervall"
                         />
                         <StatCard
                           title="Kunden mit WKR"
                           value={formatNumber(recurringTags?.customersCount || 0)}
-                          subtitle="mit mindestens einer getaggten Vorlage"
+                          subtitle="mit mindestens einer wiederkehrenden Rechnung"
                         />
                         <StatCard
-                          title="Aktive Tags"
+                          title="Tags"
                           value={formatNumber(recurringTags?.tagCount || 0)}
                           subtitle="sevdesk Tag-Namen"
                         />
                         <StatCard
-                          title="Untagged"
-                          value={formatNumber(recurringTagTotals.filter((entry) => !String(entry?.tagId || "").trim()).length)}
+                          title="Ohne Tag"
+                          value={formatNumber(recurringTagTotals.reduce((sum, entry) => {
+                            if (String(entry?.tagId || "").trim()) return sum;
+                            return sum + Number(entry?.invoiceCount || 0);
+                          }, 0))}
                           subtitle="Vorlagen ohne Tag"
                         />
                       </div>
@@ -691,13 +694,13 @@ export default function StatsView() {
                                     <span className="font-metrics">{formatEur(entry.monthlyEur || 0)}</span>
                                   </div>
                                   <div className="mt-1 text-[10px] text-sand-400">
-                                    {formatNumber(entry.itemCount || 0)} Positionen · {formatNumber(entry.customersCount || 0)} Kunden
+                                    {formatNumber(entry.invoiceCount || 0)} Vorlagen · {formatNumber(entry.customersCount || 0)} Kunden
                                   </div>
                                 </div>
                               ))}
                             </div>
                           ) : (
-                            <p className="mt-2 text-[11px] text-sand-400">Noch keine getaggten WKR-Vorlagen in sevdesk gefunden.</p>
+                            <p className="mt-2 text-[11px] text-sand-400">Noch keine wiederkehrenden Rechnungen in sevdesk gefunden.</p>
                           )}
                         </div>
                         <div className="rounded-2xl border border-sand-200 bg-white p-3">

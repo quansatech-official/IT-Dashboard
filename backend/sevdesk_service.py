@@ -176,6 +176,17 @@ class SevdeskClient:
                 break
         return results
 
+    def list_recurring_invoices(
+        self,
+        params: Optional[Dict[str, Any]] = None,
+        *,
+        limit: int = 100,
+        max_pages: int = 25,
+    ) -> List[Dict[str, Any]]:
+        request_params = dict(params or {})
+        request_params["invoiceType"] = "WKR"
+        return self.list_invoices(request_params, limit=limit, max_pages=max_pages)
+
     def list_contacts(
         self,
         params: Optional[Dict[str, Any]] = None,
