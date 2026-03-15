@@ -720,19 +720,16 @@ export default function StatsView() {
                                   recurringCustomerRows.map((row) => (
                                     <tr key={`recurring-cost-row-${row.contactId || row.customerName}`} className="border-t border-sand-100">
                                       <td className="px-2.5 py-1.5 align-top text-sand-800">
-                                        <div className="max-w-[13rem] truncate font-medium">
+                                        <div className="max-w-[16rem] truncate font-medium whitespace-nowrap">
                                           {row.customerName || "Unbekannt"}
-                                        </div>
-                                        <div className="text-[10px] text-sand-400">
-                                          {row.customerNumber || "Keine Kundennummer"}
                                         </div>
                                       </td>
                                       <td className="px-2.5 py-1.5 align-top text-sand-700">
-                                        <div className="flex flex-wrap gap-1">
+                                        <div className="flex flex-nowrap gap-1 overflow-hidden whitespace-nowrap">
                                           {(Array.isArray(row.tags) ? row.tags : []).slice(0, 4).map((entry) => (
                                             <span
                                               key={`${row.contactId || row.customerName}-${entry.tagId || entry.tagName}`}
-                                              className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-600"
+                                              className="truncate rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-600"
                                             >
                                               {entry.tagName}: {formatEur(entry.monthlyEur || 0)}
                                             </span>
