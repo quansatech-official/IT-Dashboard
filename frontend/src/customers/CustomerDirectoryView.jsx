@@ -562,6 +562,12 @@ const formatEur = (value) => {
   });
 };
 
+const formatNumber = (value) => {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "0";
+  return number.toLocaleString("de-DE");
+};
+
 const formatEurPrecise = (value) => {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "€ 0,00";
@@ -2355,6 +2361,16 @@ export default function CustomerDirectoryView() {
     periodStats?.[customerStatsPeriod] && typeof periodStats[customerStatsPeriod] === "object"
       ? periodStats[customerStatsPeriod]
       : null;
+  const sevdeskRecurringTagsSummary =
+    selectedCustomerMetrics?.sevdeskRecurringTags && typeof selectedCustomerMetrics.sevdeskRecurringTags === "object"
+      ? selectedCustomerMetrics.sevdeskRecurringTags
+      : null;
+  const sevdeskRecurringTagTotals = Array.isArray(sevdeskRecurringTagsSummary?.tagTotals)
+    ? sevdeskRecurringTagsSummary.tagTotals
+    : [];
+  const sevdeskRecurringTagInvoices = Array.isArray(sevdeskRecurringTagsSummary?.invoices)
+    ? sevdeskRecurringTagsSummary.invoices
+    : [];
   const prepaidHoursSummary =
     prepaidHoursData && typeof prepaidHoursData === "object" ? prepaidHoursData : null;
   const prepaidHoursEntries = Array.isArray(prepaidHoursSummary?.entries) ? prepaidHoursSummary.entries : [];
@@ -3311,6 +3327,69 @@ export default function CustomerDirectoryView() {
                 ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum.`
                 : "Keine bezahlten sevdesk-Rechnungen im Zeitraum."}
             </p>
+          </div>
+          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">sevdesk Tags / WKR</p>
+              <p className="text-[11px] text-sand-500">
+                {formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)} Vorlagen
+              </p>
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-4">
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamt / Monat</p>
+                <p className="text-sm font-semibold text-sand-900">{formatEurPrecise(sevdeskRecurringTagsSummary?.monthlyTotalEur || 0)}</p>
+                <p className="text-[11px] text-sand-600">Monatswert aus recurring invoices</p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Tags</p>
+                <p className="text-sm font-semibold text-sand-900">{formatNumber(sevdeskRecurringTagsSummary?.tagCount || 0)}</p>
+                <p className="text-[11px] text-sand-600">sevdesk Tag-Namen</p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">WKR Vorlagen</p>
+                <p className="text-sm font-semibold text-sand-900">{formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)}</p>
+                <p className="text-[11px] text-sand-600">aktive recurring invoices</p>
+              </div>
+              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Top Tag</p>
+                <p className="text-sm font-semibold text-sand-900">
+                  {(sevdeskRecurringTagTotals[0]?.tagName || "n/a").slice(0, 22)}
+                </p>
+                <p className="text-[11px] text-sand-600">{formatEurPrecise(sevdeskRecurringTagTotals[0]?.monthlyEur || 0)}</p>
+              </div>
+            </div>
+            {sevdeskRecurringTagTotals.length ? (
+              <div className="mt-3 space-y-2">
+                {sevdeskRecurringTagTotals.slice(0, 6).map((entry) => (
+                  <div
+                    key={entry.tagId || entry.tagName}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-[11px]"
+                  >
+                    <span className="text-sand-700">{entry.tagName || "Ohne Tag"}</span>
+                    <span className="font-semibold text-sand-900">{formatEurPrecise(entry.monthlyEur || 0)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-[11px] text-sand-500">Keine getaggten recurring invoices in sevdesk gefunden.</p>
+            )}
+            {sevdeskRecurringTagInvoices.length ? (
+              <div className="mt-3 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Argumentationsbasis</p>
+                <div className="mt-2 space-y-1.5">
+                  {sevdeskRecurringTagInvoices.slice(0, 6).map((entry) => (
+                    <div key={`${entry.invoiceId || entry.invoiceNumber || "wkr"}`} className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                      <div className="text-sand-700">
+                        {entry.invoiceNumber || "WKR"}
+                        <span className="text-sand-400"> · {(entry.tags || []).join(", ") || "Ohne Tag"}</span>
+                      </div>
+                      <div className="font-semibold text-sand-900">{formatEurPrecise(entry.monthlyEur || 0)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
           <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
             <p className="text-[10px] uppercase tracking-wide text-sand-500">Steuerung (kundenbezogen)</p>
@@ -5282,6 +5361,48 @@ export default function CustomerDirectoryView() {
                         <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
                       ) : null}
                     </div>
+                  </div>
+                  <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-white via-sky-50/40 to-sky-100/30 p-3.5 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <div className="mt-0.5 rounded-xl border border-sky-200 bg-white p-2 text-sky-700">
+                          <WalletCards size={15} />
+                        </div>
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.28em] text-sky-700">sevdesk Tags</p>
+                          <p className="mt-1 text-[11px] text-sand-600">
+                            Rein lesend aus sevdesk recurring invoices je Kunde und Tag.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-sky-100 bg-white px-3 py-2 text-right">
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Aktuell / Monat</p>
+                        <p className="text-base font-semibold text-sand-900">
+                          {formatEurPrecise(sevdeskRecurringTagsSummary?.monthlyTotalEur || 0)}
+                        </p>
+                        <p className="text-[11px] text-sand-500">
+                          Tags {formatNumber(sevdeskRecurringTagsSummary?.tagCount || 0)} · WKR{" "}
+                          {formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)}
+                        </p>
+                      </div>
+                    </div>
+                    {sevdeskRecurringTagTotals.length ? (
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        {sevdeskRecurringTagTotals.slice(0, 8).map((entry) => (
+                          <div key={entry.tagId || entry.tagName} className="rounded-xl border border-sand-200 bg-white px-3 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-sm font-semibold text-sand-900">{entry.tagName || "Ohne Tag"}</p>
+                              <p className="text-sm font-semibold text-sand-900">{formatEurPrecise(entry.monthlyEur || 0)}</p>
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-sand-500">
+                              {formatNumber(entry.invoiceCount || 0)} Vorlagen
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-xs text-sand-500">Keine getaggten recurring invoices in sevdesk gefunden.</p>
+                    )}
                   </div>
                   {renderPrepaidHoursContainer()}
                 </div>

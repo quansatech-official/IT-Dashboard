@@ -450,6 +450,9 @@ class CustomerInventoryEvent(Base):
     reminder_days = Column(Integer, default=60)
     is_external = Column(Boolean, default=False)
     is_recurring = Column(Boolean, default=False)
+    cost_category = Column(String, default="other")
+    monthly_cost_eur = Column(Float, default=0.0)
+    tags_json = Column(Text, default="[]")
     note = Column(Text, default="")
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
@@ -1387,6 +1390,12 @@ def _ensure_customer_inventory_events_columns() -> None:
         statements.append("ALTER TABLE customer_inventory_events ADD COLUMN is_external BOOLEAN DEFAULT FALSE")
     if "is_recurring" not in columns:
         statements.append("ALTER TABLE customer_inventory_events ADD COLUMN is_recurring BOOLEAN DEFAULT FALSE")
+    if "cost_category" not in columns:
+        statements.append("ALTER TABLE customer_inventory_events ADD COLUMN cost_category VARCHAR DEFAULT 'other'")
+    if "monthly_cost_eur" not in columns:
+        statements.append("ALTER TABLE customer_inventory_events ADD COLUMN monthly_cost_eur DOUBLE PRECISION DEFAULT 0")
+    if "tags_json" not in columns:
+        statements.append("ALTER TABLE customer_inventory_events ADD COLUMN tags_json TEXT DEFAULT '[]'")
     if not statements:
         return
     with engine.begin() as connection:
@@ -1573,6 +1582,9 @@ class CustomerInventoryEventCreate(BaseModel):
     reminder_days: Optional[int] = 60
     is_external: Optional[bool] = False
     is_recurring: Optional[bool] = False
+    cost_category: Optional[str] = "other"
+    monthly_cost_eur: Optional[float] = 0.0
+    tags: Optional[List[str]] = None
     note: Optional[str] = ""
 
 
@@ -1586,6 +1598,9 @@ class CustomerInventoryEventUpdate(BaseModel):
     reminder_days: Optional[int] = None
     is_external: Optional[bool] = None
     is_recurring: Optional[bool] = None
+    cost_category: Optional[str] = None
+    monthly_cost_eur: Optional[float] = None
+    tags: Optional[List[str]] = None
     note: Optional[str] = None
 
 
@@ -3651,6 +3666,28 @@ def _filter_inactive_customer_payment_rows(
     return filtered
 
 
+def _filter_inactive_recurring_tag_customer_rows(
+    rows: List[Dict[str, Any]],
+    inactive_name_keys: Set[str],
+    active_name_keys: Set[str],
+    inactive_number_keys: Set[str],
+    active_number_keys: Set[str],
+) -> List[Dict[str, Any]]:
+    filtered: List[Dict[str, Any]] = []
+    for row in rows:
+        row_name_key = _dev_normalize_text(row.get("customerName"))
+        row_number_key = _normalize_customer_number(row.get("customerNumber"))
+        matched_inactive = False
+        if row_number_key and row_number_key in inactive_number_keys and row_number_key not in active_number_keys:
+            matched_inactive = True
+        if row_name_key and row_name_key in inactive_name_keys and row_name_key not in active_name_keys:
+            matched_inactive = True
+        if matched_inactive:
+            continue
+        filtered.append(row)
+    return filtered
+
+
 def _invoice_reminder_count(invoice: Dict[str, Any]) -> int:
     for key in ("reminderCount", "dunningLevel", "dunning_level", "reminderLevel", "dunningLevelNumber"):
         value = _parse_int(invoice.get(key))
@@ -3924,6 +3961,217 @@ def _build_customer_payment_stats(
     return {"rows": rows, "summary": summary}
 
 
+def _parse_recurring_invoice_months(value: Any) -> float:
+    raw = str(value or "").strip().upper()
+    if not raw:
+        return 1.0
+    if raw == "P1M":
+        return 1.0
+    match = re.fullmatch(
+        r"P(?:(?P<years>\d+)Y)?(?:(?P<months>\d+)M)?(?:(?P<weeks>\d+)W)?(?:(?P<days>\d+)D)?",
+        raw,
+    )
+    if not match:
+        return 1.0
+    years = _safe_nonnegative_float(match.group("years"))
+    months = _safe_nonnegative_float(match.group("months"))
+    weeks = _safe_nonnegative_float(match.group("weeks"))
+    days = _safe_nonnegative_float(match.group("days"))
+    total_months = years * 12.0 + months + weeks * (7.0 / 30.4375) + days / 30.4375
+    if total_months <= 0:
+        return 1.0
+    return round(total_months, 4)
+
+
+def _build_sevdesk_recurring_tag_overview(
+    client: SevdeskClient,
+    invoices: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    recurring_invoices = []
+    for invoice in invoices:
+        invoice_type = str(invoice.get("invoiceType") or "").strip().upper()
+        status = _parse_int(invoice.get("status"))
+        if invoice_type != "WKR" or status == 50:
+            continue
+        invoice_id = _parse_int(invoice.get("id"))
+        if invoice_id <= 0:
+            continue
+        recurring_invoices.append(invoice)
+    if not recurring_invoices:
+        return {
+            "monthlyTotalEur": 0.0,
+            "customersCount": 0,
+            "invoiceCount": 0,
+            "tagCount": 0,
+            "tagTotals": [],
+            "customerRows": [],
+        }
+
+    invoice_ids = {int(_parse_int(invoice.get("id"))) for invoice in recurring_invoices if _parse_int(invoice.get("id")) > 0}
+    tag_relations = client.list_tag_relations(max_pages=40)
+    invoice_tag_ids: Dict[int, List[str]] = {}
+    tag_ids: Set[str] = set()
+    for relation in tag_relations:
+        if not isinstance(relation, dict):
+            continue
+        obj = relation.get("object")
+        tag_ref = relation.get("tag")
+        if not isinstance(obj, dict) or not isinstance(tag_ref, dict):
+            continue
+        if str(obj.get("objectName") or "").strip() != "Invoice":
+            continue
+        invoice_id = _parse_int(obj.get("id"))
+        if invoice_id <= 0 or invoice_id not in invoice_ids:
+            continue
+        tag_id = str(tag_ref.get("id") or "").strip()
+        if not tag_id:
+            continue
+        invoice_tag_ids.setdefault(invoice_id, []).append(tag_id)
+        tag_ids.add(tag_id)
+
+    tag_name_by_id: Dict[str, str] = {}
+    if tag_ids:
+        for tag in client.list_tags(max_pages=20):
+            tag_id = str(tag.get("id") or "").strip()
+            if not tag_id or tag_id not in tag_ids:
+                continue
+            tag_name = str(tag.get("name") or "").strip() or f"Tag #{tag_id}"
+            tag_name_by_id[tag_id] = tag_name
+
+    overview = {
+        "monthlyTotalEur": 0.0,
+        "customersCount": 0,
+        "invoiceCount": 0,
+        "tagCount": 0,
+        "tagTotals": [],
+        "customerRows": [],
+    }
+    tag_totals: Dict[str, Dict[str, Any]] = {}
+    customer_rows: Dict[str, Dict[str, Any]] = {}
+
+    for invoice in recurring_invoices:
+        invoice_id = _parse_int(invoice.get("id"))
+        if invoice_id <= 0:
+            continue
+        gross_value = round(_parse_sevdesk_amount(invoice), 2)
+        if gross_value <= 0:
+            continue
+        months = _parse_recurring_invoice_months(invoice.get("accountIntervall"))
+        monthly_value = round(gross_value / months, 2) if months > 0 else gross_value
+        if monthly_value <= 0:
+            continue
+        tag_ids_for_invoice = list(dict.fromkeys(invoice_tag_ids.get(invoice_id) or []))
+        tag_keys = tag_ids_for_invoice or ["untagged"]
+        allocation_count = max(1, len(tag_keys))
+        allocated_value = round(monthly_value / allocation_count, 2)
+
+        contact_id, contact_name = _extract_sevdesk_contact(invoice)
+        customer_number = _extract_sevdesk_customer_number(invoice)
+        customer_key = contact_id or f"invoice:{invoice_id}"
+        customer_entry = customer_rows.get(customer_key)
+        if not customer_entry:
+            customer_entry = {
+                "contactId": contact_id,
+                "customerName": contact_name or f"Kontakt #{contact_id or invoice_id}",
+                "customerNumber": customer_number,
+                "monthlyTotalEur": 0.0,
+                "invoiceCount": 0,
+                "tags": {},
+                "invoices": [],
+            }
+        customer_entry["monthlyTotalEur"] = round(customer_entry["monthlyTotalEur"] + monthly_value, 2)
+        customer_entry["invoiceCount"] += 1
+        customer_entry["invoices"].append(
+            {
+                "invoiceId": invoice_id,
+                "invoiceNumber": str(
+                    invoice.get("invoiceNumber")
+                    or invoice.get("invoiceNumberDefault")
+                    or invoice.get("name")
+                    or f"WKR #{invoice_id}"
+                ).strip(),
+                "grossEur": gross_value,
+                "monthlyEur": monthly_value,
+                "interval": str(invoice.get("accountIntervall") or "").strip(),
+                "nextInvoiceAt": str(invoice.get("accountNextInvoice") or "").strip(),
+                "tags": [
+                    tag_name_by_id.get(tag_id, f"Tag #{tag_id}") for tag_id in tag_ids_for_invoice
+                ] or ["Ohne Tag"],
+            }
+        )
+        customer_rows[customer_key] = customer_entry
+
+        for index, tag_key in enumerate(tag_keys):
+            tag_name = "Ohne Tag" if tag_key == "untagged" else tag_name_by_id.get(tag_key, f"Tag #{tag_key}")
+            value_piece = allocated_value
+            if index == allocation_count - 1:
+                distributed_before = round(allocated_value * (allocation_count - 1), 2)
+                value_piece = round(monthly_value - distributed_before, 2)
+            tag_entry = tag_totals.get(tag_key)
+            if not tag_entry:
+                tag_entry = {
+                    "tagId": "" if tag_key == "untagged" else tag_key,
+                    "tagName": tag_name,
+                    "monthlyEur": 0.0,
+                    "invoiceCount": 0,
+                    "customerIds": set(),
+                }
+            tag_entry["monthlyEur"] = round(tag_entry["monthlyEur"] + value_piece, 2)
+            tag_entry["invoiceCount"] += 1
+            tag_entry["customerIds"].add(customer_key)
+            tag_totals[tag_key] = tag_entry
+
+            customer_tag_entry = customer_entry["tags"].get(tag_key)
+            if not customer_tag_entry:
+                customer_tag_entry = {
+                    "tagId": "" if tag_key == "untagged" else tag_key,
+                    "tagName": tag_name,
+                    "monthlyEur": 0.0,
+                    "invoiceCount": 0,
+                }
+            customer_tag_entry["monthlyEur"] = round(customer_tag_entry["monthlyEur"] + value_piece, 2)
+            customer_tag_entry["invoiceCount"] += 1
+            customer_entry["tags"][tag_key] = customer_tag_entry
+
+        overview["monthlyTotalEur"] = round(overview["monthlyTotalEur"] + monthly_value, 2)
+        overview["invoiceCount"] += 1
+
+    overview["customersCount"] = len(customer_rows)
+    overview["tagCount"] = len(tag_totals)
+    overview["tagTotals"] = sorted(
+        [
+            {
+                "tagId": value["tagId"],
+                "tagName": value["tagName"],
+                "monthlyEur": round(value["monthlyEur"], 2),
+                "invoiceCount": int(value["invoiceCount"] or 0),
+                "customersCount": len(value["customerIds"]),
+            }
+            for value in tag_totals.values()
+        ],
+        key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("tagName") or "").lower()),
+    )
+    overview["customerRows"] = sorted(
+        [
+            {
+                "contactId": row["contactId"],
+                "customerName": row["customerName"],
+                "customerNumber": row["customerNumber"],
+                "monthlyTotalEur": round(row["monthlyTotalEur"], 2),
+                "invoiceCount": int(row["invoiceCount"] or 0),
+                "tags": sorted(
+                    row["tags"].values(),
+                    key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("tagName") or "").lower()),
+                ),
+                "invoices": row["invoices"],
+            }
+            for row in customer_rows.values()
+        ],
+        key=lambda item: (-float(item.get("monthlyTotalEur") or 0.0), str(item.get("customerName") or "").lower()),
+    )
+    return overview
+
+
 def _build_sevdesk_stats(
     client: SevdeskClient,
     now_dt: datetime,
@@ -3945,6 +4193,14 @@ def _build_sevdesk_stats(
     overdue_invoices: List[Dict[str, Any]] = []
     overdue_sum = 0.0
     paid_avg = 0.0
+    recurring_tag_overview: Dict[str, Any] = {
+        "monthlyTotalEur": 0.0,
+        "customersCount": 0,
+        "invoiceCount": 0,
+        "tagCount": 0,
+        "tagTotals": [],
+        "customerRows": [],
+    }
 
     if include_financial_overview:
         drafts = client.list_invoices(params={"status": 100}, max_pages=10)
@@ -4010,6 +4266,7 @@ def _build_sevdesk_stats(
     customer_payment_data = _build_customer_payment_stats(all_invoices, now_dt)
     customer_payment_stats = customer_payment_data.get("rows") or []
     customer_payment_summary = customer_payment_data.get("summary") or {}
+    recurring_tag_overview = _build_sevdesk_recurring_tag_overview(client, all_invoices)
 
     contact_ids: set[str] = set()
     for bucket in top_customers.values():
@@ -4049,6 +4306,7 @@ def _build_sevdesk_stats(
         "topCustomers": top_customers,
         "customerPaymentStats": customer_payment_stats,
         "customerPaymentSummary": customer_payment_summary,
+        "recurringTagOverview": recurring_tag_overview,
     }
 
 
@@ -4256,6 +4514,109 @@ def _parse_tags_json(value: Optional[str]) -> List[str]:
     return _normalize_tags(loaded)
 
 
+_RECURRING_COST_CATEGORY_META: Dict[str, Dict[str, str]] = {
+    "license_suite": {"label": "Lizenzen / SaaS", "group": "license"},
+    "security_firewall": {"label": "Security / Firewall", "group": "license"},
+    "backup": {"label": "Backup", "group": "license"},
+    "mail_security": {"label": "Mailsecurity", "group": "license"},
+    "cloud": {"label": "Cloud / Hosting", "group": "license"},
+    "domain_ssl": {"label": "Domain / SSL", "group": "license"},
+    "time_tracking": {"label": "Stempeluhr / Zeiterfassung", "group": "other"},
+    "fleet_management": {"label": "Fleetcontrol / Fuhrpark", "group": "other"},
+    "telecom": {"label": "Telefonie / Internet", "group": "other"},
+    "leasing": {"label": "Leasing / Miete", "group": "other"},
+    "other": {"label": "Sonstiges Abo", "group": "other"},
+    "contract_wartung": {"label": "Servicevertrag", "group": "contract"},
+    "contract_monitoring": {"label": "Monitoringvertrag", "group": "contract"},
+    "contract_compliance": {"label": "Compliance / AVV", "group": "contract"},
+}
+
+_RECURRING_COST_CATEGORY_ALIASES = {
+    "lizenz": "license_suite",
+    "licenses": "license_suite",
+    "license": "license_suite",
+    "saas": "license_suite",
+    "m365": "license_suite",
+    "microsoft365": "license_suite",
+    "o365": "license_suite",
+    "security": "security_firewall",
+    "firewall": "security_firewall",
+    "atp": "security_firewall",
+    "backup": "backup",
+    "mailsecurity": "mail_security",
+    "mail_security": "mail_security",
+    "cloudhosting": "cloud",
+    "hosting": "cloud",
+    "cloud": "cloud",
+    "domain": "domain_ssl",
+    "ssl": "domain_ssl",
+    "zeiterfassung": "time_tracking",
+    "stempeluhr": "time_tracking",
+    "time_tracking": "time_tracking",
+    "fleet": "fleet_management",
+    "fleetcontrol": "fleet_management",
+    "telefonie": "telecom",
+    "internet": "telecom",
+    "telecom": "telecom",
+    "leasing": "leasing",
+    "miete": "leasing",
+    "contract_o365": "license_suite",
+    "contract_external": "other",
+    "contract_other": "other",
+    "wartung": "contract_wartung",
+    "monitoring": "contract_monitoring",
+    "avv": "contract_compliance",
+    "avv_dsgvo": "contract_compliance",
+}
+
+
+def _normalize_recurring_cost_category(value: Any, fallback_text: Any = "", default: str = "other") -> str:
+    normalized = (
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("&", " ")
+        .replace("/", " ")
+        .replace("-", "_")
+    )
+    normalized = re.sub(r"[^a-z0-9_]+", "_", normalized).strip("_")
+    if normalized in _RECURRING_COST_CATEGORY_META:
+        return normalized
+    if normalized in _RECURRING_COST_CATEGORY_ALIASES:
+        return _RECURRING_COST_CATEGORY_ALIASES[normalized]
+    combined = str(fallback_text or "").strip().lower()
+    if combined:
+        if any(token in combined for token in ("m365", "microsoft 365", "office 365", "exchange", "sharepoint", "adobe", "saas")):
+            return "license_suite"
+        if any(token in combined for token in ("firewall", "atp", "security", "utm", "endpoint")):
+            return "security_firewall"
+        if "backup" in combined:
+            return "backup"
+        if any(token in combined for token in ("mailsecurity", "mail security", "spamfilter", "mailarchiv", "mailarchivierung")):
+            return "mail_security"
+        if any(token in combined for token in ("hosting", "cloud", "vps", "server", "azure", "aws")):
+            return "cloud"
+        if any(token in combined for token in ("domain", "ssl", "zertifikat")):
+            return "domain_ssl"
+        if any(token in combined for token in ("stempeluhr", "zeiterfassung", "time tracking")):
+            return "time_tracking"
+        if any(token in combined for token in ("fleet", "fuhrpark", "fahrzeug")):
+            return "fleet_management"
+        if any(token in combined for token in ("telefon", "sip", "internet", "dsl", "mobilfunk")):
+            return "telecom"
+        if any(token in combined for token in ("leasing", "miete", "rental")):
+            return "leasing"
+    return default if default in _RECURRING_COST_CATEGORY_META else "other"
+
+
+def _recurring_cost_category_meta(key: Any) -> Dict[str, str]:
+    normalized = _normalize_recurring_cost_category(key)
+    return _RECURRING_COST_CATEGORY_META.get(
+        normalized,
+        _RECURRING_COST_CATEGORY_META["other"],
+    )
+
+
 def serialize_purchasing_item(item: PurchasingItem) -> Dict[str, Any]:
     status = str(item.status or "").strip().lower()
     if status not in {"open", "ordered", "received"}:
@@ -4304,6 +4665,19 @@ def serialize_delivery_note(note: DeliveryNote) -> Dict[str, Any]:
 
 def serialize_customer_inventory_event(item: CustomerInventoryEvent) -> Dict[str, Any]:
     cancellation_date = str(item.cancellation_date or item.event_date or "").strip()
+    fallback_text = " ".join(
+        [
+            str(item.device_label or ""),
+            str(item.provider or ""),
+            str(item.event_type or ""),
+            str(item.note or ""),
+            " ".join(_parse_tags_json(getattr(item, "tags_json", "[]"))),
+        ]
+    )
+    cost_category = _normalize_recurring_cost_category(
+        getattr(item, "cost_category", "") or getattr(item, "event_type", ""),
+        fallback_text=fallback_text,
+    )
     return {
         "id": item.id,
         "customer_id": item.customer_id,
@@ -4316,6 +4690,11 @@ def serialize_customer_inventory_event(item: CustomerInventoryEvent) -> Dict[str
         "reminder_days": int(item.reminder_days or 0),
         "is_external": bool(item.is_external),
         "is_recurring": bool(item.is_recurring),
+        "cost_category": cost_category,
+        "cost_category_label": _recurring_cost_category_meta(cost_category)["label"],
+        "monthly_cost_eur": round(float(getattr(item, "monthly_cost_eur", 0.0) or 0.0), 2),
+        "yearly_cost_eur": round(float(getattr(item, "monthly_cost_eur", 0.0) or 0.0) * 12.0, 2),
+        "tags": _parse_tags_json(getattr(item, "tags_json", "[]")),
         "note": item.note or "",
         "created_at": int(item.created_at or 0),
         "updated_at": int(item.updated_at or 0),
@@ -7056,6 +7435,390 @@ def serialize_customer_contract_document(item: CustomerContractDocument) -> Dict
         "stop_service_immediately": bool(getattr(item, "stop_service_immediately", False)),
         "created_at": int(item.created_at or 0),
         "timeline": timeline,
+    }
+
+
+def _contract_recurring_cost_key(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace(" ", "_")
+    if normalized == "wartung":
+        return "contract_wartung"
+    if normalized == "monitoring":
+        return "contract_monitoring"
+    if normalized in {"avv", "avv_dsgvo", "dsgvo"}:
+        return "contract_compliance"
+    return "contract_wartung"
+
+
+def _contract_document_monthly_cost(item: CustomerContractDocument) -> float:
+    snapshot_payload = _parse_json_object(getattr(item, "snapshot_json", "{}"))
+    pricing_payload = _parse_json_object(snapshot_payload.get("pricing"))
+    monthly_total = _safe_nonnegative_float(pricing_payload.get("monthly_total"))
+    if monthly_total > 0:
+        return round(monthly_total, 2)
+    suggested_monthly_total = _safe_nonnegative_float(pricing_payload.get("suggested_monthly_total"))
+    if suggested_monthly_total > 0:
+        return round(suggested_monthly_total, 2)
+    yearly_total = _safe_nonnegative_float(pricing_payload.get("yearly_total"))
+    if yearly_total > 0:
+        return round(yearly_total / 12.0, 2)
+    suggested_yearly_total = _safe_nonnegative_float(pricing_payload.get("suggested_yearly_total"))
+    if suggested_yearly_total > 0:
+        return round(suggested_yearly_total / 12.0, 2)
+    return 0.0
+
+
+def _inventory_event_recurring_cost_item(
+    item: CustomerInventoryEvent,
+    customer_name: str,
+    customer_number: str,
+) -> Optional[Dict[str, Any]]:
+    monthly_cost = round(_safe_nonnegative_float(getattr(item, "monthly_cost_eur", 0.0)), 2)
+    if monthly_cost <= 0:
+        return None
+    tags = _parse_tags_json(getattr(item, "tags_json", "[]"))
+    category_key = _normalize_recurring_cost_category(
+        getattr(item, "cost_category", "") or getattr(item, "event_type", ""),
+        fallback_text=" ".join(
+            [
+                str(item.device_label or ""),
+                str(item.provider or ""),
+                str(item.event_type or ""),
+                str(item.note or ""),
+                " ".join(tags),
+            ]
+        ),
+    )
+    category_meta = _recurring_cost_category_meta(category_key)
+    title = str(item.device_label or "").strip() or category_meta["label"]
+    return {
+        "source": "inventory",
+        "customerId": int(item.customer_id or 0),
+        "customerName": customer_name,
+        "customerNumber": customer_number,
+        "itemId": int(item.id or 0),
+        "title": title,
+        "provider": str(item.provider or "").strip(),
+        "categoryKey": category_key,
+        "categoryLabel": category_meta["label"],
+        "group": category_meta["group"],
+        "monthlyEur": monthly_cost,
+        "yearlyEur": round(monthly_cost * 12.0, 2),
+        "billingCycle": str(item.billing_cycle or "monthly").strip() or "monthly",
+        "tags": tags,
+        "note": str(item.note or "").strip(),
+        "isExternal": bool(item.is_external),
+    }
+
+
+def _contract_document_recurring_cost_item(
+    item: CustomerContractDocument,
+    customer_name: str,
+    customer_number: str,
+) -> Optional[Dict[str, Any]]:
+    status = str(getattr(item, "status", "") or "").strip().lower()
+    if status != "active":
+        return None
+    monthly_cost = _contract_document_monthly_cost(item)
+    if monthly_cost <= 0:
+        return None
+    category_key = _contract_recurring_cost_key(getattr(item, "doc_type", "") or getattr(item, "template_key", ""))
+    category_meta = _recurring_cost_category_meta(category_key)
+    title = str(item.title or "").strip() or category_meta["label"]
+    return {
+        "source": "contract",
+        "customerId": int(item.customer_id or 0),
+        "customerName": customer_name,
+        "customerNumber": customer_number,
+        "itemId": int(item.id or 0),
+        "title": title,
+        "provider": "QT Workbench",
+        "categoryKey": category_key,
+        "categoryLabel": category_meta["label"],
+        "group": category_meta["group"],
+        "monthlyEur": monthly_cost,
+        "yearlyEur": round(monthly_cost * 12.0, 2),
+        "billingCycle": "monthly",
+        "tags": ["vertrag", str(getattr(item, "doc_type", "") or "").strip().lower()],
+        "note": str(item.note or "").strip(),
+        "isExternal": False,
+    }
+
+
+def _collect_recurring_cost_items(
+    db: Session,
+    customer_rows: List[Customer],
+) -> List[Dict[str, Any]]:
+    if not customer_rows:
+        return []
+    customer_ids = [int(customer.id) for customer in customer_rows if int(customer.id or 0) > 0]
+    if not customer_ids:
+        return []
+    customer_meta = {
+        int(customer.id): {
+            "name": str(customer.name or "").strip() or f"Kunde #{customer.id}",
+            "number": str(customer.creditor_number or customer.short_code or "").strip(),
+        }
+        for customer in customer_rows
+        if int(customer.id or 0) > 0
+    }
+    items: List[Dict[str, Any]] = []
+    inventory_rows = (
+        db.query(CustomerInventoryEvent)
+        .filter(CustomerInventoryEvent.customer_id.in_(customer_ids))
+        .filter(
+            or_(
+                CustomerInventoryEvent.is_recurring == True,
+                CustomerInventoryEvent.event_type.like("contract_%"),
+            )
+        )
+        .all()
+    )
+    for row in inventory_rows:
+        meta = customer_meta.get(int(row.customer_id or 0))
+        if not meta:
+            continue
+        item_payload = _inventory_event_recurring_cost_item(
+            row,
+            meta["name"],
+            meta["number"],
+        )
+        if item_payload:
+            items.append(item_payload)
+    contract_rows = (
+        db.query(CustomerContractDocument)
+        .filter(CustomerContractDocument.customer_id.in_(customer_ids))
+        .all()
+    )
+    for row in contract_rows:
+        meta = customer_meta.get(int(row.customer_id or 0))
+        if not meta:
+            continue
+        item_payload = _contract_document_recurring_cost_item(
+            row,
+            meta["name"],
+            meta["number"],
+        )
+        if item_payload:
+            items.append(item_payload)
+    items.sort(
+        key=lambda entry: (
+            -float(entry.get("monthlyEur") or 0.0),
+            str(entry.get("customerName") or "").lower(),
+            str(entry.get("title") or "").lower(),
+        )
+    )
+    return items
+
+
+def _empty_recurring_cost_overview() -> Dict[str, Any]:
+    return {
+        "monthlyTotalEur": 0.0,
+        "yearlyTotalEur": 0.0,
+        "licenseMonthlyEur": 0.0,
+        "otherRecurringMonthlyEur": 0.0,
+        "contractMonthlyEur": 0.0,
+        "customersCount": 0,
+        "itemCount": 0,
+        "categoryTotals": [],
+        "customerRows": [],
+    }
+
+
+def _build_recurring_costs_overview(
+    db: Session,
+    *,
+    customer_id: Optional[int] = None,
+    include_inactive: bool = False,
+) -> Dict[str, Any]:
+    customer_query = db.query(Customer)
+    if customer_id:
+        customer_query = customer_query.filter(Customer.id == customer_id)
+    elif not include_inactive:
+        customer_query = customer_query.filter(func.lower(func.coalesce(Customer.status, "active")) != "inactive")
+    customer_rows = customer_query.all()
+    if not customer_rows:
+        return _empty_recurring_cost_overview()
+    items = _collect_recurring_cost_items(db, customer_rows)
+    if not items:
+        return _empty_recurring_cost_overview()
+
+    overview = _empty_recurring_cost_overview()
+    category_totals: Dict[str, Dict[str, Any]] = {}
+    customer_totals: Dict[int, Dict[str, Any]] = {}
+
+    for item in items:
+        customer_key = int(item.get("customerId") or 0)
+        monthly_value = round(float(item.get("monthlyEur") or 0.0), 2)
+        yearly_value = round(float(item.get("yearlyEur") or 0.0), 2)
+        if monthly_value <= 0 or customer_key <= 0:
+            continue
+
+        overview["monthlyTotalEur"] = round(overview["monthlyTotalEur"] + monthly_value, 2)
+        overview["yearlyTotalEur"] = round(overview["yearlyTotalEur"] + yearly_value, 2)
+        overview["itemCount"] += 1
+        group = str(item.get("group") or "other")
+        if group == "contract":
+            overview["contractMonthlyEur"] = round(overview["contractMonthlyEur"] + monthly_value, 2)
+        elif group == "license":
+            overview["licenseMonthlyEur"] = round(overview["licenseMonthlyEur"] + monthly_value, 2)
+        else:
+            overview["otherRecurringMonthlyEur"] = round(overview["otherRecurringMonthlyEur"] + monthly_value, 2)
+
+        category_key = str(item.get("categoryKey") or "other")
+        category_entry = category_totals.get(category_key)
+        if not category_entry:
+            meta = _recurring_cost_category_meta(category_key)
+            category_entry = {
+                "key": category_key,
+                "label": meta["label"],
+                "group": meta["group"],
+                "monthlyEur": 0.0,
+                "yearlyEur": 0.0,
+                "itemCount": 0,
+                "customerIds": set(),
+            }
+        category_entry["monthlyEur"] = round(category_entry["monthlyEur"] + monthly_value, 2)
+        category_entry["yearlyEur"] = round(category_entry["yearlyEur"] + yearly_value, 2)
+        category_entry["itemCount"] += 1
+        category_entry["customerIds"].add(customer_key)
+        category_totals[category_key] = category_entry
+
+        customer_entry = customer_totals.get(customer_key)
+        if not customer_entry:
+            customer_entry = {
+                "customerId": customer_key,
+                "customerName": str(item.get("customerName") or "").strip() or f"Kunde #{customer_key}",
+                "customerNumber": str(item.get("customerNumber") or "").strip(),
+                "licenseMonthlyEur": 0.0,
+                "otherRecurringMonthlyEur": 0.0,
+                "contractMonthlyEur": 0.0,
+                "totalMonthlyEur": 0.0,
+                "totalYearlyEur": 0.0,
+                "itemCount": 0,
+                "items": [],
+                "categoryTotals": {},
+            }
+        customer_entry["totalMonthlyEur"] = round(customer_entry["totalMonthlyEur"] + monthly_value, 2)
+        customer_entry["totalYearlyEur"] = round(customer_entry["totalYearlyEur"] + yearly_value, 2)
+        customer_entry["itemCount"] += 1
+        customer_entry["items"].append(item)
+        if group == "contract":
+            customer_entry["contractMonthlyEur"] = round(customer_entry["contractMonthlyEur"] + monthly_value, 2)
+        elif group == "license":
+            customer_entry["licenseMonthlyEur"] = round(customer_entry["licenseMonthlyEur"] + monthly_value, 2)
+        else:
+            customer_entry["otherRecurringMonthlyEur"] = round(customer_entry["otherRecurringMonthlyEur"] + monthly_value, 2)
+        customer_category_entry = customer_entry["categoryTotals"].get(category_key)
+        if not customer_category_entry:
+            meta = _recurring_cost_category_meta(category_key)
+            customer_category_entry = {
+                "key": category_key,
+                "label": meta["label"],
+                "group": meta["group"],
+                "monthlyEur": 0.0,
+                "yearlyEur": 0.0,
+                "itemCount": 0,
+            }
+        customer_category_entry["monthlyEur"] = round(customer_category_entry["monthlyEur"] + monthly_value, 2)
+        customer_category_entry["yearlyEur"] = round(customer_category_entry["yearlyEur"] + yearly_value, 2)
+        customer_category_entry["itemCount"] += 1
+        customer_entry["categoryTotals"][category_key] = customer_category_entry
+        customer_totals[customer_key] = customer_entry
+
+    overview["customersCount"] = len(customer_totals)
+    overview["categoryTotals"] = sorted(
+        [
+            {
+                "key": entry["key"],
+                "label": entry["label"],
+                "group": entry["group"],
+                "monthlyEur": round(entry["monthlyEur"], 2),
+                "yearlyEur": round(entry["yearlyEur"], 2),
+                "itemCount": int(entry["itemCount"] or 0),
+                "customersCount": len(entry["customerIds"]),
+            }
+            for entry in category_totals.values()
+        ],
+        key=lambda entry: (-float(entry.get("monthlyEur") or 0.0), str(entry.get("label") or "").lower()),
+    )
+    overview["customerRows"] = sorted(
+        [
+            {
+                "customerId": entry["customerId"],
+                "customerName": entry["customerName"],
+                "customerNumber": entry["customerNumber"],
+                "licenseMonthlyEur": round(entry["licenseMonthlyEur"], 2),
+                "otherRecurringMonthlyEur": round(entry["otherRecurringMonthlyEur"], 2),
+                "contractMonthlyEur": round(entry["contractMonthlyEur"], 2),
+                "totalMonthlyEur": round(entry["totalMonthlyEur"], 2),
+                "totalYearlyEur": round(entry["totalYearlyEur"], 2),
+                "itemCount": int(entry["itemCount"] or 0),
+                "categoryTotals": sorted(
+                    list(entry["categoryTotals"].values()),
+                    key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("label") or "").lower()),
+                ),
+                "items": entry["items"],
+            }
+            for entry in customer_totals.values()
+        ],
+        key=lambda entry: (-float(entry.get("totalMonthlyEur") or 0.0), str(entry.get("customerName") or "").lower()),
+    )
+    return overview
+
+
+def _build_customer_recurring_costs(db: Session, customer_id: int) -> Dict[str, Any]:
+    overview = _build_recurring_costs_overview(db, customer_id=customer_id, include_inactive=True)
+    if not overview["customerRows"]:
+        return {
+            "monthlyTotalEur": 0.0,
+            "yearlyTotalEur": 0.0,
+            "licenseMonthlyEur": 0.0,
+            "otherRecurringMonthlyEur": 0.0,
+            "contractMonthlyEur": 0.0,
+            "itemCount": 0,
+            "categoryTotals": [],
+            "items": [],
+        }
+    row = overview["customerRows"][0]
+    return {
+        "monthlyTotalEur": round(float(row.get("totalMonthlyEur") or 0.0), 2),
+        "yearlyTotalEur": round(float(row.get("totalYearlyEur") or 0.0), 2),
+        "licenseMonthlyEur": round(float(row.get("licenseMonthlyEur") or 0.0), 2),
+        "otherRecurringMonthlyEur": round(float(row.get("otherRecurringMonthlyEur") or 0.0), 2),
+        "contractMonthlyEur": round(float(row.get("contractMonthlyEur") or 0.0), 2),
+        "itemCount": int(row.get("itemCount") or 0),
+        "categoryTotals": row.get("categoryTotals") or [],
+        "items": row.get("items") or [],
+    }
+
+
+def _empty_sevdesk_customer_recurring_tags() -> Dict[str, Any]:
+    return {
+        "monthlyTotalEur": 0.0,
+        "invoiceCount": 0,
+        "tagCount": 0,
+        "tagTotals": [],
+        "invoices": [],
+    }
+
+
+def _build_customer_sevdesk_recurring_tags(client: SevdeskClient, contact_id: int) -> Dict[str, Any]:
+    if int(contact_id or 0) <= 0:
+        return _empty_sevdesk_customer_recurring_tags()
+    invoices = client.list_invoices(
+        params={"contact[id]": int(contact_id), "contact[objectName]": "Contact"},
+        max_pages=25,
+    )
+    overview = _build_sevdesk_recurring_tag_overview(client, invoices)
+    if not overview.get("customerRows"):
+        return _empty_sevdesk_customer_recurring_tags()
+    row = overview["customerRows"][0]
+    return {
+        "monthlyTotalEur": round(float(row.get("monthlyTotalEur") or 0.0), 2),
+        "invoiceCount": int(row.get("invoiceCount") or 0),
+        "tagCount": len(row.get("tags") or []),
+        "tagTotals": row.get("tags") or [],
+        "invoices": row.get("invoices") or [],
     }
 
 
@@ -13380,6 +14143,13 @@ def delete_customer(customer_id: int):
 @app.get("/api/customers/{customer_id}/metrics")
 def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
     contract_time_budget: Dict[str, Any] = {}
+    sevdesk_recurring_tags: Dict[str, Any] = {
+        "monthlyTotalEur": 0.0,
+        "itemCount": 0,
+        "tagCount": 0,
+        "tagTotals": [],
+        "invoices": [],
+    }
     with SessionLocal() as db:
         customer = db.query(Customer).get(customer_id)
         if not customer:
@@ -13610,6 +14380,7 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
                     revenue_delta = round(revenue_current_year - revenue_last_year, 2)
                     if revenue_last_year and revenue_last_year > 0:
                         revenue_delta_pct = round((revenue_delta / revenue_last_year) * 100, 1)
+                    sevdesk_recurring_tags = _build_customer_sevdesk_recurring_tags(client, contact_id)
 
                     for period_key, invoice_ids in period_invoice_refs.items():
                         work_hours = 0.0
@@ -13663,6 +14434,13 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
                     revenue_total = None
                     revenue_delta = None
                     revenue_delta_pct = None
+                    sevdesk_recurring_tags = {
+                        "monthlyTotalEur": 0.0,
+                        "invoiceCount": 0,
+                        "tagCount": 0,
+                        "tagTotals": [],
+                        "invoices": [],
+                    }
                     period_stats = {
                         "currentYear": {
                             "key": "currentYear",
@@ -13721,6 +14499,10 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
         },
         "periodStats": period_stats,
         "contractTimeBudget": contract_time_budget,
+        "sevdeskRecurringTags": {
+            **sevdesk_recurring_tags,
+            "itemCount": int(sevdesk_recurring_tags.get("invoiceCount") or 0),
+        },
     }
 
 
@@ -13883,6 +14665,19 @@ def create_customer_inventory_event(customer_id: int, data: CustomerInventoryEve
         is_recurring = bool(data.is_recurring)
         if event_type.startswith("contract_"):
             is_recurring = True
+        tags = _normalize_tags(data.tags)
+        cost_category = _normalize_recurring_cost_category(
+            data.cost_category or event_type,
+            fallback_text=" ".join(
+                [
+                    str(data.device_label or ""),
+                    str(data.provider or ""),
+                    str(event_type or ""),
+                    str(data.note or ""),
+                    " ".join(tags),
+                ]
+            ),
+        )
         row = CustomerInventoryEvent(
             customer_id=customer_id,
             device_label=str(data.device_label or "").strip(),
@@ -13894,6 +14689,9 @@ def create_customer_inventory_event(customer_id: int, data: CustomerInventoryEve
             reminder_days=_normalize_inventory_event_reminder_days(data.reminder_days),
             is_external=bool(data.is_external),
             is_recurring=is_recurring,
+            cost_category=cost_category,
+            monthly_cost_eur=_safe_nonnegative_float(data.monthly_cost_eur or 0.0),
+            tags_json=json.dumps(tags, ensure_ascii=False),
             note=str(data.note or "").strip(),
             created_at=now_ms,
             updated_at=now_ms,
@@ -13942,6 +14740,27 @@ def update_customer_inventory_event(customer_id: int, event_id: int, data: Custo
             row.is_external = bool(updates.get("is_external"))
         if "is_recurring" in updates:
             row.is_recurring = bool(updates.get("is_recurring"))
+        if "cost_category" in updates or "tags" in updates or "device_label" in updates or "provider" in updates or "note" in updates:
+            tags = _normalize_tags(
+                updates.get("tags") if "tags" in updates else _parse_tags_json(getattr(row, "tags_json", "[]"))
+            )
+            if "tags" in updates:
+                row.tags_json = json.dumps(tags, ensure_ascii=False)
+            cost_category = updates.get("cost_category") if "cost_category" in updates else getattr(row, "cost_category", "")
+            row.cost_category = _normalize_recurring_cost_category(
+                cost_category or row.event_type,
+                fallback_text=" ".join(
+                    [
+                        str(row.device_label or ""),
+                        str(row.provider or ""),
+                        str(row.event_type or ""),
+                        str(updates.get("note") if "note" in updates else row.note or ""),
+                        " ".join(tags),
+                    ]
+                ),
+            )
+        if "monthly_cost_eur" in updates:
+            row.monthly_cost_eur = _safe_nonnegative_float(updates.get("monthly_cost_eur"))
         if "note" in updates:
             row.note = str(updates.get("note") or "").strip()
         row.updated_at = int(time.time() * 1000)
@@ -18358,6 +19177,60 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
             )
             sevdesk_stats["customerPaymentStats"] = filtered_rows
             sevdesk_stats["customerPaymentSummary"] = _summarize_customer_payment_rows(filtered_rows)
+        recurring_tag_overview = sevdesk_stats.get("recurringTagOverview")
+        recurring_customer_rows = recurring_tag_overview.get("customerRows") if isinstance(recurring_tag_overview, dict) else None
+        if isinstance(recurring_customer_rows, list):
+            filtered_customer_rows = _filter_inactive_recurring_tag_customer_rows(
+                recurring_customer_rows,
+                inactive_customer_name_keys,
+                active_customer_name_keys,
+                inactive_customer_number_keys,
+                active_customer_number_keys,
+            )
+            tag_totals: Dict[str, Dict[str, Any]] = {}
+            monthly_total = 0.0
+            invoice_count = 0
+            for row in filtered_customer_rows:
+                monthly_total += float(row.get("monthlyTotalEur") or 0.0)
+                invoice_count += int(row.get("invoiceCount") or 0)
+                for tag in row.get("tags") or []:
+                    key = str(tag.get("tagId") or tag.get("tagName") or "untagged")
+                    entry = tag_totals.get(key)
+                    if not entry:
+                        entry = {
+                            "tagId": str(tag.get("tagId") or ""),
+                            "tagName": str(tag.get("tagName") or "Ohne Tag"),
+                            "monthlyEur": 0.0,
+                            "invoiceCount": 0,
+                            "customersCount": 0,
+                            "_customers": set(),
+                        }
+                    entry["monthlyEur"] += float(tag.get("monthlyEur") or 0.0)
+                    entry["invoiceCount"] += int(tag.get("invoiceCount") or 0)
+                    customer_key = str(row.get("contactId") or row.get("customerName") or "")
+                    if customer_key:
+                        entry["_customers"].add(customer_key)
+                    tag_totals[key] = entry
+            sevdesk_stats["recurringTagOverview"] = {
+                "monthlyTotalEur": round(monthly_total, 2),
+                "customersCount": len(filtered_customer_rows),
+                "invoiceCount": invoice_count,
+                "tagCount": len(tag_totals),
+                "tagTotals": sorted(
+                    [
+                        {
+                            "tagId": value["tagId"],
+                            "tagName": value["tagName"],
+                            "monthlyEur": round(float(value["monthlyEur"] or 0.0), 2),
+                            "invoiceCount": int(value["invoiceCount"] or 0),
+                            "customersCount": len(value["_customers"]),
+                        }
+                        for value in tag_totals.values()
+                    ],
+                    key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("tagName") or "").lower()),
+                ),
+                "customerRows": filtered_customer_rows,
+            }
     if load_contracts and contracts_stats:
         payment_rows = sevdesk_stats.get("customerPaymentStats") if isinstance(sevdesk_stats, dict) else []
         contracts_stats = _apply_contract_payment_status(

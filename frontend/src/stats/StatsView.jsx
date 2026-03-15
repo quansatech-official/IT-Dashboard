@@ -185,6 +185,12 @@ export default function StatsView() {
     stats?.sevdesk?.customerPaymentSummary && typeof stats.sevdesk.customerPaymentSummary === "object"
       ? stats.sevdesk.customerPaymentSummary
       : {};
+  const recurringTags =
+    stats?.sevdesk?.recurringTagOverview && typeof stats.sevdesk.recurringTagOverview === "object"
+      ? stats.sevdesk.recurringTagOverview
+      : {};
+  const recurringTagTotals = Array.isArray(recurringTags?.tagTotals) ? recurringTags.tagTotals : [];
+  const recurringCustomerRows = Array.isArray(recurringTags?.customerRows) ? recurringTags.customerRows : [];
   const contracts =
     stats?.contracts && typeof stats.contracts === "object" ? stats.contracts : {};
   const contractMonthLabels =
@@ -445,6 +451,7 @@ export default function StatsView() {
     });
     return list;
   }, [customerPaymentStats, customerSort]);
+  const topRecurringTags = useMemo(() => recurringTagTotals.slice(0, 8), [recurringTagTotals]);
 
   const currentStatus = tabStatus[activeTab] || "idle";
   const sortIndicator = (key) =>
@@ -636,6 +643,113 @@ export default function StatsView() {
                       <TopCustomerCard title="Top 5 Kunden - Letzte 6 Monate" items={stats.sevdesk?.topCustomers?.halfYear} />
                       <TopCustomerCard title="Top 5 Kunden - Aktuelles Jahr" items={stats.sevdesk?.topCustomers?.currentYear} />
                       <TopCustomerCard title="Top 5 Kunden - Letztes Jahr" items={stats.sevdesk?.topCustomers?.lastYear} />
+                    </div>
+                    <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50/70 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">sevdesk Tags / WKR</p>
+                          <p className="mt-1 text-[11px] text-sand-600">
+                            Nur sevdesk: wiederkehrende Rechnungen je Kunde und Tag, auf Monatswert normalisiert.
+                          </p>
+                        </div>
+                        <div className="text-[11px] text-sand-500">
+                          Kunden: {formatNumber(recurringTags?.customersCount || 0)} · WKR-Vorlagen:{" "}
+                          {formatNumber(recurringTags?.invoiceCount || 0)}
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                        <StatCard
+                          title="WKR / Monat"
+                          value={formatEur(recurringTags?.monthlyTotalEur || 0)}
+                          subtitle="Monatswert aus accountIntervall"
+                        />
+                        <StatCard
+                          title="Kunden mit WKR"
+                          value={formatNumber(recurringTags?.customersCount || 0)}
+                          subtitle="mit mindestens einer getaggten Vorlage"
+                        />
+                        <StatCard
+                          title="Aktive Tags"
+                          value={formatNumber(recurringTags?.tagCount || 0)}
+                          subtitle="sevdesk Tag-Namen"
+                        />
+                        <StatCard
+                          title="Untagged"
+                          value={formatNumber(recurringTagTotals.filter((entry) => !String(entry?.tagId || "").trim()).length)}
+                          subtitle="Vorlagen ohne Tag"
+                        />
+                      </div>
+                      <div className="mt-4 grid gap-3 xl:grid-cols-[1.05fr_1.35fr]">
+                        <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                          <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Nach Tag</p>
+                          {topRecurringTags.length ? (
+                            <div className="mt-2 space-y-2">
+                              {topRecurringTags.map((entry) => (
+                                <div key={entry.tagId || entry.tagName} className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
+                                  <div className="flex items-center justify-between gap-2 text-[11px] text-sand-700">
+                                    <span>{entry.tagName || "Ohne Tag"}</span>
+                                    <span className="font-metrics">{formatEur(entry.monthlyEur || 0)}</span>
+                                  </div>
+                                  <div className="mt-1 text-[10px] text-sand-400">
+                                    {formatNumber(entry.itemCount || 0)} Positionen · {formatNumber(entry.customersCount || 0)} Kunden
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-[11px] text-sand-400">Noch keine getaggten WKR-Vorlagen in sevdesk gefunden.</p>
+                          )}
+                        </div>
+                        <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                          <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Alle Kunden</p>
+                          <div className="mt-2 overflow-x-auto">
+                            <table className="min-w-full text-left text-xs">
+                              <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
+                                <tr>
+                                  <th className="px-3 py-2">Kunde</th>
+                                  <th className="px-3 py-2">Tags</th>
+                                  <th className="px-3 py-2">WKR</th>
+                                  <th className="px-3 py-2">Gesamt / Monat</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {recurringCustomerRows.length ? (
+                                  recurringCustomerRows.map((row) => (
+                                    <tr key={`recurring-cost-row-${row.contactId || row.customerName}`} className="border-t border-sand-100">
+                                      <td className="px-3 py-2 text-sand-800">
+                                        {row.customerName || "Unbekannt"}
+                                        <div className="text-[10px] text-sand-400">
+                                          {row.customerNumber || "Keine Kundennummer"}
+                                        </div>
+                                      </td>
+                                      <td className="px-3 py-2 text-sand-700">
+                                        <div className="flex flex-wrap gap-1">
+                                          {(Array.isArray(row.tags) ? row.tags : []).slice(0, 4).map((entry) => (
+                                            <span
+                                              key={`${row.contactId || row.customerName}-${entry.tagId || entry.tagName}`}
+                                              className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-600"
+                                            >
+                                              {entry.tagName}: {formatEur(entry.monthlyEur || 0)}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </td>
+                                      <td className="px-3 py-2 text-sand-700">{formatNumber(row.invoiceCount || 0)}</td>
+                                      <td className="px-3 py-2 text-sand-900 font-semibold">{formatEur(row.monthlyTotalEur || 0)}</td>
+                                    </tr>
+                                  ))
+                                ) : (
+                                  <tr>
+                                    <td colSpan={4} className="px-3 py-4 text-sand-500">
+                                      Keine sevdesk-Tagauswertung vorhanden.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </>
                 )}
