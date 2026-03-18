@@ -229,6 +229,30 @@ MODEL_PREF_ACTION = os.environ.get("OLLAMA_MODEL_PREF_ACTION") or OLLAMA_MODEL
 MODEL_PREF_OFFER_TEXT = os.environ.get("OLLAMA_MODEL_PREF_OFFER_TEXT") or OLLAMA_MODEL
 MODEL_PREF_INVOICE_SUMMARY = os.environ.get("OLLAMA_MODEL_PREF_INVOICE_SUMMARY") or OLLAMA_MODEL
 MODEL_PREF_INTERNAL_AI = os.environ.get("OLLAMA_MODEL_PREF_INTERNAL_AI") or MODEL_PREF_ACTION or OLLAMA_MODEL
+AI_PROVIDER_OLLAMA = "ollama"
+AI_PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
+AI_PROVIDER_ENV = os.environ.get("AI_PROVIDER") or ""
+AI_BASE_URL_ENV = os.environ.get("AI_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or ""
+AI_API_KEY_ENV = os.environ.get("AI_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+AI_DEFAULT_MODEL_ENV = os.environ.get("AI_MODEL") or os.environ.get("OPENAI_MODEL") or OLLAMA_MODEL
+AI_MODEL_SETTINGS_FIELDS = {
+    "internal_ai": "ai_internal_model",
+    "action": "ai_action_model",
+    "task_draft": "ai_task_model",
+    "customer_ranking": "ai_customer_ranking_model",
+    "customer_development": "ai_customer_development_model",
+    "offer_text": "ai_offer_model",
+    "invoice_summary": "ai_invoice_model",
+}
+AI_MODEL_ENV_DEFAULTS = {
+    "internal_ai": MODEL_PREF_INTERNAL_AI,
+    "action": MODEL_PREF_ACTION,
+    "task_draft": MODEL_PREF_TASK_DRAFT,
+    "customer_ranking": MODEL_PREF_CUSTOMER_RANKING,
+    "customer_development": MODEL_PREF_CUSTOMER_DEVELOPMENT,
+    "offer_text": MODEL_PREF_OFFER_TEXT,
+    "invoice_summary": MODEL_PREF_INVOICE_SUMMARY,
+}
 FREE_EMAIL_DOMAINS = {
     "gmail.com",
     "googlemail.com",
@@ -652,6 +676,17 @@ class IntegrationSettings(Base):
     meta_hub_email_enabled = Column(Boolean, default=False)
     meta_hub_refresh_seconds = Column(Integer, default=300)
     meta_hub_mailboxes_json = Column(Text, default="[]")
+    ai_provider = Column(String, default="ollama")
+    ai_base_url = Column(String, default="")
+    ai_api_key = Column(String, default="")
+    ai_default_model = Column(String, default="")
+    ai_internal_model = Column(String, default="")
+    ai_action_model = Column(String, default="")
+    ai_task_model = Column(String, default="")
+    ai_customer_ranking_model = Column(String, default="")
+    ai_customer_development_model = Column(String, default="")
+    ai_offer_model = Column(String, default="")
+    ai_invoice_model = Column(String, default="")
 
 
 class InfraDiscoveryDevice(Base):
@@ -1014,6 +1049,28 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_refresh_seconds INTEGER DEFAULT 300")
     if "meta_hub_mailboxes_json" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_mailboxes_json TEXT DEFAULT '[]'")
+    if "ai_provider" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_provider VARCHAR DEFAULT 'ollama'")
+    if "ai_base_url" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_base_url VARCHAR DEFAULT ''")
+    if "ai_api_key" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_api_key VARCHAR DEFAULT ''")
+    if "ai_default_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_default_model VARCHAR DEFAULT ''")
+    if "ai_internal_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_internal_model VARCHAR DEFAULT ''")
+    if "ai_action_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_action_model VARCHAR DEFAULT ''")
+    if "ai_task_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_task_model VARCHAR DEFAULT ''")
+    if "ai_customer_ranking_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_customer_ranking_model VARCHAR DEFAULT ''")
+    if "ai_customer_development_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_customer_development_model VARCHAR DEFAULT ''")
+    if "ai_offer_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_offer_model VARCHAR DEFAULT ''")
+    if "ai_invoice_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_invoice_model VARCHAR DEFAULT ''")
     if statements:
         with engine.begin() as connection:
             for statement in statements:
@@ -1952,6 +2009,17 @@ class IntegrationSettingsUpdate(BaseModel):
     meta_hub_email_enabled: Optional[bool] = None
     meta_hub_refresh_seconds: Optional[int] = None
     meta_hub_mailboxes: Optional[List[Dict[str, Any]]] = None
+    ai_provider: Optional[str] = None
+    ai_base_url: Optional[str] = None
+    ai_api_key: Optional[str] = None
+    ai_default_model: Optional[str] = None
+    ai_internal_model: Optional[str] = None
+    ai_action_model: Optional[str] = None
+    ai_task_model: Optional[str] = None
+    ai_customer_ranking_model: Optional[str] = None
+    ai_customer_development_model: Optional[str] = None
+    ai_offer_model: Optional[str] = None
+    ai_invoice_model: Optional[str] = None
 
 
 class SmtpSettingsUpdate(BaseModel):
@@ -2533,28 +2601,127 @@ def _split_model_list(raw_value: Any) -> List[str]:
     return parts
 
 
-def _resolve_ollama_models(*specific_values: Any) -> List[str]:
+def _normalize_ai_provider(raw_value: Any) -> str:
+    provider = str(raw_value or "").strip().lower()
+    if provider in {"vllm", "openai", "openai_api", "openai-api", "openai-compatible", "openai_compatible"}:
+        return AI_PROVIDER_OPENAI_COMPATIBLE
+    if provider == AI_PROVIDER_OLLAMA:
+        return AI_PROVIDER_OLLAMA
+    if not provider and (AI_BASE_URL_ENV or AI_API_KEY_ENV):
+        return AI_PROVIDER_OPENAI_COMPATIBLE
+    return AI_PROVIDER_OLLAMA
+
+
+def _normalize_ai_base_url(raw_value: Any, provider: str) -> str:
+    base_url = str(raw_value or "").strip().rstrip("/")
+    if base_url:
+        return base_url
+    if provider == AI_PROVIDER_OLLAMA:
+        return str(OLLAMA_BASE_URL or "").strip().rstrip("/")
+    return ""
+
+
+def _normalize_openai_compatible_url(base_url: str, path: str) -> str:
+    normalized_base = str(base_url or "").strip().rstrip("/")
+    normalized_path = str(path or "").strip().lstrip("/")
+    if not normalized_base:
+        return ""
+    if normalized_base.lower().endswith("/v1"):
+        return f"{normalized_base}/{normalized_path}"
+    return f"{normalized_base}/v1/{normalized_path}"
+
+
+def _merge_model_candidates(*values: Any) -> List[str]:
     ordered: List[str] = []
-    seen = set()
-    model_lists = [*specific_values, OLLAMA_MODEL]
-    for raw in model_lists:
+    seen: Set[str] = set()
+    for raw in values:
         for model in _split_model_list(raw):
             lowered = model.lower()
             if lowered in seen:
                 continue
             seen.add(lowered)
             ordered.append(model)
+    return ordered
+
+
+def _build_ai_config_snapshot(settings: Optional[IntegrationSettings] = None) -> Dict[str, Any]:
+    provider = _normalize_ai_provider(
+        (getattr(settings, "ai_provider", "") if settings is not None else "") or AI_PROVIDER_ENV
+    )
+    base_url = _normalize_ai_base_url(
+        (getattr(settings, "ai_base_url", "") if settings is not None else "") or AI_BASE_URL_ENV,
+        provider,
+    )
+    api_key = str(
+        (getattr(settings, "ai_api_key", "") if settings is not None else "") or AI_API_KEY_ENV
+    ).strip()
+    default_model = str(
+        (getattr(settings, "ai_default_model", "") if settings is not None else "") or AI_DEFAULT_MODEL_ENV
+    ).strip()
+    if not default_model:
+        default_model = AI_DEFAULT_MODEL_ENV
+    models: Dict[str, str] = {}
+    for purpose, field_name in AI_MODEL_SETTINGS_FIELDS.items():
+        configured_value = getattr(settings, field_name, "") if settings is not None else ""
+        models[purpose] = str(configured_value or AI_MODEL_ENV_DEFAULTS.get(purpose) or "").strip()
+    return {
+        "provider": provider,
+        "base_url": base_url,
+        "api_key": api_key,
+        "default_model": default_model,
+        "models": models,
+    }
+
+
+def _get_ai_config_snapshot(settings: Optional[IntegrationSettings] = None) -> Dict[str, Any]:
+    if settings is not None:
+        return _build_ai_config_snapshot(settings)
+    with SessionLocal() as db:
+        return _build_ai_config_snapshot(db.query(IntegrationSettings).first())
+
+
+def _resolve_ai_models(
+    *specific_values: Any,
+    purpose: str = "",
+    settings: Optional[IntegrationSettings] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    resolved_config = config or _get_ai_config_snapshot(settings)
+    ordered = _merge_model_candidates(
+        *specific_values,
+        (resolved_config.get("models") or {}).get(str(purpose or "").strip().lower(), ""),
+        resolved_config.get("default_model") or "",
+    )
     if not ordered:
         ordered.append("qwen3:8b")
     return ordered
 
 
-def _list_ollama_models(timeout_seconds: int = 8) -> List[str]:
+def _resolve_ollama_models(*specific_values: Any) -> List[str]:
+    return _resolve_ai_models(*specific_values)
+
+
+def _configured_ai_models_for_picker(config: Dict[str, Any]) -> List[str]:
+    models = config.get("models") if isinstance(config, dict) else {}
+    configured = _merge_model_candidates(
+        (models or {}).get("internal_ai", ""),
+        (models or {}).get("action", ""),
+        (models or {}).get("task_draft", ""),
+        (models or {}).get("invoice_summary", ""),
+        config.get("default_model") if isinstance(config, dict) else "",
+    )
+    return configured
+
+
+def _list_ollama_models(timeout_seconds: int = 8, base_url: Optional[str] = None) -> List[str]:
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
     request_timeout = max(connect_timeout, int(timeout_seconds or 8))
+    resolved_base_url = _normalize_ai_base_url(base_url or OLLAMA_BASE_URL, AI_PROVIDER_OLLAMA)
+    if not resolved_base_url:
+        return []
     try:
         with _ollama_http.get(
-            f"{OLLAMA_BASE_URL}/api/tags",
+            f"{resolved_base_url}/api/tags",
             timeout=(connect_timeout, request_timeout),
         ) as response:
             response.raise_for_status()
@@ -2581,22 +2748,92 @@ def _list_ollama_models(timeout_seconds: int = 8) -> List[str]:
     return ordered
 
 
+def _build_openai_compatible_headers(api_key: str) -> Dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if str(api_key or "").strip():
+        headers["Authorization"] = f"Bearer {str(api_key).strip()}"
+    return headers
+
+
+def _list_openai_compatible_models(
+    config: Dict[str, Any],
+    timeout_seconds: int = 8,
+) -> List[str]:
+    base_url = str(config.get("base_url") or "").strip()
+    request_url = _normalize_openai_compatible_url(base_url, "models")
+    if not request_url:
+        return []
+    connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
+    request_timeout = max(connect_timeout, int(timeout_seconds or 8))
+    try:
+        with _ollama_http.get(
+            request_url,
+            headers=_build_openai_compatible_headers(str(config.get("api_key") or "")),
+            timeout=(connect_timeout, request_timeout),
+        ) as response:
+            response.raise_for_status()
+            payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("OpenAI-compatible model listing failed: %s", exc)
+        return []
+    items = payload.get("data") if isinstance(payload, dict) else None
+    ordered: List[str] = []
+    seen: Set[str] = set()
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        model_name = str(item.get("id") or item.get("model") or "").strip()
+        if not model_name:
+            continue
+        normalized = model_name.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(model_name)
+    return ordered
+
+
+def _list_available_ai_models(
+    *,
+    timeout_seconds: int = 8,
+    settings: Optional[IntegrationSettings] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    resolved_config = config or _get_ai_config_snapshot(settings)
+    provider = str(resolved_config.get("provider") or AI_PROVIDER_OLLAMA)
+    if provider == AI_PROVIDER_OPENAI_COMPATIBLE:
+        models = _list_openai_compatible_models(resolved_config, timeout_seconds=timeout_seconds)
+    else:
+        models = _list_ollama_models(
+            timeout_seconds=timeout_seconds,
+            base_url=str(resolved_config.get("base_url") or OLLAMA_BASE_URL),
+        )
+    if models:
+        return models
+    return _configured_ai_models_for_picker(resolved_config)
+
+
 def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
+    config = _get_ai_config_snapshot()
     requested = str(requested_model or "").strip()
-    available_models = _list_ollama_models()
+    available_models = _list_available_ai_models(config=config)
     if requested:
+        if not available_models:
+            return _resolve_ai_models(requested, purpose="internal_ai", config=config)
         available_lookup = {model.lower(): model for model in available_models}
         matched_model = available_lookup.get(requested.lower())
         if not matched_model:
             raise HTTPException(400, f"Unbekanntes Modell: {requested}")
-        return _resolve_ollama_models(matched_model)
+        return _resolve_ai_models(matched_model, purpose="internal_ai", config=config)
     if available_models:
         available_lookup = {model.lower(): model for model in available_models}
-        preferred = _resolve_ollama_models(
+        preferred = _resolve_ai_models(
             MODEL_PREF_INTERNAL_AI,
             MODEL_PREF_ACTION,
             MODEL_PREF_TASK_DRAFT,
             MODEL_PREF_INVOICE_SUMMARY,
+            purpose="internal_ai",
+            config=config,
         )
         ordered: List[str] = []
         seen = set()
@@ -2612,11 +2849,13 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
             ordered.append(model)
             seen.add(normalized)
         return ordered
-    return _resolve_ollama_models(
+    return _resolve_ai_models(
         MODEL_PREF_INTERNAL_AI,
         MODEL_PREF_ACTION,
         MODEL_PREF_TASK_DRAFT,
         MODEL_PREF_INVOICE_SUMMARY,
+        purpose="internal_ai",
+        config=config,
     )
 
 
@@ -2637,6 +2876,8 @@ def _ollama_cache_key(
     *,
     prompt: str,
     model_candidates: List[str],
+    provider: str,
+    base_url: str,
     response_format: str,
     temperature: Optional[float],
     max_tokens: Optional[int],
@@ -2644,6 +2885,8 @@ def _ollama_cache_key(
     payload = {
         "prompt": prompt,
         "model_candidates": model_candidates,
+        "provider": provider,
+        "base_url": base_url,
         "response_format": response_format,
         "temperature": temperature,
         "max_tokens": int(max_tokens or 0),
@@ -2722,6 +2965,7 @@ def _ollama_generate(
     prompt: str,
     *,
     model_candidates: List[str],
+    base_url: Optional[str] = None,
     timeout: Optional[int] = None,
     response_format: str = "",
     temperature: Optional[float] = None,
@@ -2731,6 +2975,9 @@ def _ollama_generate(
 ) -> Tuple[Dict[str, Any], str]:
     request_timeout = max(1, int(timeout or OLLAMA_TIMEOUT_SECONDS))
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
+    resolved_base_url = _normalize_ai_base_url(base_url or OLLAMA_BASE_URL, AI_PROVIDER_OLLAMA)
+    if not resolved_base_url:
+        return {}, ""
     normalized_models = []
     seen_models: Set[str] = set()
     for item in model_candidates:
@@ -2748,6 +2995,8 @@ def _ollama_generate(
         _ollama_cache_key(
             prompt=prompt,
             model_candidates=normalized_models,
+            provider=AI_PROVIDER_OLLAMA,
+            base_url=resolved_base_url,
             response_format=response_format,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -2812,7 +3061,7 @@ def _ollama_generate(
         try:
             if OLLAMA_STREAM_ENABLED:
                 with _ollama_http.post(
-                    f"{OLLAMA_BASE_URL}/api/generate",
+                    f"{resolved_base_url}/api/generate",
                     json=payload,
                     timeout=(connect_timeout, request_timeout),
                     stream=True,
@@ -2841,7 +3090,7 @@ def _ollama_generate(
                         data["response"] = "".join(chunks)
             else:
                 with _ollama_http.post(
-                    f"{OLLAMA_BASE_URL}/api/generate",
+                    f"{resolved_base_url}/api/generate",
                     json=payload,
                     timeout=(connect_timeout, request_timeout),
                 ) as response:
@@ -2911,6 +3160,206 @@ def _ollama_generate_text(
         use_cache=use_cache,
     )
     return (data.get("response") or "").strip()
+
+
+def _extract_openai_compatible_response_text(payload: Dict[str, Any]) -> str:
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first_choice = choices[0] if isinstance(choices[0], dict) else {}
+    message = first_choice.get("message") if isinstance(first_choice, dict) else {}
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for entry in content:
+            if isinstance(entry, str):
+                parts.append(entry)
+                continue
+            if not isinstance(entry, dict):
+                continue
+            text_part = entry.get("text")
+            if isinstance(text_part, str) and text_part.strip():
+                parts.append(text_part)
+                continue
+            content_part = entry.get("content")
+            if isinstance(content_part, str) and content_part.strip():
+                parts.append(content_part)
+        return "".join(parts).strip()
+    text = first_choice.get("text") if isinstance(first_choice, dict) else None
+    if isinstance(text, str):
+        return text.strip()
+    return ""
+
+
+def _openai_compatible_generate(
+    prompt: str,
+    *,
+    model_candidates: List[str],
+    config: Dict[str, Any],
+    timeout: Optional[int] = None,
+    response_format: str = "",
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    use_cache: bool = True,
+) -> Tuple[Dict[str, Any], str]:
+    request_timeout = max(1, int(timeout or OLLAMA_TIMEOUT_SECONDS))
+    connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
+    normalized_models = _merge_model_candidates(model_candidates)
+    if not normalized_models:
+        normalized_models = _configured_ai_models_for_picker(config)
+    if not normalized_models:
+        normalized_models = ["qwen3:8b"]
+    prompt_text = str(prompt or "").strip()
+    if not prompt_text:
+        return {}, ""
+    if len(prompt_text) > OLLAMA_PROMPT_MAX_CHARS:
+        prompt_text = prompt_text[:OLLAMA_PROMPT_MAX_CHARS]
+    resolved_base_url = str(config.get("base_url") or "").strip()
+    request_url = _normalize_openai_compatible_url(resolved_base_url, "chat/completions")
+    if not request_url:
+        return {}, ""
+    cache_key = (
+        _ollama_cache_key(
+            prompt=prompt_text,
+            model_candidates=normalized_models,
+            provider=AI_PROVIDER_OPENAI_COMPATIBLE,
+            base_url=resolved_base_url,
+            response_format=response_format,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        if use_cache
+        else ""
+    )
+    cached_response = _get_cached_ollama_response(cache_key) if cache_key else None
+    if cached_response is not None:
+        return cached_response
+    resolved_max_tokens: Optional[int] = None
+    if max_tokens is not None:
+        try:
+            resolved_max_tokens = max(1, min(int(max_tokens), OLLAMA_MAX_TOKENS_HARD_LIMIT))
+        except (TypeError, ValueError):
+            resolved_max_tokens = None
+    headers = _build_openai_compatible_headers(str(config.get("api_key") or ""))
+    for model in normalized_models:
+        payload: Dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt_text}],
+        }
+        if temperature is not None:
+            payload["temperature"] = float(temperature)
+        if resolved_max_tokens is not None and resolved_max_tokens > 0:
+            payload["max_tokens"] = int(resolved_max_tokens)
+        if response_format == "json":
+            payload["response_format"] = {"type": "json_object"}
+        started_at = time.time()
+        try:
+            with _ollama_http.post(
+                request_url,
+                headers=headers,
+                json=payload,
+                timeout=(connect_timeout, request_timeout),
+            ) as response:
+                response.raise_for_status()
+                loaded = response.json()
+                data = loaded if isinstance(loaded, dict) else {}
+        except requests.HTTPError as exc:
+            logger.warning("OpenAI-compatible request failed with model %s: %s", model, exc)
+            continue
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("OpenAI-compatible request failed with model %s: %s", model, exc)
+            continue
+        response_text = _extract_openai_compatible_response_text(data)
+        normalized_payload = {
+            "response": response_text,
+            "usage": data.get("usage") if isinstance(data, dict) else {},
+        }
+        duration_ms = int((time.time() - started_at) * 1000)
+        if duration_ms >= OLLAMA_SLOW_REQUEST_MS:
+            logger.info(
+                "OpenAI-compatible slow response model=%s duration_ms=%s prompt_chars=%s max_tokens=%s",
+                model,
+                duration_ms,
+                len(prompt_text),
+                int(resolved_max_tokens or 0),
+            )
+        if cache_key and response_text:
+            _store_cached_ollama_response(cache_key, normalized_payload, model)
+        if response_text:
+            return normalized_payload, model
+    return {}, ""
+
+
+def _ai_generate(
+    prompt: str,
+    *,
+    model_candidates: List[str],
+    timeout: Optional[int] = None,
+    response_format: str = "",
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    use_cache: bool = True,
+    raw: bool = False,
+    settings: Optional[IntegrationSettings] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Tuple[Dict[str, Any], str, str]:
+    resolved_config = config or _get_ai_config_snapshot(settings)
+    provider = str(resolved_config.get("provider") or AI_PROVIDER_OLLAMA)
+    if provider == AI_PROVIDER_OPENAI_COMPATIBLE:
+        payload, model = _openai_compatible_generate(
+            prompt,
+            model_candidates=model_candidates,
+            config=resolved_config,
+            timeout=timeout,
+            response_format=response_format,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            use_cache=use_cache,
+        )
+        return payload, model, provider
+    payload, model = _ollama_generate(
+        prompt,
+        model_candidates=model_candidates,
+        base_url=str(resolved_config.get("base_url") or OLLAMA_BASE_URL),
+        timeout=timeout,
+        response_format=response_format,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        use_cache=use_cache,
+        raw=raw,
+    )
+    return payload, model, AI_PROVIDER_OLLAMA
+
+
+def _ai_generate_text(
+    prompt: str,
+    *,
+    model_candidates: Optional[List[str]] = None,
+    timeout: Optional[int] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    use_cache: bool = True,
+    settings: Optional[IntegrationSettings] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, str, str]:
+    resolved_config = config or _get_ai_config_snapshot(settings)
+    candidates = model_candidates or _resolve_ai_models(
+        MODEL_PREF_INVOICE_SUMMARY,
+        purpose="invoice_summary",
+        config=resolved_config,
+    )
+    data, model, provider = _ai_generate(
+        prompt,
+        model_candidates=candidates,
+        timeout=timeout,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        use_cache=use_cache,
+        config=resolved_config,
+    )
+    return str(data.get("response") or "").strip(), model, provider
 
 
 def _offer_item_text(item: Dict[str, Any]) -> str:
@@ -3193,8 +3642,12 @@ def _estimate_task_scope(task: DayTask, analysis_text: str, actual_hours: float)
     model = ""
     loaded: Dict[str, Any] = {}
     try:
-        model_candidates = _resolve_ollama_models(MODEL_PREF_TASK_DRAFT, MODEL_PREF_INVOICE_SUMMARY)
-        payload, model = _ollama_generate(
+        model_candidates = _resolve_ai_models(
+            MODEL_PREF_TASK_DRAFT,
+            MODEL_PREF_INVOICE_SUMMARY,
+            purpose="task_draft",
+        )
+        payload, model, provider_name = _ai_generate(
             prompt,
             model_candidates=model_candidates,
             timeout=TASK_SCOPE_AI_TIMEOUT_SECONDS,
@@ -3214,7 +3667,7 @@ def _estimate_task_scope(task: DayTask, analysis_text: str, actual_hours: float)
                 if start != -1 and end != -1 and end > start:
                     loaded = json.loads(raw[start : end + 1])
         if loaded:
-            provider = "ollama"
+            provider = provider_name
     except Exception as exc:
         logger.warning("Task scope estimate AI failed (%s): %s", model or "n/a", exc)
     return _finalize_task_scope_estimate(
@@ -4424,7 +4877,7 @@ def _summarize_tasks_for_invoice(tasks: List[DayTask]) -> str:
         "Kein Markdown, keine Aufzaehlungszeichen, maximal 3 Saetze.\n\n"
         f"{chr(10).join(lines)}"
     )
-    summary = _ollama_generate_text(prompt, max_tokens=180)
+    summary, _, _ = _ai_generate_text(prompt, max_tokens=180)
     if summary:
         return summary
     return " ".join(line.lstrip("- ").strip() for line in lines)
@@ -5788,6 +6241,7 @@ def _connect_meta_hub_mailbox_read_only(mailbox: Dict[str, Any]) -> imaplib.IMAP
 
 def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, Any]:
     meta_hub_mailboxes = _serialize_meta_hub_mailboxes_for_response(settings.meta_hub_mailboxes_json)
+    ai_config = _build_ai_config_snapshot(settings)
     return {
         "id": settings.id,
         "rmm_host": settings.rmm_host,
@@ -5836,6 +6290,17 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "meta_hub_refresh_seconds": int(settings.meta_hub_refresh_seconds or 300),
         "meta_hub_mailboxes": meta_hub_mailboxes,
         "meta_hub_mailbox_count": len(meta_hub_mailboxes),
+        "ai_provider": ai_config["provider"],
+        "ai_base_url": ai_config["base_url"],
+        "ai_default_model": str(settings.ai_default_model or ai_config["default_model"] or "").strip(),
+        "ai_internal_model": str(settings.ai_internal_model or "").strip(),
+        "ai_action_model": str(settings.ai_action_model or "").strip(),
+        "ai_task_model": str(settings.ai_task_model or "").strip(),
+        "ai_customer_ranking_model": str(settings.ai_customer_ranking_model or "").strip(),
+        "ai_customer_development_model": str(settings.ai_customer_development_model or "").strip(),
+        "ai_offer_model": str(settings.ai_offer_model or "").strip(),
+        "ai_invoice_model": str(settings.ai_invoice_model or "").strip(),
+        "has_ai_api_key": bool(settings.ai_api_key or ai_config["api_key"]),
     }
 
 
@@ -8620,11 +9085,12 @@ def _ai_rank_customer_candidates(
         f"{choices_block}"
     )
     try:
-        model_candidates = _resolve_ollama_models(
+        model_candidates = _resolve_ai_models(
             MODEL_PREF_CUSTOMER_RANKING,
             MODEL_PREF_TASK_DRAFT,
+            purpose="customer_ranking",
         )
-        payload, used_model = _ollama_generate(
+        payload, used_model, _ = _ai_generate(
             prompt,
             model_candidates=model_candidates,
             response_format="json",
@@ -8818,8 +9284,8 @@ def _generate_task_draft_from_email(
         f"Inhalt: {content or 'n/a'}"
     )
     try:
-        model_candidates = _resolve_ollama_models(MODEL_PREF_TASK_DRAFT)
-        payload, used_model = _ollama_generate(
+        model_candidates = _resolve_ai_models(MODEL_PREF_TASK_DRAFT, purpose="task_draft")
+        payload, used_model, _ = _ai_generate(
             prompt,
             model_candidates=model_candidates,
             response_format="json",
@@ -8827,7 +9293,7 @@ def _generate_task_draft_from_email(
             max_tokens=260,
         )
         if not payload:
-            raise RuntimeError("No Ollama response")
+            raise RuntimeError("No AI response")
         raw = payload.get("response")
         loaded: Dict[str, Any] = {}
         if isinstance(raw, dict):
@@ -10408,8 +10874,8 @@ def _build_recent_work_summary_ai_text(customer_name: str, invoice_items: List[D
         f"Rechnungspositionen:\n{chr(10).join(lines)}"
     )
     try:
-        model_candidates = _resolve_ollama_models(MODEL_PREF_INVOICE_SUMMARY)
-        data, _ = _ollama_generate(
+        model_candidates = _resolve_ai_models(MODEL_PREF_INVOICE_SUMMARY, purpose="invoice_summary")
+        data, _, _ = _ai_generate(
             prompt,
             model_candidates=model_candidates,
             timeout=10,
@@ -13143,16 +13609,18 @@ def _generate_customer_development_ai_text(
             else CUSTOMER_DEVELOPMENT_AI_TIMEOUT_SECONDS
         ),
     )
-    text_result = _ollama_generate_text(
+    text_result, _, _ = _ai_generate_text(
         prompt,
-        model_candidates=_resolve_ollama_models(
+        model_candidates=_resolve_ai_models(
             MODEL_PREF_CUSTOMER_DEVELOPMENT,
             MODEL_PREF_ACTION,
             MODEL_PREF_TASK_DRAFT,
+            purpose="customer_development",
         ),
         timeout=resolved_timeout,
         max_tokens=_customer_development_ai_max_tokens(mode_key),
-    ).strip()
+    )
+    text_result = text_result.strip()
     if text_result:
         return text_result, False, resolved_timeout
     resolved_customer_id = _safe_int(context.get("customerId"))
@@ -13202,7 +13670,7 @@ def _build_customer_development_ai_response(
         "tone": tone_value,
         "text": text_result,
         "sources": ai_sources,
-        "provider": "fallback" if used_fallback else "ollama",
+        "provider": "fallback" if used_fallback else _get_ai_config_snapshot().get("provider", AI_PROVIDER_OLLAMA),
         "used_fallback": bool(used_fallback),
         "timeout_seconds": int(resolved_timeout),
         "generated_at": int(time.time() * 1000),
@@ -13918,7 +14386,7 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest, request: 
             "tone": str(data.tone or "sachlich"),
             "text": text_result,
             "sources": aggregated_sources,
-            "provider": "fallback" if used_fallback else "ollama",
+            "provider": "fallback" if used_fallback else _get_ai_config_snapshot().get("provider", AI_PROVIDER_OLLAMA),
             "used_fallback": bool(used_fallback),
             "timeout_seconds": int(resolved_timeout),
             "generated_at": int(time.time() * 1000),
@@ -16039,6 +16507,7 @@ def update_integrations(data: IntegrationSettingsUpdate):
             "also_sftp_password",
             "sevdesk_api_token",
             "icecat_api_token",
+            "ai_api_key",
         }
         incoming_mailboxes = incoming.pop("meta_hub_mailboxes", None)
         for field, value in incoming.items():
@@ -16048,6 +16517,25 @@ def update_integrations(data: IntegrationSettingsUpdate):
                 safe_refresh = int(value or 300)
                 safe_refresh = max(30, min(safe_refresh, 86400))
                 setattr(settings, field, safe_refresh)
+                continue
+            if field == "ai_provider":
+                setattr(settings, field, _normalize_ai_provider(value))
+                continue
+            if field == "ai_base_url":
+                provider_value = incoming.get("ai_provider", settings.ai_provider)
+                setattr(settings, field, _normalize_ai_base_url(value, _normalize_ai_provider(provider_value)))
+                continue
+            if field in {
+                "ai_default_model",
+                "ai_internal_model",
+                "ai_action_model",
+                "ai_task_model",
+                "ai_customer_ranking_model",
+                "ai_customer_development_model",
+                "ai_offer_model",
+                "ai_invoice_model",
+            }:
+                setattr(settings, field, str(value or "").strip())
                 continue
             setattr(settings, field, value)
         if incoming_mailboxes is not None:
@@ -17124,7 +17612,7 @@ def pbx_phonebook_health():
             "version_preview": "",
         }
 
-# ============== OLLAMA AI =================
+# ============== AI =================
 @app.post("/api/ai_action")
 def generate_action(data: ActionAiRequest):
     text = (data.text or "").strip()
@@ -17137,8 +17625,12 @@ def generate_action(data: ActionAiRequest):
     if "{text}" not in prompts["action_prompt"] and "Text:" not in prompt:
         prompt = f"{prompt}\n\nText: {text}"
 
-    model_candidates = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
-    payload, _ = _ollama_generate(
+    model_candidates = _resolve_ai_models(
+        MODEL_PREF_ACTION,
+        MODEL_PREF_TASK_DRAFT,
+        purpose="action",
+    )
+    payload, _, _ = _ai_generate(
         prompt,
         model_candidates=model_candidates,
         response_format="json",
@@ -17147,7 +17639,7 @@ def generate_action(data: ActionAiRequest):
         timeout=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
     )
     if not payload:
-        logger.warning("AI action fallback used due to Ollama failure")
+        logger.warning("AI action fallback used due to provider failure")
         return _build_action_ai_fallback(text)
 
     action = parse_action_json(payload.get("response"))
@@ -17244,8 +17736,15 @@ def _build_action_ai_fallback(text: str) -> Dict[str, str]:
 
 @app.get("/api/tools/internal_ai_models")
 def tools_internal_ai_models():
-    available_models = _list_ollama_models()
-    preferred_models = _resolve_ollama_models(MODEL_PREF_ACTION, MODEL_PREF_TASK_DRAFT)
+    config = _get_ai_config_snapshot()
+    available_models = _list_available_ai_models(config=config)
+    preferred_models = _resolve_ai_models(
+        MODEL_PREF_INTERNAL_AI,
+        MODEL_PREF_ACTION,
+        MODEL_PREF_TASK_DRAFT,
+        purpose="internal_ai",
+        config=config,
+    )
     default_model = ""
     available_lookup = {model.lower(): model for model in available_models}
     for candidate in preferred_models:
@@ -17258,6 +17757,7 @@ def tools_internal_ai_models():
     return {
         "models": available_models,
         "default_model": default_model,
+        "provider": config.get("provider") or AI_PROVIDER_OLLAMA,
         "prompt_limit_chars": _internal_ai_prompt_limit_chars(),
         "prompt_limit_scope": "server",
     }
@@ -17272,7 +17772,7 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
     internal_prompt = _build_internal_ai_prompt(prompt_text, content_text)
 
     model_candidates = _resolve_internal_ai_tool_models(data.model)
-    payload, used_model = _ollama_generate(
+    payload, used_model, provider = _ai_generate(
         internal_prompt,
         model_candidates=model_candidates,
         temperature=0.2,
@@ -17291,7 +17791,7 @@ def tools_internal_ai_prompt(data: InternalAiPromptRequest):
         }
     return {
         "text": response_text,
-        "provider": "ollama",
+        "provider": provider,
         "model": used_model or "",
         "generated_at": int(time.time() * 1000),
     }
@@ -17306,6 +17806,7 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
 
     internal_prompt = _build_internal_ai_prompt(prompt_text, content_text)
     model_candidates = _resolve_internal_ai_tool_models(data.model)
+    config = _get_ai_config_snapshot()
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
     request_timeout = min(
         int(INTERNAL_AI_STREAM_TIMEOUT_SECONDS),
@@ -17322,6 +17823,45 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
             "stage": "connecting",
             "detail": "Verbinde mit interner KI",
         }) + "\n"
+        if str(config.get("provider") or AI_PROVIDER_OLLAMA) != AI_PROVIDER_OLLAMA:
+            payload, used_model, provider = _ai_generate(
+                internal_prompt,
+                model_candidates=model_candidates,
+                temperature=0.2,
+                max_tokens=int(INTERNAL_AI_TOOL_MAX_TOKENS),
+                timeout=request_timeout,
+                use_cache=False,
+                raw=True,
+                config=config,
+            )
+            response_text = str(payload.get("response") or "").strip()
+            if not response_text:
+                yield json.dumps({
+                    "type": "meta",
+                    "provider": "fallback",
+                    "model": used_model or "",
+                }) + "\n"
+                yield json.dumps({"type": "delta", "text": fallback_text}) + "\n"
+                yield json.dumps({
+                    "type": "done",
+                    "provider": "fallback",
+                    "model": used_model or "",
+                    "generated_at": int(time.time() * 1000),
+                }) + "\n"
+                return
+            yield json.dumps({
+                "type": "meta",
+                "provider": provider,
+                "model": used_model or "",
+            }) + "\n"
+            yield json.dumps({"type": "delta", "text": response_text}) + "\n"
+            yield json.dumps({
+                "type": "done",
+                "provider": provider,
+                "model": used_model or "",
+                "generated_at": int(time.time() * 1000),
+            }) + "\n"
+            return
         prompt_body = internal_prompt
         if len(prompt_body) > OLLAMA_PROMPT_MAX_CHARS:
             prompt_body = prompt_body[:OLLAMA_PROMPT_MAX_CHARS]
@@ -17363,7 +17903,7 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
                     "model": model,
                 }) + "\n"
                 with _ollama_http.post(
-                    f"{OLLAMA_BASE_URL}/api/generate",
+                    f"{str(config.get('base_url') or OLLAMA_BASE_URL).rstrip('/')}/api/generate",
                     json=payload,
                     timeout=(connect_timeout, request_timeout),
                     stream=True,
@@ -17371,7 +17911,7 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
                     response.raise_for_status()
                     yield json.dumps({
                         "type": "meta",
-                        "provider": "ollama",
+                        "provider": AI_PROVIDER_OLLAMA,
                         "model": model,
                     }) + "\n"
                     for raw_line in response.iter_lines(decode_unicode=True):
@@ -17401,7 +17941,7 @@ def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
                                 )
                             yield json.dumps({
                                 "type": "done",
-                                "provider": "ollama",
+                                "provider": AI_PROVIDER_OLLAMA,
                                 "model": model,
                                 "generated_at": int(time.time() * 1000),
                             }) + "\n"
@@ -17470,8 +18010,12 @@ def generate_offer_text(data: OfferAiRequest):
         },
     )
 
-    model_candidates = _resolve_ollama_models(MODEL_PREF_OFFER_TEXT, MODEL_PREF_TASK_DRAFT)
-    payload, _ = _ollama_generate(
+    model_candidates = _resolve_ai_models(
+        MODEL_PREF_OFFER_TEXT,
+        MODEL_PREF_TASK_DRAFT,
+        purpose="offer_text",
+    )
+    payload, _, provider = _ai_generate(
         prompt,
         model_candidates=model_candidates,
         temperature=0.2,
@@ -17488,7 +18032,7 @@ def generate_offer_text(data: OfferAiRequest):
         text = _sanitize_invoice_position_ai_text(text)
         if not text:
             return {"text": _build_offer_ai_fallback_text(mode, current_text, context), "provider": "fallback"}
-    return {"text": text, "provider": "ollama"}
+    return {"text": text, "provider": provider}
 
 # ============== REPORT CATALOG =============
 @app.get("/api/report_catalog")
@@ -17888,7 +18432,7 @@ def generate_newsletter_from_rss(data: NewsletterRssGenerateRequest):
     source_text = _build_newsletter_rss_source_text(articles)
     prompt_text = _build_newsletter_rss_prompt(mode, str(data.tone or "sachlich"), len(articles))
     model_candidates = _resolve_internal_ai_tool_models(None)
-    payload, used_model = _ollama_generate(
+    payload, used_model, provider = _ai_generate(
         _build_internal_ai_prompt(prompt_text, source_text),
         model_candidates=model_candidates,
         temperature=0.25 if mode == "newsletter" else 0.2,
@@ -17901,8 +18445,6 @@ def generate_newsletter_from_rss(data: NewsletterRssGenerateRequest):
     if not response_text:
         response_text = _build_newsletter_rss_fallback(mode, articles)
         provider = "fallback"
-    else:
-        provider = "ollama"
     return {
         "mode": mode,
         "text": response_text,

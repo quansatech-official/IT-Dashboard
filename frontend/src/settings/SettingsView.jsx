@@ -134,6 +134,21 @@ const defaultSevdesk = {
   has_sevdesk_api_token: false
 };
 
+const defaultAiConnection = {
+  ai_provider: "ollama",
+  ai_base_url: "http://ollama:11434",
+  ai_api_key: "",
+  has_ai_api_key: false,
+  ai_default_model: "",
+  ai_internal_model: "",
+  ai_action_model: "",
+  ai_task_model: "",
+  ai_customer_ranking_model: "",
+  ai_customer_development_model: "",
+  ai_offer_model: "",
+  ai_invoice_model: ""
+};
+
 const loadCachedSmtp = () => {
   if (typeof window === "undefined") return defaultSmtp;
   try {
@@ -530,6 +545,10 @@ export default function SettingsView() {
   const [sevdeskLoadStatus, setSevdeskLoadStatus] = useState("loading");
   const [sevdeskOpen, setSevdeskOpen] = useState(false);
   const [sevdeskAdvancedOpen, setSevdeskAdvancedOpen] = useState(false);
+  const [aiConnection, setAiConnection] = useState(defaultAiConnection);
+  const [aiConnectionOpen, setAiConnectionOpen] = useState(false);
+  const [aiConnectionStatus, setAiConnectionStatus] = useState("idle");
+  const [aiConnectionLoadStatus, setAiConnectionLoadStatus] = useState("loading");
   const [sevdeskHealth, setSevdeskHealth] = useState({
     connected: null,
     error: "",
@@ -805,10 +824,31 @@ export default function SettingsView() {
           sevdesk_hourly_rate_eur: data?.sevdesk_hourly_rate_eur || "",
           has_sevdesk_api_token: Boolean(data?.has_sevdesk_api_token)
         }));
+        setAiConnection((prev) => {
+          const provider = data?.ai_provider || defaultAiConnection.ai_provider;
+          return {
+            ...prev,
+            ai_provider: provider,
+            ai_base_url:
+              data?.ai_base_url ||
+              (provider === "openai_compatible" ? "" : defaultAiConnection.ai_base_url),
+            ai_api_key: "",
+            has_ai_api_key: Boolean(data?.has_ai_api_key),
+            ai_default_model: data?.ai_default_model || "",
+            ai_internal_model: data?.ai_internal_model || "",
+            ai_action_model: data?.ai_action_model || "",
+            ai_task_model: data?.ai_task_model || "",
+            ai_customer_ranking_model: data?.ai_customer_ranking_model || "",
+            ai_customer_development_model: data?.ai_customer_development_model || "",
+            ai_offer_model: data?.ai_offer_model || "",
+            ai_invoice_model: data?.ai_invoice_model || ""
+          };
+        });
         setPbxLoadStatus("ready");
         setMarketplaceLoadStatus("ready");
         setIcecatLoadStatus("ready");
         setSevdeskLoadStatus("ready");
+        setAiConnectionLoadStatus("ready");
         refreshMetaHubRuntimeStatus(false);
         refreshRmmHealth();
       })
@@ -818,6 +858,7 @@ export default function SettingsView() {
         setMarketplaceLoadStatus("error");
         setIcecatLoadStatus("error");
         setSevdeskLoadStatus("error");
+        setAiConnectionLoadStatus("error");
       });
     return () => {
       active = false;
@@ -1612,6 +1653,55 @@ export default function SettingsView() {
     setTimeout(() => setRmmStatus("idle"), 2000);
   };
 
+  const saveAiConnectionSettings = async () => {
+    setAiConnectionStatus("saving");
+    try {
+      const res = await fetch(`${API}/integrations`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ai_provider: aiConnection.ai_provider,
+          ai_base_url: aiConnection.ai_base_url,
+          ai_api_key: aiConnection.ai_api_key,
+          ai_default_model: aiConnection.ai_default_model,
+          ai_internal_model: aiConnection.ai_internal_model,
+          ai_action_model: aiConnection.ai_action_model,
+          ai_task_model: aiConnection.ai_task_model,
+          ai_customer_ranking_model: aiConnection.ai_customer_ranking_model,
+          ai_customer_development_model: aiConnection.ai_customer_development_model,
+          ai_offer_model: aiConnection.ai_offer_model,
+          ai_invoice_model: aiConnection.ai_invoice_model
+        })
+      });
+      if (!res.ok) throw new Error("save_failed");
+      const data = await res.json();
+      setAiConnection((prev) => {
+        const provider = data?.ai_provider || defaultAiConnection.ai_provider;
+        return {
+          ...prev,
+          ai_provider: provider,
+          ai_base_url:
+            data?.ai_base_url ||
+            (provider === "openai_compatible" ? "" : defaultAiConnection.ai_base_url),
+          ai_api_key: "",
+          has_ai_api_key: Boolean(data?.has_ai_api_key),
+          ai_default_model: data?.ai_default_model || "",
+          ai_internal_model: data?.ai_internal_model || "",
+          ai_action_model: data?.ai_action_model || "",
+          ai_task_model: data?.ai_task_model || "",
+          ai_customer_ranking_model: data?.ai_customer_ranking_model || "",
+          ai_customer_development_model: data?.ai_customer_development_model || "",
+          ai_offer_model: data?.ai_offer_model || "",
+          ai_invoice_model: data?.ai_invoice_model || ""
+        };
+      });
+      setAiConnectionStatus("saved");
+    } catch (error) {
+      setAiConnectionStatus("error");
+    }
+    setTimeout(() => setAiConnectionStatus("idle"), 2000);
+  };
+
   const addMetaHubMailbox = () => {
     setMetaHub((prev) => ({
       ...prev,
@@ -2249,6 +2339,14 @@ export default function SettingsView() {
     metaHubRuntimeStatus,
     activeMailboxCount: activeMetaHubMailboxCount
   });
+  const aiProviderLabel =
+    aiConnection.ai_provider === "openai_compatible"
+      ? "vLLM / OpenAI-kompatibel"
+      : "Ollama";
+  const aiBaseUrlPlaceholder =
+    aiConnection.ai_provider === "openai_compatible"
+      ? "https://llm.example.tld/v1"
+      : "http://ollama:11434";
 
   return (
     <div className="min-h-screen bg-sand-50">
@@ -2887,6 +2985,213 @@ export default function SettingsView() {
                   <div className="rounded-2xl border border-dashed border-sand-200 bg-white p-4 text-xs text-sand-500">
                     Noch keine Mitarbeiter angelegt.
                   </div>
+                )}
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setAiConnectionOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">KI Anbindung</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-sand-600">
+              <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-1">
+                {aiProviderLabel}
+              </span>
+              <span className="text-sm text-sand-500">{aiConnectionOpen ? "–" : "+"}</span>
+            </div>
+          </button>
+          {aiConnectionOpen ? (
+            <>
+              <p className="mt-4 text-xs text-sand-500">
+                Zentrale KI-Konfiguration fuer Workbench. Damit kann lokal `Ollama` oder ein externer
+                `vLLM / OpenAI-kompatibler` Server genutzt werden, ohne die App ueber `.env` zu verdrahten.
+              </p>
+              <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="text-xs text-sand-500">Provider</label>
+                  <select
+                    value={aiConnection.ai_provider}
+                    onChange={(event) =>
+                      setAiConnection((prev) => {
+                        const nextProvider = event.target.value;
+                        const currentBaseUrl = String(prev.ai_base_url || "").trim();
+                        const exampleBaseUrl =
+                          nextProvider === "openai_compatible"
+                            ? "https://llm.example.tld/v1"
+                            : defaultAiConnection.ai_base_url;
+                        const shouldReplaceBaseUrl =
+                          !currentBaseUrl ||
+                          currentBaseUrl === defaultAiConnection.ai_base_url ||
+                          currentBaseUrl === "https://llm.example.tld/v1";
+                        return {
+                          ...prev,
+                          ai_provider: nextProvider,
+                          ai_base_url: shouldReplaceBaseUrl ? exampleBaseUrl : prev.ai_base_url
+                        };
+                      })
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                  >
+                    <option value="ollama">Ollama</option>
+                    <option value="openai_compatible">vLLM / OpenAI-kompatibel</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Base URL</label>
+                  <input
+                    value={aiConnection.ai_base_url}
+                    onChange={(event) =>
+                      setAiConnection((prev) => ({ ...prev, ai_base_url: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={aiBaseUrlPlaceholder}
+                  />
+                  <p className="mt-1 text-[11px] text-sand-400">
+                    Bei `vLLM` funktionieren URLs mit oder ohne `/v1`.
+                  </p>
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">
+                    API Key {aiConnection.ai_provider === "openai_compatible" ? "" : "(optional)"}
+                  </label>
+                  <input
+                    type="password"
+                    value={aiConnection.ai_api_key}
+                    onChange={(event) =>
+                      setAiConnection((prev) => ({ ...prev, ai_api_key: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder={aiConnection.has_ai_api_key ? "Gespeichert" : "••••••••"}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-sand-500">Default Modell</label>
+                  <input
+                    value={aiConnection.ai_default_model}
+                    onChange={(event) =>
+                      setAiConnection((prev) => ({ ...prev, ai_default_model: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                    placeholder="z. B. qwen3:8b oder meta-llama/Llama-3.1-8B-Instruct"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">Modell-Overrides</p>
+                <p className="mt-1 text-xs text-sand-500">
+                  Leer lassen = Default Modell verwenden. Nur setzen, wenn einzelne Funktionen bewusst ein anderes Modell bekommen sollen.
+                </p>
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-xs text-sand-500">Interne Tools</label>
+                    <input
+                      value={aiConnection.ai_internal_model}
+                      onChange={(event) =>
+                        setAiConnection((prev) => ({ ...prev, ai_internal_model: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Optionales Modell fuer freie interne Prompts"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Kundenbericht / Action</label>
+                    <input
+                      value={aiConnection.ai_action_model}
+                      onChange={(event) =>
+                        setAiConnection((prev) => ({ ...prev, ai_action_model: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Optionales Modell fuer Action-Vorschlaege"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Aufgabenentwurf</label>
+                    <input
+                      value={aiConnection.ai_task_model}
+                      onChange={(event) =>
+                        setAiConnection((prev) => ({ ...prev, ai_task_model: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Optionales Modell fuer Mail- zu Aufgabenentwurf"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Kundenranking</label>
+                    <input
+                      value={aiConnection.ai_customer_ranking_model}
+                      onChange={(event) =>
+                        setAiConnection((prev) => ({
+                          ...prev,
+                          ai_customer_ranking_model: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Optionales Modell fuer Kundenzuordnung"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Kundenentwicklung</label>
+                    <input
+                      value={aiConnection.ai_customer_development_model}
+                      onChange={(event) =>
+                        setAiConnection((prev) => ({
+                          ...prev,
+                          ai_customer_development_model: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Optionales Modell fuer Entwicklung, Analyse, Leitfaden"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Angebot / Textentwurf</label>
+                    <input
+                      value={aiConnection.ai_offer_model}
+                      onChange={(event) =>
+                        setAiConnection((prev) => ({ ...prev, ai_offer_model: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Optionales Modell fuer Angebots- und Newslettertexte"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-sand-500">Rechnungszusammenfassung</label>
+                    <input
+                      value={aiConnection.ai_invoice_model}
+                      onChange={(event) =>
+                        setAiConnection((prev) => ({ ...prev, ai_invoice_model: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder="Optionales Modell fuer Rechnungs- und Leistungszusammenfassung"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center gap-3 text-xs">
+                <button
+                  onClick={saveAiConnectionSettings}
+                  className="rounded-full border border-sand-200 bg-sand-900 px-3 py-2 uppercase tracking-wide text-white hover:opacity-90"
+                >
+                  KI Anbindung speichern
+                </button>
+                {aiConnectionLoadStatus === "error" && (
+                  <span className="text-rose-600">Laden fehlgeschlagen</span>
+                )}
+                {aiConnectionStatus === "saved" && (
+                  <span className="text-emerald-600">Gespeichert</span>
+                )}
+                {aiConnectionStatus === "error" && (
+                  <span className="text-rose-600">Speichern fehlgeschlagen</span>
                 )}
               </div>
             </>
