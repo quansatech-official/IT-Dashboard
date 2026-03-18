@@ -2215,12 +2215,6 @@ class CustomerDevelopmentAiInternalRequest(BaseModel):
     context: Dict[str, Any]
 
 
-class InternalAiPromptRequest(BaseModel):
-    prompt: str
-    content: Optional[str] = ""
-    model: Optional[str] = ""
-
-
 class CustomerDevelopmentReportSuggestionPreviewRequest(BaseModel):
     customer_id: int
     recommendation_index: Optional[int] = 0
@@ -2374,6 +2368,14 @@ class AiPromptsUpdate(BaseModel):
     action_prompt: Optional[str] = None
     offer_base_prompt: Optional[str] = None
     offer_mode_instructions: Optional[Dict[str, str]] = None
+    task_scope_prompt: Optional[str] = None
+    invoice_compact_prompt: Optional[str] = None
+    newsletter_rss_prompts: Optional[Dict[str, str]] = None
+    email_customer_match_prompt: Optional[str] = None
+    email_task_prompt: Optional[str] = None
+    customer_invoice_summary_prompt: Optional[str] = None
+    customer_development_mode_prompts: Optional[Dict[str, str]] = None
+    customer_signal_newsletter_prompt: Optional[str] = None
     contract_header_html: Optional[str] = None
     contract_footer_html: Optional[str] = None
     contract_templates: Optional[Dict[str, Dict[str, str]]] = None
@@ -3770,21 +3772,16 @@ def _estimate_task_scope(task: DayTask, analysis_text: str, actual_hours: float)
     onsite_text = ""
     if task.arrival_time or task.departure_time:
         onsite_text = f"{task.arrival_time or '?'} bis {task.departure_time or '?'}"
-    prompt = (
-        "Du analysierst IT-Service-Aufgaben fuer die Fakturierung.\n"
-        "Schaetze den fachlich plausiblen Arbeitsumfang nur anhand der beschriebenen Leistung. "
-        "Nutze die bereits erfasste Zeit nicht als Schaetzgrundlage, sie dient nur dem spaeteren Vergleich.\n"
-        "Antworte ausschliesslich als JSON mit den Feldern summary, estimated_min_hours, "
-        "estimated_hours, estimated_max_hours, confidence.\n"
-        "summary: 1-2 kurze Saetze auf Deutsch, sachlich, ohne Aufzaehlung.\n"
-        "confidence: low, medium oder high.\n"
-        "Alle Stundenwerte als Dezimalzahl in 0,25h-Schritten. Es muss gelten: "
-        "estimated_min_hours <= estimated_hours <= estimated_max_hours.\n\n"
-        f"Titel: {title_text or 'n/a'}\n"
-        f"Details: {details_text or 'n/a'}\n"
-        f"Faktura-/Positionstext: {content_text or 'n/a'}\n"
-        f"Vor Ort Zeiten: {onsite_text or 'n/a'}\n"
-        f"Erfasste Zeit nur zum Vergleich: {_format_hours_for_prompt(actual_hours)} h"
+    prompts = _load_ai_prompts_payload()
+    prompt = _render_prompt(
+        prompts.get("task_scope_prompt") or "",
+        {
+            "title": title_text or "n/a",
+            "details": details_text or "n/a",
+            "content_text": content_text or "n/a",
+            "onsite_text": onsite_text or "n/a",
+            "actual_hours": _format_hours_for_prompt(actual_hours),
+        },
     )
 
     provider = "fallback"
@@ -5016,11 +5013,10 @@ def _summarize_tasks_for_invoice(tasks: List[DayTask]) -> str:
             lines.append(f"- {task.title}: {details}")
         else:
             lines.append(f"- {task.title}")
-    prompt = (
-        "Fasse die folgenden erledigten Aufgaben zu einer kompakten Rechnungsposition zusammen. "
-        "Schreibe auf Deutsch, sachlich und kundenfreundlich. "
-        "Kein Markdown, keine Aufzaehlungszeichen, maximal 3 Saetze.\n\n"
-        f"{chr(10).join(lines)}"
+    prompts = _load_ai_prompts_payload()
+    prompt = _render_prompt(
+        prompts.get("invoice_compact_prompt") or "",
+        {"task_lines": chr(10).join(lines)},
     )
     summary, _, _ = _ai_generate_text(prompt, max_tokens=180)
     if summary:
@@ -6145,6 +6141,18 @@ def _build_newsletter_rss_source_text(articles: List[NewsletterRssGenerateArticl
 def _build_newsletter_rss_prompt(mode: str, tone: str, article_count: int) -> str:
     tone_value = str(tone or "sachlich").strip() or "sachlich"
     mode_key = str(mode or "ideas").strip().lower()
+    prompts = _load_ai_prompts_payload()
+    rss_prompts = prompts.get("newsletter_rss_prompts") or {}
+    template_key = "newsletter" if mode_key == "newsletter" else "ideas"
+    template = str(rss_prompts.get(template_key) or "").strip()
+    if template:
+        return _render_prompt(
+            template,
+            {
+                "tone": tone_value,
+                "article_count": str(article_count),
+            },
+        )
     if mode_key == "newsletter":
         return (
             "Erstelle auf Deutsch einen sofort nutzbaren Newsletter-Entwurf aus den gelieferten RSS-Artikeln. "
@@ -7000,6 +7008,221 @@ def _default_ai_prompts() -> Dict[str, Any]:
             ),
             "device_description": "Schreibe eine kurze Produktbeschreibung für Material (3-6 Sätze).",
         },
+        "task_scope_prompt": (
+            "Du analysierst IT-Service-Aufgaben fuer die Fakturierung.\n"
+            "Schaetze den fachlich plausiblen Arbeitsumfang nur anhand der beschriebenen Leistung. "
+            "Nutze die bereits erfasste Zeit nicht als Schaetzgrundlage, sie dient nur dem spaeteren Vergleich.\n"
+            "Antworte ausschliesslich als JSON mit den Feldern summary, estimated_min_hours, "
+            "estimated_hours, estimated_max_hours, confidence.\n"
+            "summary: 1-2 kurze Saetze auf Deutsch, sachlich, ohne Aufzaehlung.\n"
+            "confidence: low, medium oder high.\n"
+            "Alle Stundenwerte als Dezimalzahl in 0,25h-Schritten. Es muss gelten: "
+            "estimated_min_hours <= estimated_hours <= estimated_max_hours.\n\n"
+            "Titel: {title}\n"
+            "Details: {details}\n"
+            "Faktura-/Positionstext: {content_text}\n"
+            "Vor Ort Zeiten: {onsite_text}\n"
+            "Erfasste Zeit nur zum Vergleich: {actual_hours} h"
+        ),
+        "invoice_compact_prompt": (
+            "Fasse die folgenden erledigten Aufgaben zu einer kompakten Rechnungsposition zusammen. "
+            "Schreibe auf Deutsch, sachlich und kundenfreundlich. "
+            "Kein Markdown, keine Aufzaehlungszeichen, maximal 3 Saetze.\n\n"
+            "{task_lines}"
+        ),
+        "newsletter_rss_prompts": {
+            "newsletter": (
+                "Erstelle auf Deutsch einen sofort nutzbaren Newsletter-Entwurf aus den gelieferten RSS-Artikeln. "
+                "Gib reinen Text ohne Markdown aus. "
+                "Struktur: erste Zeile = Betreff, zweite Zeile = kurzer Preheader, danach Leerzeile und dann der komplette Newsletter-Text in gut lesbaren Absätzen. "
+                "Verdichte die Inhalte, vermeide Copy-Paste aus den Artikeln und formuliere kundenorientiert mit klarer Einordnung. "
+                "Falls mehrere Artikel vorliegen, fasse sie in einem konsistenten Newsletter zusammen. "
+                "Ton: {tone}. Verarbeite {article_count} Artikel."
+            ),
+            "ideas": (
+                "Erstelle auf Deutsch 5 konkrete Newsletter-Themenvorschläge aus den gelieferten RSS-Artikeln. "
+                "Gib reinen Text ohne Markdown oder JSON aus. "
+                "Jeder Vorschlag in einer Zeile: Ueberschrift, danach Gedankenstrich und ein kurzer Nutzen-/Aufhaenger-Satz. "
+                "Ton: {tone}. Verarbeite {article_count} Artikel."
+            ),
+        },
+        "email_customer_match_prompt": (
+            "Du bekommst eine E-Mail und eine Liste bekannter Kunden.\n"
+            "Waehle den wahrscheinlichsten Kunden aus der Liste anhand von Signatur, Namen, "
+            "Betreff und Inhalt.\n"
+            "Antworte nur als JSON mit den Feldern primary und alternatives.\n"
+            "primary: exakt ein Name aus der Liste oder leer.\n"
+            "alternatives: maximal 2 weitere Namen aus der Liste.\n\n"
+            "Absender Name: {sender_name}\n"
+            "Absender E-Mail: {sender_email}\n"
+            "Betreff: {subject}\n"
+            "Inhalt: {content}\n\n"
+            "Kundenliste:\n"
+            "{choices_block}"
+        ),
+        "email_task_prompt": (
+            "Analysiere diese E-Mail und antworte nur als JSON mit den Feldern "
+            "title, details, customer_hint. "
+            "title: kurz, klar, maximal 78 Zeichen, keine Floskeln. "
+            "details: 1-3 saubere Sätze für eine Aufgaben-Notiz. "
+            "customer_hint: vermuteter Kundenname oder leer.\n\n"
+            "Absender Name: {sender_name}\n"
+            "Absender E-Mail: {sender_email}\n"
+            "Betreff: {subject}\n"
+            "Inhalt: {content}"
+        ),
+        "customer_invoice_summary_prompt": (
+            "Fasse die letzten durchgefuehrten Arbeiten bei einem IT-Kunden kurz zusammen. "
+            "Antworte auf Deutsch in max. 4 Saetzen, sachlich, konkret, ohne Aufzaehlung.\n\n"
+            "Kunde: {customer_name}\n"
+            "Rechnungspositionen:\n{invoice_lines}"
+        ),
+        "customer_development_mode_prompts": {
+            "summary": (
+                "Erstelle eine kompakte Management-Zusammenfassung auf Deutsch in 3-4 Saetzen "
+                "mit klarer Priorisierung und naechster Aktion.\n"
+                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Ton: {tone}\n\n"
+                "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
+                "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
+                "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
+                "Infrastruktur: Coverage {coverage}%, Unmanaged {unmanaged_count}, Offline {offline_rate}%\n\n"
+                "Quellenlage:\n{source_lines}\n\n"
+                "Aktuelle Themen:\n{work_topics}\n\n"
+                "Signale:\n{signal_lines}\n\n"
+                "Empfehlungen:\n{recommendation_lines}\n\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown."
+            ),
+            "mail": (
+                "Erstelle eine kurze Kundenmail auf Deutsch mit Betreff und kompaktem Nachrichtentext. "
+                "Ziel: proaktiv Betreuung anbieten und naechsten Schritt ausloesen.\n"
+                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Ton: {tone}\n\n"
+                "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
+                "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
+                "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
+                "Infrastruktur: Coverage {coverage}%, Unmanaged {unmanaged_count}, Offline {offline_rate}%\n\n"
+                "Quellenlage:\n{source_lines}\n\n"
+                "Aktuelle Themen:\n{work_topics}\n\n"
+                "Signale:\n{signal_lines}\n\n"
+                "Empfehlungen:\n{recommendation_lines}\n\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown."
+            ),
+            "angebot": (
+                "Erstelle 3 kurze, konkrete Angebotsvorschlaege auf Deutsch. "
+                "Je Vorschlag: Titel, Nutzen, naechste Aktion.\n"
+                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Ton: {tone}\n\n"
+                "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
+                "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
+                "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
+                "Infrastruktur: Coverage {coverage}%, Unmanaged {unmanaged_count}, Offline {offline_rate}%\n\n"
+                "Quellenlage:\n{source_lines}\n\n"
+                "Aktuelle Themen:\n{work_topics}\n\n"
+                "Signale:\n{signal_lines}\n\n"
+                "Empfehlungen:\n{recommendation_lines}\n\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown."
+            ),
+            "kundenbericht": (
+                "Erstelle 3 spezifische Vorschlaege fuer den naechsten Kundenbericht. "
+                "Je Vorschlag: Problembezug, warum jetzt, empfohlene Massnahme.\n"
+                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Ton: {tone}\n\n"
+                "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
+                "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
+                "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
+                "Infrastruktur: Coverage {coverage}%, Unmanaged {unmanaged_count}, Offline {offline_rate}%\n\n"
+                "Quellenlage:\n{source_lines}\n\n"
+                "Aktuelle Themen:\n{work_topics}\n\n"
+                "Signale:\n{signal_lines}\n\n"
+                "Empfehlungen:\n{recommendation_lines}\n\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown."
+            ),
+            "newsletter": (
+                "Erstelle 3 allgemein nutzbare Newsletter-Themen auf Deutsch. "
+                "Je Thema: Ueberschrift und 1-2 kurze Saetze.\n"
+                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Ton: {tone}\n\n"
+                "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
+                "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
+                "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
+                "Infrastruktur: Coverage {coverage}%, Unmanaged {unmanaged_count}, Offline {offline_rate}%\n\n"
+                "Quellenlage:\n{source_lines}\n\n"
+                "Aktuelle Themen:\n{work_topics}\n\n"
+                "Signale:\n{signal_lines}\n\n"
+                "Empfehlungen:\n{recommendation_lines}\n\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown."
+            ),
+            "leitfaden": (
+                "Erstelle einen Gespraechsleitfaden auf Deutsch mit 5-6 Stichpunkten und Abschlussfrage.\n"
+                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Ton: {tone}\n\n"
+                "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
+                "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
+                "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
+                "Infrastruktur: Coverage {coverage}%, Unmanaged {unmanaged_count}, Offline {offline_rate}%\n\n"
+                "Quellenlage:\n{source_lines}\n\n"
+                "Aktuelle Themen:\n{work_topics}\n\n"
+                "Signale:\n{signal_lines}\n\n"
+                "Empfehlungen:\n{recommendation_lines}\n\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown."
+            ),
+            "aktivierung_mail": (
+                "Erstelle eine aktivierende Kundenmail auf Deutsch mit Betreff und kurzem Fliesstext. "
+                "Fokus: Reaktivierung und klarer Call-to-Action.\n"
+                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Ton: {tone}\n\n"
+                "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
+                "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
+                "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
+                "Infrastruktur: Coverage {coverage}%, Unmanaged {unmanaged_count}, Offline {offline_rate}%\n\n"
+                "Quellenlage:\n{source_lines}\n\n"
+                "Aktuelle Themen:\n{work_topics}\n\n"
+                "Signale:\n{signal_lines}\n\n"
+                "Empfehlungen:\n{recommendation_lines}\n\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown."
+            ),
+            "aktivierung_call": (
+                "Erstelle einen Telefonleitfaden zur Kundenreaktivierung mit 6 klaren Punkten inklusive Abschlussfrage.\n"
+                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Ton: {tone}\n\n"
+                "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
+                "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
+                "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
+                "Infrastruktur: Coverage {coverage}%, Unmanaged {unmanaged_count}, Offline {offline_rate}%\n\n"
+                "Quellenlage:\n{source_lines}\n\n"
+                "Aktuelle Themen:\n{work_topics}\n\n"
+                "Signale:\n{signal_lines}\n\n"
+                "Empfehlungen:\n{recommendation_lines}\n\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown."
+            ),
+            "analyse": (
+                "Erstelle eine strukturierte Kundenanalyse auf Deutsch in 4 kurzen Abschnitten: "
+                "Kurzlage, Chancen, Risiken, naechster Schritt.\n"
+                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Ton: {tone}\n\n"
+                "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
+                "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
+                "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
+                "Infrastruktur: Coverage {coverage}%, Unmanaged {unmanaged_count}, Offline {offline_rate}%\n\n"
+                "Quellenlage:\n{source_lines}\n\n"
+                "Aktuelle Themen:\n{work_topics}\n\n"
+                "Signale:\n{signal_lines}\n\n"
+                "Empfehlungen:\n{recommendation_lines}\n\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown."
+            ),
+        },
+        "customer_signal_newsletter_prompt": (
+            "Erstelle 3 allgemein nutzbare Newsletter-Themen fuer IT-Kunden.\n"
+            "Die Themen sollen auf den haeufigsten Kundensignalen basieren.\n"
+            "Pro Thema: Ueberschrift + 2-3 Saetze Nutzen/Problembezug.\n"
+            "Nutze die verfuegbare Quellenlage und benenne fehlende Quellen transparent.\n"
+            "Ton: {tone}\n"
+            "Durchschnittliches Risiko (Top-Kunden): {avg_risk}\n"
+            "Quellenlage:\n{source_lines}\n"
+            "Haeufige Signale:\n{signal_lines}\n"
+            "Antwort als reiner Text, kein JSON, kein Markdown."
+        ),
         "contract_header_html": (
             "<div style=\"margin-bottom:10px; padding:10px 12px; border:1px solid #dbe4ef; border-radius:12px; "
             "background:#f8fafc; color:#1e3a5f;\">"
@@ -7234,6 +7457,21 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
         merged_modes = {**mode_defaults, **mode_data}
     else:
         merged_modes = mode_defaults
+    rss_prompt_defaults = defaults.get("newsletter_rss_prompts") or {}
+    rss_prompt_data = data.get("newsletter_rss_prompts")
+    if isinstance(rss_prompt_data, dict):
+        merged_rss_prompts = {**rss_prompt_defaults, **rss_prompt_data}
+    else:
+        merged_rss_prompts = rss_prompt_defaults
+    customer_development_defaults = defaults.get("customer_development_mode_prompts") or {}
+    customer_development_data = data.get("customer_development_mode_prompts")
+    if isinstance(customer_development_data, dict):
+        merged_customer_development_prompts = {
+            **customer_development_defaults,
+            **customer_development_data,
+        }
+    else:
+        merged_customer_development_prompts = customer_development_defaults
     contract_defaults = defaults.get("contract_templates") or {}
     contract_data = data.get("contract_templates")
     merged_contract_templates: Dict[str, Dict[str, str]] = {}
@@ -7297,6 +7535,23 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
         "action_prompt": data.get("action_prompt", defaults["action_prompt"]),
         "offer_base_prompt": data.get("offer_base_prompt", defaults["offer_base_prompt"]),
         "offer_mode_instructions": merged_modes,
+        "task_scope_prompt": data.get("task_scope_prompt", defaults.get("task_scope_prompt") or ""),
+        "invoice_compact_prompt": data.get("invoice_compact_prompt", defaults.get("invoice_compact_prompt") or ""),
+        "newsletter_rss_prompts": merged_rss_prompts,
+        "email_customer_match_prompt": data.get(
+            "email_customer_match_prompt",
+            defaults.get("email_customer_match_prompt") or "",
+        ),
+        "email_task_prompt": data.get("email_task_prompt", defaults.get("email_task_prompt") or ""),
+        "customer_invoice_summary_prompt": data.get(
+            "customer_invoice_summary_prompt",
+            defaults.get("customer_invoice_summary_prompt") or "",
+        ),
+        "customer_development_mode_prompts": merged_customer_development_prompts,
+        "customer_signal_newsletter_prompt": data.get(
+            "customer_signal_newsletter_prompt",
+            defaults.get("customer_signal_newsletter_prompt") or "",
+        ),
         "contract_header_html": str(
             data.get("contract_header_html")
             or defaults.get("contract_header_html")
@@ -7312,6 +7567,11 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
         "contract_variable_definitions": merged_contract_variable_definitions,
         "updated_at": _offer_iso_timestamp(store.updated_at),
     }
+
+
+def _load_ai_prompts_payload() -> Dict[str, Any]:
+    with SessionLocal() as db:
+        return serialize_ai_prompts(_get_ai_prompt_settings(db))
 
 
 def _migrate_contract_templates_to_supported_types() -> None:
@@ -7342,6 +7602,14 @@ def _migrate_contract_templates_to_supported_types() -> None:
             "action_prompt": payload.get("action_prompt") or defaults.get("action_prompt") or "",
             "offer_base_prompt": payload.get("offer_base_prompt") or defaults.get("offer_base_prompt") or "",
             "offer_mode_instructions": payload.get("offer_mode_instructions") or defaults.get("offer_mode_instructions") or {},
+            "task_scope_prompt": payload.get("task_scope_prompt") or defaults.get("task_scope_prompt") or "",
+            "invoice_compact_prompt": payload.get("invoice_compact_prompt") or defaults.get("invoice_compact_prompt") or "",
+            "newsletter_rss_prompts": payload.get("newsletter_rss_prompts") or defaults.get("newsletter_rss_prompts") or {},
+            "email_customer_match_prompt": payload.get("email_customer_match_prompt") or defaults.get("email_customer_match_prompt") or "",
+            "email_task_prompt": payload.get("email_task_prompt") or defaults.get("email_task_prompt") or "",
+            "customer_invoice_summary_prompt": payload.get("customer_invoice_summary_prompt") or defaults.get("customer_invoice_summary_prompt") or "",
+            "customer_development_mode_prompts": payload.get("customer_development_mode_prompts") or defaults.get("customer_development_mode_prompts") or {},
+            "customer_signal_newsletter_prompt": payload.get("customer_signal_newsletter_prompt") or defaults.get("customer_signal_newsletter_prompt") or "",
             "contract_header_html": defaults.get("contract_header_html") or "",
             "contract_footer_html": defaults.get("contract_footer_html") or "",
             "contract_templates": default_templates,
@@ -7386,6 +7654,14 @@ def _refresh_contract_templates_professional_defaults_v2() -> None:
             "action_prompt": payload.get("action_prompt") or "",
             "offer_base_prompt": payload.get("offer_base_prompt") or "",
             "offer_mode_instructions": payload.get("offer_mode_instructions") or {},
+            "task_scope_prompt": payload.get("task_scope_prompt") or "",
+            "invoice_compact_prompt": payload.get("invoice_compact_prompt") or "",
+            "newsletter_rss_prompts": payload.get("newsletter_rss_prompts") or {},
+            "email_customer_match_prompt": payload.get("email_customer_match_prompt") or "",
+            "email_task_prompt": payload.get("email_task_prompt") or "",
+            "customer_invoice_summary_prompt": payload.get("customer_invoice_summary_prompt") or "",
+            "customer_development_mode_prompts": payload.get("customer_development_mode_prompts") or {},
+            "customer_signal_newsletter_prompt": payload.get("customer_signal_newsletter_prompt") or "",
             "contract_header_html": payload.get("contract_header_html") or "",
             "contract_footer_html": payload.get("contract_footer_html") or "",
             "contract_templates": updated_templates,
@@ -9227,19 +9503,16 @@ def _ai_rank_customer_candidates(
     sender_name_text = _normalize_space(sender_name)
     sender_email_text = _normalize_space(sender_email)
     choices_block = "\n".join(f"- {name}" for name in cleaned_candidates[:12])
-    prompt = (
-        "Du bekommst eine E-Mail und eine Liste bekannter Kunden.\n"
-        "Waehle den wahrscheinlichsten Kunden aus der Liste anhand von Signatur, Namen, "
-        "Betreff und Inhalt.\n"
-        "Antworte nur als JSON mit den Feldern primary und alternatives.\n"
-        "primary: exakt ein Name aus der Liste oder leer.\n"
-        "alternatives: maximal 2 weitere Namen aus der Liste.\n\n"
-        f"Absender Name: {sender_name_text or 'n/a'}\n"
-        f"Absender E-Mail: {sender_email_text or 'n/a'}\n"
-        f"Betreff: {subject_text or 'n/a'}\n"
-        f"Inhalt: {content or 'n/a'}\n\n"
-        "Kundenliste:\n"
-        f"{choices_block}"
+    prompts = _load_ai_prompts_payload()
+    prompt = _render_prompt(
+        prompts.get("email_customer_match_prompt") or "",
+        {
+            "sender_name": sender_name_text or "n/a",
+            "sender_email": sender_email_text or "n/a",
+            "subject": subject_text or "n/a",
+            "content": content or "n/a",
+            "choices_block": choices_block,
+        },
     )
     try:
         model_candidates = _resolve_ai_models(purpose="customer_ranking")
@@ -9425,16 +9698,15 @@ def _generate_task_draft_from_email(
     content = _normalize_space(content_text)[:4000]
     if not content and not subject_text:
         return {"title": "", "details": "", "customer_hint": ""}
-    prompt = (
-        "Analysiere diese E-Mail und antworte nur als JSON mit den Feldern "
-        "title, details, customer_hint. "
-        "title: kurz, klar, maximal 78 Zeichen, keine Floskeln. "
-        "details: 1-3 saubere Sätze für eine Aufgaben-Notiz. "
-        "customer_hint: vermuteter Kundenname oder leer.\n\n"
-        f"Absender Name: {sender_name_text or 'n/a'}\n"
-        f"Absender E-Mail: {sender_email_text or 'n/a'}\n"
-        f"Betreff: {subject_text or 'n/a'}\n"
-        f"Inhalt: {content or 'n/a'}"
+    prompts = _load_ai_prompts_payload()
+    prompt = _render_prompt(
+        prompts.get("email_task_prompt") or "",
+        {
+            "sender_name": sender_name_text or "n/a",
+            "sender_email": sender_email_text or "n/a",
+            "subject": subject_text or "n/a",
+            "content": content or "n/a",
+        },
     )
     try:
         model_candidates = _resolve_ai_models(purpose="task_draft")
@@ -11028,11 +11300,13 @@ def _build_recent_work_summary_ai_text(customer_name: str, invoice_items: List[D
         position_snippets = item.get("positionSnippets") or []
         position_text = "; ".join(str(part) for part in position_snippets[:3] if str(part).strip())
         lines.append(f"- {date_text} ({amount:.2f} EUR): {position_text or 'Keine Positionsdetails'}")
-    prompt = (
-        "Fasse die letzten durchgefuehrten Arbeiten bei einem IT-Kunden kurz zusammen. "
-        "Antworte auf Deutsch in max. 4 Saetzen, sachlich, konkret, ohne Aufzaehlung.\n\n"
-        f"Kunde: {customer_name or 'Kunde'}\n"
-        f"Rechnungspositionen:\n{chr(10).join(lines)}"
+    prompts = _load_ai_prompts_payload()
+    prompt = _render_prompt(
+        prompts.get("customer_invoice_summary_prompt") or "",
+        {
+            "customer_name": customer_name or "Kunde",
+            "invoice_lines": chr(10).join(lines),
+        },
     )
     try:
         model_candidates = _resolve_ai_models(purpose="invoice_summary")
@@ -13617,65 +13891,29 @@ def _customer_development_ai_prompt(
     ][:4]
     if not source_lines:
         source_lines = ["- Quellenlage: teilweise unvollständig."]
-
-    if mode_key == "mail":
-        task_text = (
-            "Erstelle eine kurze Kundenmail auf Deutsch mit Betreff und kompaktem Nachrichtentext. "
-            "Ziel: proaktiv Betreuung anbieten und naechsten Schritt ausloesen."
-        )
-    elif mode_key == "angebot":
-        task_text = (
-            "Erstelle 3 kurze, konkrete Angebotsvorschlaege auf Deutsch. "
-            "Je Vorschlag: Titel, Nutzen, naechste Aktion."
-        )
-    elif mode_key == "kundenbericht":
-        task_text = (
-            "Erstelle 3 spezifische Vorschlaege fuer den naechsten Kundenbericht. "
-            "Je Vorschlag: Problembezug, warum jetzt, empfohlene Massnahme."
-        )
-    elif mode_key == "newsletter":
-        task_text = (
-            "Erstelle 3 allgemein nutzbare Newsletter-Themen auf Deutsch. "
-            "Je Thema: Ueberschrift und 1-2 kurze Saetze."
-        )
-    elif mode_key == "leitfaden":
-        task_text = (
-            "Erstelle einen Gespraechsleitfaden auf Deutsch mit 5-6 Stichpunkten und Abschlussfrage."
-        )
-    elif mode_key == "aktivierung_mail":
-        task_text = (
-            "Erstelle eine aktivierende Kundenmail auf Deutsch mit Betreff und kurzem Fliesstext. "
-            "Fokus: Reaktivierung und klarer Call-to-Action."
-        )
-    elif mode_key == "aktivierung_call":
-        task_text = (
-            "Erstelle einen Telefonleitfaden zur Kundenreaktivierung mit 6 klaren Punkten "
-            "inklusive Abschlussfrage."
-        )
-    elif mode_key == "analyse":
-        task_text = (
-            "Erstelle eine strukturierte Kundenanalyse auf Deutsch in 4 kurzen Abschnitten: "
-            "Kurzlage, Chancen, Risiken, naechster Schritt."
-        )
-    else:
-        task_text = (
-            "Erstelle eine kompakte Management-Zusammenfassung auf Deutsch in 3-4 Saetzen "
-            "mit klarer Priorisierung und naechster Aktion."
-        )
-
-    return (
-        f"{task_text}\n"
-        "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
-        f"Ton: {tone_key}\n\n"
-        f"Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
-        f"Kontakt: {days_since_interaction if isinstance(days_since_interaction, int) else 'n/a'} Tage seit Interaktion, faellig={'ja' if contact_due else 'nein'}\n"
-        f"Rechnung: {days_since_invoice if isinstance(days_since_invoice, int) else 'n/a'} Tage, Reaktivierung={'ja' if invoice_due else 'nein'}\n"
-        f"Infrastruktur: Coverage {int(float(infra.get('coverageRatio') or 0) * 100)}%, Unmanaged {int(infra.get('unmanagedCount') or 0)}, Offline {int(float(infra.get('offlineRate') or 0) * 100)}%\n\n"
-        f"Quellenlage:\n{chr(10).join(source_lines)}\n\n"
-        f"Aktuelle Themen:\n{chr(10).join(work_topics)}\n\n"
-        f"Signale:\n{chr(10).join(signal_lines)}\n\n"
-        f"Empfehlungen:\n{chr(10).join(recommendation_lines)}\n\n"
-        "Antwort als reiner Text, kein JSON, kein Markdown."
+    prompts = _load_ai_prompts_payload()
+    mode_prompts = prompts.get("customer_development_mode_prompts") or {}
+    template = str(mode_prompts.get(mode_key) or mode_prompts.get("summary") or "").strip()
+    return _render_prompt(
+        template,
+        {
+            "tone": tone_key,
+            "customer_name": customer_name,
+            "state": state,
+            "risk": str(risk),
+            "service_model_label": service_model_label,
+            "days_since_interaction": str(days_since_interaction) if isinstance(days_since_interaction, int) else "n/a",
+            "contact_due": "ja" if contact_due else "nein",
+            "days_since_invoice": str(days_since_invoice) if isinstance(days_since_invoice, int) else "n/a",
+            "invoice_due": "ja" if invoice_due else "nein",
+            "coverage": str(int(float(infra.get("coverageRatio") or 0) * 100)),
+            "unmanaged_count": str(int(infra.get("unmanagedCount") or 0)),
+            "offline_rate": str(int(float(infra.get("offlineRate") or 0) * 100)),
+            "source_lines": chr(10).join(source_lines),
+            "work_topics": chr(10).join(work_topics),
+            "signal_lines": chr(10).join(signal_lines),
+            "recommendation_lines": chr(10).join(recommendation_lines),
+        },
     )
 
 
@@ -14516,19 +14754,15 @@ def customer_development_ai_assist(data: CustomerDevelopmentAiRequest, request: 
                     continue
                 signals[label] = signals.get(label, 0) + 1
         signal_lines = sorted(signals.items(), key=lambda pair: pair[1], reverse=True)[:8]
-        prompt = (
-            "Erstelle 3 allgemein nutzbare Newsletter-Themen fuer IT-Kunden.\n"
-            "Die Themen sollen auf den haeufigsten Kundensignalen basieren.\n"
-            "Pro Thema: Ueberschrift + 2-3 Saetze Nutzen/Problembezug.\n"
-            "Nutze die verfuegbare Quellenlage und benenne fehlende Quellen transparent.\n"
-            f"Ton: {str(data.tone or 'sachlich')}\n"
-            f"Durchschnittliches Risiko (Top-Kunden): {avg_risk}\n"
-            "Quellenlage:\n"
-            + "\n".join(source_lines)
-            + "\n"
-            "Haeufige Signale:\n"
-            + "\n".join([f"- {name} ({count}x)" for name, count in signal_lines])
-            + "\nAntwort als reiner Text, kein JSON, kein Markdown."
+        prompts = _load_ai_prompts_payload()
+        prompt = _render_prompt(
+            prompts.get("customer_signal_newsletter_prompt") or "",
+            {
+                "tone": str(data.tone or "sachlich"),
+                "avg_risk": str(avg_risk),
+                "source_lines": "\n".join(source_lines),
+                "signal_lines": "\n".join([f"- {name} ({count}x)" for name, count in signal_lines]),
+            },
         )
         text_result, used_fallback, resolved_timeout = _generate_customer_development_ai_text(
             context=top[0],
@@ -17963,255 +18197,6 @@ def _build_action_ai_fallback(text: str) -> Dict[str, str]:
     }
 
 
-@app.get("/api/tools/internal_ai_models")
-def tools_internal_ai_models():
-    config = _get_ai_config_snapshot()
-    available_models = _list_available_ai_models(config=config)
-    preferred_models = _resolve_ai_models(purpose="internal_ai", config=config)
-    default_model = ""
-    available_lookup = {model.lower(): model for model in available_models}
-    for candidate in preferred_models:
-        matched_model = available_lookup.get(candidate.lower())
-        if matched_model:
-            default_model = matched_model
-            break
-    if not default_model:
-        default_model = preferred_models[0] if preferred_models else ""
-    return {
-        "models": available_models,
-        "default_model": default_model,
-        "provider": config.get("provider") or AI_PROVIDER_OLLAMA,
-        "prompt_limit_chars": _internal_ai_prompt_limit_chars(),
-        "prompt_limit_scope": "server",
-    }
-
-
-@app.post("/api/tools/internal_ai_prompt")
-def tools_internal_ai_prompt(data: InternalAiPromptRequest):
-    prompt_text = str(data.prompt or "").strip()
-    content_text = str(data.content or "").strip()
-    if not prompt_text:
-        raise HTTPException(400, "prompt required")
-    internal_prompt = _build_internal_ai_prompt(prompt_text, content_text)
-
-    model_candidates = _resolve_internal_ai_tool_models(data.model)
-    payload, used_model, provider = _ai_generate(
-        internal_prompt,
-        model_candidates=model_candidates,
-        temperature=0.2,
-        max_tokens=int(INTERNAL_AI_TOOL_MAX_TOKENS),
-        timeout=min(int(INTERNAL_AI_TOOL_TIMEOUT_SECONDS), max(10, int(OLLAMA_TIMEOUT_SECONDS))),
-        use_cache=False,
-        raw=True,
-    )
-    response_text = str(payload.get("response") or "").strip()
-    if not response_text:
-        return {
-            "text": _build_internal_ai_fallback_text(prompt_text, content_text),
-            "provider": "fallback",
-            "model": used_model or "",
-            "generated_at": int(time.time() * 1000),
-        }
-    return {
-        "text": response_text,
-        "provider": provider,
-        "model": used_model or "",
-        "generated_at": int(time.time() * 1000),
-    }
-
-
-@app.post("/api/tools/internal_ai_prompt_stream")
-def tools_internal_ai_prompt_stream(data: InternalAiPromptRequest):
-    prompt_text = str(data.prompt or "").strip()
-    content_text = str(data.content or "").strip()
-    if not prompt_text:
-        raise HTTPException(400, "prompt required")
-
-    internal_prompt = _build_internal_ai_prompt(prompt_text, content_text)
-    model_candidates = _resolve_internal_ai_tool_models(data.model)
-    config = _get_ai_config_snapshot()
-    connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
-    request_timeout = min(
-        int(INTERNAL_AI_STREAM_TIMEOUT_SECONDS),
-        max(int(INTERNAL_AI_TOOL_TIMEOUT_SECONDS), 12),
-        max(int(OLLAMA_TIMEOUT_SECONDS or 0), 12),
-    )
-    if request_timeout < 12:
-        request_timeout = 12
-    fallback_text = _build_internal_ai_fallback_text(prompt_text, content_text)
-
-    def stream() -> Any:
-        yield json.dumps({
-            "type": "status",
-            "stage": "connecting",
-            "detail": "Verbinde mit interner KI",
-        }) + "\n"
-        if str(config.get("provider") or AI_PROVIDER_OLLAMA) != AI_PROVIDER_OLLAMA:
-            payload, used_model, provider = _ai_generate(
-                internal_prompt,
-                model_candidates=model_candidates,
-                temperature=0.2,
-                max_tokens=int(INTERNAL_AI_TOOL_MAX_TOKENS),
-                timeout=request_timeout,
-                use_cache=False,
-                raw=True,
-                config=config,
-            )
-            response_text = str(payload.get("response") or "").strip()
-            if not response_text:
-                yield json.dumps({
-                    "type": "meta",
-                    "provider": "fallback",
-                    "model": used_model or "",
-                }) + "\n"
-                yield json.dumps({"type": "delta", "text": fallback_text}) + "\n"
-                yield json.dumps({
-                    "type": "done",
-                    "provider": "fallback",
-                    "model": used_model or "",
-                    "generated_at": int(time.time() * 1000),
-                }) + "\n"
-                return
-            yield json.dumps({
-                "type": "meta",
-                "provider": provider,
-                "model": used_model or "",
-            }) + "\n"
-            yield json.dumps({"type": "delta", "text": response_text}) + "\n"
-            yield json.dumps({
-                "type": "done",
-                "provider": provider,
-                "model": used_model or "",
-                "generated_at": int(time.time() * 1000),
-            }) + "\n"
-            return
-        prompt_body = internal_prompt
-        if len(prompt_body) > OLLAMA_PROMPT_MAX_CHARS:
-            prompt_body = prompt_body[:OLLAMA_PROMPT_MAX_CHARS]
-        resolved_max_tokens = max(
-            128,
-            min(int(INTERNAL_AI_TOOL_MAX_TOKENS), int(OLLAMA_MAX_TOKENS_HARD_LIMIT or INTERNAL_AI_TOOL_MAX_TOKENS)),
-        )
-        target_predict = int(resolved_max_tokens or 0)
-        prompt_ctx_budget = max(128, int(OLLAMA_NUM_CTX) - target_predict - int(OLLAMA_PROMPT_TOKEN_MARGIN))
-        approx_prompt_tokens = max(1, int(math.ceil(len(prompt_body) / 4.0)))
-        if approx_prompt_tokens > prompt_ctx_budget:
-            allowed_chars = max(800, int(prompt_ctx_budget * 4))
-            if len(prompt_body) > allowed_chars:
-                prompt_body = prompt_body[:allowed_chars]
-
-        for model in model_candidates:
-            if _ollama_model_temporarily_missing(model):
-                continue
-            payload: Dict[str, Any] = {
-                "model": model,
-                "prompt": prompt_body,
-                "stream": True,
-                "raw": True,
-                "options": {
-                    "num_ctx": int(OLLAMA_NUM_CTX),
-                    "num_thread": int(OLLAMA_NUM_THREAD),
-                    "temperature": 0.2,
-                    "num_predict": int(resolved_max_tokens),
-                },
-            }
-            if OLLAMA_REQUEST_KEEP_ALIVE:
-                payload["keep_alive"] = OLLAMA_REQUEST_KEEP_ALIVE
-            started_at = time.time()
-            try:
-                yield json.dumps({
-                    "type": "status",
-                    "stage": "model_request",
-                    "detail": f"Modell {model} wird angefragt",
-                    "model": model,
-                }) + "\n"
-                with _ollama_http.post(
-                    f"{str(config.get('base_url') or OLLAMA_BASE_URL).rstrip('/')}/api/generate",
-                    json=payload,
-                    timeout=(connect_timeout, request_timeout),
-                    stream=True,
-                ) as response:
-                    response.raise_for_status()
-                    yield json.dumps({
-                        "type": "meta",
-                        "provider": AI_PROVIDER_OLLAMA,
-                        "model": model,
-                    }) + "\n"
-                    for raw_line in response.iter_lines(decode_unicode=True):
-                        if not raw_line:
-                            continue
-                        line = raw_line.strip()
-                        if not line:
-                            continue
-                        try:
-                            chunk = json.loads(line)
-                        except ValueError:
-                            continue
-                        if not isinstance(chunk, dict):
-                            continue
-                        chunk_text = chunk.get("response")
-                        if isinstance(chunk_text, str) and chunk_text:
-                            yield json.dumps({"type": "delta", "text": chunk_text}) + "\n"
-                        if bool(chunk.get("done")):
-                            duration_ms = int((time.time() - started_at) * 1000)
-                            if duration_ms >= OLLAMA_SLOW_REQUEST_MS:
-                                logger.info(
-                                    "Ollama slow stream response model=%s duration_ms=%s prompt_chars=%s num_predict=%s",
-                                    model,
-                                    duration_ms,
-                                    len(prompt_body),
-                                    int(resolved_max_tokens),
-                                )
-                            yield json.dumps({
-                                "type": "done",
-                                "provider": AI_PROVIDER_OLLAMA,
-                                "model": model,
-                                "generated_at": int(time.time() * 1000),
-                            }) + "\n"
-                            return
-            except requests.HTTPError as exc:
-                response = exc.response
-                if response is not None and response.status_code == 404:
-                    _mark_ollama_model_missing(model)
-                continue
-            except requests.RequestException as exc:
-                logger.warning("Ollama stream request failed with model %s: %s", model, exc)
-                yield json.dumps({
-                    "type": "meta",
-                    "provider": "fallback",
-                    "model": model,
-                }) + "\n"
-                yield json.dumps({"type": "delta", "text": fallback_text}) + "\n"
-                yield json.dumps({
-                    "type": "done",
-                    "provider": "fallback",
-                    "model": model,
-                    "generated_at": int(time.time() * 1000),
-                }) + "\n"
-                return
-        yield json.dumps({
-            "type": "meta",
-            "provider": "fallback",
-            "model": "",
-        }) + "\n"
-        yield json.dumps({"type": "delta", "text": fallback_text}) + "\n"
-        yield json.dumps({
-            "type": "done",
-            "provider": "fallback",
-            "model": "",
-            "generated_at": int(time.time() * 1000),
-        }) + "\n"
-
-    return StreamingResponse(
-        stream(),
-        media_type="application/x-ndjson",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 @app.post("/api/offer_ai_text")
 def generate_offer_text(data: OfferAiRequest):
     mode = (data.mode or "").strip().lower()
@@ -18996,6 +18981,18 @@ def update_ai_prompts(data: AiPromptsUpdate):
             "action_prompt": data.action_prompt or current["action_prompt"],
             "offer_base_prompt": data.offer_base_prompt or current["offer_base_prompt"],
             "offer_mode_instructions": data.offer_mode_instructions or current["offer_mode_instructions"],
+            "task_scope_prompt": data.task_scope_prompt or current["task_scope_prompt"],
+            "invoice_compact_prompt": data.invoice_compact_prompt or current["invoice_compact_prompt"],
+            "newsletter_rss_prompts": data.newsletter_rss_prompts or current["newsletter_rss_prompts"],
+            "email_customer_match_prompt": data.email_customer_match_prompt or current["email_customer_match_prompt"],
+            "email_task_prompt": data.email_task_prompt or current["email_task_prompt"],
+            "customer_invoice_summary_prompt": data.customer_invoice_summary_prompt or current["customer_invoice_summary_prompt"],
+            "customer_development_mode_prompts": (
+                data.customer_development_mode_prompts or current["customer_development_mode_prompts"]
+            ),
+            "customer_signal_newsletter_prompt": (
+                data.customer_signal_newsletter_prompt or current["customer_signal_newsletter_prompt"]
+            ),
             "contract_header_html": data.contract_header_html if data.contract_header_html is not None else current.get("contract_header_html", ""),
             "contract_footer_html": data.contract_footer_html if data.contract_footer_html is not None else current.get("contract_footer_html", ""),
             "contract_templates": data.contract_templates or current["contract_templates"],

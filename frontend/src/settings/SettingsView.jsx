@@ -373,6 +373,27 @@ const normalizeAiPromptsPayload = (data) => {
       position_text: data?.offer_mode_instructions?.position_text || "",
       device_description: data?.offer_mode_instructions?.device_description || ""
     },
+    task_scope_prompt: data?.task_scope_prompt || "",
+    invoice_compact_prompt: data?.invoice_compact_prompt || "",
+    newsletter_rss_prompts: {
+      newsletter: data?.newsletter_rss_prompts?.newsletter || "",
+      ideas: data?.newsletter_rss_prompts?.ideas || ""
+    },
+    email_customer_match_prompt: data?.email_customer_match_prompt || "",
+    email_task_prompt: data?.email_task_prompt || "",
+    customer_invoice_summary_prompt: data?.customer_invoice_summary_prompt || "",
+    customer_development_mode_prompts: {
+      summary: data?.customer_development_mode_prompts?.summary || "",
+      mail: data?.customer_development_mode_prompts?.mail || "",
+      angebot: data?.customer_development_mode_prompts?.angebot || "",
+      kundenbericht: data?.customer_development_mode_prompts?.kundenbericht || "",
+      newsletter: data?.customer_development_mode_prompts?.newsletter || "",
+      leitfaden: data?.customer_development_mode_prompts?.leitfaden || "",
+      aktivierung_mail: data?.customer_development_mode_prompts?.aktivierung_mail || "",
+      aktivierung_call: data?.customer_development_mode_prompts?.aktivierung_call || "",
+      analyse: data?.customer_development_mode_prompts?.analyse || ""
+    },
+    customer_signal_newsletter_prompt: data?.customer_signal_newsletter_prompt || "",
     contract_header_html: data?.contract_header_html || "",
     contract_footer_html: data?.contract_footer_html || "",
     contract_templates: normalizeContractTemplates(data?.contract_templates),
@@ -380,6 +401,168 @@ const normalizeAiPromptsPayload = (data) => {
     contract_variables: flattenContractVariableDefinitions(contractVariableDefinitions)
   };
 };
+
+const getAiPromptValueByKey = (prompts, key) => {
+  return String(
+    key.split(".").reduce((current, part) => {
+      if (!current || typeof current !== "object") return "";
+      return current[part];
+    }, prompts) || ""
+  );
+};
+
+const setAiPromptValueByKey = (prompts, key, value) => {
+  const parts = String(key || "").split(".").filter(Boolean);
+  if (!parts.length) return prompts;
+  const next = {
+    ...(prompts || {})
+  };
+  let cursor = next;
+  parts.forEach((part, index) => {
+    if (index === parts.length - 1) {
+      cursor[part] = value;
+      return;
+    }
+    const current = cursor[part];
+    cursor[part] = current && typeof current === "object" && !Array.isArray(current) ? { ...current } : {};
+    cursor = cursor[part];
+  });
+  return next;
+};
+
+const AI_PROMPT_OPTIONS = [
+  {
+    key: "action_prompt",
+    label: "Kundenbericht: Action Prompt",
+    placeholders: "{text}"
+  },
+  {
+    key: "offer_base_prompt",
+    label: "Angebot: Basis Prompt",
+    placeholders: "{instruction}, {context}, {current_text}"
+  },
+  {
+    key: "offer_mode_instructions.cover_intro",
+    label: "Angebot: Deckblatt Intro",
+    placeholders: "Wird als {instruction} in den Basis-Prompt eingesetzt"
+  },
+  {
+    key: "offer_mode_instructions.overview",
+    label: "Angebot: Überblick",
+    placeholders: "Wird als {instruction} in den Basis-Prompt eingesetzt"
+  },
+  {
+    key: "offer_mode_instructions.calculation",
+    label: "Angebot: Kalkulation",
+    placeholders: "Wird als {instruction} in den Basis-Prompt eingesetzt"
+  },
+  {
+    key: "offer_mode_instructions.position_text",
+    label: "Angebot: Dienstleistung Positionstext",
+    placeholders: "Wird als {instruction} in den Basis-Prompt eingesetzt"
+  },
+  {
+    key: "offer_mode_instructions.device_description",
+    label: "Angebot: Material Beschreibung",
+    placeholders: "Wird als {instruction} in den Basis-Prompt eingesetzt"
+  },
+  {
+    key: "task_scope_prompt",
+    label: "Fakturierung: Aufwandsschätzung",
+    placeholders: "{title}, {details}, {content_text}, {onsite_text}, {actual_hours}"
+  },
+  {
+    key: "invoice_compact_prompt",
+    label: "Fakturierung: Rechnungsposition aus Aufgaben",
+    placeholders: "{task_lines}"
+  },
+  {
+    key: "newsletter_rss_prompts.newsletter",
+    label: "Newsletter RSS: Entwurf",
+    placeholders: "{tone}, {article_count}"
+  },
+  {
+    key: "newsletter_rss_prompts.ideas",
+    label: "Newsletter RSS: Themenideen",
+    placeholders: "{tone}, {article_count}"
+  },
+  {
+    key: "email_customer_match_prompt",
+    label: "E-Mail: Kundenzuordnung",
+    placeholders: "{sender_name}, {sender_email}, {subject}, {content}, {choices_block}"
+  },
+  {
+    key: "email_task_prompt",
+    label: "E-Mail: Aufgabenentwurf",
+    placeholders: "{sender_name}, {sender_email}, {subject}, {content}"
+  },
+  {
+    key: "customer_invoice_summary_prompt",
+    label: "Kunde: Zusammenfassung letzter Arbeiten",
+    placeholders: "{customer_name}, {invoice_lines}"
+  },
+  {
+    key: "customer_development_mode_prompts.summary",
+    label: "Customer Development: Summary",
+    placeholders:
+      "{tone}, {customer_name}, {state}, {risk}, {service_model_label}, {days_since_interaction}, {contact_due}, {days_since_invoice}, {invoice_due}, {coverage}, {unmanaged_count}, {offline_rate}, {source_lines}, {work_topics}, {signal_lines}, {recommendation_lines}"
+  },
+  {
+    key: "customer_development_mode_prompts.mail",
+    label: "Customer Development: Mail",
+    placeholders:
+      "{tone}, {customer_name}, {state}, {risk}, {service_model_label}, {days_since_interaction}, {contact_due}, {days_since_invoice}, {invoice_due}, {coverage}, {unmanaged_count}, {offline_rate}, {source_lines}, {work_topics}, {signal_lines}, {recommendation_lines}"
+  },
+  {
+    key: "customer_development_mode_prompts.angebot",
+    label: "Customer Development: Angebot",
+    placeholders:
+      "{tone}, {customer_name}, {state}, {risk}, {service_model_label}, {days_since_interaction}, {contact_due}, {days_since_invoice}, {invoice_due}, {coverage}, {unmanaged_count}, {offline_rate}, {source_lines}, {work_topics}, {signal_lines}, {recommendation_lines}"
+  },
+  {
+    key: "customer_development_mode_prompts.kundenbericht",
+    label: "Customer Development: Kundenbericht",
+    placeholders:
+      "{tone}, {customer_name}, {state}, {risk}, {service_model_label}, {days_since_interaction}, {contact_due}, {days_since_invoice}, {invoice_due}, {coverage}, {unmanaged_count}, {offline_rate}, {source_lines}, {work_topics}, {signal_lines}, {recommendation_lines}"
+  },
+  {
+    key: "customer_development_mode_prompts.newsletter",
+    label: "Customer Development: Newsletter",
+    placeholders:
+      "{tone}, {customer_name}, {state}, {risk}, {service_model_label}, {days_since_interaction}, {contact_due}, {days_since_invoice}, {invoice_due}, {coverage}, {unmanaged_count}, {offline_rate}, {source_lines}, {work_topics}, {signal_lines}, {recommendation_lines}"
+  },
+  {
+    key: "customer_development_mode_prompts.leitfaden",
+    label: "Customer Development: Leitfaden",
+    placeholders:
+      "{tone}, {customer_name}, {state}, {risk}, {service_model_label}, {days_since_interaction}, {contact_due}, {days_since_invoice}, {invoice_due}, {coverage}, {unmanaged_count}, {offline_rate}, {source_lines}, {work_topics}, {signal_lines}, {recommendation_lines}"
+  },
+  {
+    key: "customer_development_mode_prompts.aktivierung_mail",
+    label: "Customer Development: Aktivierung Mail",
+    placeholders:
+      "{tone}, {customer_name}, {state}, {risk}, {service_model_label}, {days_since_interaction}, {contact_due}, {days_since_invoice}, {invoice_due}, {coverage}, {unmanaged_count}, {offline_rate}, {source_lines}, {work_topics}, {signal_lines}, {recommendation_lines}"
+  },
+  {
+    key: "customer_development_mode_prompts.aktivierung_call",
+    label: "Customer Development: Aktivierung Call",
+    placeholders:
+      "{tone}, {customer_name}, {state}, {risk}, {service_model_label}, {days_since_interaction}, {contact_due}, {days_since_invoice}, {invoice_due}, {coverage}, {unmanaged_count}, {offline_rate}, {source_lines}, {work_topics}, {signal_lines}, {recommendation_lines}"
+  },
+  {
+    key: "customer_development_mode_prompts.analyse",
+    label: "Customer Development: Analyse",
+    placeholders:
+      "{tone}, {customer_name}, {state}, {risk}, {service_model_label}, {days_since_interaction}, {contact_due}, {days_since_invoice}, {invoice_due}, {coverage}, {unmanaged_count}, {offline_rate}, {source_lines}, {work_topics}, {signal_lines}, {recommendation_lines}"
+  },
+  {
+    key: "customer_signal_newsletter_prompt",
+    label: "Customer Development: Newsletter aus Signalen",
+    placeholders: "{tone}, {avg_risk}, {source_lines}, {signal_lines}"
+  }
+];
+
+const defaultAiPromptsState = () => normalizeAiPromptsPayload({});
 
 const formatEurPrecise = (value) => {
   const number = Number(value || 0);
@@ -627,22 +810,8 @@ export default function SettingsView() {
   });
   const [pbxOpen, setPbxOpen] = useState(false);
   const [ctiOpen, setCtiOpen] = useState(false);
-  const [aiPrompts, setAiPrompts] = useState({
-    action_prompt: "",
-    offer_base_prompt: "",
-    offer_mode_instructions: {
-      cover_intro: "",
-      overview: "",
-      calculation: "",
-      position_text: "",
-      device_description: ""
-    },
-    contract_header_html: "",
-    contract_footer_html: "",
-    contract_templates: normalizeContractTemplates(null),
-    contract_variable_definitions: normalizeContractVariableDefinitions(null, null),
-    contract_variables: normalizeContractVariables(null)
-  });
+  const [aiPrompts, setAiPrompts] = useState(() => defaultAiPromptsState());
+  const [selectedAiPromptKey, setSelectedAiPromptKey] = useState(AI_PROMPT_OPTIONS[0]?.key || "action_prompt");
   const [contractTemplateDraft, setContractTemplateDraft] = useState({
     key: "",
     title: "",
@@ -1154,6 +1323,10 @@ export default function SettingsView() {
     }
     setTimeout(() => setAiPromptsStatus("idle"), 2000);
   };
+
+  const selectedAiPromptMeta =
+    AI_PROMPT_OPTIONS.find((entry) => entry.key === selectedAiPromptKey) || AI_PROMPT_OPTIONS[0];
+  const selectedAiPromptValue = getAiPromptValueByKey(aiPrompts, selectedAiPromptMeta?.key || "");
 
   const saveContractTemplates = async () => {
     setContractTemplatesStatus("saving");
@@ -3456,118 +3629,38 @@ export default function SettingsView() {
             <>
               <div className="mt-4 grid grid-cols-1 gap-4">
                 <div>
-                  <label className="text-xs text-sand-500">Kundenbericht: Action Prompt</label>
-                  <textarea
-                    value={aiPrompts.action_prompt}
-                    onChange={(event) =>
-                      setAiPrompts((prev) => ({ ...prev, action_prompt: event.target.value }))
-                    }
+                  <label className="text-xs text-sand-500">Prompt auswählen</label>
+                  <select
+                    value={selectedAiPromptMeta?.key || ""}
+                    onChange={(event) => setSelectedAiPromptKey(event.target.value)}
                     className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
-                    rows={8}
-                    placeholder="Prompt fuer Kundenbericht-Aktionen"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Angebot: Basis Prompt</label>
-                  <textarea
-                    value={aiPrompts.offer_base_prompt}
-                    onChange={(event) =>
-                      setAiPrompts((prev) => ({ ...prev, offer_base_prompt: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
-                    rows={6}
-                    placeholder="Basis-Prompt fuer Angebots-Texte"
-                  />
+                  >
+                    {AI_PROMPT_OPTIONS.map((entry) => (
+                      <option key={entry.key} value={entry.key}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </select>
                   <p className="mt-2 text-xs text-sand-400">
-                    Platzhalter: {"{instruction}"}, {"{context}"}, {"{current_text}"}
+                    {AI_PROMPT_OPTIONS.length} Prompts werden zentral über diese Liste gepflegt.
                   </p>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs text-sand-500">Deckblatt Intro</label>
-                    <textarea
-                      value={aiPrompts.offer_mode_instructions.cover_intro}
-                      onChange={(event) =>
-                        setAiPrompts((prev) => ({
-                          ...prev,
-                          offer_mode_instructions: {
-                            ...prev.offer_mode_instructions,
-                            cover_intro: event.target.value
-                          }
-                        }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
-                      rows={3}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-sand-500">Ueberblick</label>
-                    <textarea
-                      value={aiPrompts.offer_mode_instructions.overview}
-                      onChange={(event) =>
-                        setAiPrompts((prev) => ({
-                          ...prev,
-                          offer_mode_instructions: {
-                            ...prev.offer_mode_instructions,
-                            overview: event.target.value
-                          }
-                        }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
-                      rows={3}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-sand-500">Kalkulation</label>
-                    <textarea
-                      value={aiPrompts.offer_mode_instructions.calculation}
-                      onChange={(event) =>
-                        setAiPrompts((prev) => ({
-                          ...prev,
-                          offer_mode_instructions: {
-                            ...prev.offer_mode_instructions,
-                            calculation: event.target.value
-                          }
-                        }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
-                      rows={3}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-sand-500">Dienstleistung Positionstext</label>
-                    <textarea
-                      value={aiPrompts.offer_mode_instructions.position_text}
-                      onChange={(event) =>
-                        setAiPrompts((prev) => ({
-                          ...prev,
-                          offer_mode_instructions: {
-                            ...prev.offer_mode_instructions,
-                            position_text: event.target.value
-                          }
-                        }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
-                      rows={3}
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="text-xs text-sand-500">Material Beschreibung</label>
-                    <textarea
-                      value={aiPrompts.offer_mode_instructions.device_description}
-                      onChange={(event) =>
-                        setAiPrompts((prev) => ({
-                          ...prev,
-                          offer_mode_instructions: {
-                            ...prev.offer_mode_instructions,
-                            device_description: event.target.value
-                          }
-                        }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 text-xs text-sand-800"
-                      rows={3}
-                    />
-                  </div>
+                <div>
+                  <label className="text-xs text-sand-500">{selectedAiPromptMeta?.label || "Prompt"}</label>
+                  <textarea
+                    value={selectedAiPromptValue}
+                    onChange={(event) =>
+                      setAiPrompts((prev) =>
+                        setAiPromptValueByKey(prev, selectedAiPromptMeta?.key || "", event.target.value)
+                      )
+                    }
+                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2 font-mono text-xs text-sand-800"
+                    rows={18}
+                    placeholder="Prompt Text"
+                  />
+                  <p className="mt-2 text-xs text-sand-400">
+                    Platzhalter: {selectedAiPromptMeta?.placeholders || "keine"}
+                  </p>
                 </div>
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
