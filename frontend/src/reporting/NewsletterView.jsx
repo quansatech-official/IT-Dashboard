@@ -588,7 +588,7 @@ export default function NewsletterView() {
   };
 
   const handlePreviewNewsletter = (item) => {
-    const normalized = mapNewsletterToDraft(item);
+    const normalized = buildDraftPayload(mapNewsletterToDraft(item));
     setPreviewModal({
       open: true,
       title: normalized.subject || "Newsletter Vorschau",

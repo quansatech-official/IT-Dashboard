@@ -2041,6 +2041,11 @@ class AiConnectionProbeRequest(BaseModel):
     ai_invoice_model: Optional[str] = None
 
 
+class AiModelManageRequest(AiConnectionProbeRequest):
+    action: str
+    model: str
+
+
 class SmtpSettingsUpdate(BaseModel):
     host: Optional[str] = None
     port: Optional[int] = None
@@ -2869,6 +2874,62 @@ def _list_available_ai_models(
     if models:
         return models
     return _configured_ai_models_for_picker(resolved_config)
+
+
+def _ollama_manage_model(
+    *,
+    action: str,
+    model: str,
+    base_url: str,
+    timeout_seconds: int = 600,
+) -> Dict[str, Any]:
+    resolved_action = str(action or "").strip().lower()
+    model_name = str(model or "").strip()
+    resolved_base_url = _normalize_ai_base_url(base_url, AI_PROVIDER_OLLAMA)
+    if resolved_action not in {"pull", "delete"}:
+        raise HTTPException(400, "Unsupported action")
+    if not model_name:
+        raise HTTPException(400, "Model fehlt")
+    if not resolved_base_url:
+        raise HTTPException(400, "Base URL fehlt")
+    connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
+    request_timeout = max(connect_timeout, int(timeout_seconds or 600))
+    endpoint = "pull" if resolved_action == "pull" else "delete"
+    payload = {"name": model_name}
+    if resolved_action == "pull":
+        payload["stream"] = False
+    try:
+        with _ollama_http.post(
+            f"{resolved_base_url}/api/{endpoint}",
+            json=payload,
+            timeout=(connect_timeout, request_timeout),
+        ) as response:
+            response.raise_for_status()
+            try:
+                loaded = response.json()
+            except ValueError:
+                loaded = {}
+    except requests.HTTPError as exc:
+        detail = ""
+        if exc.response is not None:
+            try:
+                payload = exc.response.json()
+                detail = str(payload.get("error") or payload.get("detail") or exc.response.text or "").strip()
+            except Exception:
+                detail = str(exc.response.text or "").strip()
+        raise HTTPException(502, detail or f"Ollama {resolved_action} fehlgeschlagen") from exc
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Ollama {resolved_action} fehlgeschlagen: {exc}") from exc
+    result = loaded if isinstance(loaded, dict) else {}
+    return {
+        "ok": True,
+        "action": resolved_action,
+        "model": model_name,
+        "provider": AI_PROVIDER_OLLAMA,
+        "base_url": resolved_base_url,
+        "detail": str(result.get("status") or result.get("detail") or "").strip(),
+        "response": result,
+    }
 
 
 def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
@@ -16651,6 +16712,24 @@ def probe_ai_connection_models(data: AiConnectionProbeRequest):
         "configured_models": configured_models,
         "detected_count": len(models),
     }
+
+
+@app.post("/api/integrations/ai_models/manage")
+def manage_ai_provider_model(data: AiModelManageRequest):
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        config = _build_ai_config_from_request(data, settings)
+    provider = str(config.get("provider") or AI_PROVIDER_OLLAMA)
+    if provider != AI_PROVIDER_OLLAMA:
+        raise HTTPException(
+            400,
+            "Modell laden/loeschen ist nur fuer Ollama direkt verfuegbar. vLLM/OpenAI-kompatibel bietet dafuer keine Standard-API.",
+        )
+    return _ollama_manage_model(
+        action=data.action,
+        model=data.model,
+        base_url=str(config.get("base_url") or OLLAMA_BASE_URL),
+    )
 
 
 @app.get("/api/meta_hub/status")

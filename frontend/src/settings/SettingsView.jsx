@@ -557,6 +557,9 @@ export default function SettingsView() {
     defaultModel: "",
     error: ""
   });
+  const [aiModelDraft, setAiModelDraft] = useState("");
+  const [aiModelManageStatus, setAiModelManageStatus] = useState("idle");
+  const [aiModelManageMessage, setAiModelManageMessage] = useState("");
   const [sevdeskHealth, setSevdeskHealth] = useState({
     connected: null,
     error: "",
@@ -1750,6 +1753,47 @@ export default function SettingsView() {
         error: error?.message ? String(error.message) : "Modellliste konnte nicht geladen werden"
       });
       setAiConnectionModelsStatus("error");
+    }
+  };
+
+  const manageAiProviderModel = async (action) => {
+    const model = String(aiModelDraft || "").trim();
+    if (!model) {
+      setAiModelManageStatus("error");
+      setAiModelManageMessage("Bitte Modellnamen eingeben.");
+      return;
+    }
+    setAiModelManageStatus("loading");
+    setAiModelManageMessage("");
+    try {
+      const res = await fetch(`${API}/integrations/ai_models/manage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          model,
+          ai_provider: aiConnection.ai_provider,
+          ai_base_url: aiConnection.ai_base_url,
+          ai_api_key: aiConnection.ai_api_key
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "ai_model_manage_failed");
+      setAiModelManageStatus("ready");
+      setAiModelManageMessage(
+        action === "pull"
+          ? `Modell ${model} wurde geladen oder aktualisiert.`
+          : `Modell ${model} wurde entfernt.`
+      );
+      if (action === "delete" && aiConnection.ai_default_model === model) {
+        setAiConnection((prev) => ({ ...prev, ai_default_model: "" }));
+      }
+      await loadAiProviderModels();
+    } catch (error) {
+      setAiModelManageStatus("error");
+      setAiModelManageMessage(
+        error?.message ? String(error.message) : "Modellverwaltung fehlgeschlagen."
+      );
     }
   };
 
@@ -3197,10 +3241,13 @@ export default function SettingsView() {
                             key={modelName}
                             type="button"
                             onClick={() =>
-                              setAiConnection((prev) => ({
-                                ...prev,
-                                ai_default_model: modelName
-                              }))
+                              {
+                                setAiConnection((prev) => ({
+                                  ...prev,
+                                  ai_default_model: modelName
+                                }));
+                                setAiModelDraft(modelName);
+                              }
                             }
                             className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] text-emerald-700"
                             title="Klick setzt dieses Modell als Default."
@@ -3214,6 +3261,56 @@ export default function SettingsView() {
                     )
                   ) : null}
                 </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">Modellverwaltung</p>
+                {aiConnection.ai_provider === "ollama" ? (
+                  <>
+                    <p className="mt-1 text-xs text-sand-500">
+                      Direkt aus dem Settings-Panel Ollama-Modelle nachladen oder loeschen.
+                    </p>
+                    <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                      <input
+                        list={aiKnownModels.length ? aiModelDatalistId : undefined}
+                        value={aiModelDraft}
+                        onChange={(event) => setAiModelDraft(event.target.value)}
+                        className="rounded-2xl border border-sand-200 px-4 py-2"
+                        placeholder="z. B. qwen2.5:32b-instruct-q4_K_M"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => manageAiProviderModel("pull")}
+                        className="rounded-full border border-emerald-200 bg-emerald-600 px-4 py-2 text-xs uppercase tracking-wide text-white hover:bg-emerald-700"
+                      >
+                        Modell laden
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => manageAiProviderModel("delete")}
+                        className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                      >
+                        Modell loeschen
+                      </button>
+                    </div>
+                    {aiModelManageStatus === "loading" ? (
+                      <p className="mt-3 text-xs text-sand-500">Ollama verarbeitet den Auftrag…</p>
+                    ) : null}
+                    {aiModelManageMessage ? (
+                      <p
+                        className={`mt-3 text-xs ${
+                          aiModelManageStatus === "error" ? "text-rose-600" : "text-emerald-700"
+                        }`}
+                      >
+                        {aiModelManageMessage}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="mt-1 text-xs text-sand-500">
+                    vLLM / OpenAI-kompatibel bietet ueber die Standard-API nur Modellabfrage. Laden oder Loeschen muss auf dem Host bzw. Deployment des Servers passieren.
+                  </p>
+                )}
               </div>
 
               <div className="mt-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
