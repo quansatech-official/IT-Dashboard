@@ -2929,16 +2929,23 @@ def _ollama_manage_model(
         raise HTTPException(400, "Base URL fehlt")
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
     request_timeout = max(connect_timeout, int(timeout_seconds or 600))
-    endpoint = "pull" if resolved_action == "pull" else "delete"
     payload = {"name": model_name}
     if resolved_action == "pull":
         payload["stream"] = False
     try:
-        with _ollama_http.post(
-            f"{resolved_base_url}/api/{endpoint}",
-            json=payload,
-            timeout=(connect_timeout, request_timeout),
-        ) as response:
+        if resolved_action == "pull":
+            request_context = _ollama_http.post(
+                f"{resolved_base_url}/api/pull",
+                json=payload,
+                timeout=(connect_timeout, request_timeout),
+            )
+        else:
+            request_context = _ollama_http.delete(
+                f"{resolved_base_url}/api/delete",
+                json=payload,
+                timeout=(connect_timeout, request_timeout),
+            )
+        with request_context as response:
             response.raise_for_status()
             try:
                 loaded = response.json()
