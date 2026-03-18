@@ -89,7 +89,7 @@ INTERNAL_AI_TOOL_MAX_TOKENS = max(
 )
 INTERNAL_AI_TOOL_TIMEOUT_SECONDS = max(
     6,
-    int(os.environ.get("INTERNAL_AI_TOOL_TIMEOUT_SECONDS") or "18"),
+    int(os.environ.get("INTERNAL_AI_TOOL_TIMEOUT_SECONDS") or "45"),
 )
 OLLAMA_SLOW_REQUEST_MS = max(
     500,
@@ -117,7 +117,7 @@ CUSTOMER_DEVELOPMENT_AI_TIMEOUT_SECONDS = max(
 )
 CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS = max(
     3,
-    int(os.environ.get("CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS") or "20"),
+    int(os.environ.get("CUSTOMER_DEVELOPMENT_AI_INTERNAL_TIMEOUT_SECONDS") or "45"),
 )
 TASK_SCOPE_AI_TIMEOUT_SECONDS = max(
     5,
@@ -2692,21 +2692,25 @@ def _build_ai_config_snapshot(settings: Optional[IntegrationSettings] = None) ->
     api_key = str(
         (getattr(settings, "ai_api_key", "") if settings is not None else "") or AI_API_KEY_ENV
     ).strip()
-    default_model = str(
-        (getattr(settings, "ai_default_model", "") if settings is not None else "") or AI_DEFAULT_MODEL_ENV
+    configured_default_model = str(
+        getattr(settings, "ai_default_model", "") if settings is not None else ""
     ).strip()
-    if not default_model:
-        default_model = AI_DEFAULT_MODEL_ENV
+    default_model = configured_default_model or AI_DEFAULT_MODEL_ENV
+    configured_models: Dict[str, str] = {}
     models: Dict[str, str] = {}
     for purpose, field_name in AI_MODEL_SETTINGS_FIELDS.items():
         configured_value = getattr(settings, field_name, "") if settings is not None else ""
-        models[purpose] = str(configured_value or AI_MODEL_ENV_DEFAULTS.get(purpose) or "").strip()
+        normalized_value = str(configured_value or "").strip()
+        configured_models[purpose] = normalized_value
+        models[purpose] = normalized_value or str(AI_MODEL_ENV_DEFAULTS.get(purpose) or "").strip()
     return {
         "provider": provider,
         "base_url": base_url,
         "api_key": api_key,
         "default_model": default_model,
+        "configured_default_model": configured_default_model,
         "models": models,
+        "configured_models": configured_models,
     }
 
 
@@ -2728,18 +2732,26 @@ def _build_ai_config_from_request(
     provider = _normalize_ai_provider(payload.get("ai_provider", base_config.get("provider")))
     base_url = _normalize_ai_base_url(payload.get("ai_base_url", base_config.get("base_url")), provider)
     api_key = str(payload.get("ai_api_key", base_config.get("api_key")) or "").strip()
-    default_model = str(payload.get("ai_default_model", base_config.get("default_model")) or "").strip()
+    configured_default_model = str(
+        payload.get("ai_default_model", base_config.get("configured_default_model")) or ""
+    ).strip()
+    default_model = configured_default_model or str(base_config.get("default_model") or "").strip()
     models = dict(base_config.get("models") or {})
+    configured_models = dict(base_config.get("configured_models") or {})
     for purpose, field_name in AI_MODEL_SETTINGS_FIELDS.items():
         if field_name not in payload:
             continue
-        models[purpose] = str(payload.get(field_name) or "").strip()
+        normalized_value = str(payload.get(field_name) or "").strip()
+        configured_models[purpose] = normalized_value
+        models[purpose] = normalized_value or str(AI_MODEL_ENV_DEFAULTS.get(purpose) or "").strip()
     return {
         "provider": provider,
         "base_url": base_url,
         "api_key": api_key,
         "default_model": default_model,
+        "configured_default_model": configured_default_model,
         "models": models,
+        "configured_models": configured_models,
     }
 
 
@@ -2750,9 +2762,21 @@ def _resolve_ai_models(
     config: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     resolved_config = config or _get_ai_config_snapshot(settings)
+    ordered = _merge_model_candidates(*specific_values)
+    if ordered:
+        return ordered
+    normalized_purpose = str(purpose or "").strip().lower()
+    configured_models = resolved_config.get("configured_models") or {}
+    configured_purpose_model = str(
+        configured_models.get(normalized_purpose, "") if isinstance(configured_models, dict) else ""
+    ).strip()
+    configured_default_model = str(resolved_config.get("configured_default_model") or "").strip()
+    if configured_purpose_model:
+        return [configured_purpose_model]
+    if configured_default_model:
+        return [configured_default_model]
     ordered = _merge_model_candidates(
-        *specific_values,
-        (resolved_config.get("models") or {}).get(str(purpose or "").strip().lower(), ""),
+        (resolved_config.get("models") or {}).get(normalized_purpose, ""),
         resolved_config.get("default_model") or "",
     )
     if not ordered:
@@ -2774,6 +2798,17 @@ def _configured_ai_models_for_picker(config: Dict[str, Any]) -> List[str]:
         config.get("default_model") if isinstance(config, dict) else "",
     )
     return configured
+
+
+def _has_explicit_ai_model_selection(config: Optional[Dict[str, Any]], purpose: str = "") -> bool:
+    if not isinstance(config, dict):
+        return False
+    normalized_purpose = str(purpose or "").strip().lower()
+    configured_models = config.get("configured_models") or {}
+    if normalized_purpose and isinstance(configured_models, dict):
+        if str(configured_models.get(normalized_purpose) or "").strip():
+            return True
+    return bool(str(config.get("configured_default_model") or "").strip())
 
 
 def _list_ollama_models(timeout_seconds: int = 8, base_url: Optional[str] = None) -> List[str]:
@@ -2936,6 +2971,7 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
     config = _get_ai_config_snapshot()
     requested = str(requested_model or "").strip()
     available_models = _list_available_ai_models(config=config)
+    has_explicit_selection = bool(requested) or _has_explicit_ai_model_selection(config, "internal_ai")
     if requested:
         if not available_models:
             return _resolve_ai_models(requested, purpose="internal_ai", config=config)
@@ -2946,14 +2982,7 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
         return _resolve_ai_models(matched_model, purpose="internal_ai", config=config)
     if available_models:
         available_lookup = {model.lower(): model for model in available_models}
-        preferred = _resolve_ai_models(
-            MODEL_PREF_INTERNAL_AI,
-            MODEL_PREF_ACTION,
-            MODEL_PREF_TASK_DRAFT,
-            MODEL_PREF_INVOICE_SUMMARY,
-            purpose="internal_ai",
-            config=config,
-        )
+        preferred = _resolve_ai_models(purpose="internal_ai", config=config)
         ordered: List[str] = []
         seen = set()
         for candidate in preferred:
@@ -2961,6 +2990,8 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
             if matched_model and matched_model.lower() not in seen:
                 ordered.append(matched_model)
                 seen.add(matched_model.lower())
+        if has_explicit_selection:
+            return ordered or preferred
         for model in available_models:
             normalized = model.lower()
             if normalized in seen:
@@ -2968,14 +2999,7 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
             ordered.append(model)
             seen.add(normalized)
         return ordered
-    return _resolve_ai_models(
-        MODEL_PREF_INTERNAL_AI,
-        MODEL_PREF_ACTION,
-        MODEL_PREF_TASK_DRAFT,
-        MODEL_PREF_INVOICE_SUMMARY,
-        purpose="internal_ai",
-        config=config,
-    )
+    return _resolve_ai_models(purpose="internal_ai", config=config)
 
 
 def _internal_ai_prompt_limit_chars() -> int:
@@ -3465,7 +3489,6 @@ def _ai_generate_text(
 ) -> Tuple[str, str, str]:
     resolved_config = config or _get_ai_config_snapshot(settings)
     candidates = model_candidates or _resolve_ai_models(
-        MODEL_PREF_INVOICE_SUMMARY,
         purpose="invoice_summary",
         config=resolved_config,
     )
@@ -3761,11 +3784,7 @@ def _estimate_task_scope(task: DayTask, analysis_text: str, actual_hours: float)
     model = ""
     loaded: Dict[str, Any] = {}
     try:
-        model_candidates = _resolve_ai_models(
-            MODEL_PREF_TASK_DRAFT,
-            MODEL_PREF_INVOICE_SUMMARY,
-            purpose="task_draft",
-        )
+        model_candidates = _resolve_ai_models(purpose="task_draft")
         payload, model, provider_name = _ai_generate(
             prompt,
             model_candidates=model_candidates,
@@ -9209,11 +9228,7 @@ def _ai_rank_customer_candidates(
         f"{choices_block}"
     )
     try:
-        model_candidates = _resolve_ai_models(
-            MODEL_PREF_CUSTOMER_RANKING,
-            MODEL_PREF_TASK_DRAFT,
-            purpose="customer_ranking",
-        )
+        model_candidates = _resolve_ai_models(purpose="customer_ranking")
         payload, used_model, _ = _ai_generate(
             prompt,
             model_candidates=model_candidates,
@@ -9408,7 +9423,7 @@ def _generate_task_draft_from_email(
         f"Inhalt: {content or 'n/a'}"
     )
     try:
-        model_candidates = _resolve_ai_models(MODEL_PREF_TASK_DRAFT, purpose="task_draft")
+        model_candidates = _resolve_ai_models(purpose="task_draft")
         payload, used_model, _ = _ai_generate(
             prompt,
             model_candidates=model_candidates,
@@ -11006,7 +11021,7 @@ def _build_recent_work_summary_ai_text(customer_name: str, invoice_items: List[D
         f"Rechnungspositionen:\n{chr(10).join(lines)}"
     )
     try:
-        model_candidates = _resolve_ai_models(MODEL_PREF_INVOICE_SUMMARY, purpose="invoice_summary")
+        model_candidates = _resolve_ai_models(purpose="invoice_summary")
         data, _, _ = _ai_generate(
             prompt,
             model_candidates=model_candidates,
@@ -13743,12 +13758,7 @@ def _generate_customer_development_ai_text(
     )
     text_result, _, _ = _ai_generate_text(
         prompt,
-        model_candidates=_resolve_ai_models(
-            MODEL_PREF_CUSTOMER_DEVELOPMENT,
-            MODEL_PREF_ACTION,
-            MODEL_PREF_TASK_DRAFT,
-            purpose="customer_development",
-        ),
+        model_candidates=_resolve_ai_models(purpose="customer_development"),
         timeout=resolved_timeout,
         max_tokens=_customer_development_ai_max_tokens(mode_key),
     )
@@ -17802,11 +17812,7 @@ def generate_action(data: ActionAiRequest):
     if "{text}" not in prompts["action_prompt"] and "Text:" not in prompt:
         prompt = f"{prompt}\n\nText: {text}"
 
-    model_candidates = _resolve_ai_models(
-        MODEL_PREF_ACTION,
-        MODEL_PREF_TASK_DRAFT,
-        purpose="action",
-    )
+    model_candidates = _resolve_ai_models(purpose="action")
     payload, _, _ = _ai_generate(
         prompt,
         model_candidates=model_candidates,
@@ -17915,13 +17921,7 @@ def _build_action_ai_fallback(text: str) -> Dict[str, str]:
 def tools_internal_ai_models():
     config = _get_ai_config_snapshot()
     available_models = _list_available_ai_models(config=config)
-    preferred_models = _resolve_ai_models(
-        MODEL_PREF_INTERNAL_AI,
-        MODEL_PREF_ACTION,
-        MODEL_PREF_TASK_DRAFT,
-        purpose="internal_ai",
-        config=config,
-    )
+    preferred_models = _resolve_ai_models(purpose="internal_ai", config=config)
     default_model = ""
     available_lookup = {model.lower(): model for model in available_models}
     for candidate in preferred_models:
@@ -18187,11 +18187,7 @@ def generate_offer_text(data: OfferAiRequest):
         },
     )
 
-    model_candidates = _resolve_ai_models(
-        MODEL_PREF_OFFER_TEXT,
-        MODEL_PREF_TASK_DRAFT,
-        purpose="offer_text",
-    )
+    model_candidates = _resolve_ai_models(purpose="offer_text")
     payload, _, provider = _ai_generate(
         prompt,
         model_candidates=model_candidates,
