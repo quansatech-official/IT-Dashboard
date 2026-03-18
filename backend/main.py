@@ -30,7 +30,7 @@ from html import escape
 from html import unescape
 from email import policy
 from email.parser import Parser
-from email.utils import parsedate_to_datetime
+from email.utils import formataddr, formatdate, make_msgid, parseaddr, parsedate_to_datetime
 import requests
 from urllib.parse import quote, urlparse
 from datetime import datetime, timedelta, timezone
@@ -277,6 +277,7 @@ class Customer(Base):
     creditor_number = Column(String, default="")
     short_code = Column(String, default="")
     email = Column(String, default="")
+    billing_email = Column(String, default="")
     time_tracking_enabled = Column(Boolean, default=False)
     customer_report = Column(Boolean, default=True)
     newsletter = Column(Boolean, default=True)
@@ -287,6 +288,10 @@ class Customer(Base):
     postal_code = Column(String, default="")
     city = Column(String, default="")
     country = Column(String, default="")
+    billing_street = Column(String, default="")
+    billing_postal_code = Column(String, default="")
+    billing_city = Column(String, default="")
+    billing_country = Column(String, default="")
 
     phones = relationship(
         "CustomerPhone",
@@ -844,6 +849,23 @@ class CustomerPrepaidHoursEntry(Base):
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
+class CustomerLicense(Base):
+    __tablename__ = "customer_licenses"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
+    vendor = Column(String, default="")
+    product_name = Column(String, default="")
+    quantity = Column(Integer, default=1)
+    billing_cycle = Column(String, default="monthly")
+    cost_eur = Column(Float, default=0.0)
+    valid_until = Column(String, default="")
+    status = Column(String, default="active")
+    notes = Column(Text, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
 def _run_db_startup_step(step_name: str, callback: Callable[[], None]) -> None:
     attempts = max(1, int(DB_STARTUP_RETRY_ATTEMPTS or 1))
     delay_seconds = max(0.5, float(DB_STARTUP_RETRY_DELAY_SECONDS or 0.5))
@@ -1182,6 +1204,8 @@ def _ensure_customer_columns() -> None:
         statements.append("ALTER TABLE customers ADD COLUMN short_code VARCHAR DEFAULT ''")
     if "email" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN email VARCHAR DEFAULT ''")
+    if "billing_email" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN billing_email VARCHAR DEFAULT ''")
     if "time_tracking_enabled" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN time_tracking_enabled BOOLEAN DEFAULT FALSE")
     if "customer_report" not in columns:
@@ -1202,6 +1226,14 @@ def _ensure_customer_columns() -> None:
         statements.append("ALTER TABLE customers ADD COLUMN city VARCHAR DEFAULT ''")
     if "country" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN country VARCHAR DEFAULT ''")
+    if "billing_street" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN billing_street VARCHAR DEFAULT ''")
+    if "billing_postal_code" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN billing_postal_code VARCHAR DEFAULT ''")
+    if "billing_city" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN billing_city VARCHAR DEFAULT ''")
+    if "billing_country" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN billing_country VARCHAR DEFAULT ''")
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
@@ -1610,6 +1642,28 @@ class CustomerInventoryDeviceStateUpsert(BaseModel):
     device_label: Optional[str] = ""
     retired: Optional[bool] = False
     note: Optional[str] = ""
+
+
+class CustomerLicenseCreate(BaseModel):
+    vendor: Optional[str] = ""
+    product_name: Optional[str] = ""
+    quantity: Optional[int] = 1
+    billing_cycle: Optional[str] = "monthly"
+    cost_eur: Optional[float] = 0.0
+    valid_until: Optional[str] = ""
+    status: Optional[str] = "active"
+    notes: Optional[str] = ""
+
+
+class CustomerLicenseUpdate(BaseModel):
+    vendor: Optional[str] = None
+    product_name: Optional[str] = None
+    quantity: Optional[int] = None
+    billing_cycle: Optional[str] = None
+    cost_eur: Optional[float] = None
+    valid_until: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
 
 
 class EmployeeCreate(BaseModel):
@@ -2165,6 +2219,43 @@ def _attach_email_attachments(
             subtype=subtype,
             filename=attachment.filename or "attachment",
         )
+
+
+def _format_smtp_from_address(sender_email: Any, sender_name: Any = "") -> str:
+    email_value = str(sender_email or "").strip()
+    name_value = str(sender_name or "").strip()
+    if not name_value:
+        return email_value
+    return formataddr((name_value, email_value))
+
+
+def _build_smtp_message(
+    *,
+    sender_email: Any,
+    sender_name: Any = "",
+    to: Any,
+    subject: Any,
+    text_body: Any = "",
+    html_body: Any = "",
+    attachments: Optional[List["EmailAttachment"]] = None,
+):
+    from email.message import EmailMessage
+
+    normalized_sender_email = str(sender_email or "").strip()
+    msg = EmailMessage(policy=policy.SMTP)
+    msg["Subject"] = str(subject or "").strip()
+    msg["From"] = _format_smtp_from_address(normalized_sender_email, sender_name)
+    msg["To"] = str(to or "").strip()
+    msg["Date"] = formatdate(localtime=True)
+    _, parsed_sender = parseaddr(normalized_sender_email)
+    message_id_domain = parsed_sender.rsplit("@", 1)[1].strip() if "@" in parsed_sender else ""
+    msg["Message-ID"] = make_msgid(domain=message_id_domain or None)
+    msg.set_content(
+        str(text_body or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung.")
+    )
+    msg.add_alternative(str(html_body or ""), subtype="html")
+    _attach_email_attachments(msg, attachments)
+    return msg
 
 
 class OfferSaveRequest(BaseModel):
@@ -4473,12 +4564,21 @@ def serialize_customer(
     contract_flags = _parse_contract_flags(c.contract_flags)
     normalized_contract_document_flags = _normalize_contract_document_flags(contract_document_flags)
     normalized_contract_type_counts = _normalize_contract_type_counts(contract_type_counts)
+    general_email = _customer_general_email(c)
+    billing_email = _customer_billing_email(c)
+    effective_email = _customer_effective_email(c)
+    general_address = _customer_general_address(c)
+    billing_address = _customer_billing_address(c)
+    effective_address = _customer_effective_address(c)
     return {
         "id": c.id,
         "name": c.name,
         "creditor_number": c.creditor_number,
         "short_code": c.short_code,
-        "email": c.email,
+        "email": effective_email,
+        "general_email": general_email,
+        "billing_email": billing_email,
+        "primary_address_source": _customer_primary_address_source(c),
         "time_tracking_enabled": c.time_tracking_enabled,
         "customer_report": c.customer_report,
         "newsletter": c.newsletter,
@@ -4491,10 +4591,18 @@ def serialize_customer(
         "contract_flags": contract_flags,
         "contract_document_flags": normalized_contract_document_flags,
         "contract_type_counts": normalized_contract_type_counts,
-        "street": c.street,
-        "postal_code": c.postal_code,
-        "city": c.city,
-        "country": c.country,
+        "street": effective_address["street"],
+        "postal_code": effective_address["postal_code"],
+        "city": effective_address["city"],
+        "country": effective_address["country"],
+        "general_street": general_address["street"],
+        "general_postal_code": general_address["postal_code"],
+        "general_city": general_address["city"],
+        "general_country": general_address["country"],
+        "billing_street": billing_address["street"],
+        "billing_postal_code": billing_address["postal_code"],
+        "billing_city": billing_address["city"],
+        "billing_country": billing_address["country"],
         "phones": [serialize_customer_phone(p) for p in c.phones],
     }
 
@@ -4504,6 +4612,58 @@ def serialize_customer_phone(p: CustomerPhone) -> Dict[str, Any]:
         "id": p.id,
         "label": p.label,
         "number": p.number,
+    }
+
+
+def _normalize_customer_license_billing_cycle(value: Any, default: str = "monthly") -> str:
+    key = str(value or "").strip().lower()
+    if key in {"monthly", "monatlich", "month"}:
+        return "monthly"
+    if key in {"quarterly", "quartal", "quarter"}:
+        return "quarterly"
+    if key in {"yearly", "year", "jaehrlich", "jährlich", "annual", "annually"}:
+        return "yearly"
+    if key in {"once", "einmalig", "one_time"}:
+        return "once"
+    return default
+
+
+def _normalize_customer_license_status(value: Any, default: str = "active") -> str:
+    key = str(value or "").strip().lower()
+    if key in {"inactive", "inaktiv", "disabled"}:
+        return "inactive"
+    return "active" if default != "inactive" else default
+
+
+def _customer_license_monthly_equivalent(cost_eur: Any, billing_cycle: Any) -> float:
+    cost_value = round(float(_safe_nonnegative_float(cost_eur or 0.0)), 2)
+    cycle = _normalize_customer_license_billing_cycle(billing_cycle, default="monthly")
+    if cycle == "yearly":
+        return round(cost_value / 12.0, 2)
+    if cycle == "quarterly":
+        return round(cost_value / 3.0, 2)
+    if cycle == "once":
+        return 0.0
+    return cost_value
+
+
+def serialize_customer_license(item: CustomerLicense) -> Dict[str, Any]:
+    billing_cycle = _normalize_customer_license_billing_cycle(item.billing_cycle, default="monthly")
+    cost_eur = round(float(item.cost_eur or 0.0), 2)
+    return {
+        "id": int(item.id),
+        "customer_id": int(item.customer_id),
+        "vendor": str(item.vendor or "").strip(),
+        "product_name": str(item.product_name or "").strip(),
+        "quantity": max(0, int(item.quantity or 0)),
+        "billing_cycle": billing_cycle,
+        "cost_eur": cost_eur,
+        "monthly_equivalent_eur": _customer_license_monthly_equivalent(cost_eur, billing_cycle),
+        "valid_until": str(item.valid_until or "").strip(),
+        "status": _normalize_customer_license_status(item.status, default="active"),
+        "notes": str(item.notes or "").strip(),
+        "created_at": int(item.created_at or 0),
+        "updated_at": int(item.updated_at or 0),
     }
 
 
@@ -5032,7 +5192,7 @@ def _serialize_newsletter_group_customer(customer: Customer) -> Dict[str, Any]:
     return {
         "id": customer.id,
         "name": customer.name or "",
-        "email": customer.email or "",
+        "email": _customer_effective_email(customer),
         "status": (customer.status or "active").strip().lower() or "active",
         "newsletter": bool(customer.newsletter),
     }
@@ -5438,9 +5598,9 @@ def _resolve_newsletter_recipient_emails(
     explicit_emails: Optional[List[Any]] = None,
 ) -> List[str]:
     blocked_emails = {
-        str(row.email or "").strip().lower()
-        for row in db.query(Customer.email).filter(Customer.newsletter.is_(False)).all()
-        if str(row.email or "").strip()
+        _customer_effective_email(customer).lower()
+        for customer in db.query(Customer).filter(Customer.newsletter.is_(False)).all()
+        if _customer_effective_email(customer)
     }
     emails = [
         email
@@ -5462,7 +5622,11 @@ def _resolve_newsletter_recipient_emails(
             .filter(Customer.id.in_(list(customer_ids)), Customer.newsletter.is_(True))
             .all()
         )
-        emails.extend(customer.email for customer in customers if str(customer.email or "").strip())
+        emails.extend(
+            _customer_effective_email(customer)
+            for customer in customers
+            if _customer_effective_email(customer)
+        )
     return _normalize_newsletter_email_list(emails)
 
 
@@ -6771,13 +6935,7 @@ def _render_contract_html(
         if str(rendered_footer or "").strip()
         else ""
     )
-    customer_address = " ".join(
-        [
-            str(customer.street or "").strip(),
-            f"{str(customer.postal_code or '').strip()} {str(customer.city or '').strip()}".strip(),
-            str(customer.country or "").strip(),
-        ]
-    ).strip()
+    customer_address = _customer_address_text(_customer_effective_address(customer))
     customer_address = re.sub(r"\s+", " ", customer_address)
     customer_display = escape(str(customer.name or "").strip() or "Kunde")
     template_label = escape((template_key or "wartung").replace("_", " ").upper())
@@ -8543,7 +8701,7 @@ def _best_customer_match(
         name_tokens = set(_tokenize_match(name))
         name_aliases = _customer_name_aliases(name)
         alias_norms = [_normalize_match_text(alias) for alias in name_aliases]
-        customer_email = str(customer.email or "").strip().lower()
+        customer_email = _customer_effective_email(customer).lower()
         customer_domain = customer_email.split("@", 1)[1] if "@" in customer_email else ""
         customer_local = customer_email.split("@", 1)[0] if "@" in customer_email else ""
         customer_short = str(customer.short_code or "").strip().lower()
@@ -9905,6 +10063,172 @@ def _extract_customer_number_from_contact(contact: Dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def _clean_customer_contact_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _customer_general_email(customer: Customer) -> str:
+    return _clean_customer_contact_value(getattr(customer, "email", ""))
+
+
+def _customer_billing_email(customer: Customer) -> str:
+    return _clean_customer_contact_value(getattr(customer, "billing_email", ""))
+
+
+def _customer_effective_email(customer: Customer) -> str:
+    return _customer_general_email(customer) or _customer_billing_email(customer)
+
+
+def _customer_general_address(customer: Customer) -> Dict[str, str]:
+    return {
+        "street": _clean_customer_contact_value(getattr(customer, "street", "")),
+        "postal_code": _clean_customer_contact_value(getattr(customer, "postal_code", "")),
+        "city": _clean_customer_contact_value(getattr(customer, "city", "")),
+        "country": _clean_customer_contact_value(getattr(customer, "country", "")),
+    }
+
+
+def _customer_billing_address(customer: Customer) -> Dict[str, str]:
+    return {
+        "street": _clean_customer_contact_value(getattr(customer, "billing_street", "")),
+        "postal_code": _clean_customer_contact_value(getattr(customer, "billing_postal_code", "")),
+        "city": _clean_customer_contact_value(getattr(customer, "billing_city", "")),
+        "country": _clean_customer_contact_value(getattr(customer, "billing_country", "")),
+    }
+
+
+def _customer_effective_address(customer: Customer) -> Dict[str, str]:
+    general = _customer_general_address(customer)
+    billing = _customer_billing_address(customer)
+    return {
+        "street": general["street"] or billing["street"],
+        "postal_code": general["postal_code"] or billing["postal_code"],
+        "city": general["city"] or billing["city"],
+        "country": general["country"] or billing["country"],
+    }
+
+
+def _customer_primary_address_source(customer: Customer) -> str:
+    general = _customer_general_address(customer)
+    if any(general.values()):
+        return "general"
+    billing = _customer_billing_address(customer)
+    return "billing" if any(billing.values()) else "general"
+
+
+def _customer_address_text(address: Dict[str, Any]) -> str:
+    street = _clean_customer_contact_value(address.get("street"))
+    postal_code = _clean_customer_contact_value(address.get("postal_code"))
+    city = _clean_customer_contact_value(address.get("city"))
+    country = _clean_customer_contact_value(address.get("country"))
+    return ", ".join(
+        [part for part in [street, f"{postal_code} {city}".strip(), country] if part]
+    )
+
+
+def _sevdesk_contact_candidate_objects(contact: Dict[str, Any]) -> List[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    seen: Set[int] = set()
+
+    def _append(value: Any) -> None:
+        if isinstance(value, dict):
+            marker = id(value)
+            if marker not in seen:
+                seen.add(marker)
+                candidates.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                _append(item)
+
+    _append(contact)
+    for key in (
+        "invoiceAddress",
+        "invoice_address",
+        "billingAddress",
+        "billing_address",
+        "mainAddress",
+        "main_address",
+        "address",
+        "contactAddress",
+        "contact_address",
+        "addresses",
+        "invoice",
+        "billing",
+    ):
+        _append(contact.get(key))
+    return candidates
+
+
+def _sevdesk_extract_string(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("name", "value", "text", "label"):
+            nested = _clean_customer_contact_value(value.get(key))
+            if nested:
+                return nested
+        return ""
+    return _clean_customer_contact_value(value)
+
+
+def _sevdesk_find_contact_string(contact: Dict[str, Any], keys: Tuple[str, ...]) -> str:
+    for candidate in _sevdesk_contact_candidate_objects(contact):
+        for key in keys:
+            value = _sevdesk_extract_string(candidate.get(key))
+            if value:
+                return value
+    return ""
+
+
+def _extract_sevdesk_contact_email(contact: Dict[str, Any]) -> str:
+    for email in [
+        _sevdesk_find_contact_string(
+            contact,
+            (
+                "invoiceEmail",
+                "invoice_email",
+                "billingEmail",
+                "billing_email",
+                "email",
+                "email1",
+                "email2",
+                "mainEmail",
+                "freemail",
+            ),
+        )
+    ]:
+        if email and "@" in email:
+            return email
+    return ""
+
+
+def _extract_sevdesk_contact_billing_address(contact: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "street": _sevdesk_find_contact_string(
+            contact,
+            (
+                "invoiceStreet",
+                "billingStreet",
+                "street",
+                "streetName",
+                "street_name",
+                "address1",
+                "streetAddress",
+            ),
+        ),
+        "postal_code": _sevdesk_find_contact_string(
+            contact,
+            ("invoiceZip", "billingZip", "zip", "zipcode", "postalCode", "postal_code", "postcode"),
+        ),
+        "city": _sevdesk_find_contact_string(
+            contact,
+            ("invoiceCity", "billingCity", "city", "town"),
+        ),
+        "country": _sevdesk_find_contact_string(
+            contact,
+            ("invoiceCountry", "billingCountry", "country", "countryName", "addressCountry"),
+        ),
+    }
 
 
 def _normalize_customer_number(value: Any) -> str:
@@ -12149,7 +12473,7 @@ def _build_customer_development_context(
         "customerId": customer.id,
         "customerName": customer.name or "",
         "customerNumber": customer.creditor_number or "",
-        "customerEmail": customer.email or "",
+        "customerEmail": _customer_effective_email(customer),
         "status": (customer.status or "active").lower(),
         "hasMaintenanceContract": has_contract,
         "isRegieCustomer": is_regie_customer,
@@ -13762,6 +14086,8 @@ def sync_customers_from_sevdesk():
             number = _extract_customer_number_from_contact(contact)
             normalized_number = _normalize_customer_number(number)
             name = _sevdesk_contact_display_name(contact)
+            billing_email = _extract_sevdesk_contact_email(contact)
+            billing_address = _extract_sevdesk_contact_billing_address(contact)
             if number:
                 seen_numbers.add(number)
             if normalized_number:
@@ -13783,12 +14109,32 @@ def sync_customers_from_sevdesk():
                 if name and _dev_normalize_text(name) != _dev_normalize_text(customer.name):
                     customer.name = name
                     changed = True
+                if billing_email != _customer_billing_email(customer):
+                    customer.billing_email = billing_email
+                    changed = True
+                if billing_address["street"] != _clean_customer_contact_value(customer.billing_street):
+                    customer.billing_street = billing_address["street"]
+                    changed = True
+                if billing_address["postal_code"] != _clean_customer_contact_value(customer.billing_postal_code):
+                    customer.billing_postal_code = billing_address["postal_code"]
+                    changed = True
+                if billing_address["city"] != _clean_customer_contact_value(customer.billing_city):
+                    customer.billing_city = billing_address["city"]
+                    changed = True
+                if billing_address["country"] != _clean_customer_contact_value(customer.billing_country):
+                    customer.billing_country = billing_address["country"]
+                    changed = True
                 if changed:
                     updated += 1
                 continue
             created_customer = Customer(
                 name=name or f"Kunde {number}",
                 creditor_number=number or "",
+                billing_email=billing_email,
+                billing_street=billing_address["street"],
+                billing_postal_code=billing_address["postal_code"],
+                billing_city=billing_address["city"],
+                billing_country=billing_address["country"],
                 status="active",
                 contract_flags="[]",
             )
@@ -14200,8 +14546,7 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
                 .count()
             )
         open_tasks = open_time_tasks + open_day_tasks
-        address_parts = [customer.street, customer.postal_code, customer.city, customer.country]
-        address = ", ".join([part for part in address_parts if part])
+        address = _customer_address_text(_customer_effective_address(customer))
         phone_numbers = [phone.number for phone in customer.phones]
         contract_time_budget = _customer_contract_time_budget(db, customer, now_ms)
 
@@ -15210,27 +15555,169 @@ def _extract_tracking_provider(payload: Dict[str, Any], fallback_label: str) -> 
     return fallback_label
 
 
-def _extract_latest_status_text(payload: Dict[str, Any]) -> str:
+def _parse_tracking_state_timestamp(value: Any) -> int:
+    if isinstance(value, (int, float)) and float(value) > 0:
+        numeric = float(value)
+        if numeric > 10_000_000_000:
+            return int(numeric)
+        return int(numeric * 1000)
+    text_value = str(value or "").strip()
+    if not text_value:
+        return 0
+    try:
+        if text_value.endswith("Z"):
+            parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+        else:
+            parsed = datetime.fromisoformat(text_value)
+        return int(parsed.timestamp() * 1000)
+    except ValueError:
+        pass
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y %H:%M:%S",
+        "%d.%m.%Y",
+        "%Y-%m-%d",
+    ):
+        try:
+            return int(datetime.strptime(text_value, fmt).timestamp() * 1000)
+        except ValueError:
+            continue
+    return 0
+
+
+def _extract_tracking_states(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     states = payload.get("states")
-    if isinstance(states, list) and states:
-        for raw_state in states:
-            latest = raw_state if isinstance(raw_state, dict) else {}
-            candidates = (
-                latest.get("status"),
-                latest.get("description"),
-                latest.get("text"),
-                latest.get("note"),
-                latest.get("state"),
-            )
-            for candidate in candidates:
-                text_value = str(candidate or "").strip()
-                if text_value:
-                    return text_value
-    for candidate in (payload.get("final_status"), payload.get("status")):
-        text_value = str(candidate or "").strip()
-        if text_value:
-            return text_value
-    return ""
+    normalized_states: List[Dict[str, Any]] = []
+    if not isinstance(states, list):
+        return normalized_states
+    for index, raw_state in enumerate(states):
+        latest = raw_state if isinstance(raw_state, dict) else {}
+        text_value = ""
+        for candidate in (
+            latest.get("status"),
+            latest.get("description"),
+            latest.get("text"),
+            latest.get("note"),
+            latest.get("state"),
+        ):
+            text_candidate = str(candidate or "").strip()
+            if text_candidate:
+                text_value = text_candidate
+                break
+        normalized_states.append(
+            {
+                "index": index,
+                "text": text_value,
+                "location": str(
+                    latest.get("location")
+                    or latest.get("place")
+                    or latest.get("city")
+                    or latest.get("facility")
+                    or ""
+                ).strip(),
+                "timestamp": _parse_tracking_state_timestamp(
+                    latest.get("timestamp")
+                    or latest.get("time")
+                    or latest.get("datetime")
+                    or latest.get("date")
+                    or latest.get("created")
+                ),
+            }
+        )
+    return normalized_states
+
+
+def _extract_latest_tracking_state(payload: Dict[str, Any]) -> Dict[str, Any]:
+    states = _extract_tracking_states(payload)
+    if states:
+        ordered = sorted(
+            states,
+            key=lambda item: (int(item.get("timestamp") or 0), -int(item.get("index") or 0)),
+            reverse=True,
+        )
+        for state in ordered:
+            if str(state.get("text") or "").strip() or int(state.get("timestamp") or 0) > 0:
+                return state
+    return {
+        "text": str(payload.get("final_status") or payload.get("status") or "").strip(),
+        "location": "",
+        "timestamp": _parse_tracking_state_timestamp(
+            payload.get("updated_at") or payload.get("updatedAt") or payload.get("timestamp")
+        ),
+    }
+
+
+def _normalize_tracking_delivery_stage(
+    status_text: str,
+    *,
+    error_code: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, str]:
+    if error_code == "NO_DATA":
+        return "pending", "Noch keine Daten"
+    if error_code:
+        return "problem", "Problem"
+    data = payload if isinstance(payload, dict) else {}
+    delivered_flag = bool(
+        data.get("delivered")
+        or data.get("isDelivered")
+        or data.get("delivery")
+        or data.get("is_delivered")
+    )
+    text = str(status_text or "").strip().lower()
+    if delivered_flag or any(token in text for token in ("zugestellt", "delivered", "ausgeliefert", "empfangen", "abholbereit")):
+        return "delivered", "Zugestellt"
+    if any(
+        token in text
+        for token in (
+            "exception",
+            "fehlgeschlagen",
+            "problem",
+            "retour",
+            "returned",
+            "unable",
+            "verzög",
+            "delay",
+            "storniert",
+            "cancelled",
+            "beschädigt",
+        )
+    ):
+        return "problem", "Problem"
+    if any(
+        token in text
+        for token in (
+            "unterwegs",
+            "transit",
+            "zustellung",
+            "out for delivery",
+            "shipment picked up",
+            "in bearbeitung",
+            "bearbeitet",
+            "sortier",
+            "processing",
+            "verladen",
+            "linehaul",
+            "arrived",
+            "departure",
+        )
+    ):
+        return "transit", "Unterwegs"
+    if any(
+        token in text
+        for token in (
+            "label created",
+            "pre-transit",
+            "daten erhalten",
+            "angekündigt",
+            "electronic",
+            "noch keine",
+        )
+    ):
+        return "pending", "Angekündigt"
+    return "info", "Info"
 
 
 def _fetch_parcelsapp_tracking_payload(
@@ -15282,11 +15769,13 @@ def _lookup_tracking_status(tracking_number: str, *, force_refresh: bool = False
     status_text = ""
     error_code = ""
     source = "parcelsapp"
+    latest_state: Dict[str, Any] = {"text": "", "location": "", "timestamp": 0}
     try:
         payload = _fetch_parcelsapp_tracking_payload(tracking_number, provider_slug)
         provider_label = _extract_tracking_provider(payload, provider_label)
         error_code = str(payload.get("error") or "").strip().upper()
-        status_text = _extract_latest_status_text(payload)
+        latest_state = _extract_latest_tracking_state(payload)
+        status_text = str(latest_state.get("text") or "").strip()
         if error_code:
             status_kind = "error"
             if not status_text:
@@ -15305,12 +15794,21 @@ def _lookup_tracking_status(tracking_number: str, *, force_refresh: bool = False
         status_text = "Ungültige Tracking-Antwort"
         error_code = "INVALID_RESPONSE"
         source = "fallback"
+    delivery_stage, delivery_label = _normalize_tracking_delivery_stage(
+        status_text,
+        error_code=error_code,
+        payload=payload,
+    )
 
     result = {
         "trackingNumber": tracking_number,
         "provider": provider_label,
         "status": status_kind,
         "statusText": status_text,
+        "deliveryStage": delivery_stage,
+        "deliveryLabel": delivery_label,
+        "lastEventAt": int(latest_state.get("timestamp") or 0),
+        "lastEventLocation": str(latest_state.get("location") or "").strip(),
         "errorCode": error_code,
         "checkedAt": now_ms,
         "source": source,
@@ -17561,9 +18059,9 @@ def send_newsletter(newsletter_id: int, data: NewsletterSendRequest):
         if not recipients:
             recipients = _parse_json_string_list(newsletter.recipient_emails_json)
         blocked_emails = {
-            str(row.email or "").strip().lower()
-            for row in db.query(Customer.email).filter(Customer.newsletter.is_(False)).all()
-            if str(row.email or "").strip()
+            _customer_effective_email(customer).lower()
+            for customer in db.query(Customer).filter(Customer.newsletter.is_(False)).all()
+            if _customer_effective_email(customer)
         }
         recipients = [
             recipient
@@ -17577,12 +18075,7 @@ def send_newsletter(newsletter_id: int, data: NewsletterSendRequest):
         if not subject:
             raise HTTPException(400, "Subject required")
 
-        from_addr = settings.sender_email
-        if settings.sender_name:
-            from_addr = f"{settings.sender_name} <{settings.sender_email}>"
-
         import smtplib
-        from email.message import EmailMessage
 
         if settings.use_ssl:
             server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
@@ -17594,16 +18087,16 @@ def send_newsletter(newsletter_id: int, data: NewsletterSendRequest):
             if settings.username:
                 server.login(settings.username, settings.password or "")
             for recipient in recipients:
-                msg = EmailMessage()
-                msg["Subject"] = subject
-                msg["From"] = from_addr
-                msg["To"] = recipient
-                msg.set_content(
-                    data.text or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung."
+                msg = _build_smtp_message(
+                    sender_email=settings.sender_email,
+                    sender_name=settings.sender_name,
+                    to=recipient,
+                    subject=subject,
+                    text_body=data.text,
+                    html_body=data.html,
+                    attachments=data.attachments,
                 )
-                msg.add_alternative(data.html, subtype="html")
-                _attach_email_attachments(msg, data.attachments)
-                server.send_message(msg)
+                server.send_message(msg, from_addr=str(settings.sender_email or "").strip(), to_addrs=[recipient])
         except Exception as exc:  # noqa: BLE001
             logger.exception("SMTP newsletter send failed: %s", exc)
             raise HTTPException(502, f"SMTP send failed: {exc}") from exc
@@ -18171,6 +18664,118 @@ def delete_customer_prepaid_hours_entry(customer_id: int, entry_id: int):
         return {"status": "deleted", "id": int(entry_id)}
 
 
+@app.get("/api/customers/{customer_id}/licenses")
+def get_customer_licenses(customer_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        rows = (
+            db.query(CustomerLicense)
+            .filter(CustomerLicense.customer_id == customer.id)
+            .order_by(
+                CustomerLicense.status.asc(),
+                CustomerLicense.vendor.asc(),
+                CustomerLicense.product_name.asc(),
+                CustomerLicense.id.desc(),
+            )
+            .all()
+        )
+        return [serialize_customer_license(row) for row in rows]
+
+
+@app.post("/api/customers/{customer_id}/licenses")
+def create_customer_license(customer_id: int, data: CustomerLicenseCreate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        vendor = str(data.vendor or "").strip()
+        product_name = str(data.product_name or "").strip()
+        if not vendor and not product_name:
+            raise HTTPException(400, "vendor or product_name is required")
+        now_ms = int(time.time() * 1000)
+        row = CustomerLicense(
+            customer_id=customer.id,
+            vendor=vendor,
+            product_name=product_name,
+            quantity=max(0, int(_safe_nonnegative_int(data.quantity if data.quantity is not None else 1) or 0)),
+            billing_cycle=_normalize_customer_license_billing_cycle(data.billing_cycle, default="monthly"),
+            cost_eur=_safe_nonnegative_float(data.cost_eur if data.cost_eur is not None else 0.0),
+            valid_until=str(data.valid_until or "").strip(),
+            status=_normalize_customer_license_status(data.status, default="active"),
+            notes=str(data.notes or "").strip(),
+            created_at=now_ms,
+            updated_at=now_ms,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_license(row)
+
+
+@app.patch("/api/customers/{customer_id}/licenses/{license_id}")
+def update_customer_license(customer_id: int, license_id: int, data: CustomerLicenseUpdate):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerLicense)
+            .filter(CustomerLicense.id == license_id, CustomerLicense.customer_id == customer.id)
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "License not found")
+        update_fields = data.dict(exclude_unset=True)
+        if "vendor" in update_fields:
+            row.vendor = str(update_fields.get("vendor") or "").strip()
+        if "product_name" in update_fields:
+            row.product_name = str(update_fields.get("product_name") or "").strip()
+        if not str(row.vendor or "").strip() and not str(row.product_name or "").strip():
+            raise HTTPException(400, "vendor or product_name is required")
+        if "quantity" in update_fields:
+            row.quantity = max(0, int(_safe_nonnegative_int(update_fields.get("quantity")) or 0))
+        if "billing_cycle" in update_fields:
+            row.billing_cycle = _normalize_customer_license_billing_cycle(
+                update_fields.get("billing_cycle"),
+                default=_normalize_customer_license_billing_cycle(row.billing_cycle, default="monthly"),
+            )
+        if "cost_eur" in update_fields:
+            row.cost_eur = _safe_nonnegative_float(update_fields.get("cost_eur"))
+        if "valid_until" in update_fields:
+            row.valid_until = str(update_fields.get("valid_until") or "").strip()
+        if "status" in update_fields:
+            row.status = _normalize_customer_license_status(
+                update_fields.get("status"),
+                default=_normalize_customer_license_status(row.status, default="active"),
+            )
+        if "notes" in update_fields:
+            row.notes = str(update_fields.get("notes") or "").strip()
+        row.updated_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(row)
+        return serialize_customer_license(row)
+
+
+@app.delete("/api/customers/{customer_id}/licenses/{license_id}")
+def delete_customer_license(customer_id: int, license_id: int):
+    with SessionLocal() as db:
+        customer = db.query(Customer).get(customer_id)
+        if not customer:
+            raise HTTPException(404, "Customer not found")
+        row = (
+            db.query(CustomerLicense)
+            .filter(CustomerLicense.id == license_id, CustomerLicense.customer_id == customer.id)
+            .first()
+        )
+        if not row:
+            raise HTTPException(404, "License not found")
+        db.delete(row)
+        db.commit()
+        return {"status": "deleted", "id": int(license_id)}
+
+
 @app.get("/api/customers/{customer_id}/contracts")
 def get_customer_contract_documents(customer_id: int, status: Optional[str] = None):
     with SessionLocal() as db:
@@ -18315,14 +18920,13 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         extension_period_months = max(1, auto_extension_months)
         customer_number = str(customer.creditor_number or "").strip()
         customer_short_code = str(customer.short_code or "").strip()
-        customer_email = str(customer.email or "").strip()
-        customer_street = str(customer.street or "").strip()
-        customer_postal_code = str(customer.postal_code or "").strip()
-        customer_city = str(customer.city or "").strip()
-        customer_country = str(customer.country or "").strip()
-        customer_address = ", ".join(
-            [part for part in [customer_street, f"{customer_postal_code} {customer_city}".strip(), customer_country] if part]
-        )
+        effective_address = _customer_effective_address(customer)
+        customer_email = _customer_effective_email(customer)
+        customer_street = effective_address["street"]
+        customer_postal_code = effective_address["postal_code"]
+        customer_city = effective_address["city"]
+        customer_country = effective_address["country"]
+        customer_address = _customer_address_text(effective_address)
         termination_notice_label = (
             f"{termination_notice_months} Monat" if termination_notice_months == 1 else f"{termination_notice_months} Monate"
         )
@@ -19155,6 +19759,10 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
     revenue_estimate_week = (
         round(float(done_time_week_hours) * hourly_rate, 2) if hourly_rate else 0
     )
+    current_week_workdays = max(1, min(5, int(now_dt.weekday()) + 1))
+    avg_done_tasks_week = round(float(day_tasks_done_week) / float(current_week_workdays), 1)
+    avg_done_hours_week = round(float(done_time_week_hours) / float(current_week_workdays), 2)
+    avg_revenue_week = round(float(revenue_estimate_week) / float(current_week_workdays), 2)
 
     sevdesk_stats: Dict[str, Any] = {"connected": False}
     if load_sevdesk and sevdesk_config and sevdesk_config.api_token:
@@ -19249,6 +19857,24 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
 
     response: Dict[str, Any] = {}
     if load_general:
+        response["taskPerformance"] = {
+            "today": {
+                "doneCount": int(day_tasks_done_today),
+                "doneHours": done_time_today_hours,
+                "revenueEur": revenue_estimate_today,
+            },
+            "week": {
+                "doneCount": int(day_tasks_done_week),
+                "doneHours": done_time_week_hours,
+                "revenueEur": revenue_estimate_week,
+                "workdayCount": int(current_week_workdays),
+                "averagePerWorkday": {
+                    "doneCount": avg_done_tasks_week,
+                    "doneHours": avg_done_hours_week,
+                    "revenueEur": avg_revenue_week,
+                },
+            },
+        }
         response.update(
             {
                 "dayTasks": {
@@ -19311,21 +19937,17 @@ def send_report(report_id: int, data: ReportSendRequest):
             report.guid = str(uuid.uuid4())
         subject = data.subject or f"IT-Kundenbericht – {report.customer} ({report.period or 'ohne Zeitraum'})"
 
-        from_addr = settings.sender_email
-        if settings.sender_name:
-            from_addr = f"{settings.sender_name} <{settings.sender_email}>"
-
         import smtplib
-        from email.message import EmailMessage
 
-        msg = EmailMessage()
-        msg["Subject"] = subject
-        msg["From"] = from_addr
-        msg["To"] = data.to
-        fallback_text = "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung."
-        msg.set_content(data.text or fallback_text)
-        msg.add_alternative(data.html, subtype="html")
-        _attach_email_attachments(msg, data.attachments)
+        msg = _build_smtp_message(
+            sender_email=settings.sender_email,
+            sender_name=settings.sender_name,
+            to=data.to,
+            subject=subject,
+            text_body=data.text,
+            html_body=data.html,
+            attachments=data.attachments,
+        )
 
         if settings.use_ssl:
             server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
@@ -19336,7 +19958,7 @@ def send_report(report_id: int, data: ReportSendRequest):
                 server.starttls()
             if settings.username:
                 server.login(settings.username, settings.password or "")
-            server.send_message(msg)
+            server.send_message(msg, from_addr=str(settings.sender_email or "").strip())
         except Exception as exc:  # noqa: BLE001
             logger.exception("SMTP report send failed: %s", exc)
             raise HTTPException(502, f"SMTP send failed: {exc}") from exc
@@ -19378,22 +20000,19 @@ def send_offer(data: OfferSendRequest):
         logger.info("offer_send start offer_id=%s to=%s", data.offer_id, data.to)
 
         subject = data.subject or "Angebot"
-        from_addr = settings.sender_email
-        if settings.sender_name:
-            from_addr = f"{settings.sender_name} <{settings.sender_email}>"
-
         html = data.html or ""
 
         import smtplib
-        from email.message import EmailMessage
 
-        msg = EmailMessage()
-        msg["Subject"] = subject
-        msg["From"] = from_addr
-        msg["To"] = data.to
-        msg.set_content(data.text or "Bitte verwenden Sie ein E-Mail-Programm mit HTML-Unterstuetzung.")
-        msg.add_alternative(html, subtype="html")
-        _attach_email_attachments(msg, data.attachments)
+        msg = _build_smtp_message(
+            sender_email=settings.sender_email,
+            sender_name=settings.sender_name,
+            to=data.to,
+            subject=subject,
+            text_body=data.text,
+            html_body=html,
+            attachments=data.attachments,
+        )
 
         if settings.use_ssl:
             server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
@@ -19404,7 +20023,7 @@ def send_offer(data: OfferSendRequest):
                 server.starttls()
             if settings.username:
                 server.login(settings.username, settings.password or "")
-            server.send_message(msg)
+            server.send_message(msg, from_addr=str(settings.sender_email or "").strip())
         finally:
             server.quit()
 

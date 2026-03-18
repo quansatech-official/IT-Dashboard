@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, FileText, PhoneCall, ClipboardList, Receipt, Users, Gauge, Wrench, Sigma } from "lucide-react";
+import { BarChart3, FileText, ClipboardList, Receipt, Users, Gauge, Wrench, Sigma } from "lucide-react";
 
 const API = "/api";
 
@@ -119,7 +119,6 @@ const contractTypeLabel = (type) => {
 
 const customerTabs = [
   { key: "general", label: "Allgemein", icon: ClipboardList },
-  { key: "telephony", label: "Telefonie", icon: PhoneCall },
   { key: "billing", label: "Faktura", icon: Receipt },
   { key: "reports", label: "Berichte", icon: FileText },
   { key: "contracts", label: "Verträge", icon: FileText },
@@ -191,6 +190,16 @@ export default function StatsView() {
       : {};
   const recurringTagTotals = Array.isArray(recurringTags?.tagTotals) ? recurringTags.tagTotals : [];
   const recurringCustomerRows = Array.isArray(recurringTags?.customerRows) ? recurringTags.customerRows : [];
+  const taskPerformance =
+    stats?.taskPerformance && typeof stats.taskPerformance === "object" ? stats.taskPerformance : {};
+  const taskPerformanceToday =
+    taskPerformance?.today && typeof taskPerformance.today === "object" ? taskPerformance.today : {};
+  const taskPerformanceWeek =
+    taskPerformance?.week && typeof taskPerformance.week === "object" ? taskPerformance.week : {};
+  const taskPerformanceWeekAverage =
+    taskPerformanceWeek?.averagePerWorkday && typeof taskPerformanceWeek.averagePerWorkday === "object"
+      ? taskPerformanceWeek.averagePerWorkday
+      : {};
   const contracts =
     stats?.contracts && typeof stats.contracts === "object" ? stats.contracts : {};
   const contractMonthLabels =
@@ -563,26 +572,86 @@ export default function StatsView() {
                     </div>
                   </div>
                 </div>
-              </section>
-            ) : null}
-
-            {activeTab === "telephony" ? (
-              <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-                <div className="flex items-center gap-2 mb-3 text-sand-700">
-                  <PhoneCall size={16} />
-                  <p className="text-sm uppercase tracking-[0.3em] text-sand-500">Telefonie ({days} Tage)</p>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <StatCard
-                    title="Gesprächsminuten"
-                    value={`${formatNumber(stats.telephony?.minutes ?? 0)} Min`}
-                    subtitle="Summe Anrufe"
-                  />
-                  <StatCard
-                    title="Verpasste Anrufe"
-                    value={formatNumber(stats.telephony?.missed ?? 0)}
-                    subtitle="Anrufe nicht beantwortet"
-                  />
+                <div className="mt-4 rounded-2xl border border-emerald-200 bg-gradient-to-br from-white via-emerald-50/40 to-emerald-100/30 p-3.5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-[0.28em] text-emerald-700">Aufgaben-Leistung</p>
+                      <p className="mt-1 text-[11px] text-sand-600">
+                        Erledigte Aufgaben auf einen Blick, inklusive geschätztem Tages- und Wochenwert.
+                      </p>
+                    </div>
+                    <div className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[11px] text-emerald-700">
+                      Stundenpreis: {formatEur(stats.hourlyRateEur ?? 0)}
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                    <div className="rounded-2xl border border-emerald-200 bg-white p-3 shadow-soft">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-700">Heute</p>
+                      <p className="mt-2 text-2xl font-metrics text-emerald-900">
+                        {formatEur(taskPerformanceToday.revenueEur ?? 0)}
+                      </p>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Erledigt</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {formatNumber(taskPerformanceToday.doneCount ?? stats.dayTasks?.doneToday ?? 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {formatHours(taskPerformanceToday.doneHours ?? stats.timeTracking?.doneTodayHours ?? 0)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-emerald-200 bg-white p-3 shadow-soft">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-700">Diese Woche</p>
+                      <p className="mt-2 text-2xl font-metrics text-emerald-900">
+                        {formatEur(taskPerformanceWeek.revenueEur ?? 0)}
+                      </p>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Erledigt</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {formatNumber(taskPerformanceWeek.doneCount ?? stats.dayTasks?.doneWeek ?? 0)}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {formatHours(taskPerformanceWeek.doneHours ?? stats.timeTracking?.doneWeekHours ?? 0)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-emerald-200 bg-white p-3 shadow-soft">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-700">Ø pro Werktag</p>
+                      <p className="mt-2 text-2xl font-metrics text-emerald-900">
+                        {formatEur(taskPerformanceWeekAverage.revenueEur ?? 0)}
+                      </p>
+                      <p className="mt-1 text-[11px] text-sand-500">
+                        Basis: {formatNumber(taskPerformanceWeek.workdayCount ?? 0)} Werktage dieser Woche
+                      </p>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Erledigt</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {formatNumber(taskPerformanceWeekAverage.doneCount ?? 0, {
+                              minimumFractionDigits: 0,
+                              maximumFractionDigits: 1
+                            })}
+                          </p>
+                        </div>
+                        <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {formatHours(taskPerformanceWeekAverage.doneHours ?? 0)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </section>
             ) : null}

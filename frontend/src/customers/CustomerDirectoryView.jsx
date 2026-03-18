@@ -3,6 +3,7 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import {
   BarChart3,
+  Boxes,
   Building2,
   BookPlus,
   ChevronLeft,
@@ -21,6 +22,7 @@ import {
   Users,
   X
 } from "lucide-react";
+import CustomerInventoryTab from "./CustomerInventoryTab";
 import { renderReportHTML, uid } from "../reporting/utils";
 import { telephonyService } from "../telephony/telephonyService";
 
@@ -87,6 +89,40 @@ const api = {
         String(status || "").trim() ? `?status=${encodeURIComponent(String(status || "").trim())}` : ""
       }`
     ).then((r) => r.json()),
+  listCustomerLicenses: (customerId) =>
+    fetch(`${API}/customers/${customerId}/licenses`).then(async (r) => {
+      const data = await r.json().catch(() => []);
+      if (!r.ok) throw new Error(data?.detail || "customer_licenses_load_failed");
+      return data;
+    }),
+  createCustomerLicense: (customerId, payload) =>
+    fetch(`${API}/customers/${customerId}/licenses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "customer_license_create_failed");
+      return data;
+    }),
+  updateCustomerLicense: (customerId, licenseId, payload) =>
+    fetch(`${API}/customers/${customerId}/licenses/${licenseId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "customer_license_update_failed");
+      return data;
+    }),
+  deleteCustomerLicense: (customerId, licenseId) =>
+    fetch(`${API}/customers/${customerId}/licenses/${licenseId}`, {
+      method: "DELETE"
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "customer_license_delete_failed");
+      return data;
+    }),
   getCustomerPrepaidHours: (customerId) =>
     fetch(`${API}/customers/${customerId}/prepaid_hours`).then(async (r) => {
       const data = await r.json().catch(() => ({}));
@@ -496,35 +532,58 @@ const normalizeCustomer = (customer) => {
       ? customer.contractDocumentFlags
       : []
   );
+  const generalEmail = customer.general_email ?? customer.generalEmail ?? "";
+  const billingEmail = customer.billing_email ?? customer.billingEmail ?? "";
+  const generalStreet = customer.general_street ?? customer.generalStreet ?? "";
+  const generalPostalCode = customer.general_postal_code ?? customer.generalPostalCode ?? "";
+  const generalCity = customer.general_city ?? customer.generalCity ?? "";
+  const generalCountry = customer.general_country ?? customer.generalCountry ?? "";
+  const billingStreet = customer.billing_street ?? customer.billingStreet ?? "";
+  const billingPostalCode = customer.billing_postal_code ?? customer.billingPostalCode ?? "";
+  const billingCity = customer.billing_city ?? customer.billingCity ?? "";
+  const billingCountry = customer.billing_country ?? customer.billingCountry ?? "";
   return {
     ...customer,
-  creditorNumber:
-    customer.creditor_number ?? customer.creditorNumber ?? customer.internal_number ?? "",
-  shortCode: customer.short_code ?? customer.shortCode ?? "",
-  street: customer.street ?? "",
-  postalCode: customer.postal_code ?? customer.postalCode ?? "",
-  city: customer.city ?? "",
-  country: customer.country ?? "",
-  phones: customer.phones?.length ? customer.phones : [blankPhone()],
-  customerReport:
-    customer.customer_report ??
-    customer.customerReport ??
-    customer.report_enabled ??
-    customer.reportEnabled ??
-    true,
-  newsletter:
-    customer.newsletter ??
-    customer.newsletter_enabled ??
-    customer.newsletterEnabled ??
-    true,
-  status: String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active",
-  maintenanceContract:
-    Boolean(customer.maintenance_contract ?? customer.maintenanceContract ?? false) ||
-    contractFlags.includes("wartung") ||
-    contractDocumentFlags.includes("wartung"),
-  contractFlags,
-  contractDocumentFlags,
-  contractTypeCounts
+    creditorNumber:
+      customer.creditor_number ?? customer.creditorNumber ?? customer.internal_number ?? "",
+    shortCode: customer.short_code ?? customer.shortCode ?? "",
+    email: customer.email ?? billingEmail ?? generalEmail ?? "",
+    generalEmail,
+    billingEmail,
+    street: customer.street ?? billingStreet ?? generalStreet ?? "",
+    postalCode: customer.postal_code ?? billingPostalCode ?? generalPostalCode ?? "",
+    city: customer.city ?? billingCity ?? generalCity ?? "",
+    country: customer.country ?? billingCountry ?? generalCountry ?? "",
+    generalStreet,
+    generalPostalCode,
+    generalCity,
+    generalCountry,
+    billingStreet,
+    billingPostalCode,
+    billingCity,
+    billingCountry,
+    primaryAddressSource:
+      customer.primary_address_source ?? customer.primaryAddressSource ?? "general",
+    phones: customer.phones?.length ? customer.phones : [blankPhone()],
+    customerReport:
+      customer.customer_report ??
+      customer.customerReport ??
+      customer.report_enabled ??
+      customer.reportEnabled ??
+      true,
+    newsletter:
+      customer.newsletter ??
+      customer.newsletter_enabled ??
+      customer.newsletterEnabled ??
+      true,
+    status: String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active",
+    maintenanceContract:
+      Boolean(customer.maintenance_contract ?? customer.maintenanceContract ?? false) ||
+      contractFlags.includes("wartung") ||
+      contractDocumentFlags.includes("wartung"),
+    contractFlags,
+    contractDocumentFlags,
+    contractTypeCounts
   };
 };
 
@@ -532,11 +591,11 @@ const customerPayload = (customer) => ({
   name: customer.name || "Neuer Kunde",
   creditor_number: customer.creditorNumber || "",
   short_code: customer.shortCode || "",
-  email: customer.email || "",
-  street: customer.street || "",
-  postal_code: customer.postalCode || "",
-  city: customer.city || "",
-  country: customer.country || "",
+  email: customer.generalEmail || "",
+  street: customer.generalStreet || "",
+  postal_code: customer.generalPostalCode || "",
+  city: customer.generalCity || "",
+  country: customer.generalCountry || "",
   customer_report: Boolean(customer.customerReport),
   newsletter: Boolean(customer.newsletter),
   status: String(customer.status || "active").toLowerCase() === "inactive" ? "inactive" : "active",
@@ -550,6 +609,14 @@ const customerPayload = (customer) => ({
       number: phone.number || ""
     }))
 });
+
+const buildCustomerAddressLines = ({ street, postalCode, city, country }) => {
+  const line2 = [postalCode, city].filter((value) => String(value || "").trim()).join(" ").trim();
+  return [street, line2, country].filter((value) => String(value || "").trim());
+};
+
+const hasCustomerAddress = ({ street, postalCode, city, country }) =>
+  Boolean(buildCustomerAddressLines({ street, postalCode, city, country }).length);
 
 const formatEur = (value) => {
   if (value === null || typeof value === "undefined") return "n/a";
@@ -1251,6 +1318,52 @@ const EMPTY_CUSTOMER_COMMUNICATION = {
   telephonyError: false
 };
 
+const LICENSE_BILLING_CYCLE_OPTIONS = [
+  { value: "monthly", label: "Monatlich" },
+  { value: "quarterly", label: "Quartal" },
+  { value: "yearly", label: "Jährlich" },
+  { value: "once", label: "Einmalig" }
+];
+
+const LICENSE_STATUS_OPTIONS = [
+  { value: "active", label: "Aktiv" },
+  { value: "inactive", label: "Inaktiv" }
+];
+
+const CUSTOMER_LICENSE_VENDOR_PRESETS = [
+  "Microsoft",
+  "Microsoft 365",
+  "Veeam",
+  "ESET",
+  "Hornetsecurity",
+  "Acronis"
+];
+
+const buildEmptyCustomerLicenseDraft = () => ({
+  vendor: "",
+  product_name: "",
+  quantity: "1",
+  billing_cycle: "monthly",
+  cost_eur: "",
+  valid_until: "",
+  status: "active",
+  notes: ""
+});
+
+const formatLicenseBillingCycle = (value) => {
+  const key = String(value || "").trim().toLowerCase();
+  return LICENSE_BILLING_CYCLE_OPTIONS.find((item) => item.value === key)?.label || "Monatlich";
+};
+
+const calculateLicenseMonthlyEquivalent = (costValue, billingCycle) => {
+  const cost = parseOptionalMoneyInput(costValue) ?? 0;
+  const cycle = String(billingCycle || "monthly").trim().toLowerCase();
+  if (cycle === "yearly") return Number((cost / 12).toFixed(2));
+  if (cycle === "quarterly") return Number((cost / 3).toFixed(2));
+  if (cycle === "once") return 0;
+  return Number(cost.toFixed(2));
+};
+
 export default function CustomerDirectoryView() {
   const [customers, setCustomers] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -1305,6 +1418,10 @@ export default function CustomerDirectoryView() {
   const [calcImportStatus, setCalcImportStatus] = useState("idle");
   const [customerContracts, setCustomerContracts] = useState([]);
   const [contractsStatus, setContractsStatus] = useState("idle");
+  const [customerLicenses, setCustomerLicenses] = useState([]);
+  const [customerLicensesStatus, setCustomerLicensesStatus] = useState("idle");
+  const [customerLicenseDraft, setCustomerLicenseDraft] = useState(buildEmptyCustomerLicenseDraft);
+  const [customerLicenseBusy, setCustomerLicenseBusy] = useState("");
   const [prepaidHoursData, setPrepaidHoursData] = useState(null);
   const [prepaidHoursStatus, setPrepaidHoursStatus] = useState("idle");
   const [prepaidHoursReloadTick, setPrepaidHoursReloadTick] = useState(0);
@@ -1543,6 +1660,13 @@ export default function CustomerDirectoryView() {
   }, [editCustomer?.id]);
 
   useEffect(() => {
+    setCustomerLicenses([]);
+    setCustomerLicensesStatus("idle");
+    setCustomerLicenseDraft(buildEmptyCustomerLicenseDraft());
+    setCustomerLicenseBusy("");
+  }, [editCustomer?.id]);
+
+  useEffect(() => {
     if (settingsTab !== "contracts" || !editCustomer?.id) return;
     let active = true;
     setPrepaidHoursStatus("loading");
@@ -1562,6 +1686,27 @@ export default function CustomerDirectoryView() {
       active = false;
     };
   }, [editCustomer?.id, prepaidHoursReloadTick, settingsTab]);
+
+  useEffect(() => {
+    if (settingsTab !== "licenses" || !editCustomer?.id) return;
+    let active = true;
+    setCustomerLicensesStatus("loading");
+    api
+      .listCustomerLicenses(editCustomer.id)
+      .then((rows) => {
+        if (!active) return;
+        setCustomerLicenses(Array.isArray(rows) ? rows : []);
+        setCustomerLicensesStatus("ready");
+      })
+      .catch(() => {
+        if (!active) return;
+        setCustomerLicenses([]);
+        setCustomerLicensesStatus("error");
+      });
+    return () => {
+      active = false;
+    };
+  }, [editCustomer?.id, settingsTab]);
 
   const parseCount = (value) => {
     const parsed = Number.parseInt(String(value || "0"), 10);
@@ -2476,6 +2621,26 @@ export default function CustomerDirectoryView() {
       runtimeDaysAvg
     };
   }, [customerContracts]);
+  const customerLicenseSummary = useMemo(() => {
+    const licenses = Array.isArray(customerLicenses) ? customerLicenses : [];
+    const activeLicenses = licenses.filter((item) => String(item?.status || "").trim().toLowerCase() === "active");
+    const monthlyEquivalent = activeLicenses.reduce(
+      (sum, item) => sum + Number(item?.monthly_equivalent_eur || 0),
+      0
+    );
+    const dueSoonCount = activeLicenses.filter((item) => {
+      const validUntilTimestamp = toTimestampMs(item?.valid_until);
+      if (!validUntilTimestamp) return false;
+      const days = Math.ceil((validUntilTimestamp - Date.now()) / (24 * 60 * 60 * 1000));
+      return days >= 0 && days <= 45;
+    }).length;
+    return {
+      total: licenses.length,
+      active: activeLicenses.length,
+      dueSoonCount,
+      monthlyEquivalent: Number(monthlyEquivalent.toFixed(2))
+    };
+  }, [customerLicenses]);
   const customerSteering = useMemo(() => {
     const revenueYtd = Number(selectedCustomerMetrics?.revenueCurrentYearEur || 0);
     const hasServiceContract = Boolean(contractTimeBudget?.hasServiceContract);
@@ -2521,7 +2686,7 @@ export default function CustomerDirectoryView() {
             ? "Verlängerungsgespräch terminieren."
             : communicationGap
               ? "Kommunikationslücke schließen (Call + E-Mail Follow-up)."
-              : contractControlStats.proposal > 0
+      : contractControlStats.proposal > 0
                 ? "Offene Vertragsvorschläge in aktiv überführen."
                 : "Keine akute Eskalation.";
     return {
@@ -3108,316 +3273,708 @@ export default function CustomerDirectoryView() {
     );
   };
 
-  const renderCustomerKpiTab = () => (
-    <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs uppercase tracking-[0.3em] text-sand-500">KPI</p>
-        <button
-          type="button"
-          onClick={() => setMetricsReloadTick((prev) => prev + 1)}
-          className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
-        >
-          Aktualisieren
-        </button>
+  const buildCustomerLicensePayload = (source) => ({
+    vendor: String(source?.vendor || "").trim(),
+    product_name: String(source?.product_name || "").trim(),
+    quantity: Math.max(0, parseCount(source?.quantity || 0)),
+    billing_cycle: String(source?.billing_cycle || "monthly").trim().toLowerCase() || "monthly",
+    cost_eur: parseOptionalMoneyInput(source?.cost_eur) ?? 0,
+    valid_until: String(source?.valid_until || "").trim(),
+    status: String(source?.status || "active").trim().toLowerCase() === "inactive" ? "inactive" : "active",
+    notes: String(source?.notes || "").trim()
+  });
+
+  const updateCustomerLicenseDraftField = (field, value) => {
+    setCustomerLicenseDraft((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const updateCustomerLicenseField = (licenseId, field, value) => {
+    setCustomerLicenses((prev) =>
+      prev.map((item) => (Number(item?.id || 0) === Number(licenseId) ? { ...item, [field]: value } : item))
+    );
+  };
+
+  const handleCreateCustomerLicense = async () => {
+    if (!editCustomer?.id) return;
+    const payload = buildCustomerLicensePayload(customerLicenseDraft);
+    if (!payload.vendor && !payload.product_name) {
+      setToast("Bitte Hersteller oder Produkt angeben.");
+      return;
+    }
+    setCustomerLicenseBusy("create");
+    try {
+      const created = await api.createCustomerLicense(editCustomer.id, payload);
+      setCustomerLicenses((prev) => [created, ...prev]);
+      setCustomerLicenseDraft(buildEmptyCustomerLicenseDraft());
+    } catch (error) {
+      setToast(error?.message ? String(error.message) : "Lizenz konnte nicht angelegt werden.");
+    } finally {
+      setCustomerLicenseBusy("");
+    }
+  };
+
+  const saveCustomerLicense = async (licenseId) => {
+    if (!editCustomer?.id || !licenseId) return;
+    const current = customerLicenses.find((item) => Number(item?.id || 0) === Number(licenseId));
+    if (!current) return;
+    const payload = buildCustomerLicensePayload(current);
+    if (!payload.vendor && !payload.product_name) {
+      setToast("Bitte Hersteller oder Produkt angeben.");
+      return;
+    }
+    setCustomerLicenseBusy(`save-${licenseId}`);
+    try {
+      const updated = await api.updateCustomerLicense(editCustomer.id, licenseId, payload);
+      setCustomerLicenses((prev) =>
+        prev.map((item) => (Number(item?.id || 0) === Number(licenseId) ? updated : item))
+      );
+    } catch (error) {
+      setToast(error?.message ? String(error.message) : "Lizenz konnte nicht gespeichert werden.");
+    } finally {
+      setCustomerLicenseBusy("");
+    }
+  };
+
+  const deleteCustomerLicense = async (licenseId) => {
+    if (!editCustomer?.id || !licenseId) return;
+    if (!window.confirm("Lizenz wirklich löschen?")) return;
+    setCustomerLicenseBusy(`delete-${licenseId}`);
+    try {
+      await api.deleteCustomerLicense(editCustomer.id, licenseId);
+      setCustomerLicenses((prev) => prev.filter((item) => Number(item?.id || 0) !== Number(licenseId)));
+    } catch (error) {
+      setToast(error?.message ? String(error.message) : "Lizenz konnte nicht gelöscht werden.");
+    } finally {
+      setCustomerLicenseBusy("");
+    }
+  };
+
+  const renderCustomerLicensesTab = () => (
+    <div className="mt-4 space-y-3">
+      <div className="rounded-2xl border border-sky-200 bg-gradient-to-br from-white via-sky-50/40 to-sky-100/30 p-3.5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <div className="mt-0.5 rounded-xl border border-sky-200 bg-white p-2 text-sky-700">
+              <WalletCards size={15} />
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.28em] text-sky-700">Lizenzen</p>
+              <p className="mt-1 text-[11px] text-sand-600">
+                Einfache Pflege von Microsoft-, Veeam-, ESET- und SaaS-Lizenzen ohne komplexe Maske.
+              </p>
+            </div>
+          </div>
+          <div className="grid min-w-[220px] gap-2 sm:grid-cols-3">
+            <div className="rounded-xl border border-sky-100 bg-white px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Aktiv</p>
+              <p className="text-base font-semibold text-sand-900">{customerLicenseSummary.active}</p>
+            </div>
+            <div className="rounded-xl border border-sky-100 bg-white px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Monatswert</p>
+              <p className="text-base font-semibold text-sand-900">
+                {formatEurPrecise(customerLicenseSummary.monthlyEquivalent)}
+              </p>
+            </div>
+            <div className="rounded-xl border border-sky-100 bg-white px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-sand-500">Fällig ≤ 45T</p>
+              <p className="text-base font-semibold text-sand-900">{customerLicenseSummary.dueSoonCount}</p>
+            </div>
+          </div>
+        </div>
       </div>
-      {metricsStatus === "loading" ? (
-        <p className="mt-3 text-xs text-sand-500">Lade Kennzahlen…</p>
-      ) : null}
-      {metricsStatus === "error" ? (
-        <p className="mt-3 text-xs text-rose-600">Kennzahlen konnten nicht geladen werden.</p>
-      ) : null}
-      {metricsStatus === "ready" && selectedCustomerMetrics ? (
-        <div className="mt-3 space-y-3">
-          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Monats-KPI</p>
-              <div className="flex flex-wrap items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setKpiMonthOffset((prev) => Math.max(-120, prev - 1))}
-                  disabled={!canShowOlderMonth || metricsStatus === "loading"}
-                  className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-40"
-                  aria-label="Vorheriger Monat"
-                >
-                  <ChevronLeft size={14} />
-                </button>
-                <div className="min-w-[9rem] rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-center text-[11px] font-semibold text-sand-900">
-                  {selectedMonthLabel}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setKpiMonthOffset((prev) => Math.min(0, prev + 1))}
-                  disabled={!canShowNewerMonth || metricsStatus === "loading"}
-                  className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-40"
-                  aria-label="Nächster Monat"
-                >
-                  <ChevronRight size={14} />
-                </button>
-                {selectedMonthOffset !== 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => setKpiMonthOffset(0)}
-                    className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-50"
-                  >
-                    Aktuell
-                  </button>
-                ) : null}
-              </div>
-            </div>
-            <div className="mt-2 grid gap-2 md:grid-cols-3">
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Arbeitszeit</p>
-                <p className="text-sm font-semibold text-sand-900">{formatHours(selectedMonthTaskHours)}</p>
-                <p className="text-[11px] text-sand-600">
-                  {formatEurPrecise(selectedMonthTaskRevenue)} · {selectedMonthTaskCount} Aufgaben
-                </p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Telefon</p>
-                <p className="text-sm font-semibold text-sand-900">{formatHours(selectedMonthTelephonyHours)}</p>
-                <p className="text-[11px] text-sand-600">
-                  {selectedMonthCallCount} Calls · {selectedMonthMissedCalls} verpasst ·{" "}
-                  {selectedMonthTelephonyMinutes.toLocaleString("de-DE", {
-                    minimumFractionDigits: 1,
-                    maximumFractionDigits: 1
-                  })} min
-                </p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamt</p>
-                <p className="text-sm font-semibold text-sand-900">{formatHours(selectedMonthConsumedHours)}</p>
-                <p className="text-[11px] text-sand-600">{formatEurPrecise(selectedMonthConsumedRevenue)}</p>
-              </div>
-            </div>
-            <div className="mt-2 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Anfahrt aktuell</p>
-                <p className="text-sm font-semibold text-sand-900">
-                  {travelRoundTripKm > 0
-                    ? `${travelRoundTripKm.toLocaleString("de-DE", {
-                        minimumFractionDigits: 1,
-                        maximumFractionDigits: 1
-                      })} km`
-                    : "n/a"}
-                </p>
-              </div>
-              <p className="text-[11px] text-sand-600">
-                {selectedCustomerMetrics.mileageEur !== null &&
-                typeof selectedCustomerMetrics.mileageEur !== "undefined"
-                  ? `${formatEurPrecise(selectedCustomerMetrics.mileageEur)} Vorschlag`
-                  : "kein Vorschlag"}
-              </p>
-            </div>
+
+      <div className="rounded-2xl border border-sand-200 bg-white p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs uppercase tracking-[0.28em] text-sand-500">Schnellerfassung</p>
+            <p className="mt-1 text-[11px] text-sand-600">Hersteller, Produkt, Menge, Intervall und optional Ablauf/Kosten.</p>
           </div>
-          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Betreuungsaktivität 30T</p>
-              <p className="text-[11px] font-medium text-sand-700">{thirtyDayMissRate}% Miss-Quote</p>
-            </div>
-            <div className="mt-2 grid gap-2 md:grid-cols-4">
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Calls</p>
-                <p className="text-sm font-semibold text-sand-900">{thirtyDayTotalCalls}</p>
-                <p className="text-[11px] text-sand-600">{thirtyDayAnsweredCalls} angenommen</p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Verpasst</p>
-                <p className="text-sm font-semibold text-rose-700">{thirtyDayMissedCalls}</p>
-                <p className="text-[11px] text-sand-600">Erreichbarkeit im 30T-Fenster</p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesprächszeit</p>
-                <p className="text-sm font-semibold text-sand-900">{formatHours(thirtyDayTalkHours, 1)}</p>
-                <p className="text-[11px] text-sand-600">
-                  {Number(selectedCustomerMetrics.totalMinutes || 0).toLocaleString("de-DE", {
-                    minimumFractionDigits: 1,
-                    maximumFractionDigits: 1
-                  })} min
-                </p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Aufgaben</p>
-                <p className="text-sm font-semibold text-sand-900">{Number(selectedCustomerMetrics.openTasks || 0)}</p>
-                <p className="text-[11px] text-sand-600">
-                  {formatHours(openEffortHours, 1)} offen · {formatEurPrecise(selectedCustomerMetrics.estimatedRevenueEur)}
-                </p>
-              </div>
-            </div>
-            <div className="mt-3">
-              <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-sand-500">
-                <span>Erreichbarkeit</span>
-                <span>
-                  {thirtyDayAnsweredCalls} angenommen · {thirtyDayMissedCalls} verpasst
-                </span>
-              </div>
-              <div className="mt-1 flex h-2 overflow-hidden rounded-full bg-sand-100">
-                {thirtyDayTotalCalls > 0 ? (
-                  <>
-                    <div
-                      className="bg-emerald-500"
-                      style={{ width: `${(thirtyDayAnsweredCalls / thirtyDayTotalCalls) * 100}%` }}
-                    />
-                    <div
-                      className="bg-rose-400"
-                      style={{ width: `${(thirtyDayMissedCalls / thirtyDayTotalCalls) * 100}%` }}
-                    />
-                  </>
-                ) : (
-                  <div className="w-full bg-sand-200" />
-                )}
-              </div>
-            </div>
+          <div className="flex flex-wrap gap-1.5">
+            {CUSTOMER_LICENSE_VENDOR_PRESETS.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                onClick={() => updateCustomerLicenseDraftField("vendor", preset)}
+                className="rounded-full border border-sand-200 bg-sand-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              >
+                {preset}
+              </button>
+            ))}
           </div>
-          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Statistik Zeitraum</p>
-              <div className="flex flex-wrap items-center gap-1">
-                {["currentYear", "lastYear"].map((key) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setCustomerStatsPeriod(key)}
-                    className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
-                      customerStatsPeriod === key
-                        ? "border-sand-900 bg-sand-900 text-white"
-                        : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
-                    }`}
-                  >
-                    {periodStats?.[key]?.label || (key === "currentYear" ? "Lfd. Jahr" : "Vorjahr")}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="mt-2 grid gap-2 md:grid-cols-3">
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Arbeitszeit</p>
-                <p className="text-sm font-semibold text-sand-900">
-                  {selectedPeriodStats?.workHours === null || typeof selectedPeriodStats?.workHours === "undefined"
-                    ? "n/a"
-                    : formatHours(selectedPeriodStats.workHours)}
-                </p>
-                <p className="text-[11px] text-sand-600">
-                  {selectedPeriodStats?.workRevenueEur === null ||
-                  typeof selectedPeriodStats?.workRevenueEur === "undefined"
-                    ? "n/a"
-                    : formatEurPrecise(selectedPeriodStats.workRevenueEur)}
-                </p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Material</p>
-                <p className="text-sm font-semibold text-sand-900">
-                  {selectedPeriodStats?.materialRevenueEur === null ||
-                  typeof selectedPeriodStats?.materialRevenueEur === "undefined"
-                    ? "n/a"
-                    : formatEurPrecise(selectedPeriodStats.materialRevenueEur)}
-                </p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamtumsatz</p>
-                <p className="text-sm font-semibold text-sand-900">
-                  {selectedPeriodStats?.totalRevenueEur === null ||
-                  typeof selectedPeriodStats?.totalRevenueEur === "undefined"
-                    ? "n/a"
-                    : formatEurPrecise(selectedPeriodStats.totalRevenueEur)}
-                </p>
-              </div>
-            </div>
-            <p className="mt-2 text-[11px] text-sand-600">
-              {selectedPeriodStats?.invoiceCount
-                ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum.`
-                : "Keine bezahlten sevdesk-Rechnungen im Zeitraum."}
-            </p>
-          </div>
-          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-[10px] uppercase tracking-wide text-sand-500">Wiederkehrende Rechnungen</p>
-              <p className="text-[11px] text-sand-500">
-                {formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)} Vorlagen
-              </p>
-            </div>
-            <div className="mt-2 grid gap-2 md:grid-cols-4">
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamt / Monat</p>
-                <p className="text-sm font-semibold text-sand-900">{formatEurPrecise(sevdeskRecurringTagsSummary?.monthlyTotalEur || 0)}</p>
-                <p className="text-[11px] text-sand-600">Monatswert aus wiederkehrenden Rechnungen</p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Tags</p>
-                <p className="text-sm font-semibold text-sand-900">{formatNumber(sevdeskRecurringTagsSummary?.tagCount || 0)}</p>
-                <p className="text-[11px] text-sand-600">sevdesk Tag-Namen</p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Vorlagen</p>
-                <p className="text-sm font-semibold text-sand-900">{formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)}</p>
-                <p className="text-[11px] text-sand-600">aktive wiederkehrende Rechnungen</p>
-              </div>
-              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Top Tag</p>
-                <p className="text-sm font-semibold text-sand-900">
-                  {(sevdeskRecurringTagTotals[0]?.tagName || "n/a").slice(0, 22)}
-                </p>
-                <p className="text-[11px] text-sand-600">{formatEurPrecise(sevdeskRecurringTagTotals[0]?.monthlyEur || 0)}</p>
-              </div>
-            </div>
-            {sevdeskRecurringTagTotals.length ? (
-              <div className="mt-3 space-y-2">
-                {sevdeskRecurringTagTotals.slice(0, 6).map((entry) => (
-                  <div
-                    key={entry.tagId || entry.tagName}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-[11px]"
-                  >
-                    <span className="text-sand-700">{entry.tagName || "Ohne Tag"}</span>
-                    <span className="font-semibold text-sand-900">{formatEurPrecise(entry.monthlyEur || 0)}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="mt-2 text-[11px] text-sand-500">Keine getaggten wiederkehrenden Rechnungen in sevdesk gefunden.</p>
-            )}
-            {sevdeskRecurringTagInvoices.length ? (
-              <div className="mt-3 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-sand-500">Argumentationsbasis</p>
-                <div className="mt-2 space-y-1.5">
-                  {sevdeskRecurringTagInvoices.slice(0, 6).map((entry) => (
-                    <div key={`${entry.invoiceId || entry.invoiceNumber || "wkr"}`} className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                      <div className="text-sand-700">
-                        {entry.invoiceNumber || "WKR"}
-                        <span className="text-sand-400"> · {(entry.tags || []).join(", ") || "Ohne Tag"}</span>
-                      </div>
-                      <div className="font-semibold text-sand-900">{formatEurPrecise(entry.monthlyEur || 0)}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-          <div className="rounded-lg border border-sand-200 bg-white px-2.5 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-sand-500">Steuerung (kundenbezogen)</p>
-            <div className="mt-1.5 grid gap-1.5 md:grid-cols-2">
-              <p className="text-[11px] text-sand-700">
-                <span className="text-sand-500">Profitabilität:</span> {customerSteering.profitabilityLabel}
-              </p>
-              <p className={`text-[11px] ${customerSteering.communicationGap ? "text-amber-700" : "text-sand-700"}`}>
-                <span className="text-sand-500">Kommunikationslücke:</span> {customerSteering.communicationLabel}
-              </p>
-              <p className={`text-[11px] ${contractTimeBudget?.hasServiceContract && contractTimeBudget?.isOverrun ? "text-rose-700" : "text-sand-700"}`}>
-                <span className="text-sand-500">SLA:</span> {customerSteering.slaLabel}
-              </p>
-              <p className={`text-[11px] ${contractControlStats.renewalsDueSoon ? "text-amber-700" : "text-sand-700"}`}>
-                <span className="text-sand-500">Vertragsfälligkeit:</span> {customerSteering.renewalLabel}
-              </p>
-            </div>
-            <p className="mt-1.5 text-[11px] font-semibold text-sand-900">
-              Nächste konkrete Aktion: {customerSteering.nextAction}
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-[1.05fr_1.2fr_90px_120px_120px_120px]">
+          <input
+            value={customerLicenseDraft.vendor}
+            onChange={(event) => updateCustomerLicenseDraftField("vendor", event.target.value)}
+            placeholder="Hersteller, z. B. Microsoft"
+            className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+          />
+          <input
+            value={customerLicenseDraft.product_name}
+            onChange={(event) => updateCustomerLicenseDraftField("product_name", event.target.value)}
+            placeholder="Produkt, z. B. Microsoft 365 Business Premium"
+            className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+          />
+          <input
+            value={customerLicenseDraft.quantity}
+            onChange={(event) => updateCustomerLicenseDraftField("quantity", event.target.value)}
+            placeholder="Menge"
+            className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+          />
+          <select
+            value={customerLicenseDraft.billing_cycle}
+            onChange={(event) => updateCustomerLicenseDraftField("billing_cycle", event.target.value)}
+            className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+          >
+            {LICENSE_BILLING_CYCLE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <input
+            value={customerLicenseDraft.cost_eur}
+            onChange={(event) => updateCustomerLicenseDraftField("cost_eur", event.target.value)}
+            placeholder="Kosten"
+            className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+          />
+          <input
+            type="date"
+            value={customerLicenseDraft.valid_until}
+            onChange={(event) => updateCustomerLicenseDraftField("valid_until", event.target.value)}
+            className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_160px_140px]">
+          <input
+            value={customerLicenseDraft.notes}
+            onChange={(event) => updateCustomerLicenseDraftField("notes", event.target.value)}
+            placeholder="Kurznotiz, z. B. Tenant A / Nonprofit / Serverlizenz"
+            className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+          />
+          <select
+            value={customerLicenseDraft.status}
+            onChange={(event) => updateCustomerLicenseDraftField("status", event.target.value)}
+            className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+          >
+            {LICENSE_STATUS_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={handleCreateCustomerLicense}
+            disabled={customerLicenseBusy === "create"}
+            className="inline-flex items-center justify-center gap-1 rounded-xl border border-sand-200 bg-sand-900 px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Plus size={14} />
+            Anlegen
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-sand-200 bg-white p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs uppercase tracking-[0.28em] text-sand-500">Bestand</p>
+            <p className="mt-1 text-[11px] text-sand-600">
+              {customerLicenseSummary.total
+                ? `${customerLicenseSummary.total} Einträge. Änderungen direkt in der Liste vornehmen und speichern.`
+                : "Noch keine Lizenzen für diesen Kunden hinterlegt."}
             </p>
           </div>
         </div>
-      ) : null}
-      {metricsStatus === "ready" && !selectedCustomerMetrics ? (
-        <p className="mt-3 text-xs text-sand-500">Keine Kennzahlen für diesen Kunden verfügbar.</p>
-      ) : null}
+        {customerLicensesStatus === "loading" ? <p className="mt-3 text-xs text-sand-500">Lade Lizenzen…</p> : null}
+        {customerLicensesStatus === "error" ? (
+          <p className="mt-3 text-xs text-rose-600">Lizenzen konnten nicht geladen werden.</p>
+        ) : null}
+        <div className="mt-3 space-y-2">
+          {customerLicenses.map((item) => (
+            <div key={item.id} className="rounded-2xl border border-sand-200 bg-sand-50 p-2.5">
+              <div className="grid gap-2 xl:grid-cols-[1fr_1.2fr_90px_120px_120px_120px_120px]">
+                <input
+                  value={item.vendor || ""}
+                  onChange={(event) => updateCustomerLicenseField(item.id, "vendor", event.target.value)}
+                  placeholder="Hersteller"
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                />
+                <input
+                  value={item.product_name || ""}
+                  onChange={(event) => updateCustomerLicenseField(item.id, "product_name", event.target.value)}
+                  placeholder="Produkt"
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                />
+                <input
+                  value={String(item.quantity ?? "")}
+                  onChange={(event) => updateCustomerLicenseField(item.id, "quantity", event.target.value)}
+                  placeholder="Menge"
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                />
+                <select
+                  value={String(item.billing_cycle || "monthly")}
+                  onChange={(event) => updateCustomerLicenseField(item.id, "billing_cycle", event.target.value)}
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                >
+                  {LICENSE_BILLING_CYCLE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={String(item.cost_eur ?? "")}
+                  onChange={(event) => updateCustomerLicenseField(item.id, "cost_eur", event.target.value)}
+                  placeholder="Kosten"
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                />
+                <input
+                  type="date"
+                  value={item.valid_until || ""}
+                  onChange={(event) => updateCustomerLicenseField(item.id, "valid_until", event.target.value)}
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                />
+                <select
+                  value={String(item.status || "active")}
+                  onChange={(event) => updateCustomerLicenseField(item.id, "status", event.target.value)}
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                >
+                  {LICENSE_STATUS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                <input
+                  value={item.notes || ""}
+                  onChange={(event) => updateCustomerLicenseField(item.id, "notes", event.target.value)}
+                  placeholder="Notiz"
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                />
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <span className="text-[11px] text-sand-500">
+                    {formatLicenseBillingCycle(item.billing_cycle)} ·{" "}
+                    {formatEurPrecise(calculateLicenseMonthlyEquivalent(item.cost_eur, item.billing_cycle))}/Monat
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => saveCustomerLicense(item.id)}
+                    disabled={customerLicenseBusy === `save-${item.id}`}
+                    className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Speichern
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => deleteCustomerLicense(item.id)}
+                    disabled={customerLicenseBusy === `delete-${item.id}`}
+                    className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Löschen
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {!customerLicenses.length && customerLicensesStatus === "ready" ? (
+            <p className="text-xs text-sand-500">Noch keine Lizenzen hinterlegt.</p>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
+
+  const renderCustomerKpiTab = () => {
+    const summaryCards = [
+      {
+        key: "month",
+        icon: BarChart3,
+        label: "Monat gesamt",
+        value: formatHours(selectedMonthConsumedHours),
+        detail: `${formatEurPrecise(selectedMonthConsumedRevenue)} · ${selectedMonthTaskCount} Aufgaben`,
+        tone: "border-emerald-200 bg-emerald-50 text-emerald-700"
+      },
+      {
+        key: "reachability",
+        icon: Phone,
+        label: "Erreichbarkeit 30T",
+        value: `${thirtyDayAnsweredCalls}/${thirtyDayTotalCalls || 0}`,
+        detail: `${thirtyDayMissRate}% Miss-Quote · ${thirtyDayMissedCalls} verpasst`,
+        tone: thirtyDayMissedCalls > 0 ? "border-amber-200 bg-amber-50 text-amber-700" : "border-sky-200 bg-sky-50 text-sky-700"
+      },
+      {
+        key: "open",
+        icon: FileText,
+        label: "Offene Aufgaben",
+        value: formatNumber(selectedCustomerMetrics?.openTasks || 0),
+        detail: `${formatHours(openEffortHours, 1)} offen · ${formatEurPrecise(selectedCustomerMetrics?.estimatedRevenueEur || 0)}`,
+        tone: Number(selectedCustomerMetrics?.openTasks || 0) > 0 ? "border-sand-300 bg-sand-100 text-sand-800" : "border-sand-200 bg-sand-50 text-sand-700"
+      },
+      {
+        key: "recurring",
+        icon: WalletCards,
+        label: "WKR / Monat",
+        value: formatEurPrecise(sevdeskRecurringTagsSummary?.monthlyTotalEur || 0),
+        detail: `${formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)} Vorlagen · ${formatNumber(sevdeskRecurringTagsSummary?.tagCount || 0)} Tags`,
+        tone: "border-violet-200 bg-violet-50 text-violet-700"
+      }
+    ];
+
+    return (
+      <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">KPI</p>
+            <p className="mt-1 text-[11px] text-sand-600">Monat, Kommunikation, Umsatz und Steuerung sauber getrennt.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setMetricsReloadTick((prev) => prev + 1)}
+            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide hover:bg-sand-100"
+          >
+            Aktualisieren
+          </button>
+        </div>
+        {metricsStatus === "loading" ? (
+          <p className="mt-3 text-xs text-sand-500">Lade Kennzahlen…</p>
+        ) : null}
+        {metricsStatus === "error" ? (
+          <p className="mt-3 text-xs text-rose-600">Kennzahlen konnten nicht geladen werden.</p>
+        ) : null}
+        {metricsStatus === "ready" && selectedCustomerMetrics ? (
+          <div className="mt-3 space-y-3">
+            <div className="grid gap-2 xl:grid-cols-4">
+              {summaryCards.map((card) => {
+                const Icon = card.icon;
+                return (
+                  <div key={card.key} className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wide text-sand-500">{card.label}</p>
+                        <p className="mt-1 text-lg font-semibold text-sand-900">{card.value}</p>
+                        <p className="mt-1 text-[11px] text-sand-600">{card.detail}</p>
+                      </div>
+                      <div className={`rounded-xl border p-2 ${card.tone}`}>
+                        <Icon size={15} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="grid gap-3 xl:grid-cols-[1.25fr_1fr]">
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Monatsbild</p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">{selectedMonthLabel}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setKpiMonthOffset((prev) => Math.max(-120, prev - 1))}
+                        disabled={!canShowOlderMonth || metricsStatus === "loading"}
+                        className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="Vorheriger Monat"
+                      >
+                        <ChevronLeft size={14} />
+                      </button>
+                      <div className="min-w-[9rem] rounded-full border border-sand-200 bg-white px-3 py-1 text-center text-[11px] font-semibold text-sand-900">
+                        {selectedMonthLabel}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setKpiMonthOffset((prev) => Math.min(0, prev + 1))}
+                        disabled={!canShowNewerMonth || metricsStatus === "loading"}
+                        className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label="Nächster Monat"
+                      >
+                        <ChevronRight size={14} />
+                      </button>
+                      {selectedMonthOffset !== 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setKpiMonthOffset(0)}
+                          className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+                        >
+                          Aktuell
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <div className="flex items-center gap-2">
+                        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-emerald-700">
+                          <BarChart3 size={14} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Arbeitszeit</p>
+                          <p className="text-sm font-semibold text-sand-900">{formatHours(selectedMonthTaskHours)}</p>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[11px] text-sand-600">
+                        {formatEurPrecise(selectedMonthTaskRevenue)} · {selectedMonthTaskCount} Aufgaben
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <div className="flex items-center gap-2">
+                        <div className="rounded-lg border border-sky-200 bg-sky-50 p-2 text-sky-700">
+                          <Phone size={14} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Telefon</p>
+                          <p className="text-sm font-semibold text-sand-900">{formatHours(selectedMonthTelephonyHours)}</p>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[11px] text-sand-600">
+                        {selectedMonthCallCount} Calls · {selectedMonthMissedCalls} verpasst ·{" "}
+                        {selectedMonthTelephonyMinutes.toLocaleString("de-DE", {
+                          minimumFractionDigits: 1,
+                          maximumFractionDigits: 1
+                        })} min
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <div className="flex items-center gap-2">
+                        <div className="rounded-lg border border-sand-300 bg-sand-100 p-2 text-sand-800">
+                          <FileText size={14} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamtaufwand</p>
+                          <p className="text-sm font-semibold text-sand-900">{formatHours(selectedMonthConsumedHours)}</p>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[11px] text-sand-600">{formatEurPrecise(selectedMonthConsumedRevenue)}</p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <div className="flex items-center gap-2">
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-700">
+                          <Building2 size={14} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Anfahrt</p>
+                          <p className="text-sm font-semibold text-sand-900">
+                            {travelRoundTripKm > 0
+                              ? `${travelRoundTripKm.toLocaleString("de-DE", {
+                                  minimumFractionDigits: 1,
+                                  maximumFractionDigits: 1
+                                })} km`
+                              : "n/a"}
+                          </p>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[11px] text-sand-600">
+                        {selectedCustomerMetrics.mileageEur !== null &&
+                        typeof selectedCustomerMetrics.mileageEur !== "undefined"
+                          ? `${formatEurPrecise(selectedCustomerMetrics.mileageEur)} Vorschlag`
+                          : "kein Vorschlag"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Kommunikation 30 Tage</p>
+                    <p className="text-[11px] font-medium text-sand-700">{thirtyDayMissRate}% Miss-Quote</p>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Calls</p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">{thirtyDayTotalCalls}</p>
+                      <p className="mt-1 text-[11px] text-sand-600">{thirtyDayAnsweredCalls} angenommen</p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Verpasst</p>
+                      <p className="mt-1 text-sm font-semibold text-rose-700">{thirtyDayMissedCalls}</p>
+                      <p className="mt-1 text-[11px] text-sand-600">Erreichbarkeit im 30T-Fenster</p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesprächszeit</p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">{formatHours(thirtyDayTalkHours, 1)}</p>
+                      <p className="mt-1 text-[11px] text-sand-600">
+                        {Number(selectedCustomerMetrics.totalMinutes || 0).toLocaleString("de-DE", {
+                          minimumFractionDigits: 1,
+                          maximumFractionDigits: 1
+                        })} min
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Offene Aufgaben</p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">{Number(selectedCustomerMetrics.openTasks || 0)}</p>
+                      <p className="mt-1 text-[11px] text-sand-600">
+                        {formatHours(openEffortHours, 1)} offen
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-sand-500">
+                      <span>Antwortquote</span>
+                      <span>
+                        {thirtyDayAnsweredCalls} angenommen · {thirtyDayMissedCalls} verpasst
+                      </span>
+                    </div>
+                    <div className="mt-1 flex h-2 overflow-hidden rounded-full bg-sand-200">
+                      {thirtyDayTotalCalls > 0 ? (
+                        <>
+                          <div
+                            className="bg-emerald-500"
+                            style={{ width: `${(thirtyDayAnsweredCalls / thirtyDayTotalCalls) * 100}%` }}
+                          />
+                          <div
+                            className="bg-rose-400"
+                            style={{ width: `${(thirtyDayMissedCalls / thirtyDayTotalCalls) * 100}%` }}
+                          />
+                        </>
+                      ) : (
+                        <div className="w-full bg-sand-300" />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Zeitraumvergleich</p>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {["currentYear", "lastYear"].map((key) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setCustomerStatsPeriod(key)}
+                          className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-wide ${
+                            customerStatsPeriod === key
+                              ? "border-sand-900 bg-sand-900 text-white"
+                              : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                          }`}
+                        >
+                          {periodStats?.[key]?.label || (key === "currentYear" ? "Lfd. Jahr" : "Vorjahr")}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-3">
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Arbeitszeit</p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">
+                        {selectedPeriodStats?.workHours === null || typeof selectedPeriodStats?.workHours === "undefined"
+                          ? "n/a"
+                          : formatHours(selectedPeriodStats.workHours)}
+                      </p>
+                      <p className="mt-1 text-[11px] text-sand-600">
+                        {selectedPeriodStats?.workRevenueEur === null ||
+                        typeof selectedPeriodStats?.workRevenueEur === "undefined"
+                          ? "n/a"
+                          : formatEurPrecise(selectedPeriodStats.workRevenueEur)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Material</p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">
+                        {selectedPeriodStats?.materialRevenueEur === null ||
+                        typeof selectedPeriodStats?.materialRevenueEur === "undefined"
+                          ? "n/a"
+                          : formatEurPrecise(selectedPeriodStats.materialRevenueEur)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamtumsatz</p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">
+                        {selectedPeriodStats?.totalRevenueEur === null ||
+                        typeof selectedPeriodStats?.totalRevenueEur === "undefined"
+                          ? "n/a"
+                          : formatEurPrecise(selectedPeriodStats.totalRevenueEur)}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-[11px] text-sand-600">
+                    {selectedPeriodStats?.invoiceCount
+                      ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum.`
+                      : "Keine bezahlten sevdesk-Rechnungen im Zeitraum."}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Wiederkehrende Rechnungen</p>
+                    <p className="text-[11px] text-sand-500">
+                      {formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)} Vorlagen
+                    </p>
+                  </div>
+                  <div className="mt-3 space-y-2">
+                    {(sevdeskRecurringTagTotals.length ? sevdeskRecurringTagTotals.slice(0, 5) : [null]).map((entry, index) =>
+                      entry ? (
+                        <div
+                          key={entry.tagId || entry.tagName || index}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-sand-900">{entry.tagName || "Ohne Tag"}</p>
+                            <p className="text-[11px] text-sand-500">{formatNumber(entry.invoiceCount || 0)} Vorlagen</p>
+                          </div>
+                          <p className="text-sm font-semibold text-sand-900">{formatEurPrecise(entry.monthlyEur || 0)}</p>
+                        </div>
+                      ) : (
+                        <p key="empty-recurring" className="text-[11px] text-sand-500">
+                          Keine getaggten wiederkehrenden Rechnungen in sevdesk gefunden.
+                        </p>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                  <p className="text-[10px] uppercase tracking-wide text-sand-500">Steuerung</p>
+                  <div className="mt-3 grid gap-2">
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Profitabilität</p>
+                      <p className="mt-1 text-[12px] text-sand-800">{customerSteering.profitabilityLabel}</p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Kommunikation</p>
+                      <p className={`mt-1 text-[12px] ${customerSteering.communicationGap ? "text-amber-700" : "text-sand-800"}`}>
+                        {customerSteering.communicationLabel}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">SLA & Vertrag</p>
+                      <p
+                        className={`mt-1 text-[12px] ${
+                          contractTimeBudget?.hasServiceContract && contractTimeBudget?.isOverrun
+                            ? "text-rose-700"
+                            : "text-sand-800"
+                        }`}
+                      >
+                        {customerSteering.slaLabel}
+                      </p>
+                      <p className={`mt-1 text-[12px] ${contractControlStats.renewalsDueSoon ? "text-amber-700" : "text-sand-600"}`}>
+                        {customerSteering.renewalLabel}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-sand-900 bg-sand-900 p-3 text-white">
+                      <p className="text-[10px] uppercase tracking-wide text-white/70">Nächste Aktion</p>
+                      <p className="mt-1 text-sm font-semibold">{customerSteering.nextAction}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {metricsStatus === "ready" && !selectedCustomerMetrics ? (
+          <p className="mt-3 text-xs text-sand-500">Keine Kennzahlen für diesen Kunden verfügbar.</p>
+        ) : null}
+      </div>
+    );
+  };
 
   useEffect(() => {
     setKpiMonthOffset(0);
@@ -4926,6 +5483,30 @@ export default function CustomerDirectoryView() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setSettingsTab("licenses")}
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                    settingsTab === "licenses"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white hover:bg-sand-100"
+                  }`}
+                >
+                  <WalletCards size={12} />
+                  Lizenzen
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("inventory")}
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] uppercase tracking-wide ${
+                    settingsTab === "inventory"
+                      ? "border-sand-900 bg-sand-900 text-white"
+                      : "border-sand-200 bg-white hover:bg-sand-100"
+                  }`}
+                >
+                  <Boxes size={12} />
+                  Inventar
+                </button>
+                <button
+                  type="button"
                   onClick={() => handleRemove(editCustomer.id)}
                   className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
                 >
@@ -4965,15 +5546,60 @@ export default function CustomerDirectoryView() {
                     className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
-                <label className="block md:col-span-3">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">E-Mail</span>
-                  <input
-                    type="email"
-                    value={editCustomer.email}
-                    onChange={(event) => updateCustomer(editCustomer.id, { email: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
-                  />
-                </label>
+                <div className="md:col-span-3 rounded-2xl border border-sand-200 bg-white p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.28em] text-sand-500">Allgemeine Kontaktadresse</p>
+                      <p className="mt-1 text-xs text-sand-500">
+                        Für Newsletter und allgemeine Kommunikation. Wenn leer, wird die Rechnungsadresse als Hauptadresse verwendet.
+                      </p>
+                    </div>
+                    <Mail size={16} className="mt-0.5 text-sand-400" />
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    <label className="block md:col-span-2">
+                      <span className="text-xs uppercase tracking-wide text-sand-500">Allgemeine E-Mail</span>
+                      <input
+                        type="email"
+                        value={editCustomer.generalEmail}
+                        onChange={(event) => updateCustomer(editCustomer.id, { generalEmail: event.target.value })}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="block md:col-span-2">
+                      <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
+                      <input
+                        value={editCustomer.generalStreet}
+                        onChange={(event) => updateCustomer(editCustomer.id, { generalStreet: event.target.value })}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs uppercase tracking-wide text-sand-500">PLZ</span>
+                      <input
+                        value={editCustomer.generalPostalCode}
+                        onChange={(event) => updateCustomer(editCustomer.id, { generalPostalCode: event.target.value })}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs uppercase tracking-wide text-sand-500">Ort</span>
+                      <input
+                        value={editCustomer.generalCity}
+                        onChange={(event) => updateCustomer(editCustomer.id, { generalCity: event.target.value })}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="block md:col-span-2">
+                      <span className="text-xs uppercase tracking-wide text-sand-500">Land</span>
+                      <input
+                        value={editCustomer.generalCountry}
+                        onChange={(event) => updateCustomer(editCustomer.id, { generalCountry: event.target.value })}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                      />
+                    </label>
+                  </div>
+                </div>
               </div>
               <div className="mt-2 grid gap-2 md:grid-cols-3">
                 <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-1.5 text-sm text-sand-700">
@@ -5006,39 +5632,54 @@ export default function CustomerDirectoryView() {
                   </select>
                 </label>
               </div>
-              <div className="mt-2 grid gap-2 md:grid-cols-2">
-                <label className="block md:col-span-2">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
-                  <input
-                    value={editCustomer.street}
-                    onChange={(event) => updateCustomer(editCustomer.id, { street: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">PLZ</span>
-                  <input
-                    value={editCustomer.postalCode}
-                    onChange={(event) => updateCustomer(editCustomer.id, { postalCode: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">Ort</span>
-                  <input
-                    value={editCustomer.city}
-                    onChange={(event) => updateCustomer(editCustomer.id, { city: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">Land</span>
-                  <input
-                    value={editCustomer.country}
-                    onChange={(event) => updateCustomer(editCustomer.id, { country: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
-                  />
-                </label>
+              <div className="mt-2 rounded-2xl border border-sky-100 bg-sky-50/70 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.28em] text-sky-700">Rechnungsadresse (sevDesk)</p>
+                    <p className="mt-1 text-xs text-sky-700/80">
+                      Wird aus sevDesk synchronisiert und als Hauptadresse verwendet, wenn keine allgemeine Adresse gepflegt ist.
+                    </p>
+                  </div>
+                  <Building2 size={16} className="mt-0.5 text-sky-700" />
+                </div>
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  <div className="rounded-xl border border-sky-100 bg-white/80 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-sky-700/70">Rechnungs-E-Mail</p>
+                    <p className="mt-1 text-sm text-slate-800">
+                      {editCustomer.billingEmail || "Keine Rechnungs-E-Mail aus sevDesk"}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-sky-100 bg-white/80 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-sky-700/70">Adressquelle</p>
+                    <p className="mt-1 text-sm text-slate-800">
+                      {editCustomer.primaryAddressSource === "billing"
+                        ? "Aktuell ist die Rechnungsadresse zugleich Hauptadresse."
+                        : "Allgemeine Adresse überschreibt die Rechnungsadresse."}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-sky-100 bg-white/80 px-3 py-2 md:col-span-2">
+                    <p className="text-[10px] uppercase tracking-wide text-sky-700/70">Rechnungsanschrift</p>
+                    {hasCustomerAddress({
+                      street: editCustomer.billingStreet,
+                      postalCode: editCustomer.billingPostalCode,
+                      city: editCustomer.billingCity,
+                      country: editCustomer.billingCountry
+                    }) ? (
+                      <div className="mt-1 space-y-0.5 text-sm text-slate-800">
+                        {buildCustomerAddressLines({
+                          street: editCustomer.billingStreet,
+                          postalCode: editCustomer.billingPostalCode,
+                          city: editCustomer.billingCity,
+                          country: editCustomer.billingCountry
+                        }).map((line) => (
+                          <p key={line}>{line}</p>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-sm text-sand-500">Keine Rechnungsadresse aus sevDesk vorhanden.</p>
+                    )}
+                  </div>
+                </div>
               </div>
               <div className="mt-2 rounded-2xl border border-sand-200 bg-white p-2.5">
                 <div className="mb-2 flex items-center justify-between gap-2">
@@ -5235,6 +5876,12 @@ export default function CustomerDirectoryView() {
                   ) : null}
                 </div>
               ) : null}
+              {settingsTab === "inventory" ? (
+                <div className="mt-4">
+                  <CustomerInventoryTab customerId={editCustomer.id} />
+                </div>
+              ) : null}
+              {settingsTab === "licenses" ? renderCustomerLicensesTab() : null}
               {settingsTab === "contracts" ? (
                 <div className="mt-4 space-y-3">
                   <div className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-white via-emerald-50/40 to-emerald-100/30 p-3.5 shadow-sm">

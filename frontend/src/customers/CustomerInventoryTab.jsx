@@ -35,6 +35,30 @@ const formatLastSeen = (value) => {
 
 const compactText = (value) => String(value || "").trim();
 
+const normalizeLookupText = (value) => compactText(value).toLowerCase();
+
+const normalizeHostToken = (value) => normalizeLookupText(value).replace(/[^a-z0-9.-]+/g, "");
+
+const buildDiscoveryEvidenceText = (device) =>
+  (Array.isArray(device?.evidence) ? device.evidence : [])
+    .map((item) => compactText(item))
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+const discoveryMatchesAgent = (device, agent, allowSingleAgentFallback = false) => {
+  const deviceHostname = normalizeHostToken(device?.hostname);
+  const agentHostname = normalizeHostToken(agent?.hostname);
+  if (deviceHostname && agentHostname && deviceHostname === agentHostname) return true;
+  const evidenceText = buildDiscoveryEvidenceText(device);
+  const agentId = normalizeLookupText(agent?.agentId);
+  if (agentId && evidenceText.includes(agentId)) return true;
+  if (agentHostname && evidenceText.includes(agentHostname)) return true;
+  const sourceText = normalizeLookupText(device?.rawSource || device?.sourceLabel || device?.source);
+  if (allowSingleAgentFallback && sourceText.includes("agent")) return true;
+  return false;
+};
+
 const CONTRACT_TYPE_OPTIONS = [
   { value: "contract_o365", label: "Microsoft 365 / SaaS" },
   { value: "contract_external", label: "Externer Vertrag" },
@@ -410,6 +434,7 @@ export default function CustomerInventoryTab({ customerId }) {
         source: "rmm",
         sourceLabel: "RMM",
         sourceIcon: "rmm",
+        entryType: "agent",
         label: compactText(device?.hostname) || compactText(device?.agentId) || "Unbekanntes Gerät",
         secondary:
           [
@@ -421,6 +446,15 @@ export default function CustomerInventoryTab({ customerId }) {
         tertiary: `Last Seen: ${formatLastSeen(device?.lastSeen)}`,
         online: Boolean(device?.online),
         deviceKey,
+        agentId: compactText(device?.agentId),
+        hostname: compactText(device?.hostname),
+        site: compactText(device?.site),
+        client: compactText(device?.client),
+        os: compactText(device?.os),
+        warningCount: Number(device?.warningCount || 0),
+        errorCount: Number(device?.errorCount || 0),
+        openUpdates: Number(device?.openUpdates || 0),
+        failingCheckCount: Number(device?.failingCheckCount || 0),
         retired: Boolean(state?.retired),
         inactive: false,
         note: compactText(state?.note)
@@ -436,6 +470,7 @@ export default function CustomerInventoryTab({ customerId }) {
         source: "discovery",
         sourceLabel: "Discovery",
         sourceIcon: "discovery",
+        entryType: "discovery",
         label: compactText(device?.hostname) || compactText(device?.ip) || compactText(device?.mac) || "Discovery Gerät",
         secondary:
           [
@@ -449,6 +484,15 @@ export default function CustomerInventoryTab({ customerId }) {
         tertiary: `Last Seen: ${formatLastSeen(device?.lastSeenAt)}`,
         online: null,
         deviceKey,
+        hostname: compactText(device?.hostname),
+        ip: compactText(device?.ip),
+        mac: compactText(device?.mac),
+        vendor: compactText(device?.vendor),
+        deviceType: compactText(device?.deviceType),
+        confidence: Number(device?.confidence || 0),
+        evidence: Array.isArray(device?.evidence) ? device.evidence : [],
+        managedByDiscovery: Boolean(device?.managed),
+        rawSource: compactText(device?.source),
         retired: Boolean(state?.retired),
         inactive: device?.active === false,
         note: compactText(state?.note)
@@ -501,6 +545,14 @@ export default function CustomerInventoryTab({ customerId }) {
         entry.sourceLabel,
         entry.secondary,
         entry.tertiary,
+        entry.hostname,
+        entry.ip,
+        entry.mac,
+        entry.site,
+        entry.client,
+        entry.deviceType,
+        entry.vendor,
+        (entry.evidence || []).join(" "),
         entry.inactive ? "inaktiv" : "aktiv",
         noteDrafts[`${entry.source}:${entry.deviceKey}`] || entry.note || ""
       ]
@@ -509,6 +561,34 @@ export default function CustomerInventoryTab({ customerId }) {
       return haystack.includes(query);
     });
   }, [deviceFilter, noteDrafts, searchTerm, unifiedDevices]);
+
+  const groupedInventory = useMemo(() => {
+    const agentRows = filteredDevices.filter((entry) => entry.entryType === "agent");
+    const discoveryRows = filteredDevices.filter((entry) => entry.entryType === "discovery");
+    const groups = agentRows.map((agent) => ({
+      key: `agent-group:${agent.deviceKey}`,
+      agent,
+      discoveryRows: []
+    }));
+    const unmatchedDiscovery = [];
+
+    discoveryRows.forEach((device) => {
+      const matchIndex = groups.findIndex((group) =>
+        discoveryMatchesAgent(device, group.agent, groups.length === 1)
+      );
+      if (matchIndex === -1) {
+        unmatchedDiscovery.push(device);
+        return;
+      }
+      groups[matchIndex].discoveryRows.push(device);
+    });
+
+    groups.forEach((group) => {
+      group.discoveryRows.sort((left, right) => left.label.localeCompare(right.label, "de", { sensitivity: "base" }));
+    });
+    unmatchedDiscovery.sort((left, right) => left.label.localeCompare(right.label, "de", { sensitivity: "base" }));
+    return { groups, unmatchedDiscovery };
+  }, [filteredDevices]);
 
   const totalDevices = unifiedDevices.length;
   const totalRetired = unifiedDevices.filter((entry) => entry.retired).length;
@@ -569,6 +649,93 @@ export default function CustomerInventoryTab({ customerId }) {
       retired: !entry.retired,
       note: noteDrafts[noteKey] ?? entry.note ?? ""
     });
+  };
+
+  const renderDeviceRow = (entry, index, rowBackground = "bg-white") => {
+    const noteKey = `${entry.source}:${entry.deviceKey}`;
+    const busy = stateBusyKey === noteKey;
+    const draftNote = noteDrafts[noteKey] ?? "";
+    const noteChanged = draftNote !== (entry.note || "");
+    return (
+      <div key={entry.rowKey} className={`${rowBackground} px-3 py-2`}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className={`min-w-[220px] flex-1 ${entry.retired || entry.inactive ? "opacity-60" : ""}`}>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {entry.sourceIcon === "rmm" ? <Server size={13} className="text-sand-500" /> : <Wifi size={13} className="text-sand-500" />}
+              <p className="text-sm font-semibold text-sand-900">{entry.label}</p>
+              <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
+                {entry.sourceLabel}
+              </span>
+              {entry.managedByDiscovery ? (
+                <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-700">
+                  Discovery: Managed
+                </span>
+              ) : null}
+              {entry.confidence ? (
+                <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
+                  Confidence {entry.confidence}
+                </span>
+              ) : null}
+              {entry.inactive ? (
+                <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+                  Inaktiv
+                </span>
+              ) : null}
+              {entry.online === true ? (
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700">
+                  Online
+                </span>
+              ) : null}
+              {entry.online === false ? (
+                <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
+                  Offline
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-0.5 text-xs text-sand-600">{entry.secondary}</p>
+            <p className="mt-0.5 text-[11px] text-sand-500">{entry.tertiary}</p>
+            {entry.entryType === "agent" ? (
+              <p className="mt-1 text-[11px] text-sand-500">
+                Client: {entry.client || "n/a"} · Site: {entry.site || "n/a"} · Updates {entry.openUpdates || 0} ·
+                Fehler {entry.errorCount || 0} · Warnungen {entry.warningCount || 0}
+              </p>
+            ) : null}
+            {entry.entryType === "discovery" && Array.isArray(entry.evidence) && entry.evidence.length ? (
+              <p className="mt-1 text-[11px] text-sand-500">Hinweise: {entry.evidence.slice(0, 3).join(" · ")}</p>
+            ) : null}
+          </div>
+          <div className="flex min-w-[260px] flex-1 flex-wrap items-center justify-end gap-1.5">
+            <input
+              value={draftNote}
+              onChange={(event) => setNoteDrafts((prev) => ({ ...prev, [noteKey]: event.target.value }))}
+              placeholder="Anmerkung, z. B. letzter Akkutausch 02/2026"
+              className="w-full min-w-[220px] flex-1 rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs"
+            />
+            <button
+              type="button"
+              onClick={() => saveNote(entry)}
+              disabled={busy || !noteChanged}
+              className="inline-flex items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+              title="Anmerkung speichern"
+            >
+              <Check size={13} />
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleRetired(entry)}
+              disabled={busy}
+              className={`rounded-lg border px-2.5 py-1.5 text-[11px] uppercase tracking-wide ${
+                entry.retired
+                  ? "border-slate-300 bg-slate-100 text-slate-700"
+                  : "border-amber-200 bg-amber-50 text-amber-700"
+              }`}
+            >
+              {busy ? "..." : entry.retired ? "Ausgeschieden" : "Aktiv"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   if (!customerId) {
@@ -687,78 +854,65 @@ export default function CustomerInventoryTab({ customerId }) {
 
       <div className="rounded-2xl border border-sand-200 bg-white">
         <div className="border-b border-sand-200 px-3 py-2 text-xs text-sand-600">
-          Einheitliche Liste aus RMM und Discovery. Pro Gerät nur Status und Anmerkung pflegen.
+          Gruppiert nach Agenten. Discovery-Treffer werden nach Möglichkeit dem passenden Agenten zugeordnet.
         </div>
-        <div className="divide-y divide-sand-200">
+        <div className="space-y-3 p-3">
           {filteredDevices.length ? (
-            filteredDevices.map((entry, index) => {
-              const noteKey = `${entry.source}:${entry.deviceKey}`;
-              const busy = stateBusyKey === noteKey;
-              const draftNote = noteDrafts[noteKey] ?? "";
-              const noteChanged = draftNote !== (entry.note || "");
-              const rowBackground = index % 2 === 0 ? "bg-white" : "bg-sand-50/70";
-              return (
-                <div key={entry.rowKey} className={`${rowBackground} px-3 py-2`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className={`min-w-[220px] flex-1 ${entry.retired || entry.inactive ? "opacity-60" : ""}`}>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {entry.sourceIcon === "rmm" ? <Server size={13} className="text-sand-500" /> : <Wifi size={13} className="text-sand-500" />}
-                        <p className="text-sm font-semibold text-sand-900">{entry.label}</p>
-                        <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
-                          {entry.sourceLabel}
-                        </span>
-                        {entry.inactive ? (
-                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
-                            Inaktiv
-                          </span>
-                        ) : null}
-                        {entry.online === true ? (
-                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700">
-                            Online
-                          </span>
-                        ) : null}
-                        {entry.online === false ? (
-                          <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
-                            Offline
-                          </span>
-                        ) : null}
-                      </div>
-                      <p className="mt-0.5 text-xs text-sand-600">{entry.secondary}</p>
-                      <p className="mt-0.5 text-[11px] text-sand-500">{entry.tertiary}</p>
+            <>
+              {groupedInventory.groups.map((group) => (
+                <div key={group.key} className="rounded-2xl border border-sand-200 bg-sand-50/70">
+                  <div className="flex flex-wrap items-start justify-between gap-2 border-b border-sand-200 px-3 py-2">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sand-500">Agent</p>
+                      <p className="text-sm font-semibold text-sand-900">
+                        {group.agent.label}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-sand-500">
+                        {group.agent.client || "Client n/a"} · {group.agent.site || "Site n/a"} · Discovery-Geräte{" "}
+                        {group.discoveryRows.length}
+                      </p>
                     </div>
-                    <div className="flex min-w-[260px] flex-1 flex-wrap items-center justify-end gap-1.5">
-                      <input
-                        value={draftNote}
-                        onChange={(event) => setNoteDrafts((prev) => ({ ...prev, [noteKey]: event.target.value }))}
-                        placeholder="Anmerkung, z. B. letzter Akkutausch 02/2026"
-                        className="w-full min-w-[220px] flex-1 rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => saveNote(entry)}
-                        disabled={busy || !noteChanged}
-                        className="inline-flex items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[11px] text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Anmerkung speichern"
-                      >
-                        <Check size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => toggleRetired(entry)}
-                        disabled={busy}
-                        className={`rounded-lg border px-2.5 py-1.5 text-[11px] uppercase tracking-wide ${
-                          entry.retired
-                            ? "border-slate-300 bg-slate-100 text-slate-700"
-                            : "border-amber-200 bg-amber-50 text-amber-700"
-                        }`}
-                      >
-                        {busy ? "..." : entry.retired ? "Ausgeschieden" : "Aktiv"}
-                      </button>
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
+                        Updates {group.agent.openUpdates || 0}
+                      </span>
+                      <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700">
+                        Fehler {group.agent.errorCount || 0}
+                      </span>
+                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+                        Warnungen {group.agent.warningCount || 0}
+                      </span>
                     </div>
                   </div>
+                  <div className="divide-y divide-sand-200">
+                    {renderDeviceRow(group.agent, 0, "bg-white")}
+                    {group.discoveryRows.length ? (
+                      <div className="border-t border-sand-200 bg-sky-50/40 px-3 py-1.5 text-[10px] uppercase tracking-[0.22em] text-sky-700">
+                        Discovery auf diesem Agenten
+                      </div>
+                    ) : null}
+                    {group.discoveryRows.map((entry, index) =>
+                      renderDeviceRow(entry, index, index % 2 === 0 ? "bg-sky-50/20" : "bg-white")
+                    )}
+                  </div>
                 </div>
-              );
-            })
+              ))}
+              {groupedInventory.unmatchedDiscovery.length ? (
+                <div className="rounded-2xl border border-sky-200 bg-sky-50/50">
+                  <div className="border-b border-sky-100 px-3 py-2">
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-700">Discovery ohne Agent-Match</p>
+                    <p className="mt-0.5 text-[11px] text-sky-700/80">
+                      Geräte aus Discovery, die keinem vorhandenen RMM-Agenten sicher zugeordnet werden konnten.
+                    </p>
+                  </div>
+                  <div className="divide-y divide-sand-200">
+                    {groupedInventory.unmatchedDiscovery.map((entry, index) =>
+                      renderDeviceRow(entry, index, index % 2 === 0 ? "bg-white" : "bg-sky-50/20")
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </>
           ) : (
             <p className="px-3 py-3 text-xs text-sand-500">
               {totalDevices ? "Keine Geräte für den aktuellen Filter gefunden." : "Noch keine Geräte vorhanden."}

@@ -115,6 +115,22 @@ const formatTrackingCheckedAt = (value) => {
   }
 };
 
+const formatTrackingEventAt = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "";
+  try {
+    return new Date(numeric).toLocaleString("de-DE", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  } catch (error) {
+    return "";
+  }
+};
+
 const getTrackingTone = (trackingStatus, isLoading) => {
   if (isLoading) {
     return {
@@ -122,16 +138,34 @@ const getTrackingTone = (trackingStatus, isLoading) => {
       className: "border-sky-200 bg-sky-50 text-sky-700"
     };
   }
+  if (trackingStatus?.deliveryStage === "delivered") {
+    return {
+      badge: "Zugestellt",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700"
+    };
+  }
+  if (trackingStatus?.deliveryStage === "transit") {
+    return {
+      badge: "Unterwegs",
+      className: "border-sky-200 bg-sky-50 text-sky-700"
+    };
+  }
+  if (trackingStatus?.deliveryStage === "pending") {
+    return {
+      badge: "Angekündigt",
+      className: "border-amber-200 bg-amber-50 text-amber-700"
+    };
+  }
+  if (trackingStatus?.deliveryStage === "problem" || trackingStatus?.status === "error") {
+    return {
+      badge: "Problem",
+      className: "border-rose-200 bg-rose-50 text-rose-700"
+    };
+  }
   if (trackingStatus?.status === "ok") {
     return {
       badge: "Live",
       className: "border-emerald-200 bg-emerald-50 text-emerald-700"
-    };
-  }
-  if (trackingStatus?.status === "error") {
-    return {
-      badge: "Problem",
-      className: "border-amber-200 bg-amber-50 text-amber-700"
     };
   }
   return {
@@ -448,8 +482,10 @@ export default function PurchasingView() {
       const trackingStatus = trackingKey ? trackingStatuses[trackingKey] : null;
       const trackingStatusText = trackingStatus?.statusText || "Noch kein Tracking-Status abgefragt";
       const trackingCheckedAt = formatTrackingCheckedAt(trackingStatus?.checkedAt);
+      const trackingEventAt = formatTrackingEventAt(trackingStatus?.lastEventAt);
       const isTrackingBusy = Boolean(trackingKey && trackingLoading[trackingKey]);
       const trackingTone = getTrackingTone(trackingStatus, isTrackingBusy);
+      const resolvedTrackingProvider = trackingStatus?.provider || trackingInfo.provider || "Unbekannt";
       return (
         <tr key={item.id} className="border-b border-sand-200 align-top">
           <td className="px-3 py-1.5">
@@ -619,19 +655,32 @@ export default function PurchasingView() {
             ) : null}
             {item.trackingNumber ? (
               <div className="mt-1 space-y-1">
-                <div
-                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${trackingTone.className}`}
-                >
-                  {isTrackingBusy ? <Loader2 size={10} className="animate-spin" /> : null}
-                  {trackingTone.badge}
+                <div className="flex flex-wrap items-center gap-1">
+                  <div
+                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${trackingTone.className}`}
+                  >
+                    {isTrackingBusy ? <Loader2 size={10} className="animate-spin" /> : null}
+                    {trackingTone.badge}
+                  </div>
+                  <span className="inline-flex items-center rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600">
+                    {resolvedTrackingProvider}
+                  </span>
                 </div>
                 <p
                   className={`text-[10px] leading-4 ${
-                    trackingStatus?.status === "error" ? "text-amber-700" : "text-sand-600"
+                    trackingStatus?.deliveryStage === "problem" || trackingStatus?.status === "error"
+                      ? "text-rose-700"
+                      : "text-sand-600"
                   }`}
                 >
                   {trackingStatusText}
                 </p>
+                {trackingEventAt || trackingStatus?.lastEventLocation ? (
+                  <p className="text-[10px] text-sand-500">
+                    Letztes Ereignis: {trackingEventAt || "Zeitpunkt n/a"}
+                    {trackingStatus?.lastEventLocation ? ` · ${trackingStatus.lastEventLocation}` : ""}
+                  </p>
+                ) : null}
                 {trackingCheckedAt ? (
                   <p className="text-[10px] text-sand-500">
                     Zuletzt geprüft: {trackingCheckedAt}
@@ -639,6 +688,9 @@ export default function PurchasingView() {
                 ) : null}
                 {trackingStatus?.provider && trackingStatus.provider !== trackingInfo.provider ? (
                   <p className="text-[10px] text-sand-500">Dienst erkannt: {trackingStatus.provider}</p>
+                ) : null}
+                {trackingStatus?.source === "fallback" ? (
+                  <p className="text-[10px] text-amber-700">Tracking aktuell nur eingeschränkt erreichbar.</p>
                 ) : null}
               </div>
             ) : null}
