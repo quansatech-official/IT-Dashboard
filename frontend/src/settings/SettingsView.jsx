@@ -2398,6 +2398,24 @@ export default function SettingsView() {
     aiConnection.ai_provider === "openai_compatible"
       ? "https://llm.example.tld/v1"
       : "http://ollama:11434";
+  const aiModelDatalistId = "ai-provider-model-options";
+  const aiKnownModels = Array.from(
+    new Set(
+      [
+        ...aiConnectionModels,
+        aiConnection.ai_default_model,
+        aiConnection.ai_internal_model,
+        aiConnection.ai_action_model,
+        aiConnection.ai_task_model,
+        aiConnection.ai_customer_ranking_model,
+        aiConnection.ai_customer_development_model,
+        aiConnection.ai_offer_model,
+        aiConnection.ai_invoice_model
+      ]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    )
+  );
 
   return (
     <div className="min-h-screen bg-sand-50">
@@ -3109,23 +3127,28 @@ export default function SettingsView() {
                     Bei `vLLM` funktionieren URLs mit oder ohne `/v1`.
                   </p>
                 </div>
-                <div>
-                  <label className="text-xs text-sand-500">
-                    API Key {aiConnection.ai_provider === "openai_compatible" ? "" : "(optional)"}
-                  </label>
-                  <input
-                    type="password"
-                    value={aiConnection.ai_api_key}
-                    onChange={(event) =>
-                      setAiConnection((prev) => ({ ...prev, ai_api_key: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder={aiConnection.has_ai_api_key ? "Gespeichert" : "••••••••"}
-                  />
-                </div>
+                {aiConnection.ai_provider === "openai_compatible" ? (
+                  <div>
+                    <label className="text-xs text-sand-500">API Key</label>
+                    <input
+                      type="password"
+                      value={aiConnection.ai_api_key}
+                      onChange={(event) =>
+                        setAiConnection((prev) => ({ ...prev, ai_api_key: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+                      placeholder={aiConnection.has_ai_api_key ? "Gespeichert" : "••••••••"}
+                    />
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-xs text-sand-500">
+                    Ollama verwendet hier keinen API Key.
+                  </div>
+                )}
                 <div>
                   <label className="text-xs text-sand-500">Default Modell</label>
                   <input
+                    list={aiKnownModels.length ? aiModelDatalistId : undefined}
                     value={aiConnection.ai_default_model}
                     onChange={(event) =>
                       setAiConnection((prev) => ({ ...prev, ai_default_model: event.target.value }))
@@ -3196,12 +3219,20 @@ export default function SettingsView() {
               <div className="mt-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
                 <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">Modell-Overrides</p>
                 <p className="mt-1 text-xs text-sand-500">
-                  Leer lassen = Default Modell verwenden. Nur setzen, wenn einzelne Funktionen bewusst ein anderes Modell bekommen sollen.
+                  Leer lassen = Default Modell verwenden. Nach `Modelle abfragen` werden die Provider-Modelle direkt als Auswahlvorschläge angeboten.
                 </p>
+                {aiKnownModels.length ? (
+                  <datalist id={aiModelDatalistId}>
+                    {aiKnownModels.map((modelName) => (
+                      <option key={modelName} value={modelName} />
+                    ))}
+                  </datalist>
+                ) : null}
                 <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
                     <label className="text-xs text-sand-500">Interne Tools</label>
                     <input
+                      list={aiKnownModels.length ? aiModelDatalistId : undefined}
                       value={aiConnection.ai_internal_model}
                       onChange={(event) =>
                         setAiConnection((prev) => ({ ...prev, ai_internal_model: event.target.value }))
@@ -3213,6 +3244,7 @@ export default function SettingsView() {
                   <div>
                     <label className="text-xs text-sand-500">Kundenbericht / Action</label>
                     <input
+                      list={aiKnownModels.length ? aiModelDatalistId : undefined}
                       value={aiConnection.ai_action_model}
                       onChange={(event) =>
                         setAiConnection((prev) => ({ ...prev, ai_action_model: event.target.value }))
@@ -3224,6 +3256,7 @@ export default function SettingsView() {
                   <div>
                     <label className="text-xs text-sand-500">Aufgabenentwurf</label>
                     <input
+                      list={aiKnownModels.length ? aiModelDatalistId : undefined}
                       value={aiConnection.ai_task_model}
                       onChange={(event) =>
                         setAiConnection((prev) => ({ ...prev, ai_task_model: event.target.value }))
@@ -3235,6 +3268,7 @@ export default function SettingsView() {
                   <div>
                     <label className="text-xs text-sand-500">Kundenranking</label>
                     <input
+                      list={aiKnownModels.length ? aiModelDatalistId : undefined}
                       value={aiConnection.ai_customer_ranking_model}
                       onChange={(event) =>
                         setAiConnection((prev) => ({
@@ -3249,6 +3283,7 @@ export default function SettingsView() {
                   <div>
                     <label className="text-xs text-sand-500">Kundenentwicklung</label>
                     <input
+                      list={aiKnownModels.length ? aiModelDatalistId : undefined}
                       value={aiConnection.ai_customer_development_model}
                       onChange={(event) =>
                         setAiConnection((prev) => ({
@@ -3263,6 +3298,7 @@ export default function SettingsView() {
                   <div>
                     <label className="text-xs text-sand-500">Angebot / Textentwurf</label>
                     <input
+                      list={aiKnownModels.length ? aiModelDatalistId : undefined}
                       value={aiConnection.ai_offer_model}
                       onChange={(event) =>
                         setAiConnection((prev) => ({ ...prev, ai_offer_model: event.target.value }))
@@ -3274,6 +3310,7 @@ export default function SettingsView() {
                   <div>
                     <label className="text-xs text-sand-500">Rechnungszusammenfassung</label>
                     <input
+                      list={aiKnownModels.length ? aiModelDatalistId : undefined}
                       value={aiConnection.ai_invoice_model}
                       onChange={(event) =>
                         setAiConnection((prev) => ({ ...prev, ai_invoice_model: event.target.value }))
