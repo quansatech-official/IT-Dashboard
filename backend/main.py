@@ -6104,13 +6104,19 @@ def _fetch_newsletter_rss_articles_for_feed(
 
 
 def _build_newsletter_rss_source_text(articles: List[NewsletterRssGenerateArticle]) -> str:
+    prompt_limit = _internal_ai_prompt_limit_chars()
+    total_budget = max(1600, min(prompt_limit - 600, 5200))
+    article_count = max(1, len(articles))
+    per_article_budget = max(420, min(1200, int(total_budget / article_count)))
     blocks: List[str] = []
     for index, article in enumerate(articles, start=1):
         title = str(article.title or "").strip()
         if not title:
             continue
-        summary = _html_to_plain_text(article.summary)[:1600]
-        content = _html_to_plain_text(article.content)[:3200]
+        summary_budget = max(180, min(420, int(per_article_budget * 0.35)))
+        content_budget = max(220, min(760, int(per_article_budget * 0.65)))
+        summary = _truncate_middle_text(_html_to_plain_text(article.summary), summary_budget)
+        content = _truncate_middle_text(_html_to_plain_text(article.content), content_budget)
         link = str(article.link or "").strip()
         feed_name = str(article.feed_name or "").strip()
         published_at = _safe_int(article.published_at, 0)
@@ -6132,7 +6138,8 @@ def _build_newsletter_rss_source_text(articles: List[NewsletterRssGenerateArticl
         if link:
             parts.append(f"Link: {link}")
         blocks.append("\n".join(parts))
-    return "\n\n".join(blocks).strip()
+    combined = "\n\n".join(blocks).strip()
+    return _truncate_middle_text(combined, total_budget)
 
 
 def _build_newsletter_rss_prompt(mode: str, tone: str, article_count: int) -> str:
@@ -17839,18 +17846,50 @@ def generate_action(data: ActionAiRequest):
     return action
 
 
+def _truncate_middle_text(value: str, limit: int) -> str:
+    text_value = str(value or "").strip()
+    max_chars = max(0, int(limit or 0))
+    if max_chars <= 0 or len(text_value) <= max_chars:
+        return text_value
+    if max_chars <= 80:
+        return text_value[:max_chars].rstrip()
+    marker = "\n...\n[gekuerzt]\n...\n"
+    if len(marker) >= max_chars:
+        return text_value[:max_chars].rstrip()
+    remaining = max_chars - len(marker)
+    head_chars = max(1, int(math.ceil(remaining * 0.7)))
+    tail_chars = max(1, remaining - head_chars)
+    return (
+        text_value[:head_chars].rstrip()
+        + marker
+        + text_value[-tail_chars:].lstrip()
+    )
+
+
 def _build_internal_ai_prompt(prompt_text: str, content_text: str) -> str:
     prompt_value = str(prompt_text or "").strip()
     content_value = str(content_text or "").strip()
+    limit_chars = _internal_ai_prompt_limit_chars()
+    if prompt_value and len(prompt_value) > limit_chars:
+        prompt_value = _truncate_middle_text(prompt_value, max(400, limit_chars // 2))
     if not content_value:
         return prompt_value
-    return (
-        f"{prompt_value}\n\n"
-        "Arbeitsmaterial:\n"
-        "<<<BEGINN>>>\n"
-        f"{content_value}\n"
-        "<<<ENDE>>>"
+    prefix = (
+        f"{prompt_value}\n\nArbeitsmaterial:\n<<<BEGINN>>>\n"
+        if prompt_value
+        else "Arbeitsmaterial:\n<<<BEGINN>>>\n"
     )
+    suffix = "\n<<<ENDE>>>"
+    content_budget = max(240, limit_chars - len(prefix) - len(suffix))
+    trimmed_content = _truncate_middle_text(content_value, content_budget)
+    if trimmed_content != content_value:
+        logger.info(
+            "Internal AI material trimmed original_chars=%s trimmed_chars=%s limit_chars=%s",
+            len(content_value),
+            len(trimmed_content),
+            content_budget,
+        )
+    return f"{prefix}{trimmed_content}{suffix}"
 
 
 def _build_internal_ai_fallback_text(prompt_text: str, content_text: str) -> str:
