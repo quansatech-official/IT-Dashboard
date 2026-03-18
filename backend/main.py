@@ -15,6 +15,7 @@ import math
 import time
 import uuid
 import threading
+import ast
 import json
 import json as jsonlib
 import re
@@ -2633,11 +2634,31 @@ def _resolve_configured_hourly_rate(
 
 
 def _split_model_list(raw_value: Any) -> List[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, (list, tuple, set)):
+        ordered: List[str] = []
+        for item in raw_value:
+            ordered.extend(_split_model_list(item))
+        return ordered
     text_value = str(raw_value or "").strip()
     if not text_value:
         return []
+    if text_value[:1] in {"[", "("} and text_value[-1:] in {"]", ")"}:
+        for loader in (jsonlib.loads, ast.literal_eval):
+            try:
+                loaded = loader(text_value)
+            except (ValueError, SyntaxError, TypeError):
+                continue
+            if isinstance(loaded, (list, tuple, set)):
+                return _split_model_list(loaded)
     parts = [part.strip() for part in re.split(r"[,\s]+", text_value) if part.strip()]
     return parts
+
+
+def _normalize_model_setting_value(raw_value: Any) -> str:
+    candidates = _split_model_list(raw_value)
+    return candidates[0] if candidates else ""
 
 
 def _normalize_ai_provider(raw_value: Any) -> str:
@@ -2694,15 +2715,15 @@ def _build_ai_config_snapshot(settings: Optional[IntegrationSettings] = None) ->
     api_key = str(
         (getattr(settings, "ai_api_key", "") if settings is not None else "") or AI_API_KEY_ENV
     ).strip()
-    configured_default_model = str(
+    configured_default_model = _normalize_model_setting_value(
         getattr(settings, "ai_default_model", "") if settings is not None else ""
-    ).strip()
+    )
     default_model = configured_default_model or AI_DEFAULT_MODEL_ENV
     configured_models: Dict[str, str] = {}
     models: Dict[str, str] = {}
     for purpose, field_name in AI_MODEL_SETTINGS_FIELDS.items():
         configured_value = getattr(settings, field_name, "") if settings is not None else ""
-        normalized_value = str(configured_value or "").strip()
+        normalized_value = _normalize_model_setting_value(configured_value)
         configured_models[purpose] = normalized_value
         models[purpose] = normalized_value or str(AI_MODEL_ENV_DEFAULTS.get(purpose) or "").strip()
     return {
@@ -2734,16 +2755,16 @@ def _build_ai_config_from_request(
     provider = _normalize_ai_provider(payload.get("ai_provider", base_config.get("provider")))
     base_url = _normalize_ai_base_url(payload.get("ai_base_url", base_config.get("base_url")), provider)
     api_key = str(payload.get("ai_api_key", base_config.get("api_key")) or "").strip()
-    configured_default_model = str(
-        payload.get("ai_default_model", base_config.get("configured_default_model")) or ""
-    ).strip()
+    configured_default_model = _normalize_model_setting_value(
+        payload.get("ai_default_model", base_config.get("configured_default_model"))
+    )
     default_model = configured_default_model or str(base_config.get("default_model") or "").strip()
     models = dict(base_config.get("models") or {})
     configured_models = dict(base_config.get("configured_models") or {})
     for purpose, field_name in AI_MODEL_SETTINGS_FIELDS.items():
         if field_name not in payload:
             continue
-        normalized_value = str(payload.get(field_name) or "").strip()
+        normalized_value = _normalize_model_setting_value(payload.get(field_name))
         configured_models[purpose] = normalized_value
         models[purpose] = normalized_value or str(AI_MODEL_ENV_DEFAULTS.get(purpose) or "").strip()
     return {
@@ -2921,7 +2942,7 @@ def _ollama_manage_model(
     timeout_seconds: int = 600,
 ) -> Dict[str, Any]:
     resolved_action = str(action or "").strip().lower()
-    model_name = str(model or "").strip()
+    model_name = _normalize_model_setting_value(model)
     resolved_base_url = _normalize_ai_base_url(base_url, AI_PROVIDER_OLLAMA)
     if resolved_action not in {"pull", "delete"}:
         raise HTTPException(400, "Unsupported action")
@@ -2978,7 +2999,7 @@ def _ollama_manage_model(
 
 def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
     config = _get_ai_config_snapshot()
-    requested = str(requested_model or "").strip()
+    requested = _normalize_model_setting_value(requested_model)
     available_models = _list_available_ai_models(config=config)
     has_explicit_selection = bool(requested) or _has_explicit_ai_model_selection(config, "internal_ai")
     if requested:
@@ -6457,14 +6478,14 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "meta_hub_mailbox_count": len(meta_hub_mailboxes),
         "ai_provider": ai_config["provider"],
         "ai_base_url": ai_config["base_url"],
-        "ai_default_model": str(settings.ai_default_model or ai_config["default_model"] or "").strip(),
-        "ai_internal_model": str(settings.ai_internal_model or "").strip(),
-        "ai_action_model": str(settings.ai_action_model or "").strip(),
-        "ai_task_model": str(settings.ai_task_model or "").strip(),
-        "ai_customer_ranking_model": str(settings.ai_customer_ranking_model or "").strip(),
-        "ai_customer_development_model": str(settings.ai_customer_development_model or "").strip(),
-        "ai_offer_model": str(settings.ai_offer_model or "").strip(),
-        "ai_invoice_model": str(settings.ai_invoice_model or "").strip(),
+        "ai_default_model": _normalize_model_setting_value(settings.ai_default_model or ai_config["default_model"]),
+        "ai_internal_model": _normalize_model_setting_value(settings.ai_internal_model),
+        "ai_action_model": _normalize_model_setting_value(settings.ai_action_model),
+        "ai_task_model": _normalize_model_setting_value(settings.ai_task_model),
+        "ai_customer_ranking_model": _normalize_model_setting_value(settings.ai_customer_ranking_model),
+        "ai_customer_development_model": _normalize_model_setting_value(settings.ai_customer_development_model),
+        "ai_offer_model": _normalize_model_setting_value(settings.ai_offer_model),
+        "ai_invoice_model": _normalize_model_setting_value(settings.ai_invoice_model),
         "has_ai_api_key": bool(settings.ai_api_key or ai_config["api_key"]),
     }
 
@@ -16925,7 +16946,7 @@ def update_integrations(data: IntegrationSettingsUpdate):
                 "ai_offer_model",
                 "ai_invoice_model",
             }:
-                setattr(settings, field, str(value or "").strip())
+                setattr(settings, field, _normalize_model_setting_value(value))
                 continue
             setattr(settings, field, value)
         if incoming_mailboxes is not None:
