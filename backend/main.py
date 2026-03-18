@@ -301,6 +301,7 @@ class Customer(Base):
     creditor_number = Column(String, default="")
     short_code = Column(String, default="")
     email = Column(String, default="")
+    newsletter_email = Column(String, default="")
     billing_email = Column(String, default="")
     time_tracking_enabled = Column(Boolean, default=False)
     customer_report = Column(Boolean, default=True)
@@ -1261,6 +1262,8 @@ def _ensure_customer_columns() -> None:
         statements.append("ALTER TABLE customers ADD COLUMN short_code VARCHAR DEFAULT ''")
     if "email" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN email VARCHAR DEFAULT ''")
+    if "newsletter_email" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN newsletter_email VARCHAR DEFAULT ''")
     if "billing_email" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN billing_email VARCHAR DEFAULT ''")
     if "time_tracking_enabled" not in columns:
@@ -1565,6 +1568,7 @@ class CustomerCreate(BaseModel):
     creditor_number: Optional[str] = ""
     short_code: Optional[str] = ""
     email: Optional[str] = ""
+    newsletter_email: Optional[str] = ""
     time_tracking_enabled: Optional[bool] = None
     customer_report: Optional[bool] = None
     newsletter: Optional[bool] = None
@@ -1583,6 +1587,7 @@ class CustomerUpdate(BaseModel):
     creditor_number: Optional[str] = None
     short_code: Optional[str] = None
     email: Optional[str] = None
+    newsletter_email: Optional[str] = None
     time_tracking_enabled: Optional[bool] = None
     customer_report: Optional[bool] = None
     newsletter: Optional[bool] = None
@@ -2009,6 +2014,20 @@ class IntegrationSettingsUpdate(BaseModel):
     meta_hub_email_enabled: Optional[bool] = None
     meta_hub_refresh_seconds: Optional[int] = None
     meta_hub_mailboxes: Optional[List[Dict[str, Any]]] = None
+    ai_provider: Optional[str] = None
+    ai_base_url: Optional[str] = None
+    ai_api_key: Optional[str] = None
+    ai_default_model: Optional[str] = None
+    ai_internal_model: Optional[str] = None
+    ai_action_model: Optional[str] = None
+    ai_task_model: Optional[str] = None
+    ai_customer_ranking_model: Optional[str] = None
+    ai_customer_development_model: Optional[str] = None
+    ai_offer_model: Optional[str] = None
+    ai_invoice_model: Optional[str] = None
+
+
+class AiConnectionProbeRequest(BaseModel):
     ai_provider: Optional[str] = None
     ai_base_url: Optional[str] = None
     ai_api_key: Optional[str] = None
@@ -2555,9 +2574,7 @@ def _build_sevdesk_config(
     unity_id = _parse_int(settings.sevdesk_unity_id) or 1
     service_unity_id = _parse_int(settings.sevdesk_service_unity_id)
     device_unity_id = _parse_int(settings.sevdesk_device_unity_id)
-    hourly_rate = _parse_float(settings.sevdesk_hourly_rate_eur, default=0.0)
-    if metrics and _parse_float(metrics.hourly_rate_eur, default=0.0) > 0:
-        hourly_rate = _parse_float(metrics.hourly_rate_eur, default=hourly_rate)
+    hourly_rate = _resolve_configured_hourly_rate(settings, metrics)
 
     return SevdeskConfig(
         base_url=base_url,
@@ -2591,6 +2608,21 @@ def _require_sevdesk_config(
 
 def _require_sevdesk_invoice_fields(config: SevdeskConfig) -> None:
     return None
+
+
+def _resolve_configured_hourly_rate(
+    integration: Optional[IntegrationSettings] = None,
+    metrics: Optional[CustomerMetricsSettings] = None,
+) -> float:
+    if integration is not None:
+        configured_rate = _parse_float(getattr(integration, "sevdesk_hourly_rate_eur", ""), default=-1.0)
+        if configured_rate > 0:
+            return configured_rate
+    if metrics is not None:
+        legacy_rate = _parse_float(getattr(metrics, "hourly_rate_eur", ""), default=0.0)
+        if legacy_rate > 0:
+            return legacy_rate
+    return 0.0
 
 
 def _split_model_list(raw_value: Any) -> List[str]:
@@ -2678,6 +2710,32 @@ def _get_ai_config_snapshot(settings: Optional[IntegrationSettings] = None) -> D
         return _build_ai_config_snapshot(settings)
     with SessionLocal() as db:
         return _build_ai_config_snapshot(db.query(IntegrationSettings).first())
+
+
+def _build_ai_config_from_request(
+    data: Optional[AiConnectionProbeRequest],
+    persisted_settings: Optional[IntegrationSettings] = None,
+) -> Dict[str, Any]:
+    base_config = _build_ai_config_snapshot(persisted_settings)
+    if data is None:
+        return base_config
+    payload = data.dict(exclude_unset=True)
+    provider = _normalize_ai_provider(payload.get("ai_provider", base_config.get("provider")))
+    base_url = _normalize_ai_base_url(payload.get("ai_base_url", base_config.get("base_url")), provider)
+    api_key = str(payload.get("ai_api_key", base_config.get("api_key")) or "").strip()
+    default_model = str(payload.get("ai_default_model", base_config.get("default_model")) or "").strip()
+    models = dict(base_config.get("models") or {})
+    for purpose, field_name in AI_MODEL_SETTINGS_FIELDS.items():
+        if field_name not in payload:
+            continue
+        models[purpose] = str(payload.get(field_name) or "").strip()
+    return {
+        "provider": provider,
+        "base_url": base_url,
+        "api_key": api_key,
+        "default_model": default_model,
+        "models": models,
+    }
 
 
 def _resolve_ai_models(
@@ -5017,9 +5075,11 @@ def serialize_customer(
     contract_flags = _parse_contract_flags(c.contract_flags)
     normalized_contract_document_flags = _normalize_contract_document_flags(contract_document_flags)
     normalized_contract_type_counts = _normalize_contract_type_counts(contract_type_counts)
-    general_email = _customer_general_email(c)
+    primary_email = _customer_primary_email(c)
+    newsletter_email = _customer_newsletter_email(c)
     billing_email = _customer_billing_email(c)
     effective_email = _customer_effective_email(c)
+    effective_newsletter_email = _customer_newsletter_effective_email(c)
     general_address = _customer_general_address(c)
     billing_address = _customer_billing_address(c)
     effective_address = _customer_effective_address(c)
@@ -5029,7 +5089,10 @@ def serialize_customer(
         "creditor_number": c.creditor_number,
         "short_code": c.short_code,
         "email": effective_email,
-        "general_email": general_email,
+        "primary_email": primary_email,
+        "general_email": newsletter_email,
+        "newsletter_email": newsletter_email,
+        "newsletter_effective_email": effective_newsletter_email,
         "billing_email": billing_email,
         "primary_address_source": _customer_primary_address_source(c),
         "time_tracking_enabled": c.time_tracking_enabled,
@@ -5645,7 +5708,7 @@ def _serialize_newsletter_group_customer(customer: Customer) -> Dict[str, Any]:
     return {
         "id": customer.id,
         "name": customer.name or "",
-        "email": _customer_effective_email(customer),
+        "email": _customer_newsletter_effective_email(customer),
         "status": (customer.status or "active").strip().lower() or "active",
         "newsletter": bool(customer.newsletter),
     }
@@ -6051,9 +6114,9 @@ def _resolve_newsletter_recipient_emails(
     explicit_emails: Optional[List[Any]] = None,
 ) -> List[str]:
     blocked_emails = {
-        _customer_effective_email(customer).lower()
+        _customer_newsletter_effective_email(customer).lower()
         for customer in db.query(Customer).filter(Customer.newsletter.is_(False)).all()
-        if _customer_effective_email(customer)
+        if _customer_newsletter_effective_email(customer)
     }
     emails = [
         email
@@ -6076,9 +6139,9 @@ def _resolve_newsletter_recipient_emails(
             .all()
         )
         emails.extend(
-            _customer_effective_email(customer)
+            _customer_newsletter_effective_email(customer)
             for customer in customers
-            if _customer_effective_email(customer)
+            if _customer_newsletter_effective_email(customer)
         )
     return _normalize_newsletter_email_list(emails)
 
@@ -10535,8 +10598,12 @@ def _clean_customer_contact_value(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _customer_general_email(customer: Customer) -> str:
+def _customer_primary_email(customer: Customer) -> str:
     return _clean_customer_contact_value(getattr(customer, "email", ""))
+
+
+def _customer_newsletter_email(customer: Customer) -> str:
+    return _clean_customer_contact_value(getattr(customer, "newsletter_email", ""))
 
 
 def _customer_billing_email(customer: Customer) -> str:
@@ -10544,7 +10611,11 @@ def _customer_billing_email(customer: Customer) -> str:
 
 
 def _customer_effective_email(customer: Customer) -> str:
-    return _customer_general_email(customer) or _customer_billing_email(customer)
+    return _customer_primary_email(customer) or _customer_billing_email(customer)
+
+
+def _customer_newsletter_effective_email(customer: Customer) -> str:
+    return _customer_newsletter_email(customer) or _customer_effective_email(customer)
 
 
 def _customer_general_address(customer: Customer) -> Dict[str, str]:
@@ -14861,6 +14932,7 @@ def create_customer(data: CustomerCreate):
             creditor_number=data.creditor_number or "",
             short_code=data.short_code or "",
             email=data.email or "",
+            newsletter_email=data.newsletter_email or "",
             time_tracking_enabled=bool(data.time_tracking_enabled),
             customer_report=True if data.customer_report is None else bool(data.customer_report),
             newsletter=True if data.newsletter is None else bool(data.newsletter),
@@ -15071,12 +15143,11 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
         km_rate = float(metrics_settings.km_rate_eur or 0)
         min_distance_km = float(metrics_settings.min_distance_km or 0)
         min_fee_eur = float(metrics_settings.min_fee_eur or 0)
-        hourly_rate = float(metrics_settings.hourly_rate_eur or 0)
     except ValueError:
         km_rate = 0.0
         min_distance_km = 0.0
         min_fee_eur = 0.0
-        hourly_rate = 0.0
+    hourly_rate = _resolve_configured_hourly_rate(integration_settings, metrics_settings)
     mileage_eur = None
     round_trip_km = None
     if distance_km is not None:
@@ -16553,6 +16624,33 @@ def update_integrations(data: IntegrationSettingsUpdate):
             _customer_development_cache.clear()
             _customer_cve_cache.clear()
         return serialize_integration_settings(settings)
+
+
+@app.post("/api/integrations/ai_models")
+def probe_ai_connection_models(data: AiConnectionProbeRequest):
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        config = _build_ai_config_from_request(data, settings)
+    provider = str(config.get("provider") or AI_PROVIDER_OLLAMA)
+    base_url = str(config.get("base_url") or "").strip()
+    if not base_url:
+        raise HTTPException(400, "Base URL fehlt")
+    models = _list_available_ai_models(config=config, timeout_seconds=12)
+    configured_models = _configured_ai_models_for_picker(config)
+    default_model = str(config.get("default_model") or "").strip()
+    if not models and configured_models:
+        models = configured_models
+    if not models:
+        raise HTTPException(502, "Keine Modelle vom Provider abrufbar")
+    resolved_default_model = default_model or (models[0] if models else "")
+    return {
+        "provider": provider,
+        "base_url": base_url,
+        "models": models,
+        "default_model": resolved_default_model,
+        "configured_models": configured_models,
+        "detected_count": len(models),
+    }
 
 
 @app.get("/api/meta_hub/status")
@@ -20125,13 +20223,12 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
     active_customer_number_keys: Set[str] = set()
 
     with SessionLocal() as db:
-        settings = None
+        metrics_settings = None
+        integration_settings = None
         if load_general or load_sevdesk:
-            settings = _get_customer_metrics_settings(db)
-            try:
-                hourly_rate = float(settings.hourly_rate_eur or 0)
-            except ValueError:
-                hourly_rate = 0.0
+            metrics_settings = _get_customer_metrics_settings(db)
+            integration_settings = db.query(IntegrationSettings).first()
+            hourly_rate = _resolve_configured_hourly_rate(integration_settings, metrics_settings)
 
         if load_customers:
             all_customers = db.query(Customer).all()
@@ -20262,12 +20359,11 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
             contracts_stats = _build_contracts_stats(db, now_ms)
 
         if load_sevdesk:
-            integration = db.query(IntegrationSettings).first()
-            if not integration:
-                integration = IntegrationSettings()
-                db.add(integration)
+            if not integration_settings:
+                integration_settings = IntegrationSettings()
+                db.add(integration_settings)
                 db.commit()
-            sevdesk_config = _build_sevdesk_config(integration, settings)
+            sevdesk_config = _build_sevdesk_config(integration_settings, metrics_settings)
 
     telephony_minutes = 0
     telephony_missed = 0

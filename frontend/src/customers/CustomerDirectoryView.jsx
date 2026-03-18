@@ -532,7 +532,9 @@ const normalizeCustomer = (customer) => {
       ? customer.contractDocumentFlags
       : []
   );
-  const generalEmail = customer.general_email ?? customer.generalEmail ?? "";
+  const primaryEmail = customer.primary_email ?? customer.primaryEmail ?? customer.email ?? "";
+  const newsletterEmail =
+    customer.newsletter_email ?? customer.newsletterEmail ?? customer.general_email ?? customer.generalEmail ?? "";
   const billingEmail = customer.billing_email ?? customer.billingEmail ?? "";
   const generalStreet = customer.general_street ?? customer.generalStreet ?? "";
   const generalPostalCode = customer.general_postal_code ?? customer.generalPostalCode ?? "";
@@ -547,8 +549,8 @@ const normalizeCustomer = (customer) => {
     creditorNumber:
       customer.creditor_number ?? customer.creditorNumber ?? customer.internal_number ?? "",
     shortCode: customer.short_code ?? customer.shortCode ?? "",
-    email: customer.email ?? billingEmail ?? generalEmail ?? "",
-    generalEmail,
+    email: primaryEmail,
+    newsletterEmail,
     billingEmail,
     street: customer.street ?? billingStreet ?? generalStreet ?? "",
     postalCode: customer.postal_code ?? billingPostalCode ?? generalPostalCode ?? "",
@@ -591,7 +593,8 @@ const customerPayload = (customer) => ({
   name: customer.name || "Neuer Kunde",
   creditor_number: customer.creditorNumber || "",
   short_code: customer.shortCode || "",
-  email: customer.generalEmail || "",
+  email: customer.email || "",
+  newsletter_email: customer.newsletterEmail || "",
   street: customer.generalStreet || "",
   postal_code: customer.generalPostalCode || "",
   city: customer.generalCity || "",
@@ -5546,24 +5549,35 @@ export default function CustomerDirectoryView() {
                     className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
                   />
                 </label>
+                <label className="block md:col-span-3">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">Haupt-E-Mail</span>
+                  <input
+                    type="email"
+                    value={editCustomer.email}
+                    onChange={(event) => updateCustomer(editCustomer.id, { email: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                    placeholder="kunde@example.com"
+                  />
+                </label>
                 <div className="md:col-span-3 rounded-2xl border border-sand-200 bg-white p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-xs uppercase tracking-[0.28em] text-sand-500">Allgemeine Kontaktadresse</p>
+                      <p className="text-xs uppercase tracking-[0.28em] text-sand-500">Kommunikation & Allgemeine Adresse</p>
                       <p className="mt-1 text-xs text-sand-500">
-                        Für Newsletter und allgemeine Kommunikation. Wenn leer, wird die Rechnungsadresse als Hauptadresse verwendet.
+                        Optionale separate E-Mail für Newsletter und ähnliche Aussendungen. Wenn leer, wird die Haupt-E-Mail verwendet. Die Postadresse darunter bleibt die allgemeine Kontaktadresse.
                       </p>
                     </div>
                     <Mail size={16} className="mt-0.5 text-sand-400" />
                   </div>
                   <div className="mt-3 grid gap-2 md:grid-cols-2">
                     <label className="block md:col-span-2">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">Allgemeine E-Mail</span>
+                      <span className="text-xs uppercase tracking-wide text-sand-500">Newsletter-/Kommunikations-E-Mail</span>
                       <input
                         type="email"
-                        value={editCustomer.generalEmail}
-                        onChange={(event) => updateCustomer(editCustomer.id, { generalEmail: event.target.value })}
+                        value={editCustomer.newsletterEmail}
+                        onChange={(event) => updateCustomer(editCustomer.id, { newsletterEmail: event.target.value })}
                         className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                        placeholder="optional, z. B. marketing@example.com"
                       />
                     </label>
                     <label className="block md:col-span-2">

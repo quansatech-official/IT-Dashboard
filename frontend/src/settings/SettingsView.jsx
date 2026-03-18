@@ -549,6 +549,14 @@ export default function SettingsView() {
   const [aiConnectionOpen, setAiConnectionOpen] = useState(false);
   const [aiConnectionStatus, setAiConnectionStatus] = useState("idle");
   const [aiConnectionLoadStatus, setAiConnectionLoadStatus] = useState("loading");
+  const [aiConnectionModelsStatus, setAiConnectionModelsStatus] = useState("idle");
+  const [aiConnectionModels, setAiConnectionModels] = useState([]);
+  const [aiConnectionModelsInfo, setAiConnectionModelsInfo] = useState({
+    provider: "",
+    baseUrl: "",
+    defaultModel: "",
+    error: ""
+  });
   const [sevdeskHealth, setSevdeskHealth] = useState({
     connected: null,
     error: "",
@@ -1700,6 +1708,49 @@ export default function SettingsView() {
       setAiConnectionStatus("error");
     }
     setTimeout(() => setAiConnectionStatus("idle"), 2000);
+  };
+
+  const loadAiProviderModels = async () => {
+    setAiConnectionModelsStatus("loading");
+    setAiConnectionModelsInfo((prev) => ({ ...prev, error: "" }));
+    try {
+      const res = await fetch(`${API}/integrations/ai_models`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ai_provider: aiConnection.ai_provider,
+          ai_base_url: aiConnection.ai_base_url,
+          ai_api_key: aiConnection.ai_api_key,
+          ai_default_model: aiConnection.ai_default_model,
+          ai_internal_model: aiConnection.ai_internal_model,
+          ai_action_model: aiConnection.ai_action_model,
+          ai_task_model: aiConnection.ai_task_model,
+          ai_customer_ranking_model: aiConnection.ai_customer_ranking_model,
+          ai_customer_development_model: aiConnection.ai_customer_development_model,
+          ai_offer_model: aiConnection.ai_offer_model,
+          ai_invoice_model: aiConnection.ai_invoice_model
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "model_probe_failed");
+      setAiConnectionModels(Array.isArray(data?.models) ? data.models : []);
+      setAiConnectionModelsInfo({
+        provider: String(data?.provider || aiConnection.ai_provider || ""),
+        baseUrl: String(data?.base_url || aiConnection.ai_base_url || ""),
+        defaultModel: String(data?.default_model || ""),
+        error: ""
+      });
+      setAiConnectionModelsStatus("ready");
+    } catch (error) {
+      setAiConnectionModels([]);
+      setAiConnectionModelsInfo({
+        provider: String(aiConnection.ai_provider || ""),
+        baseUrl: String(aiConnection.ai_base_url || ""),
+        defaultModel: "",
+        error: error?.message ? String(error.message) : "Modellliste konnte nicht geladen werden"
+      });
+      setAiConnectionModelsStatus("error");
+    }
   };
 
   const addMetaHubMailbox = () => {
@@ -3086,6 +3137,63 @@ export default function SettingsView() {
               </div>
 
               <div className="mt-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">Provider-Modelle</p>
+                    <p className="mt-1 text-xs text-sand-500">
+                      Fragt den aktuell konfigurierten Ollama- oder vLLM-Endpoint ab und zeigt die angebotenen Modelle.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={loadAiProviderModels}
+                    className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[11px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                  >
+                    Modelle abfragen
+                  </button>
+                </div>
+                <div className="mt-3 rounded-2xl border border-sand-200 bg-white p-3">
+                  <div className="flex flex-wrap gap-3 text-[11px] text-sand-500">
+                    <span>Provider: {aiConnectionModelsInfo.provider || aiProviderLabel}</span>
+                    <span>URL: {aiConnectionModelsInfo.baseUrl || aiConnection.ai_base_url || "n/a"}</span>
+                    <span>Default: {aiConnectionModelsInfo.defaultModel || aiConnection.ai_default_model || "n/a"}</span>
+                  </div>
+                  {aiConnectionModelsStatus === "loading" ? (
+                    <p className="mt-3 text-xs text-sand-500">Lade Modellliste…</p>
+                  ) : null}
+                  {aiConnectionModelsStatus === "error" ? (
+                    <p className="mt-3 text-xs text-rose-600">
+                      {aiConnectionModelsInfo.error || "Modellliste konnte nicht geladen werden."}
+                    </p>
+                  ) : null}
+                  {aiConnectionModelsStatus === "ready" ? (
+                    aiConnectionModels.length ? (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {aiConnectionModels.map((modelName) => (
+                          <button
+                            key={modelName}
+                            type="button"
+                            onClick={() =>
+                              setAiConnection((prev) => ({
+                                ...prev,
+                                ai_default_model: modelName
+                              }))
+                            }
+                            className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[11px] text-emerald-700"
+                            title="Klick setzt dieses Modell als Default."
+                          >
+                            {modelName}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-xs text-sand-500">Keine Modelle zurückgegeben.</p>
+                    )
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
                 <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">Modell-Overrides</p>
                 <p className="mt-1 text-xs text-sand-500">
                   Leer lassen = Default Modell verwenden. Nur setzen, wenn einzelne Funktionen bewusst ein anderes Modell bekommen sollen.
@@ -4371,7 +4479,7 @@ export default function SettingsView() {
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-sand-500">Stundensatz EUR</label>
+                    <label className="text-xs text-sand-500">Zentraler Stundenpreis EUR</label>
                     <input
                       value={sevdesk.sevdesk_hourly_rate_eur}
                       onChange={(event) =>
@@ -4380,6 +4488,9 @@ export default function SettingsView() {
                       className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
                       placeholder="120"
                     />
+                    <p className="mt-1 text-[11px] text-sand-400">
+                      Wird einheitlich für Statistik, Aufgabenwert und sevDesk-Vorschläge verwendet.
+                    </p>
                   </div>
                 </div>
               ) : null}

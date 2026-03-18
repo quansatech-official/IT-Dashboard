@@ -74,6 +74,16 @@ const normalizeEmailList = (value = "") => {
     });
 };
 
+const customerNewsletterEmail = (customer) =>
+  String(
+    customer?.newsletter_effective_email ??
+      customer?.newsletterEffectiveEmail ??
+      customer?.newsletter_email ??
+      customer?.newsletterEmail ??
+      customer?.email ??
+      ""
+  ).trim();
+
 const escapeHtml = (value = "") =>
   String(value)
     .replaceAll("&", "&amp;")
@@ -292,8 +302,8 @@ export default function NewsletterView() {
     () =>
       new Set(
         customers
-          .filter((customer) => !customer.newsletter && customer.email)
-          .map((customer) => String(customer.email || "").trim().toLowerCase())
+          .filter((customer) => !customer.newsletter && customerNewsletterEmail(customer))
+          .map((customer) => customerNewsletterEmail(customer).toLowerCase())
           .filter(Boolean)
       ),
     [customers]
@@ -320,7 +330,7 @@ export default function NewsletterView() {
 
   const resolvedRecipients = useMemo(() => {
     const emails = resolvedCustomerIds
-      .map((customerId) => newsletterCustomerById.get(customerId)?.email || "")
+      .map((customerId) => customerNewsletterEmail(newsletterCustomerById.get(customerId)) || "")
       .filter(Boolean);
     return normalizeEmailList([...emails, ...manualRecipientList].join(",")).filter(
       (email) => !optedOutEmailSet.has(String(email || "").trim().toLowerCase())
@@ -331,7 +341,7 @@ export default function NewsletterView() {
     () =>
       resolvedCustomerIds
         .map((customerId) => newsletterCustomerById.get(customerId))
-        .filter((customer) => customer && !customer.email),
+        .filter((customer) => customer && !customerNewsletterEmail(customer)),
     [newsletterCustomerById, resolvedCustomerIds]
   );
 
@@ -353,7 +363,7 @@ export default function NewsletterView() {
     const needle = recipientSearch.trim().toLowerCase();
     if (!needle) return newsletterCustomers;
     return newsletterCustomers.filter((customer) => {
-      const haystack = `${customer.name} ${customer.email}`.toLowerCase();
+      const haystack = `${customer.name} ${customerNewsletterEmail(customer)}`.toLowerCase();
       return haystack.includes(needle);
     });
   }, [newsletterCustomers, recipientSearch]);
@@ -362,7 +372,7 @@ export default function NewsletterView() {
     const needle = groupSearch.trim().toLowerCase();
     if (!needle) return newsletterCustomers;
     return newsletterCustomers.filter((customer) => {
-      const haystack = `${customer.name} ${customer.email}`.toLowerCase();
+      const haystack = `${customer.name} ${customerNewsletterEmail(customer)}`.toLowerCase();
       return haystack.includes(needle);
     });
   }, [groupSearch, newsletterCustomers]);
@@ -958,16 +968,16 @@ export default function NewsletterView() {
                             <p className="truncate text-sm font-semibold text-sand-900">{customer.name}</p>
                             <span
                               className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                                customer.email
+                                customerNewsletterEmail(customer)
                                   ? "bg-emerald-100 text-emerald-700"
                                   : "bg-sand-200 text-sand-500"
                               }`}
                             >
-                              {customer.email ? "Mail" : "Ohne Mail"}
+                              {customerNewsletterEmail(customer) ? "Mail" : "Ohne Mail"}
                             </span>
                           </div>
                           <p className="truncate text-[11px] leading-4 text-sand-500">
-                            {customer.email || "Keine E-Mail hinterlegt"}
+                            {customerNewsletterEmail(customer) || "Keine E-Mail hinterlegt"}
                           </p>
                         </div>
                       </label>
@@ -1316,16 +1326,16 @@ export default function NewsletterView() {
                           <div className="min-w-0 flex-1 truncate text-sm">
                             <span className="font-semibold text-sand-900">{customer.name}</span>
                             <span className="mx-2 text-sand-300">•</span>
-                            <span className={customer.email ? "text-sand-500" : "text-rose-600"}>
-                              {customer.email || "Keine E-Mail hinterlegt"}
+                            <span className={customerNewsletterEmail(customer) ? "text-sand-500" : "text-rose-600"}>
+                              {customerNewsletterEmail(customer) || "Keine E-Mail hinterlegt"}
                             </span>
                           </div>
                           <span
                             className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                              customer.email ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+                              customerNewsletterEmail(customer) ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
                             }`}
                           >
-                            {customer.email ? "Mail" : "Fehlt"}
+                            {customerNewsletterEmail(customer) ? "Mail" : "Fehlt"}
                           </span>
                         </label>
                       );
