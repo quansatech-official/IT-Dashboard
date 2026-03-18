@@ -2831,7 +2831,36 @@ def _has_explicit_ai_model_selection(config: Optional[Dict[str, Any]], purpose: 
     if normalized_purpose and isinstance(configured_models, dict):
         if str(configured_models.get(normalized_purpose) or "").strip():
             return True
+    if not normalized_purpose and isinstance(configured_models, dict):
+        for value in configured_models.values():
+            if str(value or "").strip():
+                return True
     return bool(str(config.get("configured_default_model") or "").strip())
+
+
+def _merge_preferred_and_available_models(
+    preferred_models: List[str],
+    available_models: List[str],
+) -> List[str]:
+    available_lookup = {model.lower(): model for model in available_models}
+    ordered: List[str] = []
+    seen: Set[str] = set()
+    for candidate in preferred_models:
+        matched_model = available_lookup.get(str(candidate or "").strip().lower())
+        if not matched_model:
+            continue
+        normalized = matched_model.lower()
+        if normalized in seen:
+            continue
+        ordered.append(matched_model)
+        seen.add(normalized)
+    for model in available_models:
+        normalized = str(model or "").strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        ordered.append(model)
+        seen.add(normalized)
+    return ordered
 
 
 def _list_ollama_models(timeout_seconds: int = 8, base_url: Optional[str] = None) -> List[str]:
@@ -2932,6 +2961,76 @@ def _list_available_ai_models(
     if models:
         return models
     return _configured_ai_models_for_picker(resolved_config)
+
+
+def _extract_openai_compatible_error_detail(response: Optional[requests.Response]) -> str:
+    if response is None:
+        return ""
+    try:
+        payload = response.json()
+    except ValueError:
+        return str(response.text or "").strip()
+    if isinstance(payload, dict):
+        error_payload = payload.get("error")
+        if isinstance(error_payload, dict):
+            return str(
+                error_payload.get("message")
+                or error_payload.get("detail")
+                or payload.get("detail")
+                or response.text
+                or ""
+            ).strip()
+        return str(payload.get("detail") or payload.get("message") or response.text or "").strip()
+    return str(response.text or "").strip()
+
+
+def _shrink_openai_prompt_for_context_limit(
+    prompt_text: str,
+    max_tokens: Optional[int],
+    error_detail: str,
+) -> Tuple[str, Optional[int], bool]:
+    detail = str(error_detail or "").strip()
+    if not detail:
+        return prompt_text, max_tokens, False
+    match = re.search(
+        r"maximum context length is\s*(\d+)\s*tokens.*?requested\s*(\d+)\s*tokens\s*\((\d+)\s*in the messages,\s*(\d+)\s*in the completion\)",
+        detail,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return prompt_text, max_tokens, False
+    context_limit = int(match.group(1) or 0)
+    message_tokens = int(match.group(3) or 0)
+    requested_completion_tokens = int(match.group(4) or 0)
+    if context_limit <= 0 or message_tokens <= 0:
+        return prompt_text, max_tokens, False
+    current_completion_tokens = int(max_tokens or requested_completion_tokens or 0)
+    if current_completion_tokens <= 0:
+        current_completion_tokens = requested_completion_tokens
+    target_max_tokens = max(
+        32,
+        min(
+            current_completion_tokens or 96,
+            max(48, context_limit // 5),
+            160,
+        ),
+    )
+    allowed_prompt_tokens = max(64, context_limit - target_max_tokens - 16)
+    next_prompt_text = prompt_text
+    if message_tokens > allowed_prompt_tokens:
+        ratio = allowed_prompt_tokens / max(1, message_tokens)
+        next_char_limit = max(240, int(len(prompt_text) * ratio) - 24)
+        if next_char_limit >= len(prompt_text):
+            next_char_limit = max(240, len(prompt_text) - 120)
+        next_prompt_text = _truncate_middle_text(prompt_text, next_char_limit)
+    next_max_tokens = max_tokens
+    if max_tokens is None:
+        if requested_completion_tokens > target_max_tokens:
+            next_max_tokens = target_max_tokens
+    elif target_max_tokens < max_tokens:
+        next_max_tokens = target_max_tokens
+    changed = next_prompt_text != prompt_text or next_max_tokens != max_tokens
+    return next_prompt_text, next_max_tokens, changed
 
 
 def _ollama_manage_model(
@@ -3382,6 +3481,10 @@ def _openai_compatible_generate(
     normalized_models = _merge_model_candidates(model_candidates)
     if not normalized_models:
         normalized_models = _configured_ai_models_for_picker(config)
+    if not _has_explicit_ai_model_selection(config):
+        available_models = _list_openai_compatible_models(config, timeout_seconds=min(request_timeout, 8))
+        if available_models:
+            normalized_models = _merge_preferred_and_available_models(normalized_models, available_models)
     if not normalized_models:
         normalized_models = ["qwen3:8b"]
     prompt_text = str(prompt or "").strip()
@@ -3417,32 +3520,65 @@ def _openai_compatible_generate(
             resolved_max_tokens = None
     headers = _build_openai_compatible_headers(str(config.get("api_key") or ""))
     for model in normalized_models:
-        payload: Dict[str, Any] = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt_text}],
-        }
-        if temperature is not None:
-            payload["temperature"] = float(temperature)
-        if resolved_max_tokens is not None and resolved_max_tokens > 0:
-            payload["max_tokens"] = int(resolved_max_tokens)
-        if response_format == "json":
-            payload["response_format"] = {"type": "json_object"}
+        attempt_prompt_text = prompt_text
+        attempt_max_tokens = resolved_max_tokens
+        data: Dict[str, Any] = {}
         started_at = time.time()
-        try:
-            with _ollama_http.post(
-                request_url,
-                headers=headers,
-                json=payload,
-                timeout=(connect_timeout, request_timeout),
-            ) as response:
-                response.raise_for_status()
-                loaded = response.json()
-                data = loaded if isinstance(loaded, dict) else {}
-        except requests.HTTPError as exc:
-            logger.warning("OpenAI-compatible request failed with model %s: %s", model, exc)
-            continue
-        except (requests.RequestException, ValueError) as exc:
-            logger.warning("OpenAI-compatible request failed with model %s: %s", model, exc)
+        for attempt_index in range(3):
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": attempt_prompt_text}],
+            }
+            if temperature is not None:
+                payload["temperature"] = float(temperature)
+            if attempt_max_tokens is not None and attempt_max_tokens > 0:
+                payload["max_tokens"] = int(attempt_max_tokens)
+            if response_format == "json":
+                payload["response_format"] = {"type": "json_object"}
+            try:
+                with _ollama_http.post(
+                    request_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=(connect_timeout, request_timeout),
+                ) as response:
+                    response.raise_for_status()
+                    loaded = response.json()
+                    data = loaded if isinstance(loaded, dict) else {}
+                    break
+            except requests.HTTPError as exc:
+                detail = _extract_openai_compatible_error_detail(exc.response)
+                if exc.response is not None and exc.response.status_code == 400:
+                    next_prompt_text, next_max_tokens, changed = _shrink_openai_prompt_for_context_limit(
+                        attempt_prompt_text,
+                        attempt_max_tokens,
+                        detail,
+                    )
+                    if changed:
+                        logger.info(
+                            "OpenAI-compatible context trim model=%s attempt=%s prompt_chars=%s->%s max_tokens=%s->%s",
+                            model,
+                            attempt_index + 1,
+                            len(attempt_prompt_text),
+                            len(next_prompt_text),
+                            int(attempt_max_tokens or 0),
+                            int(next_max_tokens or 0),
+                        )
+                        attempt_prompt_text = next_prompt_text
+                        attempt_max_tokens = next_max_tokens
+                        continue
+                logger.warning(
+                    "OpenAI-compatible request failed with model %s: %s",
+                    model,
+                    detail or exc,
+                )
+                data = {}
+                break
+            except (requests.RequestException, ValueError) as exc:
+                logger.warning("OpenAI-compatible request failed with model %s: %s", model, exc)
+                data = {}
+                break
+        if not data:
             continue
         response_text = _extract_openai_compatible_response_text(data)
         normalized_payload = {
@@ -3455,8 +3591,8 @@ def _openai_compatible_generate(
                 "OpenAI-compatible slow response model=%s duration_ms=%s prompt_chars=%s max_tokens=%s",
                 model,
                 duration_ms,
-                len(prompt_text),
-                int(resolved_max_tokens or 0),
+                len(attempt_prompt_text),
+                int(attempt_max_tokens or 0),
             )
         if cache_key and response_text:
             _store_cached_ollama_response(cache_key, normalized_payload, model)
@@ -6478,7 +6614,7 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "meta_hub_mailbox_count": len(meta_hub_mailboxes),
         "ai_provider": ai_config["provider"],
         "ai_base_url": ai_config["base_url"],
-        "ai_default_model": _normalize_model_setting_value(settings.ai_default_model or ai_config["default_model"]),
+        "ai_default_model": _normalize_model_setting_value(settings.ai_default_model),
         "ai_internal_model": _normalize_model_setting_value(settings.ai_internal_model),
         "ai_action_model": _normalize_model_setting_value(settings.ai_action_model),
         "ai_task_model": _normalize_model_setting_value(settings.ai_task_model),
@@ -16982,7 +17118,10 @@ def probe_ai_connection_models(data: AiConnectionProbeRequest):
         models = configured_models
     if not models:
         raise HTTPException(502, "Keine Modelle vom Provider abrufbar")
-    resolved_default_model = default_model or (models[0] if models else "")
+    available_lookup = {str(model or "").strip().lower(): model for model in models}
+    resolved_default_model = available_lookup.get(default_model.lower(), "") if default_model else ""
+    if not resolved_default_model:
+        resolved_default_model = models[0] if models else ""
     return {
         "provider": provider,
         "base_url": base_url,
