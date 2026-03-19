@@ -77,6 +77,14 @@ OLLAMA_MAX_TOKENS_HARD_LIMIT = max(
     64,
     int(os.environ.get("OLLAMA_MAX_TOKENS_HARD_LIMIT") or "320"),
 )
+OPENAI_COMPATIBLE_PROMPT_MAX_CHARS = max(
+    0,
+    int(os.environ.get("OPENAI_COMPATIBLE_PROMPT_MAX_CHARS") or "0"),
+)
+OPENAI_COMPATIBLE_MAX_TOKENS_HARD_LIMIT = max(
+    0,
+    int(os.environ.get("OPENAI_COMPATIBLE_MAX_TOKENS_HARD_LIMIT") or "0"),
+)
 INTERNAL_AI_MAX_TOKENS = max(
     128,
     int(os.environ.get("INTERNAL_AI_MAX_TOKENS") or "1200"),
@@ -3132,6 +3140,12 @@ def _resolve_internal_ai_tool_models(requested_model: Any = None) -> List[str]:
 
 
 def _internal_ai_prompt_limit_chars() -> int:
+    config = _get_ai_config_snapshot()
+    provider = str(config.get("provider") or AI_PROVIDER_OLLAMA)
+    if provider == AI_PROVIDER_OPENAI_COMPATIBLE:
+        if OPENAI_COMPATIBLE_PROMPT_MAX_CHARS > 0:
+            return max(800, int(OPENAI_COMPATIBLE_PROMPT_MAX_CHARS))
+        return 1_000_000_000
     resolved_max_tokens = max(
         128,
         min(int(INTERNAL_AI_TOOL_MAX_TOKENS), int(OLLAMA_MAX_TOKENS_HARD_LIMIT or INTERNAL_AI_TOOL_MAX_TOKENS)),
@@ -3434,35 +3448,92 @@ def _ollama_generate_text(
     return (data.get("response") or "").strip()
 
 
+def _extract_openai_compatible_text_parts(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, list):
+        return ""
+    parts: List[str] = []
+    for entry in value:
+        if isinstance(entry, str):
+            if entry.strip():
+                parts.append(entry)
+            continue
+        if not isinstance(entry, dict):
+            continue
+        text_part = entry.get("text")
+        if isinstance(text_part, str) and text_part.strip():
+            parts.append(text_part)
+            continue
+        content_part = entry.get("content")
+        if isinstance(content_part, str) and content_part.strip():
+            parts.append(content_part)
+    return "".join(parts).strip()
+
+
 def _extract_openai_compatible_response_text(payload: Dict[str, Any]) -> str:
     choices = payload.get("choices") if isinstance(payload, dict) else None
     if not isinstance(choices, list) or not choices:
         return ""
     first_choice = choices[0] if isinstance(choices[0], dict) else {}
     message = first_choice.get("message") if isinstance(first_choice, dict) else {}
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: List[str] = []
-        for entry in content:
-            if isinstance(entry, str):
-                parts.append(entry)
-                continue
-            if not isinstance(entry, dict):
-                continue
-            text_part = entry.get("text")
-            if isinstance(text_part, str) and text_part.strip():
-                parts.append(text_part)
-                continue
-            content_part = entry.get("content")
-            if isinstance(content_part, str) and content_part.strip():
-                parts.append(content_part)
-        return "".join(parts).strip()
+    if isinstance(message, dict):
+        content = _extract_openai_compatible_text_parts(message.get("content"))
+        if content:
+            return content
     text = first_choice.get("text") if isinstance(first_choice, dict) else None
     if isinstance(text, str):
         return text.strip()
     return ""
+
+
+def _summarize_openai_compatible_response(payload: Dict[str, Any]) -> str:
+    if not isinstance(payload, dict):
+        return "invalid-payload"
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return f"choices={type(choices).__name__}"
+    first_choice = choices[0]
+    message = first_choice.get("message") if isinstance(first_choice.get("message"), dict) else {}
+    finish_reason = str(first_choice.get("finish_reason") or "").strip() or "n/a"
+    content_text = _extract_openai_compatible_text_parts(message.get("content"))
+    reasoning_text = _extract_openai_compatible_text_parts(message.get("reasoning_content"))
+    if not reasoning_text:
+        reasoning_text = _extract_openai_compatible_text_parts(message.get("reasoning"))
+    message_keys = ",".join(sorted(str(key) for key in message.keys())) or "n/a"
+    return (
+        f"finish_reason={finish_reason} "
+        f"content_len={len(content_text)} "
+        f"reasoning_len={len(reasoning_text)} "
+        f"message_keys={message_keys}"
+    )
+
+
+def _should_disable_openai_thinking(model: str, response_format: str) -> bool:
+    model_name = str(model or "").strip().lower()
+    if response_format != "json":
+        return False
+    return model_name.startswith("qwen3") or "qwen3-" in model_name or model_name.startswith("qwq")
+
+
+def _resolve_openai_compatible_prompt_limit_chars() -> Optional[int]:
+    if OPENAI_COMPATIBLE_PROMPT_MAX_CHARS <= 0:
+        return None
+    return max(800, int(OPENAI_COMPATIBLE_PROMPT_MAX_CHARS))
+
+
+def _resolve_openai_compatible_max_tokens(max_tokens: Optional[int]) -> Optional[int]:
+    if max_tokens is None:
+        return None
+    try:
+        resolved = int(max_tokens)
+    except (TypeError, ValueError):
+        return None
+    if resolved <= 0:
+        return None
+    if OPENAI_COMPATIBLE_MAX_TOKENS_HARD_LIMIT > 0:
+        resolved = min(resolved, int(OPENAI_COMPATIBLE_MAX_TOKENS_HARD_LIMIT))
+    return max(1, resolved)
 
 
 def _openai_compatible_generate(
@@ -3490,8 +3561,9 @@ def _openai_compatible_generate(
     prompt_text = str(prompt or "").strip()
     if not prompt_text:
         return {}, ""
-    if len(prompt_text) > OLLAMA_PROMPT_MAX_CHARS:
-        prompt_text = prompt_text[:OLLAMA_PROMPT_MAX_CHARS]
+    prompt_char_limit = _resolve_openai_compatible_prompt_limit_chars()
+    if prompt_char_limit is not None and len(prompt_text) > prompt_char_limit:
+        prompt_text = prompt_text[:prompt_char_limit]
     resolved_base_url = str(config.get("base_url") or "").strip()
     request_url = _normalize_openai_compatible_url(resolved_base_url, "chat/completions")
     if not request_url:
@@ -3512,12 +3584,7 @@ def _openai_compatible_generate(
     cached_response = _get_cached_ollama_response(cache_key) if cache_key else None
     if cached_response is not None:
         return cached_response
-    resolved_max_tokens: Optional[int] = None
-    if max_tokens is not None:
-        try:
-            resolved_max_tokens = max(1, min(int(max_tokens), OLLAMA_MAX_TOKENS_HARD_LIMIT))
-        except (TypeError, ValueError):
-            resolved_max_tokens = None
+    resolved_max_tokens = _resolve_openai_compatible_max_tokens(max_tokens)
     headers = _build_openai_compatible_headers(str(config.get("api_key") or ""))
     for model in normalized_models:
         attempt_prompt_text = prompt_text
@@ -3535,6 +3602,8 @@ def _openai_compatible_generate(
                 payload["max_tokens"] = int(attempt_max_tokens)
             if response_format == "json":
                 payload["response_format"] = {"type": "json_object"}
+            if _should_disable_openai_thinking(model, response_format):
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
             try:
                 with _ollama_http.post(
                     request_url,
@@ -3581,6 +3650,12 @@ def _openai_compatible_generate(
         if not data:
             continue
         response_text = _extract_openai_compatible_response_text(data)
+        if not response_text:
+            logger.warning(
+                "OpenAI-compatible response empty for model %s: %s",
+                model,
+                _summarize_openai_compatible_response(data),
+            )
         normalized_payload = {
             "response": response_text,
             "usage": data.get("usage") if isinstance(data, dict) else {},
@@ -18226,7 +18301,7 @@ def generate_action(data: ActionAiRequest):
         model_candidates=model_candidates,
         response_format="json",
         temperature=0.2,
-        max_tokens=180,
+        max_tokens=INTERNAL_AI_TOOL_MAX_TOKENS,
         timeout=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
     )
     if not payload:
