@@ -2945,6 +2945,15 @@ def _list_openai_compatible_models(
         model_name = str(item.get("id") or item.get("model") or "").strip()
         if not model_name:
             continue
+        context_limit = _safe_int(
+            item.get("max_model_len")
+            or item.get("max_context_len")
+            or item.get("context_length")
+            or item.get("max_context_length"),
+            0,
+        )
+        if context_limit > 0:
+            _remember_openai_compatible_context_limit(model_name, context_limit)
         normalized = model_name.lower()
         if normalized in seen:
             continue
@@ -3588,6 +3597,21 @@ def _resolve_openai_compatible_max_tokens(max_tokens: Optional[int]) -> Optional
     return max(1, resolved)
 
 
+def _refresh_openai_compatible_context_limits_for_models(
+    config: Dict[str, Any],
+    model_candidates: List[str],
+    timeout_seconds: int,
+) -> None:
+    missing_models = [
+        str(model or "").strip()
+        for model in model_candidates
+        if str(model or "").strip() and _get_openai_compatible_context_limit(str(model or "").strip()) <= 0
+    ]
+    if not missing_models:
+        return
+    _list_openai_compatible_models(config, timeout_seconds=max(2, int(timeout_seconds or 8)))
+
+
 def _openai_compatible_generate(
     prompt: str,
     *,
@@ -3638,6 +3662,11 @@ def _openai_compatible_generate(
         return cached_response
     resolved_max_tokens = _resolve_openai_compatible_max_tokens(max_tokens)
     headers = _build_openai_compatible_headers(str(config.get("api_key") or ""))
+    _refresh_openai_compatible_context_limits_for_models(
+        config,
+        normalized_models,
+        timeout_seconds=min(request_timeout, 8),
+    )
     for model in normalized_models:
         attempt_prompt_text = prompt_text
         attempt_max_tokens = resolved_max_tokens
