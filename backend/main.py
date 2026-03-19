@@ -11319,6 +11319,26 @@ def _customer_address_text(address: Dict[str, Any]) -> str:
     )
 
 
+def _hydrate_customer_general_address_from_billing(
+    customer: Customer, billing_address: Dict[str, Any]
+) -> bool:
+    changed = False
+    address_mapping = {
+        "street": "street",
+        "postal_code": "postal_code",
+        "city": "city",
+        "country": "country",
+    }
+    for customer_field, billing_key in address_mapping.items():
+        current_value = _clean_customer_contact_value(getattr(customer, customer_field, ""))
+        next_value = _clean_customer_contact_value(billing_address.get(billing_key))
+        if current_value or not next_value:
+            continue
+        setattr(customer, customer_field, next_value)
+        changed = True
+    return changed
+
+
 def _sevdesk_contact_candidate_objects(contact: Dict[str, Any]) -> List[Dict[str, Any]]:
     candidates: List[Dict[str, Any]] = []
     seen: Set[int] = set()
@@ -11420,6 +11440,41 @@ def _extract_sevdesk_contact_billing_address(contact: Dict[str, Any]) -> Dict[st
             ("invoiceCountry", "billingCountry", "country", "countryName", "addressCountry"),
         ),
     }
+
+
+def _extract_sevdesk_contact_address_row(address: Dict[str, Any]) -> Dict[str, str]:
+    country_value = address.get("country")
+    country_text = _sevdesk_extract_string(country_value)
+    if not country_text and isinstance(country_value, dict):
+        country_text = _sevdesk_extract_string(country_value.get("name"))
+    return {
+        "street": _clean_customer_contact_value(address.get("street") or address.get("streetName")),
+        "postal_code": _clean_customer_contact_value(
+            address.get("zip") or address.get("postalCode") or address.get("postal_code")
+        ),
+        "city": _clean_customer_contact_value(address.get("city") or address.get("town")),
+        "country": _clean_customer_contact_value(country_text),
+    }
+
+
+def _resolve_sevdesk_contact_billing_address(
+    client: SevdeskClient, contact: Dict[str, Any]
+) -> Dict[str, str]:
+    extracted = _extract_sevdesk_contact_billing_address(contact)
+    if any(extracted.values()):
+        return extracted
+    contact_id = _safe_int(contact.get("id"))
+    if contact_id <= 0:
+        return extracted
+    try:
+        address_rows = client.list_contact_addresses(contact_id)
+    except SevdeskError:
+        return extracted
+    for row in address_rows:
+        resolved = _extract_sevdesk_contact_address_row(row)
+        if any(resolved.values()):
+            return resolved
+    return extracted
 
 
 def _normalize_customer_number(value: Any) -> str:
@@ -15209,8 +15264,9 @@ def sync_customers_from_sevdesk():
         config = _build_sevdesk_config(integration, metrics)
         if not config.api_token:
             raise HTTPException(400, "Sevdesk settings missing: sevdesk_api_token")
+        client = SevdeskClient(config, timeout=25)
         try:
-            contacts = SevdeskClient(config, timeout=25).list_contacts(limit=200, max_pages=25)
+            contacts = client.list_contacts(limit=200, max_pages=25)
         except SevdeskError as exc:
             raise HTTPException(502, f"Sevdesk sync failed: {exc}") from exc
 
@@ -15237,7 +15293,7 @@ def sync_customers_from_sevdesk():
             normalized_number = _normalize_customer_number(number)
             name = _sevdesk_contact_display_name(contact)
             billing_email = _extract_sevdesk_contact_email(contact)
-            billing_address = _extract_sevdesk_contact_billing_address(contact)
+            billing_address = _resolve_sevdesk_contact_billing_address(client, contact)
             if number:
                 seen_numbers.add(number)
             if normalized_number:
@@ -15274,6 +15330,8 @@ def sync_customers_from_sevdesk():
                 if billing_address["country"] != _clean_customer_contact_value(customer.billing_country):
                     customer.billing_country = billing_address["country"]
                     changed = True
+                if _hydrate_customer_general_address_from_billing(customer, billing_address):
+                    changed = True
                 if changed:
                     updated += 1
                 continue
@@ -15281,6 +15339,10 @@ def sync_customers_from_sevdesk():
                 name=name or f"Kunde {number}",
                 creditor_number=number or "",
                 billing_email=billing_email,
+                street=billing_address["street"],
+                postal_code=billing_address["postal_code"],
+                city=billing_address["city"],
+                country=billing_address["country"],
                 billing_street=billing_address["street"],
                 billing_postal_code=billing_address["postal_code"],
                 billing_city=billing_address["city"],

@@ -105,6 +105,26 @@ class SevdeskClient:
         payload = self.request("GET", f"/Contact/{contact_id}")
         return self._extract_first(payload)
 
+    def list_contact_addresses(self, contact_id: int) -> List[Dict[str, Any]]:
+        if int(contact_id or 0) <= 0:
+            return []
+        payload = self.request(
+            "GET",
+            "/ContactAddress",
+            params={
+                "contact[id]": int(contact_id),
+                "contact[objectName]": "Contact",
+                "limit": 100,
+                "offset": 0,
+            },
+        )
+        objects = payload.get("objects")
+        if isinstance(objects, list):
+            return [item for item in objects if isinstance(item, dict)]
+        if isinstance(objects, dict):
+            return [objects]
+        return []
+
     def find_draft_invoice(self, contact_id: int) -> Optional[Dict[str, Any]]:
         payload = self.request(
             "GET",
