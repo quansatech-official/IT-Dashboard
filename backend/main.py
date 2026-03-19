@@ -215,6 +215,8 @@ _ollama_response_cache: Dict[str, Dict[str, Any]] = {}
 _ollama_response_cache_lock = threading.Lock()
 _ollama_missing_model_until_ms: Dict[str, int] = {}
 _ollama_missing_model_lock = threading.Lock()
+_openai_compatible_context_limits: Dict[str, int] = {}
+_openai_compatible_context_limits_lock = threading.Lock()
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -2992,24 +2994,74 @@ def _extract_openai_compatible_error_detail(response: Optional[requests.Response
     return str(response.text or "").strip()
 
 
-def _shrink_openai_prompt_for_context_limit(
-    prompt_text: str,
-    max_tokens: Optional[int],
-    error_detail: str,
-) -> Tuple[str, Optional[int], bool]:
+def _parse_openai_context_limit_error_detail(error_detail: str) -> Tuple[int, int, int]:
     detail = str(error_detail or "").strip()
     if not detail:
-        return prompt_text, max_tokens, False
+        return 0, 0, 0
     match = re.search(
         r"maximum context length is\s*(\d+)\s*tokens.*?requested\s*(\d+)\s*tokens\s*\((\d+)\s*in the messages,\s*(\d+)\s*in the completion\)",
         detail,
         re.IGNORECASE | re.DOTALL,
     )
     if not match:
-        return prompt_text, max_tokens, False
-    context_limit = int(match.group(1) or 0)
-    message_tokens = int(match.group(3) or 0)
-    requested_completion_tokens = int(match.group(4) or 0)
+        return 0, 0, 0
+    return (
+        int(match.group(1) or 0),
+        int(match.group(3) or 0),
+        int(match.group(4) or 0),
+    )
+
+
+def _remember_openai_compatible_context_limit(model: str, context_limit: int) -> None:
+    model_key = str(model or "").strip().lower()
+    if not model_key or context_limit <= 0:
+        return
+    with _openai_compatible_context_limits_lock:
+        previous = int(_openai_compatible_context_limits.get(model_key) or 0)
+        if previous <= 0 or context_limit < previous:
+            _openai_compatible_context_limits[model_key] = int(context_limit)
+
+
+def _get_openai_compatible_context_limit(model: str) -> int:
+    model_key = str(model or "").strip().lower()
+    if not model_key:
+        return 0
+    with _openai_compatible_context_limits_lock:
+        return int(_openai_compatible_context_limits.get(model_key) or 0)
+
+
+def _fit_openai_request_to_known_context_limit(
+    model: str,
+    prompt_text: str,
+    max_tokens: Optional[int],
+) -> Tuple[str, Optional[int]]:
+    context_limit = _get_openai_compatible_context_limit(model)
+    prompt_value = str(prompt_text or "").strip()
+    if context_limit <= 0 or not prompt_value:
+        return prompt_value, max_tokens
+    if max_tokens is None:
+        return prompt_value, max_tokens
+    safety_margin = max(24, min(128, int(context_limit * 0.08)))
+    approx_prompt_tokens = max(1, int(math.ceil(len(prompt_value) / 4.0)))
+    allowed_completion_tokens = max(1, context_limit - approx_prompt_tokens - safety_margin)
+    next_max_tokens = min(int(max_tokens), allowed_completion_tokens)
+    allowed_prompt_tokens = max(64, context_limit - next_max_tokens - safety_margin)
+    if approx_prompt_tokens > allowed_prompt_tokens:
+        ratio = allowed_prompt_tokens / max(1, approx_prompt_tokens)
+        next_char_limit = max(240, int(len(prompt_value) * ratio) - 24)
+        prompt_value = _truncate_middle_text(prompt_value, next_char_limit)
+        approx_prompt_tokens = max(1, int(math.ceil(len(prompt_value) / 4.0)))
+        allowed_completion_tokens = max(1, context_limit - approx_prompt_tokens - safety_margin)
+        next_max_tokens = min(next_max_tokens, allowed_completion_tokens)
+    return prompt_value, max(1, next_max_tokens)
+
+
+def _shrink_openai_prompt_for_context_limit(
+    prompt_text: str,
+    max_tokens: Optional[int],
+    error_detail: str,
+) -> Tuple[str, Optional[int], bool]:
+    context_limit, message_tokens, requested_completion_tokens = _parse_openai_context_limit_error_detail(error_detail)
     if context_limit <= 0 or message_tokens <= 0:
         return prompt_text, max_tokens, False
     current_completion_tokens = int(max_tokens or requested_completion_tokens or 0)
@@ -3589,6 +3641,11 @@ def _openai_compatible_generate(
     for model in normalized_models:
         attempt_prompt_text = prompt_text
         attempt_max_tokens = resolved_max_tokens
+        attempt_prompt_text, attempt_max_tokens = _fit_openai_request_to_known_context_limit(
+            model,
+            attempt_prompt_text,
+            attempt_max_tokens,
+        )
         data: Dict[str, Any] = {}
         started_at = time.time()
         for attempt_index in range(3):
@@ -3618,6 +3675,9 @@ def _openai_compatible_generate(
             except requests.HTTPError as exc:
                 detail = _extract_openai_compatible_error_detail(exc.response)
                 if exc.response is not None and exc.response.status_code == 400:
+                    context_limit, _, _ = _parse_openai_context_limit_error_detail(detail)
+                    if context_limit > 0:
+                        _remember_openai_compatible_context_limit(model, context_limit)
                     next_prompt_text, next_max_tokens, changed = _shrink_openai_prompt_for_context_limit(
                         attempt_prompt_text,
                         attempt_max_tokens,
