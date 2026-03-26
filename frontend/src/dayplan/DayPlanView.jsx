@@ -30,7 +30,13 @@ const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }).then((r) => r.json()),
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(data?.detail || "Aufgabe konnte nicht erstellt werden.");
+      }
+      return data;
+    }),
   update: (id, payload) =>
     fetch(`${API}/day_tasks/${id}`, {
       method: "PATCH",
@@ -403,14 +409,18 @@ export default function DayPlanView() {
       return;
     }
     lastCreateRef.current = { text: trimmed, groupId: normalizedGroupId, at: now };
-    const created = await api.create({
-      title: trimmed,
-      group_id: normalizedGroupId,
-      status: "todo"
-    });
-    if (created?.id) {
-      setTasks((prev) => [created, ...prev]);
-      markTaskAsNew(created.id);
+    try {
+      const created = await api.create({
+        title: trimmed,
+        group_id: normalizedGroupId,
+        status: "todo"
+      });
+      if (created?.id) {
+        setTasks((prev) => [created, ...prev]);
+        markTaskAsNew(created.id);
+      }
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Aufgabe konnte nicht erstellt werden.");
     }
   };
 
@@ -1542,7 +1552,11 @@ export default function DayPlanView() {
       }
       closeEmailTaskModal();
     } catch (error) {
-      setEmailTaskError("Aufgabe konnte aus der E-Mail nicht erstellt werden.");
+      setEmailTaskError(
+        error instanceof Error && error.message
+          ? error.message
+          : "Aufgabe konnte aus der E-Mail nicht erstellt werden."
+      );
       setEmailTaskSaving(false);
     }
   };

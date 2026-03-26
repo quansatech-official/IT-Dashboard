@@ -16655,6 +16655,7 @@ def create_day_task(data: DayTaskCreate):
         erledigt = bool(data.erledigt) or status == "done"
         kulant = bool(data.kulant)
         wartungsvertrag = bool(data.wartungsvertrag)
+        randzeit = bool(data.randzeit)
         urgency_flag = _normalize_urgency_flag(data.urgency_flag)
         task = DayTask(
             title=data.title,
@@ -16669,6 +16670,7 @@ def create_day_task(data: DayTaskCreate):
             aberechnet=bool(data.aberechnet) and not kulant and not wartungsvertrag,
             kulant=kulant,
             wartungsvertrag=wartungsvertrag,
+            randzeit=randzeit,
             details=data.details or "",
             arrival_time=data.arrival_time or "",
             departure_time=data.departure_time or "",
@@ -16681,10 +16683,16 @@ def create_day_task(data: DayTaskCreate):
             running=bool(data.running),
             startTime=int(data.startTime or 0),
             completed_at=now_ms if erledigt else 0,
+            created_at=now_ms,
         )
         db.add(task)
-        db.commit()
-        db.refresh(task)
+        try:
+            db.commit()
+            db.refresh(task)
+        except SQLAlchemyError as exc:
+            db.rollback()
+            logger.exception("Failed to create day task")
+            raise HTTPException(500, f"Task create failed: {exc}") from exc
         return serialize_day_task(task)
 
 
