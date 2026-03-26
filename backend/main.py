@@ -11575,7 +11575,35 @@ def _find_sevdesk_contact_by_customer_number(
         contact = client.get_contact_by_customer_number(value)
         if contact:
             return contact, value
-    return None, raw_value
+    if not normalized_value:
+        return None, raw_value
+    try:
+        contacts = client.list_contacts(limit=200, max_pages=25)
+    except SevdeskError:
+        contacts = []
+    best_contact: Optional[Dict[str, Any]] = None
+    best_number = raw_value
+    best_score = -1
+    for contact in contacts:
+        if not isinstance(contact, dict):
+            continue
+        contact_number = _extract_customer_number_from_contact(contact)
+        normalized_contact_number = _normalize_customer_number(contact_number)
+        if not normalized_contact_number or normalized_contact_number != normalized_value:
+            continue
+        score = 0
+        if contact_number == raw_value:
+            score += 100
+        elif normalized_contact_number == normalized_value:
+            score += 80
+        status_value = str(contact.get("status") or "").strip().lower()
+        if status_value in {"100", "active"}:
+            score += 5
+        if score > best_score:
+            best_score = score
+            best_contact = contact
+            best_number = contact_number or raw_value
+    return best_contact, best_number
 
 
 def _build_sevdesk_customer_rows(
