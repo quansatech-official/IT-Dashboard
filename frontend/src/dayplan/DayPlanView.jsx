@@ -356,6 +356,7 @@ export default function DayPlanView() {
       return;
     }
     const customerNumber = String(sevdeskDraftForm.customer_number || "").trim();
+    const customerName = String(sevdeskDraftTask?.customer || "").trim();
     if (!customerNumber) {
       setSevdeskDraftCheck({ state: "idle", hasDraft: false, contactFound: true });
       return;
@@ -363,10 +364,18 @@ export default function DayPlanView() {
     let active = true;
     const timeout = setTimeout(() => {
       setSevdeskDraftCheck((prev) => ({ ...prev, state: "loading" }));
-      fetch(`${API}/sevdesk/drafts/check?customer_number=${encodeURIComponent(customerNumber)}`)
+      const params = new URLSearchParams({ customer_number: customerNumber });
+      if (customerName) params.set("customer_name", customerName);
+      fetch(`${API}/sevdesk/drafts/check?${params.toString()}`)
         .then((res) => (res && res.ok ? res.json() : null))
         .then((data) => {
           if (!active) return;
+          const resolvedCustomerNumber = String(data?.resolved_customer_number || "").trim();
+          if (resolvedCustomerNumber && resolvedCustomerNumber !== customerNumber) {
+            setSevdeskDraftForm((prev) =>
+              prev ? { ...prev, customer_number: resolvedCustomerNumber } : prev
+            );
+          }
           setSevdeskDraftCheck({
             state: "ready",
             hasDraft: Boolean(data?.has_draft),
@@ -382,7 +391,7 @@ export default function DayPlanView() {
       active = false;
       clearTimeout(timeout);
     };
-  }, [sevdeskDraftOpen, sevdeskDraftForm?.customer_number, sevdeskTokenAvailable]);
+  }, [sevdeskDraftOpen, sevdeskDraftForm?.customer_number, sevdeskDraftTask?.customer, sevdeskTokenAvailable]);
 
   const addTaskToGroup = async (groupId, text) => {
     const trimmed = String(text || "").trim();

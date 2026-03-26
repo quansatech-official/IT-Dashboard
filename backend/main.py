@@ -17965,7 +17965,7 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
 
 
 @app.get("/api/sevdesk/drafts/check")
-def sevdesk_check_draft(customer_number: str):
+def sevdesk_check_draft(customer_number: str, customer_name: str = ""):
     with SessionLocal() as db:
         settings = db.query(IntegrationSettings).first()
         if not settings:
@@ -17974,25 +17974,31 @@ def sevdesk_check_draft(customer_number: str):
             db.commit()
         config = _require_sevdesk_config(settings)
         _require_sevdesk_invoice_fields(config)
+        customer_number = (customer_number or "").strip()
+        customer_name = (customer_name or "").strip()
+        if not customer_number:
+            raise HTTPException(400, "Missing customer_number")
 
-    customer_number = (customer_number or "").strip()
-    if not customer_number:
-        raise HTTPException(400, "Missing customer_number")
-
-    client = SevdeskClient(config)
-    try:
-        contact, _ = _find_sevdesk_contact_by_customer_number(client, customer_number)
-        if not contact:
-            return {"contact_found": False, "has_draft": False, "draft_id": None}
-        contact_id = int(contact.get("id"))
-        draft = client.find_draft_invoice(contact_id)
-    except SevdeskError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        client = SevdeskClient(config)
+        try:
+            contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
+            if not contact and customer_name:
+                fallback_number = _resolve_local_customer_number_by_name(db, customer_name)
+                if fallback_number and fallback_number != customer_number:
+                    customer_number = fallback_number
+                    contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
+            if not contact:
+                return {"contact_found": False, "has_draft": False, "draft_id": None, "resolved_customer_number": None}
+            contact_id = int(contact.get("id"))
+            draft = client.find_draft_invoice(contact_id)
+        except SevdeskError as exc:
+            raise HTTPException(502, str(exc)) from exc
 
     return {
         "contact_found": True,
         "has_draft": bool(draft),
         "draft_id": int(draft.get("id")) if draft else None,
+        "resolved_customer_number": resolved_customer_number or customer_number,
     }
 
 
