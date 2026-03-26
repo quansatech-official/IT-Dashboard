@@ -1,11 +1,38 @@
 const API = "/api/telephony";
 const CUSTOMER_API = "/api/customers";
 
+const readJsonOrNull = async (response) => {
+  try {
+    return await response.json();
+  } catch (error) {
+    return null;
+  }
+};
+
+const responseErrorDetail = async (response) => {
+  const payload = await readJsonOrNull(response);
+  if (typeof payload?.detail === "string" && payload.detail.trim()) {
+    return payload.detail.trim();
+  }
+  return `HTTP ${response.status}`;
+};
+
 const safeJson = async (response) => {
   if (!response.ok) {
-    throw new Error("API request failed");
+    throw new Error(await responseErrorDetail(response));
   }
   return response.json();
+};
+
+const normalizeCustomerPhonesForSave = (phones) => {
+  if (!Array.isArray(phones)) return [];
+  return phones
+    .filter((phone) => String(phone?.label || "").trim() || String(phone?.number || "").trim())
+    .map((phone) => ({
+      id: Number.isInteger(phone?.id) ? phone.id : undefined,
+      label: String(phone?.label || ""),
+      number: String(phone?.number || ""),
+    }));
 };
 
 export const telephonyService = {
@@ -128,14 +155,23 @@ export const telephonyService = {
   },
   updateCustomer: async (customerId, payload) => {
     try {
+      const normalizedPayload =
+        payload && typeof payload === "object"
+          ? {
+              ...payload,
+              ...(Object.prototype.hasOwnProperty.call(payload, "phones")
+                ? { phones: normalizeCustomerPhonesForSave(payload.phones) }
+                : {})
+            }
+          : payload;
       const response = await fetch(`${CUSTOMER_API}/${customerId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(normalizedPayload)
       });
       return await safeJson(response);
     } catch (error) {
-      return null;
+      return { error: error instanceof Error ? error.message : "customer_update_failed" };
     }
   },
   fetchPbxPhonebook: async () => {

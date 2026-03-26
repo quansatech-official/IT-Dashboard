@@ -149,6 +149,9 @@ export default function TelephonyView() {
       }
     ];
     const updated = await telephonyService.updateCustomer(customerId, { phones: nextPhones });
+    if (updated?.error) {
+      return { ok: false, error: updated.error };
+    }
     if (!updated?.id) {
       return { ok: false, error: "Konnte Rufnummer nicht speichern." };
     }
