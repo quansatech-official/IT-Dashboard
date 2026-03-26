@@ -27,8 +27,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      ollama:
-        condition: service_started
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-it_user}:${POSTGRES_PASSWORD:-it_secret_password}@db:5432/${POSTGRES_DB:-it_dashboard}}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
@@ -178,6 +176,8 @@ services:
       context: ./docker/ollama
     container_name: it-dashboard-ollama
     restart: unless-stopped
+    profiles:
+      - ollama
     environment:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
       OLLAMA_PRELOAD_MODELS: ${OLLAMA_PRELOAD_MODELS:-qwen3:8b}
