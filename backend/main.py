@@ -310,6 +310,7 @@ class Customer(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     creditor_number = Column(String, default="")
+    sevdesk_contact_id = Column(String, default="")
     short_code = Column(String, default="")
     email = Column(String, default="")
     newsletter_email = Column(String, default="")
@@ -1269,6 +1270,8 @@ def _ensure_customer_columns() -> None:
     statements = []
     if "creditor_number" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN creditor_number VARCHAR DEFAULT ''")
+    if "sevdesk_contact_id" not in columns:
+        statements.append("ALTER TABLE customers ADD COLUMN sevdesk_contact_id VARCHAR DEFAULT ''")
     if "short_code" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN short_code VARCHAR DEFAULT ''")
     if "email" not in columns:
@@ -1577,6 +1580,7 @@ class CustomerPhoneSchema(BaseModel):
 class CustomerCreate(BaseModel):
     name: str
     creditor_number: Optional[str] = ""
+    sevdesk_contact_id: Optional[str] = ""
     short_code: Optional[str] = ""
     email: Optional[str] = ""
     newsletter_email: Optional[str] = ""
@@ -1596,6 +1600,7 @@ class CustomerCreate(BaseModel):
 class CustomerUpdate(BaseModel):
     name: Optional[str] = None
     creditor_number: Optional[str] = None
+    sevdesk_contact_id: Optional[str] = None
     short_code: Optional[str] = None
     email: Optional[str] = None
     newsletter_email: Optional[str] = None
@@ -5491,6 +5496,7 @@ def serialize_customer(
         "id": c.id,
         "name": c.name,
         "creditor_number": c.creditor_number,
+        "sevdesk_contact_id": c.sevdesk_contact_id,
         "short_code": c.short_code,
         "email": effective_email,
         "primary_email": primary_email,
@@ -11270,7 +11276,7 @@ def _lookup_cve_for_software(name: str, version: str) -> Tuple[List[Dict[str, An
 
 
 def _extract_customer_number_from_contact(contact: Dict[str, Any]) -> str:
-    for key in ("customerNumber", "customernumber", "number"):
+    for key in ("customerNumber", "customer_number", "customernumber", "contactCustomerNumber", "number"):
         value = str(contact.get(key) or "").strip()
         if value:
             return value
@@ -11604,6 +11610,51 @@ def _find_sevdesk_contact_by_customer_number(
             best_contact = contact
             best_number = contact_number or raw_value
     return best_contact, best_number
+
+
+def _find_local_customer_for_sevdesk(db: Session, customer_number: Any, customer_name: Any = None) -> Optional[Customer]:
+    raw_number = str(customer_number or "").strip()
+    normalized_number = _normalize_customer_number(raw_number)
+    if raw_number or normalized_number:
+        customers = db.query(Customer).all()
+        for customer in customers:
+            candidate_number = str(customer.creditor_number or "").strip()
+            candidate_short_code = str(customer.short_code or "").strip()
+            if raw_number and raw_number in {candidate_number, candidate_short_code}:
+                return customer
+            if normalized_number and normalized_number in {
+                _normalize_customer_number(candidate_number),
+                _normalize_customer_number(candidate_short_code),
+            }:
+                return customer
+    if customer_name:
+        resolved_number = _resolve_local_customer_number_by_name(db, customer_name)
+        if resolved_number:
+            return _find_local_customer_for_sevdesk(db, resolved_number, None)
+        target_name = _dev_normalize_text(customer_name)
+        if target_name:
+            return (
+                db.query(Customer)
+                .filter(func.lower(func.trim(Customer.name)) == func.lower(func.trim(str(customer_name).strip())))
+                .first()
+            )
+    return None
+
+
+def _find_sevdesk_contact_for_customer(
+    db: Session,
+    client: SevdeskClient,
+    customer_number: Any,
+    customer_name: Any = None,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    local_customer = _find_local_customer_for_sevdesk(db, customer_number, customer_name)
+    if local_customer:
+        contact_id_value = str(local_customer.sevdesk_contact_id or "").strip()
+        if contact_id_value.isdigit():
+            contact = client.get_contact(int(contact_id_value))
+            if contact:
+                return contact, str(local_customer.creditor_number or customer_number or "").strip()
+    return _find_sevdesk_contact_by_customer_number(client, customer_number)
 
 
 def _build_sevdesk_customer_rows(
@@ -15660,6 +15711,7 @@ def create_customer(data: CustomerCreate):
         customer = Customer(
             name=data.name,
             creditor_number=data.creditor_number or "",
+            sevdesk_contact_id=data.sevdesk_contact_id or "",
             short_code=data.short_code or "",
             email=data.email or "",
             newsletter_email=data.newsletter_email or "",
@@ -15945,11 +15997,15 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
         if sevdesk_config.api_token:
             customer_number = (customer.creditor_number or customer.short_code or "").strip()
             contact = None
-            if customer_number:
-                try:
-                    contact = SevdeskClient(sevdesk_config).get_contact_by_customer_number(customer_number)
-                except SevdeskError:
-                    contact = None
+            try:
+                contact, _ = _find_sevdesk_contact_for_customer(
+                    db,
+                    SevdeskClient(sevdesk_config),
+                    customer_number,
+                    customer.name,
+                )
+            except SevdeskError:
+                contact = None
             contact_id = None
             if isinstance(contact, dict):
                 try:
@@ -17895,13 +17951,21 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
 
         client = SevdeskClient(config)
         try:
-            contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
+            contact, resolved_customer_number = _find_sevdesk_contact_for_customer(
+                db,
+                client,
+                customer_number,
+                task.customer,
+            )
             if not contact and task.customer:
                 fallback_number = _resolve_local_customer_number_by_name(db, task.customer)
                 if fallback_number and fallback_number != customer_number:
                     customer_number = fallback_number
-                    contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(
-                        client, customer_number
+                    contact, resolved_customer_number = _find_sevdesk_contact_for_customer(
+                        db,
+                        client,
+                        customer_number,
+                        task.customer,
                     )
             if not contact:
                 raise HTTPException(404, f"Sevdesk contact not found for {customer_number}")
@@ -17981,12 +18045,22 @@ def sevdesk_check_draft(customer_number: str, customer_name: str = ""):
 
         client = SevdeskClient(config)
         try:
-            contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
+            contact, resolved_customer_number = _find_sevdesk_contact_for_customer(
+                db,
+                client,
+                customer_number,
+                customer_name,
+            )
             if not contact and customer_name:
                 fallback_number = _resolve_local_customer_number_by_name(db, customer_name)
                 if fallback_number and fallback_number != customer_number:
                     customer_number = fallback_number
-                    contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
+                    contact, resolved_customer_number = _find_sevdesk_contact_for_customer(
+                        db,
+                        client,
+                        customer_number,
+                        customer_name,
+                    )
             if not contact:
                 return {"contact_found": False, "has_draft": False, "draft_id": None, "resolved_customer_number": None}
             contact_id = int(contact.get("id"))

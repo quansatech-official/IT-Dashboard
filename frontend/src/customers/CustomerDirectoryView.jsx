@@ -549,6 +549,7 @@ const normalizeCustomer = (customer) => {
     ...customer,
     creditorNumber:
       customer.creditor_number ?? customer.creditorNumber ?? customer.internal_number ?? "",
+    sevdeskContactId: customer.sevdesk_contact_id ?? customer.sevdeskContactId ?? "",
     shortCode: customer.short_code ?? customer.shortCode ?? "",
     email: primaryEmail,
     newsletterEmail,
@@ -593,6 +594,7 @@ const normalizeCustomer = (customer) => {
 const customerPayload = (customer) => ({
   name: customer.name || "Neuer Kunde",
   creditor_number: customer.creditorNumber || "",
+  sevdesk_contact_id: customer.sevdeskContactId || "",
   short_code: customer.shortCode || "",
   email: customer.email || "",
   newsletter_email: customer.newsletterEmail || "",
@@ -5542,6 +5544,15 @@ export default function CustomerDirectoryView() {
                     value={editCustomer.creditorNumber}
                     onChange={(event) => updateCustomer(editCustomer.id, { creditorNumber: event.target.value })}
                     className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">sevDesk Kontakt-ID</span>
+                  <input
+                    value={editCustomer.sevdeskContactId}
+                    onChange={(event) => updateCustomer(editCustomer.id, { sevdeskContactId: event.target.value })}
+                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                    placeholder="z. B. 12345678"
                   />
                 </label>
                 <label className="block">
