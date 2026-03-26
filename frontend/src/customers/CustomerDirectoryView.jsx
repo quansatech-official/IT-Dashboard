@@ -3,6 +3,7 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import {
   BarChart3,
+  BadgeCheck,
   Boxes,
   Building2,
   BookPlus,
@@ -1782,7 +1783,7 @@ export default function CustomerDirectoryView() {
   }, [filteredActiveTariffs, tariffCategoryForContractType]);
 
   const supportsHoursBudget = useMemo(
-    () => ["wartung", "monitoring"].includes(String(activeContractBaseType || "").trim().toLowerCase()),
+    () => String(activeContractBaseType || "").trim().toLowerCase() === "wartung",
     [activeContractBaseType]
   );
 
@@ -2484,16 +2485,14 @@ export default function CustomerDirectoryView() {
     typeof selectedCustomerMetrics.contractTimeBudget === "object"
       ? selectedCustomerMetrics.contractTimeBudget
       : null;
-  const editHasServiceContract = useMemo(() => {
-    const fromMetrics = Number(contractTimeBudget?.activeBudgetContractsCount || 0) > 0;
-    if (fromMetrics) return true;
+  const editHasHoursBudgetContract = useMemo(() => {
     const contracts = Array.isArray(customerContracts) ? customerContracts : [];
     return contracts.some((item) => {
       const status = String(item?.status || "").trim().toLowerCase();
       const type = normalizeContractDocumentType(item?.doc_type ?? item?.template_key);
-      return status === "active" && (type === "wartung" || type === "monitoring");
+      return status === "active" && type === "wartung";
     });
-  }, [contractTimeBudget?.activeBudgetContractsCount, customerContracts]);
+  }, [customerContracts]);
   const openEffortHours = Number(selectedCustomerMetrics?.openTimeMinutes || 0) / 60;
   const travelRoundTripKm = Number(
     selectedCustomerMetrics?.distanceRoundTripKm ||
@@ -2576,6 +2575,10 @@ export default function CustomerDirectoryView() {
       const type = String(item?.doc_type || item?.template_key || "").toLowerCase();
       return type === "wartung" || type === "monitoring";
     });
+    const budgetContracts = contracts.filter((item) => {
+      const type = String(item?.doc_type || item?.template_key || "").toLowerCase();
+      return type === "wartung";
+    });
     const activeContracts = contracts.filter((item) => String(item?.status || "").toLowerCase() === "active");
     const proposalContracts = contracts.filter((item) => String(item?.status || "").toLowerCase() === "proposal");
     let nextRenewalAt = 0;
@@ -2598,7 +2601,7 @@ export default function CustomerDirectoryView() {
         }
       }
     });
-    const missingIncludedHours = serviceContracts.filter(
+    const missingIncludedHours = budgetContracts.filter(
       (item) => Number(item?.monthly_hours_included || 0) <= 0
     ).length;
     const runtimeDaysAvg = contracts.length
@@ -4937,9 +4940,9 @@ export default function CustomerDirectoryView() {
               <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Template-Variablen</p>
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Vertragsinhalte</p>
                     <p className="mt-1 text-[11px] text-sand-600">
-                      Kundenspezifische Inhalte direkt im Schnellstart anpassen.
+                      Vertragsdetails und kundenbezogene Angaben direkt hier anpassen.
                     </p>
                   </div>
                   <button
@@ -4950,7 +4953,7 @@ export default function CustomerDirectoryView() {
                     }}
                     className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
                   >
-                    Vorschläge laden
+                    Standardwerte laden
                   </button>
                 </div>
                 <div className="mt-2 grid gap-2 md:grid-cols-2">
@@ -5947,7 +5950,7 @@ export default function CustomerDirectoryView() {
                           : "n/a"}
                       </p>
                     </div>
-                    {editHasServiceContract ? (
+                    {editHasHoursBudgetContract ? (
                       <div className="mt-3 rounded-xl border border-emerald-100 bg-white p-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-[10px] uppercase tracking-wide text-sand-500">Stundenbudget (aktueller Monat)</p>

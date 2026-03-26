@@ -336,7 +336,7 @@ export default function StatsView() {
         if (renewalAt <= renewalThresholdMs) dueSoon += 1;
       }
       const type = String(contract?.type || "").toLowerCase();
-      if ((type === "wartung" || type === "monitoring") && Number(contract?.monthlyHoursIncluded || 0) <= 0) {
+      if (type === "wartung" && Number(contract?.monthlyHoursIncluded || 0) <= 0) {
         missingHours += 1;
       }
     });
