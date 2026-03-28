@@ -330,9 +330,11 @@ export default function StatsView() {
       const status = String(contract?.status || "").toLowerCase();
       if (status === "proposal") proposal += 1;
       if (status === "active") active += 1;
+      const nextRenewalAt = Number(contract?.nextRenewalAt || 0);
       const createdAt = Number(contract?.createdAt || 0);
-      if (createdAt > 0) {
-        const renewalAt = createdAt + 365 * 24 * 60 * 60 * 1000;
+      const renewalAt =
+        nextRenewalAt > 0 ? nextRenewalAt : createdAt > 0 ? createdAt + 365 * 24 * 60 * 60 * 1000 : 0;
+      if (renewalAt > 0) {
         if (renewalAt <= renewalThresholdMs) dueSoon += 1;
       }
       const type = String(contract?.type || "").toLowerCase();
@@ -1027,8 +1029,12 @@ export default function StatsView() {
                                         </div>
                                         <div className="text-[10px] text-sand-400">
                                           Verlängerung:{" "}
-                                          {contract.createdAt
-                                            ? formatDate(Number(contract.createdAt) + 365 * 24 * 60 * 60 * 1000)
+                                          {contract.nextRenewalAt || contract.createdAt
+                                            ? formatDate(
+                                                Number(contract.nextRenewalAt || 0) > 0
+                                                  ? Number(contract.nextRenewalAt)
+                                                  : Number(contract.createdAt) + 365 * 24 * 60 * 60 * 1000
+                                              )
                                             : "-"}
                                         </div>
                                       </div>

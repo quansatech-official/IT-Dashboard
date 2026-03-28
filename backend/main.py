@@ -12206,8 +12206,12 @@ def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
                 doc.doc_type or doc.template_key,
                 default="wartung",
             )
+            timeline = _build_contract_timeline(doc)
+            snapshot_payload = _parse_json_object(getattr(doc, "snapshot_json", "{}"))
+            pricing_payload = _parse_json_object(snapshot_payload.get("pricing"))
             title = str(doc.title or "").strip() or "Vertrag"
             monthly_hours_included = _safe_nonnegative_float(doc.monthly_hours_included or 0.0)
+            monthly_value_document = round(_safe_nonnegative_float(pricing_payload.get("monthly_total") or 0.0), 2)
             if contract_type in {"wartung", "monitoring"}:
                 monthly_hours_soll += monthly_hours_included
                 service_contract_counts[contract_type] = int(service_contract_counts.get(contract_type, 0)) + 1
@@ -12219,7 +12223,10 @@ def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
                     "type": contract_type,
                     "title": title,
                     "monthlyHoursIncluded": round(monthly_hours_included, 2),
+                    "monthlyValue": monthly_value_document,
                     "createdAt": int(doc.created_at or 0),
+                    "nextRenewalAt": int(timeline.get("next_renewal_at") or 0),
+                    "daysToNextRenewal": timeline.get("days_to_next_renewal"),
                     "inferred": False,
                 }
             )
@@ -12293,18 +12300,21 @@ def _build_contracts_stats(db, now_ms: int) -> Dict[str, Any]:
         )
         for contract in contracts:
             contract_type = str(contract.get("type") or "")
-            if contract_type == "wartung":
-                split_count = max(1, int(service_contract_counts.get("wartung", 0)))
-                contract_value = revenue_monthly_wartung / split_count
-            elif contract_type == "monitoring":
-                split_count = max(1, int(service_contract_counts.get("monitoring", 0)))
-                contract_value = revenue_monthly_monitoring / split_count
-            else:
-                contract_value = 0.0
+            contract_value = _safe_nonnegative_float(contract.get("monthlyValue") or 0.0)
+            if contract_value <= 0:
+                if contract_type == "wartung":
+                    split_count = max(1, int(service_contract_counts.get("wartung", 0)))
+                    contract_value = revenue_monthly_wartung / split_count
+                elif contract_type == "monitoring":
+                    split_count = max(1, int(service_contract_counts.get("monitoring", 0)))
+                    contract_value = revenue_monthly_monitoring / split_count
+                else:
+                    contract_value = 0.0
             contract_status = str(contract.get("status") or "")
             contract["monthlyValue"] = round(contract_value, 2)
             if contract_status == "active":
                 revenue_monthly_active_customer += contract_value
+        revenue_monthly_customer = round(sum(_safe_nonnegative_float(contract.get("monthlyValue") or 0.0) for contract in contracts), 2)
         revenue_monthly_active_customer = round(revenue_monthly_active_customer, 2)
         revenue_per_contract_customer = (
             round(revenue_monthly_customer / float(service_contract_count_total), 2)
