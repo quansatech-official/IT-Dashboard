@@ -5,6 +5,7 @@ import { telephonyService } from "./telephonyService";
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const DISMISSED_CALL_STORAGE_KEY = "qt_incoming_call_popup_dismissed_uuid";
 const MAX_ACTIVE_INCOMING_AGE_MS = 5 * 60 * 1000;
+const DIRECTORY_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 const getDefaultPosition = () => {
   if (typeof window === "undefined") return { x: 24, y: 24 };
@@ -173,7 +174,7 @@ export default function IncomingCallQuickTaskPopup() {
       setLiveMode("polling");
     }
     const callsInterval = setInterval(loadCalls, 20000);
-    const directoryInterval = setInterval(loadDirectoryData, 60000);
+    const directoryInterval = setInterval(loadDirectoryData, DIRECTORY_REFRESH_INTERVAL_MS);
 
     return () => {
       active = false;

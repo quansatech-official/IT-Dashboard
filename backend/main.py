@@ -11612,6 +11612,56 @@ def _find_sevdesk_contact_by_customer_number(
     return best_contact, best_number
 
 
+def _find_sevdesk_contact_by_name(
+    client: SevdeskClient,
+    customer_name: Any,
+    customer_number: Any = None,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    raw_name = str(customer_name or "").strip()
+    if not raw_name:
+        return None, str(customer_number or "").strip()
+    target_name = _dev_normalize_text(raw_name)
+    target_number = _normalize_customer_number(customer_number)
+    if not target_name:
+        return None, str(customer_number or "").strip()
+    try:
+        contacts = client.list_contacts(limit=200, max_pages=25)
+    except SevdeskError:
+        return None, str(customer_number or "").strip()
+    best_contact: Optional[Dict[str, Any]] = None
+    best_number = str(customer_number or "").strip()
+    best_score = -1
+    for contact in contacts:
+        if not isinstance(contact, dict):
+            continue
+        contact_name = _sevdesk_contact_display_name(contact)
+        normalized_contact_name = _dev_normalize_text(contact_name)
+        if not normalized_contact_name:
+            continue
+        score = 0
+        if normalized_contact_name == target_name:
+            score += 100
+        elif target_name in normalized_contact_name or normalized_contact_name in target_name:
+            score += 60
+        else:
+            continue
+        contact_number = _extract_customer_number_from_contact(contact)
+        normalized_contact_number = _normalize_customer_number(contact_number)
+        if target_number and normalized_contact_number:
+            if normalized_contact_number == target_number:
+                score += 50
+            elif normalized_contact_number.endswith(target_number) or target_number.endswith(normalized_contact_number):
+                score += 20
+        status_value = str(contact.get("status") or "").strip().lower()
+        if status_value in {"100", "active"}:
+            score += 5
+        if score > best_score:
+            best_score = score
+            best_contact = contact
+            best_number = contact_number or best_number
+    return best_contact, best_number
+
+
 def _find_local_customer_for_sevdesk(db: Session, customer_number: Any, customer_name: Any = None) -> Optional[Customer]:
     raw_number = str(customer_number or "").strip()
     normalized_number = _normalize_customer_number(raw_number)
@@ -11654,7 +11704,23 @@ def _find_sevdesk_contact_for_customer(
             contact = client.get_contact(int(contact_id_value))
             if contact:
                 return contact, str(local_customer.creditor_number or customer_number or "").strip()
-    return _find_sevdesk_contact_by_customer_number(client, customer_number)
+        contact, resolved_number = _find_sevdesk_contact_by_customer_number(
+            client,
+            local_customer.creditor_number or customer_number,
+        )
+        if contact:
+            return contact, resolved_number
+        contact, resolved_number = _find_sevdesk_contact_by_name(
+            client,
+            local_customer.name,
+            local_customer.creditor_number or customer_number,
+        )
+        if contact:
+            return contact, resolved_number
+    contact, resolved_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
+    if contact:
+        return contact, resolved_number
+    return _find_sevdesk_contact_by_name(client, customer_name, customer_number)
 
 
 def _build_sevdesk_customer_rows(
@@ -14483,7 +14549,7 @@ def _generate_customer_development_ai_text(
     if text_result:
         return text_result, False, resolved_timeout
     resolved_customer_id = _safe_int(context.get("customerId"))
-    logger.info(
+    logger.debug(
         "Customer development AI fallback used customer_id=%s mode=%s timeout_seconds=%s",
         resolved_customer_id if resolved_customer_id > 0 else "n/a",
         mode_key,
@@ -15427,8 +15493,12 @@ def sync_customers_from_sevdesk():
                 customer = by_name.get(_dev_normalize_text(name))
             if customer:
                 changed = False
+                contact_id_value = str(contact.get("id") or "").strip()
                 if number and not str(customer.creditor_number or "").strip():
                     customer.creditor_number = number
+                    changed = True
+                if contact_id_value and contact_id_value != str(customer.sevdesk_contact_id or "").strip():
+                    customer.sevdesk_contact_id = contact_id_value
                     changed = True
                 if name and _dev_normalize_text(name) != _dev_normalize_text(customer.name):
                     customer.name = name
@@ -15456,6 +15526,7 @@ def sync_customers_from_sevdesk():
             created_customer = Customer(
                 name=name or f"Kunde {number}",
                 creditor_number=number or "",
+                sevdesk_contact_id=str(contact.get("id") or "").strip(),
                 billing_email=billing_email,
                 street=billing_address["street"],
                 postal_code=billing_address["postal_code"],
@@ -17892,7 +17963,15 @@ def sevdesk_offer_to_invoice(offer_id: int, payload: Optional[SevdeskOfferDraftR
 
         client = SevdeskClient(config)
         try:
-            contact, resolved_customer_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
+            contact, resolved_customer_number = _find_sevdesk_contact_for_customer(
+                db,
+                client,
+                customer_number,
+                offer_payload.get("customer")
+                or offer_payload.get("recipientCompany")
+                or offer_payload.get("recipient_company")
+                or offer_payload.get("name"),
+            )
             if not contact:
                 raise HTTPException(404, f"Sevdesk contact not found for {customer_number}")
             contact_id = int(contact.get("id"))
@@ -18134,13 +18213,26 @@ def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
 
         for customer_number, customer_tasks in tasks_by_customer.items():
             try:
-                contact = client.get_contact_by_customer_number(customer_number)
+                customer_name = ""
+                for task in customer_tasks:
+                    candidate_name = str(task.customer or "").strip()
+                    if candidate_name:
+                        customer_name = candidate_name
+                        break
+                contact, resolved_customer_number = _find_sevdesk_contact_for_customer(
+                    db,
+                    client,
+                    customer_number,
+                    customer_name,
+                )
                 if not contact:
                     results.append(
                         {"customer_number": customer_number, "ok": False, "error": "Contact not found"}
                     )
                     continue
                 contact_id = int(contact.get("id"))
+                if resolved_customer_number and resolved_customer_number != customer_number:
+                    customer_number = resolved_customer_number
                 total_ms = sum(task.elapsed or 0 for task in customer_tasks)
                 total_hours = round(total_ms / 3_600_000, 2)
                 if total_hours <= 0:

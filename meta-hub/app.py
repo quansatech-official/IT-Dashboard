@@ -2209,7 +2209,7 @@ def _refresh_ai_preanalysis() -> bool:
                 used_fallback = bool(data.get("used_fallback"))
                 timeout_seconds = _safe_int(data.get("timeout_seconds"))
                 if used_fallback:
-                    logger.info(
+                    logger.debug(
                         "AI preanalysis fallback stored for customer=%s mode=%s provider=%s",
                         customer_id,
                         mode,

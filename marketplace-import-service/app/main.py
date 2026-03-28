@@ -47,6 +47,11 @@ def _get_adapter(source: str):
     return adapter
 
 
+@app.get("/health")
+async def health() -> Dict[str, Any]:
+    return {"ok": True}
+
+
 @app.get("/import/sources")
 async def list_sources() -> List[Dict[str, Any]]:
     td_ready = bool(
