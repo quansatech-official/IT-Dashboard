@@ -11,25 +11,15 @@ export const renderReportHTML = (report, options = {}) => {
   const isEmail = options.mode === "email";
   const isPdf = options.mode === "pdf";
   const period = report.period?.trim() || "ohne Zeitraum";
-  const summary = report.summary?.trim() || "";
   const customerAction = report.customer_action_text?.trim() || "";
   const thirdPartyPayload = report.third_party_payload || {};
   const thirdPartyTop = Array.isArray(thirdPartyPayload.top) ? thirdPartyPayload.top : [];
   const thirdPartyTitle = thirdPartyPayload.title || "Sicherheitsreport";
   const thirdPartySource = thirdPartyPayload.sourceName || "";
   const thirdPartyText = "Die Schwachstellen der angezeigten Programme werden bereits aktiv ausgenutzt.";
-  const actionSummary = (report.actions || [])
-    .map((action) => escapeHTML(action.title || ""))
-    .filter(Boolean);
-  const actionSummaryLine = actionSummary.length ? actionSummary.join(" · ") : "";
-  const summaryLine = summary ? escapeHTML(summary) : "";
   const customerLabel = escapeHTML(report.customer || "");
   const periodLabel = escapeHTML(period);
-  const headerSubline = summaryLine
-    ? customerLabel
-    : period
-      ? `${customerLabel} · ${periodLabel}`
-      : customerLabel;
+  const headerSubline = period ? `${customerLabel} · ${periodLabel}` : customerLabel;
   const introText =
     "Sehr geehrter Kunde,\nIm Rahmen unserer monatlichen Systemauswertung erhalten Sie hier eine aktuelle Übersicht über Systeme und Dienste mit Handlungsbedarf.";
   const statusBadge = (status = "") => {
@@ -160,7 +150,7 @@ export const renderReportHTML = (report, options = {}) => {
       ? "width: 100%; max-width: 100%;"
     : "width: 100%; max-width: 720px; margin: 0 auto;";
 
-  const outerBackground = isPdf ? "#ffffff" : "#f7f2ea";
+  const outerBackground = isPdf ? "#ffffff" : "#efebe5";
   const outerPadding = isPdf ? "0" : "24px 0";
   const outerCellPadding = isPdf ? "0" : "24px";
   const cardDecoration = isPdf
@@ -169,27 +159,20 @@ export const renderReportHTML = (report, options = {}) => {
 
   const innerTable = `
             <tr>
-              <td style="background: #24425a; padding: 18px 24px;">
+              <td style="background: #ffffff; padding: 18px 24px; border-bottom: 1px solid #e5ddd2;">
                 <table style="width: 100%; border-collapse: collapse;">
                   <tr>
                     <td style="vertical-align: middle;">
                       <table style="border-collapse: collapse;">
                         <tr>
                           <td style="padding-right: 14px;">
-                            <img src="/QTLogo.jpg" alt="Quansatech" width="44" height="44" style="height: 44px; width: 44px; object-fit: contain; display: block;" />
+                            <img src="/QTLogo.jpg" alt="Quansatech" width="40" height="40" style="height: 40px; width: 40px; object-fit: contain; display: block;" />
                           </td>
                           <td>
-                            <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 700; color: #ffffff; letter-spacing: 0.02em;">IT-Kundenbericht</div>
-                            <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 12px; color: #d9e2ea; margin-top: 4px;">
+                            <div style="font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 700; color: #74695d; letter-spacing: 0.12em; text-transform: uppercase;">IT-Kundenbericht</div>
+                            <div style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #1f2933; margin-top: 4px; line-height: 1.45;">
                               ${headerSubline}
                             </div>
-                            ${
-                              summaryLine || actionSummaryLine
-                                ? `<div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #c6d1da; margin-top: 6px; line-height: 1.4;">
-                                  ${summaryLine || actionSummaryLine}
-                                </div>`
-                                : ""
-                            }
                           </td>
                         </tr>
                       </table>
@@ -203,7 +186,7 @@ export const renderReportHTML = (report, options = {}) => {
             </tr>
             <tr>
               <td style="padding: 22px 24px 10px;">
-                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 13px; color: #3f3a33; line-height: 1.55; white-space: pre-line;">
+                <div style="font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #3f3a33; line-height: 1.55; white-space: pre-line;">
                   ${escapeHTML(introText)}
                 </div>
               </td>
@@ -212,8 +195,8 @@ export const renderReportHTML = (report, options = {}) => {
               customerAction
                 ? `<tr>
               <td style="padding: 10px 24px;">
-                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">Was wir vom Kunden benötigen</div>
-                <div style="margin-top: 8px; font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 13px; color: #3f3a33; line-height: 1.55;">${escapeHTML(
+                <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">Was wir vom Kunden benötigen</div>
+                <div style="margin-top: 8px; font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #3f3a33; line-height: 1.55;">${escapeHTML(
                   customerAction
                 )}</div>
               </td>
@@ -223,7 +206,7 @@ export const renderReportHTML = (report, options = {}) => {
             ${thirdPartyBlock}
             <tr>
               <td style="padding: 16px 24px 6px;">
-                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">Maßnahmen</div>
+                <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b8073;">Maßnahmen</div>
               </td>
             </tr>
             <tr>
@@ -235,10 +218,10 @@ export const renderReportHTML = (report, options = {}) => {
             </tr>
             <tr>
               <td style="padding: 14px 24px 22px; border-top: 1px solid #efe7db;">
-                <div style="font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #7a7064; line-height: 1.5;">
+                <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #7a7064; line-height: 1.5;">
                   Kosten und Dauer sind Schätzwerte und stellen kein verbindliches Angebot dar.
                 </div>
-                <div style="margin-top: 6px; font-family: 'Manrope', 'Helvetica Neue', Arial, sans-serif; font-size: 11px; color: #7a7064; line-height: 1.5;">
+                <div style="margin-top: 6px; font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #7a7064; line-height: 1.5;">
                   Prioritäten: Dringend = kurzfristig empfohlen, Planbar = in den nächsten Wochen, Hinweis = sinnvoll, aber optional.
                 </div>
               </td>

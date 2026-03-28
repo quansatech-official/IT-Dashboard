@@ -82,60 +82,45 @@ export const buildNewsletterHtml = (draft = {}) => {
     ? `<div style="margin-top:24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:26px;color:#000000;mso-line-height-rule:exactly;">${closing}</div>`
     : "";
   return `
-    <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#e7e7e7" style="width:100%;border-collapse:collapse;background-color:#e7e7e7;margin:0;padding:0;">
+    <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" bgcolor="#efebe5" style="width:100%;border-collapse:collapse;background-color:#efebe5;margin:0;padding:0;">
       <tr>
-        <td align="center" style="padding:20px 12px 24px;">
+        <td align="center" style="padding:18px 12px 22px;">
           <!--[if mso]>
           <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="700">
             <tr>
               <td>
           <![endif]-->
-          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:700px;border-collapse:collapse;">
+          <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:700px;border-collapse:collapse;background-color:#ffffff;border:1px solid #e5ddd2;">
             <tr>
               <td bgcolor="#ffffff" style="background-color:#ffffff;border-collapse:collapse;">
                 <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                   <tr>
-                    <td bgcolor="#1c2733" style="padding:14px 24px 12px 24px;background-color:#1c2733;">
+                    <td style="padding:18px 24px;border-bottom:1px solid #e5ddd2;">
                       <table role="presentation" width="100%" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                         <tr>
                           <td align="left" valign="middle">
-                            <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="border-collapse:separate;">
-                              <tr>
-                                <td bgcolor="#ffffff" style="background-color:#ffffff;padding:12px 16px 10px 16px;border:1px solid #dbe4ea;">
-                                  <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-                                    <tr>
-                                      <td valign="middle">
-                                        <img
-                                          src="${logoSrc}"
-                                          alt="Quansatech"
-                                          width="224"
-                                          style="display:block;width:224px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;"
-                                        />
-                                      </td>
-                                      <td valign="middle" style="padding-left:14px;font-family:Arial,Helvetica,sans-serif;border-left:1px solid #dbe4ea;">
-                                        <div style="font-size:18px;line-height:20px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#1c2733;mso-line-height-rule:exactly;">
-                                          Newsletter
-                                        </div>
-                                        <div style="padding-top:4px;font-size:12px;line-height:17px;color:#5e6a74;mso-line-height-rule:exactly;">
-                                          Stabile IT. Klare Lösungen. Persönlich betreut.
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  </table>
-                                </td>
-                              </tr>
-                            </table>
+                            <img
+                              src="${logoSrc}"
+                              alt="Quansatech"
+                              width="176"
+                              style="display:block;width:176px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;"
+                            />
+                          </td>
+                          <td align="right" valign="middle" style="padding-left:18px;font-family:Arial,Helvetica,sans-serif;">
+                            <div style="font-size:12px;line-height:15px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#74695d;mso-line-height-rule:exactly;">
+                              Newsletter
+                            </div>
+                            <div style="padding-top:4px;font-size:12px;line-height:17px;color:#74695d;mso-line-height-rule:exactly;">
+                              Stabile IT. Klare Lösungen.
+                            </div>
                           </td>
                         </tr>
                       </table>
                     </td>
                   </tr>
                   <tr>
-                    <td height="8" bgcolor="#c58a2d" style="height:8px;background-color:#c58a2d;line-height:8px;font-size:0;">&nbsp;</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:34px 30px 18px 30px;font-family:Arial,Helvetica,sans-serif;">
-                      <div style="font-size:30px;line-height:36px;font-weight:700;color:#1c2733;mso-line-height-rule:exactly;">
+                    <td style="padding:28px 30px 14px 30px;font-family:Arial,Helvetica,sans-serif;">
+                      <div style="font-size:28px;line-height:34px;font-weight:700;color:#1c2733;mso-line-height-rule:exactly;">
                         ${title}
                       </div>
                     </td>
