@@ -31,6 +31,116 @@
   white-space: pre-wrap;
 }
 
+.audit-markdown {
+  color: var(--text-800);
+  font-size: 0.8rem;
+  line-height: 1.65;
+}
+
+.audit-markdown > * + * {
+  margin-top: 0.9rem;
+}
+
+.audit-markdown h2,
+.audit-markdown h3,
+.audit-markdown h4 {
+  color: var(--text-900);
+  font-family: "Space Grotesk", "Roboto", sans-serif;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.audit-markdown h2 {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-200);
+  font-size: 0.95rem;
+}
+
+.audit-markdown h2:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.audit-markdown h3 {
+  font-size: 0.86rem;
+}
+
+.audit-markdown h4 {
+  font-size: 0.8rem;
+  color: var(--text-700);
+}
+
+.audit-markdown p,
+.audit-markdown ul,
+.audit-markdown ol,
+.audit-markdown pre,
+.audit-markdown table,
+.audit-markdown blockquote {
+  margin-top: 0.75rem;
+}
+
+.audit-markdown ul,
+.audit-markdown ol {
+  padding-left: 1.2rem;
+}
+
+.audit-markdown li + li {
+  margin-top: 0.3rem;
+}
+
+.audit-markdown strong {
+  color: var(--text-900);
+  font-weight: 600;
+}
+
+.audit-markdown code {
+  background: var(--bg-100);
+  border: 1px solid var(--border-200);
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.78rem;
+}
+
+.audit-markdown pre {
+  overflow-x: auto;
+  border: 1px solid var(--border-200);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.04);
+  padding: 0.9rem 1rem;
+}
+
+.audit-markdown pre code {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font-size: 0.76rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.audit-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.audit-markdown th,
+.audit-markdown td {
+  border: 1px solid var(--border-200);
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.audit-markdown th {
+  background: var(--bg-100);
+  color: var(--text-900);
+  font-weight: 600;
+}
+
 @layer base {
   :root {
     --bg-50: #f2f5f8;

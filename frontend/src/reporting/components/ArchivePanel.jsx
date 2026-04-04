@@ -1,4 +1,4 @@
-import { Edit3, Eye, Mail, Search, Trash2, Info } from "lucide-react";
+import { Edit3, Eye, Mail, Search, Trash2, Info, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { archiveStatusStyles } from "../constants";
 
@@ -9,6 +9,7 @@ export default function ArchivePanel({
   onPreview,
   onEdit,
   onSendSmtp,
+  onTakeAsTask,
   onUpdateStatus
 }) {
   const [query, setQuery] = useState("");
@@ -114,7 +115,10 @@ export default function ArchivePanel({
         {filteredArchive.map((group) => (
           <div key={group.customer} className="space-y-2">
             <div className="text-xs uppercase tracking-wide text-sand-500">{group.customer}</div>
-            {group.reports.map((item) => (
+            {group.reports.map((item) => {
+              const isConfirmed =
+                String(item.customerStatus || "").trim().toLowerCase() === "bestätigt";
+              return (
               <div
                 key={item.id}
                 className={`relative flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 ${
@@ -219,6 +223,16 @@ export default function ArchivePanel({
                     </div>
                   </details>
                   <div className="flex items-center gap-1">
+                    {isConfirmed ? (
+                      <button
+                        onClick={() => onTakeAsTask?.(item)}
+                        className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                        title="Als Aufgabe übernehmen"
+                      >
+                        <Plus size={12} />
+                        Aufgabe
+                      </button>
+                    ) : null}
                     <button
                       onClick={() => onPreview?.(item)}
                       className="inline-flex items-center justify-center rounded-full border border-sand-300 bg-white p-2 text-sand-600 hover:bg-sand-100"
@@ -257,7 +271,8 @@ export default function ArchivePanel({
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         ))}
         {!filteredArchive.length && (

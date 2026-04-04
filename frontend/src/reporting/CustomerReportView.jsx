@@ -1127,6 +1127,89 @@ export default function CustomerReportView() {
     third_party_payload: data.third_party_payload || null
   });
 
+  const buildReportTaskPayload = (reportData, item) => {
+    const reportCustomer = String(reportData?.customer || item?.customer || "").trim();
+    const period = String(reportData?.period || item?.period || "").trim();
+    const actionItems = Array.isArray(reportData?.actions)
+      ? reportData.actions
+      : Array.isArray(reportData?.items)
+      ? reportData.items
+      : [];
+    const customerActionText = String(reportData?.customer_action_text || "").trim();
+    const actionLabels = actionItems
+      .map((entry) => {
+        const title = String(entry?.title || "").trim();
+        const system = String(entry?.system || "").trim();
+        if (!title) return "";
+        return system ? `${title} (${system})` : title;
+      })
+      .filter(Boolean);
+    const actionSummary = actionLabels.join("; ");
+    const baseTitle = actionSummary || `Bericht bestätigt${period ? ` (${period})` : ""}`;
+    const taskTitle = reportCustomer ? `${reportCustomer}: ${baseTitle}` : baseTitle;
+    const detailLines = [];
+    detailLines.push(
+      period ? `Aus bestätigtem Kundenbericht übernommen (${period}).` : "Aus bestätigtem Kundenbericht übernommen."
+    );
+    if (customerActionText) {
+      detailLines.push("", "Kundenaktion:", customerActionText);
+    }
+    if (actionLabels.length) {
+      detailLines.push("", "Maßnahmen aus Bericht:");
+      actionLabels.forEach((label) => detailLines.push(`- ${label}`));
+    }
+    return {
+      title: taskTitle,
+      customer: reportCustomer,
+      status: "todo",
+      details: detailLines.join("\n").trim()
+    };
+  };
+
+  const createTaskFromArchivedReport = async (item, options = {}) => {
+    if (!item?.id) return { ok: false, reason: "missing-id" };
+    try {
+      const reportData = await fetchArchivedReport(item);
+      if (!reportData) return { ok: false, reason: "report-missing" };
+      const payload = buildReportTaskPayload(normalizeReport(reportData), item);
+      const response = await fetch("/api/day_tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const createdTask = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(
+          createdTask?.detail || "Aufgabe konnte nicht erstellt werden."
+        );
+      }
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("qt:daytask-created", {
+            detail: { task: createdTask || null, source: "customer-report-archive" }
+          })
+        );
+      }
+      if (!options.skipSuccessToast) {
+        setToast("Aufgabe erstellt.");
+      }
+      return { ok: true, task: createdTask };
+    } catch (error) {
+      if (!options.skipErrorToast) {
+        setToast(error instanceof Error ? error.message : "Aufgabe konnte nicht erstellt werden.");
+      }
+      return { ok: false, reason: "create-failed" };
+    }
+  };
+
+  const takeArchivedReportAsTask = async (item) => {
+    if (!item?.id) return;
+    const isConfirmed = String(item.customerStatus || "").trim().toLowerCase() === "bestätigt";
+    if (!isConfirmed) return;
+    if (!confirm("Neue Aufgabe aus diesem bestätigten Bericht anlegen?")) return;
+    await createTaskFromArchivedReport(item);
+  };
+
   const updateArchiveStatus = async (item, status) => {
     if (!item?.id) return;
     const shouldCreateTask = status === "Bestätigt" && item.customerStatus !== "Bestätigt";
@@ -1151,39 +1234,21 @@ export default function CustomerReportView() {
           )
         }))
       );
+      let taskCreated = false;
       if (shouldCreateTask) {
-        try {
-          const reportRes = await fetch(`/api/reports/${item.id}`);
-          const reportData = reportRes.ok ? await reportRes.json() : null;
-          const reportCustomer = reportData?.customer || item.customer || "";
-          const period = reportData?.period || item.period || "";
-          const actionItems = Array.isArray(reportData?.items) ? reportData.items : [];
-          const actionSummary = actionItems
-            .map((entry) => {
-              const title = String(entry?.title || "").trim();
-              const system = String(entry?.system || "").trim();
-              if (!title) return "";
-              return system ? `${title} (${system})` : title;
-            })
-            .filter(Boolean)
-            .join("; ");
-          const baseTitle =
-            actionSummary || `Bericht bestätigt${period ? ` (${period})` : ""}`;
-          const taskTitle = reportCustomer ? `${reportCustomer}: ${baseTitle}` : baseTitle;
-          await fetch("/api/day_tasks", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              title: taskTitle,
-              customer: reportCustomer,
-              status: "todo"
-            })
-          });
-        } catch (error) {
-          setToast("Aufgabe konnte nicht erstellt werden.");
-        }
+        const taskResult = await createTaskFromArchivedReport(item, {
+          skipSuccessToast: true,
+          skipErrorToast: true
+        });
+        taskCreated = Boolean(taskResult?.ok);
       }
-      setToast("Status aktualisiert.");
+      setToast(
+        shouldCreateTask
+          ? taskCreated
+            ? "Status aktualisiert. Aufgabe erstellt."
+            : "Status aktualisiert. Aufgabe konnte nicht erstellt werden."
+          : "Status aktualisiert."
+      );
     } catch (error) {
       setToast("Status speichern fehlgeschlagen.");
     }
@@ -1922,6 +1987,7 @@ export default function CustomerReportView() {
             onPreview={previewArchivedReport}
             onEdit={editArchivedReport}
             onSendSmtp={sendArchivedReport}
+            onTakeAsTask={takeArchivedReportAsTask}
             onUpdateStatus={updateArchiveStatus}
           />
         </main>

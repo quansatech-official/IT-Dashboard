@@ -110,9 +110,17 @@ _ensure_call_callback_resolved_column()
 
 app = FastAPI(title="Telephony Module")
 
+
+def _parse_cors_allow_origins() -> List[str]:
+    raw = str(os.environ.get("CORS_ALLOW_ORIGINS") or "").strip()
+    if not raw:
+        return []
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_cors_allow_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

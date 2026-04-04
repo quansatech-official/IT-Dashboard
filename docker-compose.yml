@@ -6,6 +6,19 @@ x-default-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
+x-app-hardening: &app-hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp
+
+x-web-hardening: &web-hardening
+  security_opt:
+    - no-new-privileges:true
+
 services:
   db:
     image: postgres:16
@@ -15,11 +28,11 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-it_dashboard}
       POSTGRES_USER: ${POSTGRES_USER:-it_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-it_secret_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - dashboard-db:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_BIND_IP:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test:
         [
@@ -35,12 +48,13 @@ services:
       context: ./backend
     container_name: it-dashboard-backend
     restart: unless-stopped
+    <<: *app-hardening
     logging: *default-logging
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-it_user}:${POSTGRES_PASSWORD:-it_secret_password}@db:5432/${POSTGRES_DB:-it_dashboard}}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-it_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-it_dashboard}}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
       OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-180}
@@ -62,11 +76,12 @@ services:
       CUSTOMER_META_HUB_URL: ${CUSTOMER_META_HUB_URL:-http://meta-hub:8010}
       CUSTOMER_META_HUB_ENABLED: ${CUSTOMER_META_HUB_ENABLED:-1}
       CUSTOMER_META_HUB_TIMEOUT_SECONDS: ${CUSTOMER_META_HUB_TIMEOUT_SECONDS:-8}
-      META_HUB_INTERNAL_TOKEN: ${META_HUB_INTERNAL_TOKEN:-change-me-meta-hub-token}
+      META_HUB_INTERNAL_TOKEN: ${META_HUB_INTERNAL_TOKEN:?META_HUB_INTERNAL_TOKEN is required}
       INFRA_DISCOVERY_API_URL: ${INFRA_DISCOVERY_API_URL:-}
-      INFRA_DISCOVERY_TOKEN: ${INFRA_DISCOVERY_TOKEN:-qt-discovery-token}
+      INFRA_DISCOVERY_TOKEN: ${INFRA_DISCOVERY_TOKEN:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
     ports:
-      - "${BACKEND_PORT:-9873}:8000"
+      - "${BACKEND_BIND_IP:-127.0.0.1}:${BACKEND_PORT:-9873}:8000"
     healthcheck:
       test:
         [
@@ -83,6 +98,7 @@ services:
       context: ./meta-hub
     container_name: it-dashboard-meta-hub
     restart: unless-stopped
+    <<: *app-hardening
     logging: *default-logging
     depends_on:
       backend:
@@ -95,7 +111,7 @@ services:
       META_HUB_SOURCE_INCLUDE_INACTIVE: ${META_HUB_SOURCE_INCLUDE_INACTIVE:-1}
       META_HUB_SOURCE_FULL: ${META_HUB_SOURCE_FULL:-1}
       META_HUB_AUTO_REFRESH: ${META_HUB_AUTO_REFRESH:-1}
-      META_HUB_INTERNAL_TOKEN: ${META_HUB_INTERNAL_TOKEN:-change-me-meta-hub-token}
+      META_HUB_INTERNAL_TOKEN: ${META_HUB_INTERNAL_TOKEN:?META_HUB_INTERNAL_TOKEN is required}
       META_HUB_RMM_TIMEOUT_SECONDS: ${META_HUB_RMM_TIMEOUT_SECONDS:-30}
       META_HUB_MAC_VENDOR_LOOKUP_ENABLED: ${META_HUB_MAC_VENDOR_LOOKUP_ENABLED:-1}
       META_HUB_MAC_VENDOR_API_TEMPLATE: ${META_HUB_MAC_VENDOR_API_TEMPLATE:-https://api.macvendors.com/{mac}}
@@ -111,7 +127,7 @@ services:
     volumes:
       - meta-hub-data:/data
     ports:
-      - "${META_HUB_PORT:-8010}:8010"
+      - "${META_HUB_BIND_IP:-127.0.0.1}:${META_HUB_PORT:-8010}:8010"
     healthcheck:
       test:
         [
@@ -128,6 +144,7 @@ services:
       context: ./marketplace-import-service
     container_name: it-dashboard-marketplace-import
     restart: unless-stopped
+    <<: *app-hardening
     logging: *default-logging
     environment:
       TD_SYNNEX_BASE_URL: ${TD_SYNNEX_BASE_URL:-https://api.streamone.com}
@@ -143,7 +160,7 @@ services:
       ALSO_FEED_DB_PATH: ${ALSO_FEED_DB_PATH:-/data/also_feed.db}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-20}
     ports:
-      - "${MARKETPLACE_IMPORT_PORT:-9876}:8000"
+      - "${MARKETPLACE_IMPORT_BIND_IP:-127.0.0.1}:${MARKETPLACE_IMPORT_PORT:-9876}:8000"
     volumes:
       - marketplace-import-data:/data
     healthcheck:
@@ -162,16 +179,18 @@ services:
       context: ./backend
     container_name: it-dashboard-telephony
     restart: unless-stopped
+    <<: *app-hardening
     logging: *default-logging
     depends_on:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-it_user}:${POSTGRES_PASSWORD:-it_secret_password}@db:5432/${POSTGRES_DB:-it_dashboard}}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-it_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@db:5432/${POSTGRES_DB:-it_dashboard}}
       NFON_CTI_BASE_URL: ${NFON_CTI_BASE_URL:-}
       NFON_CTI_USER: ${NFON_CTI_USER:-}
       NFON_CTI_PASSWORD: ${NFON_CTI_PASSWORD:-}
       TELEPHONY_STREAM_ENABLED: ${TELEPHONY_STREAM_ENABLED:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-}
     command: ["uvicorn", "telephony.app:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
@@ -189,9 +208,10 @@ services:
       context: ./frontend
     container_name: it-dashboard-frontend
     restart: unless-stopped
+    <<: *web-hardening
     logging: *default-logging
     ports:
-      - "${FRONTEND_PORT:-7000}:80"
+      - "${FRONTEND_BIND_IP:-0.0.0.0}:${FRONTEND_PORT:-7000}:80"
     depends_on:
       backend:
         condition: service_healthy
@@ -213,9 +233,10 @@ services:
       context: ./mobile-frontend
     container_name: it-dashboard-mobile-frontend
     restart: unless-stopped
+    <<: *web-hardening
     logging: *default-logging
     ports:
-      - "${MOBILE_FRONTEND_PORT:-7001}:80"
+      - "${MOBILE_FRONTEND_BIND_IP:-127.0.0.1}:${MOBILE_FRONTEND_PORT:-7001}:80"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
       interval: 15s
@@ -227,20 +248,22 @@ services:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
     container_name: it-dashboard-oauth2-proxy
     restart: unless-stopped
+    <<: *app-hardening
     logging: *default-logging
     environment:
       OAUTH2_PROXY_PROVIDER: oidc
       OAUTH2_PROXY_OIDC_ISSUER_URL: ${NEXTCLOUD_OIDC_ISSUER_URL}
-      OAUTH2_PROXY_CLIENT_ID: ${NEXTCLOUD_OIDC_CLIENT_ID}
-      OAUTH2_PROXY_CLIENT_SECRET: ${NEXTCLOUD_OIDC_CLIENT_SECRET}
-      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
-      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_CLIENT_ID: ${NEXTCLOUD_OIDC_CLIENT_ID:?NEXTCLOUD_OIDC_CLIENT_ID is required}
+      OAUTH2_PROXY_CLIENT_SECRET: ${NEXTCLOUD_OIDC_CLIENT_SECRET:?NEXTCLOUD_OIDC_CLIENT_SECRET is required}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET:?OAUTH2_PROXY_COOKIE_SECRET is required}
+      OAUTH2_PROXY_EMAIL_DOMAINS: ${OAUTH2_PROXY_EMAIL_DOMAINS:-*}
       OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
       OAUTH2_PROXY_UPSTREAMS: static://200
       OAUTH2_PROXY_REDIRECT_URL: ${OAUTH2_PROXY_REDIRECT_URL}
       OAUTH2_PROXY_COOKIE_SECURE: ${OAUTH2_PROXY_COOKIE_SECURE:-true}
       OAUTH2_PROXY_COOKIE_SAMESITE: lax
-      OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL: ${OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL:-true}
+      OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL: ${OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL:-false}
+      OAUTH2_PROXY_SET_XAUTHREQUEST: ${OAUTH2_PROXY_SET_XAUTHREQUEST:-true}
       OAUTH2_PROXY_CUSTOM_TEMPLATES_DIR: /etc/oauth2-proxy/templates
     volumes:
       - ./docker/oauth2-proxy/templates:/etc/oauth2-proxy/templates:ro
@@ -250,6 +273,8 @@ services:
       context: ./docker/ollama
     container_name: it-dashboard-ollama
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     logging: *default-logging
     profiles:
       - ollama
@@ -265,7 +290,7 @@ services:
     volumes:
       - ollama-data:/root/.ollama
     ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+      - "${OLLAMA_BIND_IP:-127.0.0.1}:${OLLAMA_PORT:-11434}:11434"
 
 volumes:
   dashboard-db:

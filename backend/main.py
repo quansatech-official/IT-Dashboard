@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List, Tuple, Set, Callable
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text,
@@ -700,6 +701,47 @@ class IntegrationSettings(Base):
     ai_customer_development_model = Column(String, default="")
     ai_offer_model = Column(String, default="")
     ai_invoice_model = Column(String, default="")
+
+
+class AuditRecord(Base):
+    __tablename__ = "audit_records"
+
+    id = Column(Integer, primary_key=True)
+    source_note_pk = Column(Integer, nullable=False, index=True)
+    source_agent_id = Column(String, default="", index=True)
+    source_agent_pk = Column(String, default="")
+    source_username = Column(String, default="")
+    source_entry_time = Column(String, default="")
+    source_entry_time_ms = Column(BigInteger, default=0, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+    customer_number = Column(String, default="", index=True)
+    customer_name = Column(String, default="", index=True)
+    device_name = Column(String, default="", index=True)
+    agent_hostname = Column(String, default="")
+    topic = Column(String, default="", index=True)
+    status = Column(String, default="unknown", index=True)
+    schema_name = Column(String, default="")
+    schema_version = Column(String, default="")
+    audit_at = Column(BigInteger, default=0, index=True)
+    imported_at = Column(BigInteger, default=lambda: int(time.time() * 1000), index=True)
+    is_latest = Column(Boolean, default=False, index=True)
+    summary = Column(Text, default="")
+    raw_note = Column(Text, default="")
+    payload_json = Column(Text, default="{}")
+    validation_errors_json = Column(Text, default="[]")
+
+    customer = relationship("Customer")
+
+
+class AuditIgnoredSource(Base):
+    __tablename__ = "audit_ignored_sources"
+
+    id = Column(Integer, primary_key=True)
+    source_note_pk = Column(Integer, nullable=False, index=True)
+    source_agent_id = Column(String, default="", index=True)
+    source_kind = Column(String, default="agent_note", index=True)
+    ignored_at = Column(BigInteger, default=lambda: int(time.time() * 1000), index=True)
+    reason = Column(String, default="")
 
 
 class InfraDiscoveryDevice(Base):
@@ -2252,6 +2294,12 @@ class ReportSendRequest(BaseModel):
     subject: Optional[str] = None
     html: str
     text: Optional[str] = None
+
+
+class RmmAuditCleanupRequest(BaseModel):
+    scope: str = "all"
+    customer: Optional[str] = None
+    topic: Optional[str] = None
     attachments: Optional[List["EmailAttachment"]] = None
 
 
@@ -2475,9 +2523,17 @@ class DebugClearRequest(BaseModel):
 # ================= APP ======================
 app = FastAPI(title="QT-Workbench Backend")
 
+
+def _parse_cors_allow_origins() -> List[str]:
+    raw = str(os.environ.get("CORS_ALLOW_ORIGINS") or "").strip()
+    if not raw:
+        return []
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_cors_allow_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -10751,6 +10807,1108 @@ def _fetch_tactical_rmm_agent_detail_map(
     return result
 
 
+QT_AUDIT_NOTE_PREFIX = "[QT-AUDIT]"
+QT_AUDIT_ALLOWED_STATUSES = {"pass", "fail", "warn", "info", "error", "unknown"}
+
+
+@dataclass
+class RmmAuditParsedRecord:
+    schema_name: str
+    schema_version: str
+    topic: str
+    status: str
+    summary: str
+    audit_at: int
+    customer_number: str
+    customer_name: str
+    device_name: str
+    payload: Dict[str, Any]
+    validation_errors: List[str]
+
+
+@dataclass
+class RmmAuditImportSummary:
+    fetched_notes: int = 0
+    matched_notes: int = 0
+    imported: int = 0
+    updated: int = 0
+    invalid: int = 0
+    skipped: int = 0
+    latest_marked: int = 0
+    notes_path: str = ""
+    errors: List[str] = None
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "fetchedNotes": int(self.fetched_notes),
+            "matchedNotes": int(self.matched_notes),
+            "imported": int(self.imported),
+            "updated": int(self.updated),
+            "invalid": int(self.invalid),
+            "skipped": int(self.skipped),
+            "latestMarked": int(self.latest_marked),
+            "notesPath": self.notes_path,
+            "errors": list(self.errors or []),
+        }
+
+
+@dataclass
+class RmmAuditCleanupSummary:
+    scope: str = "all"
+    customer: str = ""
+    topic: str = ""
+    fetched_notes: int = 0
+    matched_notes: int = 0
+    candidate_notes: int = 0
+    deleted_notes: int = 0
+    deleted_records: int = 0
+    failed_deletes: int = 0
+    skipped: int = 0
+    latest_marked: int = 0
+    notes_path: str = ""
+    errors: List[str] = None
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "scope": str(self.scope or "all"),
+            "customer": str(self.customer or "").strip(),
+            "topic": str(self.topic or "").strip(),
+            "fetchedNotes": int(self.fetched_notes),
+            "matchedNotes": int(self.matched_notes),
+            "candidateNotes": int(self.candidate_notes),
+            "deletedNotes": int(self.deleted_notes),
+            "deletedRecords": int(self.deleted_records),
+            "failedDeletes": int(self.failed_deletes),
+            "skipped": int(self.skipped),
+            "latestMarked": int(self.latest_marked),
+            "notesPath": self.notes_path,
+            "errors": list(self.errors or []),
+        }
+
+
+class RmmAuditParser:
+    @staticmethod
+    def _first_text(*values: Any) -> str:
+        for value in values:
+            if isinstance(value, dict):
+                candidate = RmmAuditParser._first_text(
+                    value.get("value"),
+                    value.get("name"),
+                    value.get("hostname"),
+                    value.get("title"),
+                    value.get("label"),
+                )
+                if candidate:
+                    return candidate
+                continue
+            if value is None:
+                continue
+            text_value = str(value).strip()
+            if text_value:
+                return text_value
+        return ""
+
+    @staticmethod
+    def _normalize_topic(value: Any) -> str:
+        topic = str(value or "").strip().lower()
+        if not topic:
+            return ""
+        topic = re.sub(r"[^a-z0-9]+", "-", topic).strip("-")
+        return topic
+
+    @staticmethod
+    def _normalize_status(value: Any) -> str:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return ""
+        aliases = {
+            "ok": "pass",
+            "passed": "pass",
+            "success": "pass",
+            "successful": "pass",
+            "healthy": "pass",
+            "compliant": "pass",
+            "enabled": "pass",
+            "true": "pass",
+            "failed": "fail",
+            "critical": "fail",
+            "noncompliant": "fail",
+            "disabled": "fail",
+            "false": "fail",
+            "warning": "warn",
+            "degraded": "warn",
+            "informational": "info",
+        }
+        normalized = aliases.get(raw, raw)
+        if normalized in QT_AUDIT_ALLOWED_STATUSES:
+            return normalized
+        return ""
+
+    @staticmethod
+    def _strip_code_fence(value: str) -> str:
+        text_value = str(value or "").strip()
+        if not text_value.startswith("```"):
+            return text_value
+        lines = text_value.splitlines()
+        if lines:
+            lines = lines[1:]
+        while lines and not str(lines[-1]).strip():
+            lines.pop()
+        if lines and str(lines[-1]).strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _extract_json_text(note_text: str) -> str:
+        raw_text = str(note_text or "")
+        marker_index = raw_text.find(QT_AUDIT_NOTE_PREFIX)
+        if marker_index < 0:
+            raise ValueError("Missing [QT-AUDIT] prefix")
+        payload_text = raw_text[marker_index + len(QT_AUDIT_NOTE_PREFIX):].strip()
+        payload_text = RmmAuditParser._strip_code_fence(payload_text)
+        json_start = payload_text.find("{")
+        json_end = payload_text.rfind("}")
+        if json_start < 0 or json_end < json_start:
+            raise ValueError("No JSON object found after [QT-AUDIT]")
+        return payload_text[json_start : json_end + 1].strip()
+
+    @staticmethod
+    def _schema_parts(schema_value: str) -> Tuple[str, str]:
+        raw = str(schema_value or "").strip()
+        if not raw:
+            return "", ""
+        if "/" in raw:
+            schema_name, schema_version = raw.rsplit("/", 1)
+            return schema_name.strip(), schema_version.strip()
+        return raw, ""
+
+    @staticmethod
+    def _parse_audit_time(payload: Dict[str, Any], fallback_ms: int) -> Tuple[int, List[str]]:
+        validation_errors: List[str] = []
+        candidates = [
+            payload.get("collectedAt"),
+            payload.get("auditAt"),
+            payload.get("generatedAt"),
+            payload.get("timestamp"),
+        ]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+                numeric = int(candidate)
+                if numeric > 0:
+                    if numeric < 10_000_000_000:
+                        numeric *= 1000
+                    return numeric, validation_errors
+            parsed = _parse_iso8601_to_epoch_ms(candidate)
+            if parsed > 0:
+                return parsed, validation_errors
+        if fallback_ms > 0:
+            validation_errors.append("Missing collectedAt/auditAt; source note time used as fallback")
+            return fallback_ms, validation_errors
+        raise ValueError("Missing collectedAt/auditAt")
+
+    @classmethod
+    def parse_note(
+        cls,
+        note_text: Any,
+        *,
+        fallback_agent: Optional[Dict[str, Any]] = None,
+        fallback_note_time_ms: int = 0,
+    ) -> RmmAuditParsedRecord:
+        raw_json = cls._extract_json_text(str(note_text or ""))
+        try:
+            payload = jsonlib.loads(raw_json)
+        except Exception as exc:
+            raise ValueError(f"Invalid audit JSON: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Audit JSON must be an object")
+
+        validation_errors: List[str] = []
+        schema_value = cls._first_text(payload.get("schema"), payload.get("schemaId"))
+        if not schema_value:
+            raise ValueError("Missing schema")
+        schema_name, schema_version = cls._schema_parts(schema_value)
+        if schema_name.lower() != "qt-audit":
+            validation_errors.append(f"Unexpected schema '{schema_value}'")
+        if not schema_version:
+            validation_errors.append("Schema version missing")
+
+        topic = cls._normalize_topic(cls._first_text(payload.get("topic"), payload.get("auditTopic")))
+        if not topic:
+            raise ValueError("Missing topic")
+
+        status = cls._normalize_status(
+            cls._first_text(
+                payload.get("status"),
+                payload.get("result") if not isinstance(payload.get("result"), dict) else payload.get("result", {}).get("status"),
+            )
+        )
+        if not status:
+            raise ValueError("Missing or invalid status")
+
+        audit_at, audit_time_errors = cls._parse_audit_time(payload, fallback_note_time_ms)
+        validation_errors.extend(audit_time_errors)
+
+        customer = payload.get("customer") if isinstance(payload.get("customer"), dict) else {}
+        device = payload.get("device") if isinstance(payload.get("device"), dict) else {}
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        checks = payload.get("checks")
+        if checks is not None and not isinstance(checks, list):
+            validation_errors.append("checks should be a list")
+
+        customer_number = cls._first_text(
+            customer.get("number"),
+            customer.get("customerNumber"),
+        )
+        customer_name = cls._first_text(customer.get("name"))
+        device_name = cls._first_text(
+            device.get("hostname"),
+            device.get("name"),
+            payload.get("deviceName"),
+            payload.get("hostname"),
+            (fallback_agent or {}).get("hostname"),
+        )
+        summary = cls._first_text(
+            payload.get("summary"),
+            payload.get("message"),
+            payload.get("headline"),
+            source.get("scriptName"),
+        )
+        if not summary:
+            summary = f"{topic} -> {status}"
+
+        return RmmAuditParsedRecord(
+            schema_name=schema_name,
+            schema_version=schema_version,
+            topic=topic,
+            status=status,
+            summary=summary,
+            audit_at=audit_at,
+            customer_number=customer_number,
+            customer_name=customer_name,
+            device_name=device_name,
+            payload=payload,
+            validation_errors=validation_errors,
+        )
+
+
+def _normalize_tactical_note_rows(payload: Any) -> List[Dict[str, Any]]:
+    rows = _tactical_payload_rows(payload)
+    if rows:
+        return [row for row in rows if isinstance(row, dict)]
+    if isinstance(payload, dict) and any(key in payload for key in ("note", "entry_time", "agent_id", "pk")):
+        return [payload]
+    return []
+
+
+def _history_script_output_text(row: Dict[str, Any]) -> str:
+    if not isinstance(row, dict):
+        return ""
+    script_results = row.get("script_results") if isinstance(row.get("script_results"), dict) else {}
+    return str(
+        script_results.get("stdout")
+        or row.get("stdout")
+        or row.get("results")
+        or ""
+    ).strip()
+
+
+def _collect_tactical_rmm_history_audit_rows(
+    session: requests.Session,
+    host: str,
+    agents: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], str]:
+    collected: List[Dict[str, Any]] = []
+    seen_keys: Set[str] = set()
+    used_path = ""
+    for agent in [row for row in agents if isinstance(row, dict)]:
+        agent_id = _extract_agent_id(agent)
+        if not agent_id:
+            continue
+        payload_rows: List[Dict[str, Any]] = []
+        for path in (
+            f"/agents/{quote(agent_id)}/history/?limit=50",
+            f"/agents/{quote(agent_id)}/history/",
+            f"/api/agents/{quote(agent_id)}/history/?limit=50",
+            f"/api/agents/{quote(agent_id)}/history/",
+            f"/api/v3/agents/{quote(agent_id)}/history/?limit=50",
+            f"/api/v3/agents/{quote(agent_id)}/history/",
+        ):
+            res, _ = _tactical_request(session, host, "GET", path, timeout=15, retries=0)
+            if not res or not res.ok:
+                continue
+            try:
+                payload = res.json()
+            except ValueError:
+                continue
+            payload_rows = [row for row in _tactical_payload_rows(payload) if isinstance(row, dict)]
+            if payload_rows:
+                used_path = path
+                break
+        if not payload_rows:
+            continue
+        for row in payload_rows:
+            output_text = _history_script_output_text(row)
+            if QT_AUDIT_NOTE_PREFIX not in output_text:
+                continue
+            script_results = row.get("script_results") if isinstance(row.get("script_results"), dict) else {}
+            dedupe_key = "|".join(
+                [
+                    str(agent_id),
+                    str(script_results.get("id") or row.get("id") or "").strip(),
+                    str(row.get("time") or "").strip(),
+                    output_text,
+                ]
+            )
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            collected.append(
+                {
+                    "pk": "",
+                    "id": "",
+                    "note": output_text,
+                    "entry_time": str(row.get("time") or "").strip(),
+                    "agent_id": agent_id,
+                    "agent": row.get("agent"),
+                    "username": str(row.get("username") or "").strip(),
+                    "history_id": row.get("id"),
+                    "script_result_id": script_results.get("id"),
+                    "source_kind": "history_script_run",
+                }
+            )
+    return collected, used_path
+
+
+def _fetch_tactical_rmm_agent_notes(
+    settings: Optional[IntegrationSettings],
+    agents: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[List[Dict[str, Any]], str, str]:
+    session, host = _build_tactical_rmm_session(settings)
+    if not session or not host:
+        return [], "", "RMM session init failed"
+
+    fallback_agents = [row for row in (agents or []) if isinstance(row, dict)]
+    combined_rows: List[Dict[str, Any]] = []
+    seen_keys: Set[str] = set()
+    source_labels: List[str] = []
+
+    def add_rows(rows: List[Dict[str, Any]], label: str) -> None:
+        if not rows:
+            return
+        if label and label not in source_labels:
+            source_labels.append(label)
+        for row in rows:
+            if not str(row.get("source_kind") or "").strip():
+                row["source_kind"] = "agent_note"
+            note_text = str(row.get("note") or "").strip()
+            dedupe_key = "|".join(
+                [
+                    str(row.get("source_kind") or "note"),
+                    str(row.get("pk") or row.get("id") or "").strip(),
+                    str(row.get("agent_id") or "").strip(),
+                    str(row.get("entry_time") or "").strip(),
+                    note_text,
+                ]
+            )
+            if dedupe_key in seen_keys:
+                continue
+            seen_keys.add(dedupe_key)
+            combined_rows.append(row)
+
+    note_path_candidates = [
+        "/agents/notes/?limit=5000",
+        "/agents/notes/",
+        "/agents/notes",
+        "/api/agents/notes/?limit=5000",
+        "/api/agents/notes/",
+        "/api/agents/notes",
+        "/api/v3/agents/notes/?limit=5000",
+        "/api/v3/agents/notes/",
+        "/api/v3/agents/notes",
+    ]
+    for path in note_path_candidates:
+        res, request_error = _tactical_request(session, host, "GET", path, timeout=15, retries=1)
+        if not res or not res.ok:
+            if request_error:
+                logger.debug("RMM notes fetch failed for %s: %s", path, request_error)
+            continue
+        try:
+            payload = res.json()
+        except ValueError:
+            continue
+        rows = _normalize_tactical_note_rows(payload)
+        if rows:
+            add_rows(rows, path)
+            break
+
+    if fallback_agents and not combined_rows:
+        for agent in fallback_agents:
+            agent_id = _extract_agent_id(agent)
+            if not agent_id:
+                continue
+            for path in (
+                f"/agents/{quote(agent_id)}/notes/?limit=5000",
+                f"/agents/{quote(agent_id)}/notes/",
+                f"/agents/{quote(agent_id)}/notes",
+                f"/api/agents/{quote(agent_id)}/notes/?limit=5000",
+                f"/api/agents/{quote(agent_id)}/notes/",
+                f"/api/agents/{quote(agent_id)}/notes",
+                f"/api/v3/agents/{quote(agent_id)}/notes/?limit=5000",
+                f"/api/v3/agents/{quote(agent_id)}/notes/",
+                f"/api/v3/agents/{quote(agent_id)}/notes",
+            ):
+                res, _ = _tactical_request(session, host, "GET", path, timeout=10, retries=0)
+                if not res or not res.ok:
+                    continue
+                try:
+                    payload = res.json()
+                except ValueError:
+                    continue
+                rows = _normalize_tactical_note_rows(payload)
+                if rows:
+                    add_rows(rows, "per-agent notes fallback")
+                    break
+
+    if combined_rows:
+        return combined_rows, " + ".join(source_labels), ""
+    return [], "", "Agent notes endpoint unavailable"
+
+
+def _delete_tactical_rmm_agent_note(
+    settings: Optional[IntegrationSettings],
+    *,
+    note_pk: int,
+    agent_id: str = "",
+) -> Tuple[bool, str, str]:
+    clean_note_pk = str(note_pk or "").strip()
+    clean_agent_id = str(agent_id or "").strip()
+    if not clean_note_pk:
+        return False, "", "Missing note id"
+    session, host = _build_tactical_rmm_session(settings)
+    if not session or not host:
+        return False, "", "RMM session init failed"
+
+    path_candidates: List[str] = []
+    for prefix in ("", "/api", "/api/v3"):
+        if clean_agent_id:
+            path_candidates.extend(
+                [
+                    f"{prefix}/agents/{quote(clean_agent_id)}/notes/{quote(clean_note_pk)}/",
+                    f"{prefix}/agents/{quote(clean_agent_id)}/notes/{quote(clean_note_pk)}",
+                ]
+            )
+        path_candidates.extend(
+            [
+                f"{prefix}/agents/notes/{quote(clean_note_pk)}/",
+                f"{prefix}/agents/notes/{quote(clean_note_pk)}",
+            ]
+        )
+
+    seen_paths: Set[str] = set()
+    last_error = ""
+    for path in path_candidates:
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        res, request_error = _tactical_request(session, host, "DELETE", path, timeout=15, retries=0)
+        if res is None:
+            last_error = request_error or "request_failed"
+            continue
+        if 200 <= int(res.status_code or 0) < 300:
+            return True, path, ""
+        last_error = f"HTTP {res.status_code}"
+    return False, "", last_error or "Delete endpoint unavailable"
+
+
+def _delete_tactical_rmm_history_entry(
+    settings: Optional[IntegrationSettings],
+    *,
+    agent_id: str = "",
+    agent_pk: str = "",
+    history_id: Any = None,
+    script_result_id: Any = None,
+) -> Tuple[bool, str, str]:
+    session, host = _build_tactical_rmm_session(settings)
+    if not session or not host:
+        return False, "", "RMM session init failed"
+
+    history_key = str(history_id or "").strip()
+    script_result_key = str(script_result_id or "").strip()
+    if not history_key and not script_result_key:
+        return False, "", "Missing history id"
+
+    path_candidates: List[str] = []
+    for prefix in ("", "/api", "/api/v3"):
+        if str(agent_id or "").strip() and history_key:
+            path_candidates.extend(
+                [
+                    f"{prefix}/agents/{quote(str(agent_id).strip())}/history/{quote(history_key)}/",
+                    f"{prefix}/agents/{quote(str(agent_id).strip())}/history/{quote(history_key)}",
+                ]
+            )
+        if str(agent_pk or "").strip() and history_key:
+            path_candidates.extend(
+                [
+                    f"{prefix}/agents/{quote(str(agent_pk).strip())}/history/{quote(history_key)}/",
+                    f"{prefix}/agents/{quote(str(agent_pk).strip())}/history/{quote(history_key)}",
+                ]
+            )
+        if history_key:
+            path_candidates.extend(
+                [
+                    f"{prefix}/history/{quote(history_key)}/",
+                    f"{prefix}/history/{quote(history_key)}",
+                    f"{prefix}/scripts/history/{quote(history_key)}/",
+                    f"{prefix}/scripts/history/{quote(history_key)}",
+                ]
+            )
+        if script_result_key:
+            path_candidates.extend(
+                [
+                    f"{prefix}/scripts/results/{quote(script_result_key)}/",
+                    f"{prefix}/scripts/results/{quote(script_result_key)}",
+                ]
+            )
+
+    seen_paths: Set[str] = set()
+    last_error = ""
+    for path in path_candidates:
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        res, request_error = _tactical_request(session, host, "DELETE", path, timeout=15, retries=0)
+        if res is None:
+            last_error = request_error or "request_failed"
+            continue
+        if 200 <= int(res.status_code or 0) < 300:
+            return True, path, ""
+        last_error = f"HTTP {res.status_code}"
+    return False, "", last_error or "Delete endpoint unavailable"
+
+
+def _audit_text_matches(left: Any, right: Any) -> bool:
+    left_key = _dev_normalize_text(left)
+    right_key = _dev_normalize_text(right)
+    return bool(left_key and right_key and left_key == right_key)
+
+
+def _append_audit_cleanup_error(summary: RmmAuditCleanupSummary, message: str) -> None:
+    clean_message = str(message or "").strip()
+    if not clean_message:
+        return
+    if summary.errors is None:
+        summary.errors = []
+    if len(summary.errors) >= 25:
+        return
+    summary.errors.append(clean_message)
+
+
+def _normalize_audit_source_kind(value: Any) -> str:
+    return "history_script_run" if str(value or "").strip() == "history_script_run" else "agent_note"
+
+
+def _stable_audit_source_pk(*parts: Any) -> int:
+    digest = hashlib.sha1("|".join(str(part or "").strip() for part in parts).encode("utf-8")).hexdigest()
+    return max(1, int(digest[:7], 16))
+
+
+def _find_ignored_audit_source(
+    db: Session,
+    *,
+    source_note_pk: int,
+    source_agent_id: str = "",
+    source_kind: str = "agent_note",
+) -> Optional[AuditIgnoredSource]:
+    clean_note_pk = int(source_note_pk or 0)
+    if clean_note_pk <= 0:
+        return None
+    return (
+        db.query(AuditIgnoredSource)
+        .filter(AuditIgnoredSource.source_note_pk == clean_note_pk)
+        .filter(AuditIgnoredSource.source_agent_id == str(source_agent_id or "").strip())
+        .filter(AuditIgnoredSource.source_kind == _normalize_audit_source_kind(source_kind))
+        .first()
+    )
+
+
+def _mark_audit_source_ignored(
+    db: Session,
+    *,
+    source_note_pk: int,
+    source_agent_id: str = "",
+    source_kind: str = "agent_note",
+    reason: str = "",
+) -> Optional[AuditIgnoredSource]:
+    clean_note_pk = int(source_note_pk or 0)
+    if clean_note_pk <= 0:
+        return None
+    existing = _find_ignored_audit_source(
+        db,
+        source_note_pk=clean_note_pk,
+        source_agent_id=source_agent_id,
+        source_kind=source_kind,
+    )
+    if existing:
+        return existing
+    row = AuditIgnoredSource(
+        source_note_pk=clean_note_pk,
+        source_agent_id=str(source_agent_id or "").strip(),
+        source_kind=_normalize_audit_source_kind(source_kind),
+        reason=str(reason or "").strip(),
+    )
+    db.add(row)
+    return row
+
+
+def _resolve_audit_customer(
+    db: Session,
+    agent: Dict[str, Any],
+    parsed: RmmAuditParsedRecord,
+) -> Optional[Customer]:
+    customer = _find_local_customer_for_sevdesk(db, parsed.customer_number, parsed.customer_name)
+    if customer:
+        return customer
+
+    customers = db.query(Customer).order_by(Customer.name.asc()).all()
+    for item in customers:
+        if _agent_matches_customer(agent, item):
+            return item
+
+    payload_name_key = _dev_normalize_text(parsed.customer_name)
+    if payload_name_key:
+        for item in customers:
+            if _dev_normalize_text(item.name) == payload_name_key:
+                return item
+
+    for item in customers:
+        if _agent_matches_customer_name_only(agent, item):
+            return item
+    return None
+
+
+def _serialize_audit_record(row: AuditRecord) -> Dict[str, Any]:
+    validation_errors: List[str] = []
+    payload: Dict[str, Any] = {}
+    try:
+        loaded = jsonlib.loads(row.validation_errors_json or "[]")
+        if isinstance(loaded, list):
+            validation_errors = [str(item).strip() for item in loaded if str(item).strip()]
+    except Exception:
+        validation_errors = []
+    try:
+        loaded_payload = jsonlib.loads(row.payload_json or "{}")
+        if isinstance(loaded_payload, dict):
+            payload = loaded_payload
+    except Exception:
+        payload = {}
+    return {
+        "id": int(row.id),
+        "sourceNotePk": int(row.source_note_pk or 0),
+        "sourceAgentId": str(row.source_agent_id or "").strip(),
+        "sourceUsername": str(row.source_username or "").strip(),
+        "sourceEntryTime": str(row.source_entry_time or "").strip(),
+        "sourceEntryTimeMs": int(row.source_entry_time_ms or 0),
+        "customerId": int(row.customer_id or 0) if row.customer_id else None,
+        "customerNumber": str(row.customer_number or "").strip(),
+        "customerName": str(row.customer_name or "").strip(),
+        "deviceName": str(row.device_name or "").strip(),
+        "agentHostname": str(row.agent_hostname or "").strip(),
+        "topic": str(row.topic or "").strip(),
+        "status": str(row.status or "").strip(),
+        "schemaName": str(row.schema_name or "").strip(),
+        "schemaVersion": str(row.schema_version or "").strip(),
+        "auditAt": int(row.audit_at or 0),
+        "importedAt": int(row.imported_at or 0),
+        "isLatest": bool(row.is_latest),
+        "summary": str(row.summary or "").strip(),
+        "validationErrors": validation_errors,
+        "payload": payload,
+    }
+
+
+def _build_rmm_audit_filter_options(db: Session) -> Dict[str, List[str]]:
+    rows = db.query(AuditRecord).all()
+    customers = sorted(
+        {
+            str(row.customer_name or "").strip()
+            for row in rows
+            if str(row.customer_name or "").strip()
+        }
+    )
+    devices = sorted(
+        {
+            str(row.device_name or "").strip()
+            for row in rows
+            if str(row.device_name or "").strip()
+        }
+    )
+    topics = sorted(
+        {
+            str(row.topic or "").strip()
+            for row in rows
+            if str(row.topic or "").strip()
+        }
+    )
+    statuses = sorted(
+        {
+            str(row.status or "").strip()
+            for row in rows
+            if str(row.status or "").strip()
+        }
+    )
+    return {
+        "customers": customers,
+        "devices": devices,
+        "topics": topics,
+        "statuses": statuses,
+    }
+
+
+def _rebuild_audit_latest_flags(db: Session) -> int:
+    rows = (
+        db.query(AuditRecord)
+        .order_by(
+            AuditRecord.source_agent_id.asc(),
+            AuditRecord.topic.asc(),
+            AuditRecord.audit_at.desc(),
+            AuditRecord.source_entry_time_ms.desc(),
+            AuditRecord.id.desc(),
+        )
+        .all()
+    )
+    latest_keys: Set[Tuple[str, str]] = set()
+    latest_marked = 0
+    for row in rows:
+        agent_key = str(row.source_agent_id or "").strip()
+        topic_key = str(row.topic or "").strip()
+        is_latest = False
+        if agent_key and topic_key:
+            key = (agent_key, topic_key)
+            if key not in latest_keys:
+                latest_keys.add(key)
+                is_latest = True
+                latest_marked += 1
+        row.is_latest = is_latest
+    return latest_marked
+
+
+class RmmAuditImportService:
+    def __init__(self, db: Session, settings: Optional[IntegrationSettings]) -> None:
+        self.db = db
+        self.settings = settings
+
+    def run(self) -> Dict[str, Any]:
+        summary = RmmAuditImportSummary(errors=[])
+        agents, connected = _fetch_tactical_rmm_agents(self.settings)
+        if not connected:
+            raise RuntimeError("TacticalRMM is not connected")
+        agent_map = {
+            _extract_agent_id(agent): agent
+            for agent in agents
+            if isinstance(agent, dict) and _extract_agent_id(agent)
+        }
+        note_rows, notes_path, notes_error = _fetch_tactical_rmm_agent_notes(self.settings, agents=agents)
+        summary.notes_path = notes_path
+        if notes_error and not note_rows:
+            raise RuntimeError(notes_error)
+        summary.fetched_notes = len(note_rows)
+
+        for row in note_rows:
+            note_text = str(row.get("note") or "").strip()
+            if QT_AUDIT_NOTE_PREFIX not in note_text:
+                summary.skipped += 1
+                continue
+            summary.matched_notes += 1
+            source_kind = _normalize_audit_source_kind(row.get("source_kind"))
+            note_pk = _safe_int(row.get("pk") or row.get("id"))
+            agent_id = str(row.get("agent_id") or "").strip()
+            fallback_agent = agent_map.get(agent_id, {})
+            fallback_note_time_ms = _parse_iso8601_to_epoch_ms(row.get("entry_time"))
+            if note_pk <= 0:
+                note_pk = _stable_audit_source_pk(
+                    agent_id,
+                    row.get("entry_time"),
+                    note_text,
+                    row.get("history_id"),
+                    row.get("script_result_id"),
+                    source_kind,
+                )
+            if _find_ignored_audit_source(
+                self.db,
+                source_note_pk=note_pk,
+                source_agent_id=agent_id,
+                source_kind=source_kind,
+            ):
+                summary.skipped += 1
+                continue
+            try:
+                parsed = RmmAuditParser.parse_note(
+                    note_text,
+                    fallback_agent=fallback_agent,
+                    fallback_note_time_ms=fallback_note_time_ms,
+                )
+                customer = _resolve_audit_customer(self.db, fallback_agent, parsed)
+                record = None
+                if note_pk > 0:
+                    record = (
+                        self.db.query(AuditRecord)
+                        .filter(AuditRecord.source_note_pk == note_pk)
+                        .first()
+                    )
+                created = record is None
+                if record is None:
+                    record = AuditRecord(source_note_pk=note_pk)
+                    self.db.add(record)
+
+                customer_number = parsed.customer_number
+                customer_name = parsed.customer_name
+                if customer:
+                    customer_number = str(customer.creditor_number or customer.short_code or customer_number or "").strip()
+                    customer_name = str(customer.name or customer_name or "").strip()
+
+                device_name = str(parsed.device_name or _agent_field_text(fallback_agent, "hostname", "name") or "").strip()
+                if not device_name:
+                    device_name = f"Agent {agent_id or note_pk}"
+
+                record.source_note_pk = note_pk
+                record.source_agent_id = agent_id
+                record.source_agent_pk = str(row.get("agent") or "").strip()
+                record.source_username = str(row.get("username") or "").strip()
+                record.source_entry_time = str(row.get("entry_time") or "").strip()
+                record.source_entry_time_ms = int(fallback_note_time_ms or 0)
+                record.customer_id = int(customer.id) if customer else None
+                record.customer_number = customer_number
+                record.customer_name = customer_name or _agent_field_text(
+                    fallback_agent,
+                    "client_name",
+                    "client",
+                    "customer",
+                    "site_name",
+                    "site",
+                )
+                record.device_name = device_name
+                record.agent_hostname = _agent_field_text(fallback_agent, "hostname", "name") or device_name
+                record.topic = parsed.topic
+                record.status = parsed.status
+                record.schema_name = parsed.schema_name
+                record.schema_version = parsed.schema_version
+                record.audit_at = int(parsed.audit_at or 0)
+                record.imported_at = int(time.time() * 1000)
+                record.summary = parsed.summary
+                record.raw_note = note_text
+                record.payload_json = jsonlib.dumps(parsed.payload, sort_keys=True)
+                record.validation_errors_json = jsonlib.dumps(parsed.validation_errors)
+
+                if created:
+                    summary.imported += 1
+                else:
+                    summary.updated += 1
+            except Exception as exc:
+                summary.invalid += 1
+                logger.warning(
+                    "Ignoring invalid QT-AUDIT note pk=%s agent_id=%s: %s",
+                    note_pk,
+                    agent_id or "?",
+                    exc,
+                )
+
+        summary.latest_marked = _rebuild_audit_latest_flags(self.db)
+        self.db.commit()
+        return summary.as_dict()
+
+
+class RmmAuditCleanupService:
+    def __init__(self, db: Session, settings: Optional[IntegrationSettings]) -> None:
+        self.db = db
+        self.settings = settings
+
+    def _validate_scope(
+        self,
+        scope: str,
+        customer_filter: str,
+        topic_filter: str,
+    ) -> str:
+        clean_scope = str(scope or "all").strip().lower()
+        if clean_scope not in {"all", "customer", "topic"}:
+            raise ValueError("Cleanup scope must be one of: all, customer, topic")
+        if clean_scope == "customer" and not customer_filter:
+            raise ValueError("Cleanup scope customer requires a customer name")
+        if clean_scope == "topic" and not topic_filter:
+            raise ValueError("Cleanup scope topic requires a topic")
+        return clean_scope
+
+    def _local_cleanup_query(self, *, customer_filter: str, topic_filter: str):
+        query = self.db.query(AuditRecord)
+        if customer_filter:
+            query = query.filter(func.lower(func.trim(AuditRecord.customer_name)) == customer_filter.lower())
+        if topic_filter:
+            query = query.filter(func.lower(func.trim(AuditRecord.topic)) == topic_filter.lower())
+        return query
+
+    def run(
+        self,
+        *,
+        scope: str = "all",
+        customer: Optional[str] = None,
+        topic: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        customer_filter = str(customer or "").strip()
+        topic_filter = RmmAuditParser._normalize_topic(topic)
+        clean_scope = self._validate_scope(scope, customer_filter, topic_filter)
+        summary = RmmAuditCleanupSummary(
+            scope=clean_scope,
+            customer=customer_filter,
+            topic=topic_filter,
+            errors=[],
+        )
+
+        agents, connected = _fetch_tactical_rmm_agents(self.settings)
+        if not connected:
+            raise RuntimeError("TacticalRMM is not connected")
+        agent_map = {
+            _extract_agent_id(agent): agent
+            for agent in agents
+            if isinstance(agent, dict) and _extract_agent_id(agent)
+        }
+        note_rows, notes_path, notes_error = _fetch_tactical_rmm_agent_notes(self.settings, agents=agents)
+        summary.notes_path = notes_path
+        if notes_error and not note_rows:
+            raise RuntimeError(notes_error)
+        summary.fetched_notes = len(note_rows)
+
+        scoped_local_source_pks = {
+            int(source_note_pk or 0)
+            for (source_note_pk,) in self._local_cleanup_query(
+                customer_filter=customer_filter,
+                topic_filter=topic_filter,
+            )
+            .with_entities(AuditRecord.source_note_pk)
+            .all()
+            if int(source_note_pk or 0) > 0
+        }
+        remote_present_source_pks: Set[int] = set()
+        deleted_note_pks: Set[int] = set()
+
+        for row in note_rows:
+            note_text = str(row.get("note") or "").strip()
+            if QT_AUDIT_NOTE_PREFIX not in note_text:
+                continue
+            summary.matched_notes += 1
+
+            agent_id = str(row.get("agent_id") or "").strip()
+            agent_pk = str(row.get("agent") or "").strip()
+            source_kind = _normalize_audit_source_kind(row.get("source_kind"))
+            note_pk = _safe_int(row.get("pk") or row.get("id"))
+            fallback_agent = agent_map.get(agent_id, {})
+            fallback_note_time_ms = _parse_iso8601_to_epoch_ms(row.get("entry_time"))
+
+            should_delete = not customer_filter and not topic_filter
+            if not should_delete:
+                try:
+                    parsed = RmmAuditParser.parse_note(
+                        note_text,
+                        fallback_agent=fallback_agent,
+                        fallback_note_time_ms=fallback_note_time_ms,
+                    )
+                except Exception as exc:
+                    summary.skipped += 1
+                    logger.warning(
+                        "Skipping QT-AUDIT cleanup candidate pk=%s agent_id=%s due to parse error: %s",
+                        note_pk or "?",
+                        agent_id or "?",
+                        exc,
+                    )
+                    _append_audit_cleanup_error(
+                        summary,
+                        f"Note {note_pk or '?'} konnte fuer Cleanup-Filter nicht geparst werden: {exc}",
+                    )
+                    continue
+
+                resolved_customer_name = str(parsed.customer_name or "").strip()
+                resolved_customer = _resolve_audit_customer(self.db, fallback_agent, parsed)
+                if resolved_customer and str(resolved_customer.name or "").strip():
+                    resolved_customer_name = str(resolved_customer.name or "").strip()
+
+                if customer_filter and not _audit_text_matches(resolved_customer_name, customer_filter):
+                    continue
+                if topic_filter and str(parsed.topic or "").strip().lower() != topic_filter.lower():
+                    continue
+                should_delete = True
+
+            if not should_delete:
+                continue
+
+            summary.candidate_notes += 1
+            if note_pk <= 0:
+                note_pk = _stable_audit_source_pk(
+                    agent_id,
+                    row.get("entry_time"),
+                    note_text,
+                    row.get("history_id"),
+                    row.get("script_result_id"),
+                    source_kind,
+                )
+            if clean_scope == "all" or int(note_pk or 0) in scoped_local_source_pks:
+                remote_present_source_pks.add(int(note_pk or 0))
+
+            deleted = False
+            delete_path = ""
+            delete_error = ""
+            deleted, delete_path, delete_error = _delete_tactical_rmm_agent_note(
+                self.settings,
+                note_pk=note_pk,
+                agent_id=agent_id,
+            )
+
+            if deleted:
+                deleted_note_pks.add(int(note_pk))
+                summary.deleted_notes += 1
+                continue
+
+            summary.failed_deletes += 1
+            logger.warning(
+                "Failed to delete QT-AUDIT source pk=%s agent_id=%s scope=%s source_kind=%s: %s",
+                note_pk,
+                agent_id or "?",
+                clean_scope,
+                source_kind,
+                delete_error or "unknown_error",
+            )
+            _append_audit_cleanup_error(
+                summary,
+                f"Audit-Quelle {note_pk} konnte in RMM nicht geloescht werden ({delete_error or 'unknown_error'})",
+            )
+            if delete_path:
+                _append_audit_cleanup_error(summary, f"Letzter erfolgreicher Pfadversuch: {delete_path}")
+
+        local_cleanup_query = self._local_cleanup_query(
+            customer_filter=customer_filter,
+            topic_filter=topic_filter,
+        )
+        if deleted_note_pks:
+            summary.deleted_records += int(
+                local_cleanup_query
+                .filter(AuditRecord.source_note_pk.in_(sorted(deleted_note_pks)))
+                .delete(synchronize_session=False)
+            )
+
+        orphan_cleanup_query = self._local_cleanup_query(
+            customer_filter=customer_filter,
+            topic_filter=topic_filter,
+        )
+        if remote_present_source_pks:
+            orphan_cleanup_query = orphan_cleanup_query.filter(
+                ~AuditRecord.source_note_pk.in_(sorted(remote_present_source_pks))
+            )
+        summary.deleted_records += int(orphan_cleanup_query.delete(synchronize_session=False))
+
+        summary.latest_marked = _rebuild_audit_latest_flags(self.db)
+        self.db.commit()
+        return summary.as_dict()
+
+
 def _safe_version_key(value: str) -> Tuple[int, str]:
     raw = str(value or "").strip()
     if not raw:
@@ -15623,6 +16781,8 @@ def ingest_infrastructure_discovery(
     x_discovery_token: Optional[str] = Header(default=None, alias="X-Discovery-Token"),
 ):
     expected_token = str(os.environ.get("INFRA_DISCOVERY_TOKEN") or "").strip()
+    if not expected_token:
+        raise HTTPException(503, "Discovery ingest disabled")
     if expected_token and str(x_discovery_token or "").strip() != expected_token:
         raise HTTPException(401, "Invalid discovery token")
     now_ms = int(time.time() * 1000)
@@ -17894,6 +19054,109 @@ def rmm_health():
         "error": probe.get("error") or "",
         "attemptedUrls": probe.get("attemptedUrls") if isinstance(probe.get("attemptedUrls"), list) else [],
     }
+
+
+@app.get("/api/rmm/audits")
+def get_rmm_audits(
+    q: Optional[str] = None,
+    customer: Optional[str] = None,
+    device: Optional[str] = None,
+    topic: Optional[str] = None,
+    status: Optional[str] = None,
+    audit_at_from: Optional[int] = None,
+    audit_at_to: Optional[int] = None,
+    latest_only: bool = False,
+):
+    with SessionLocal() as db:
+        query = db.query(AuditRecord)
+        if str(q or "").strip():
+            q_value = f"%{str(q or '').strip().lower()}%"
+            query = query.filter(
+                or_(
+                    func.lower(func.trim(AuditRecord.customer_name)).like(q_value),
+                    func.lower(func.trim(AuditRecord.device_name)).like(q_value),
+                    func.lower(func.trim(AuditRecord.agent_hostname)).like(q_value),
+                    func.lower(func.trim(AuditRecord.topic)).like(q_value),
+                    func.lower(func.trim(AuditRecord.status)).like(q_value),
+                    func.lower(func.trim(AuditRecord.summary)).like(q_value),
+                )
+            )
+        if str(customer or "").strip():
+            query = query.filter(func.trim(AuditRecord.customer_name) == str(customer or "").strip())
+        if str(device or "").strip():
+            query = query.filter(func.trim(AuditRecord.device_name) == str(device or "").strip())
+        if str(topic or "").strip():
+            query = query.filter(func.trim(AuditRecord.topic) == str(topic or "").strip())
+        if str(status or "").strip():
+            query = query.filter(func.trim(AuditRecord.status) == str(status or "").strip())
+        if int(audit_at_from or 0) > 0:
+            query = query.filter(AuditRecord.audit_at >= int(audit_at_from or 0))
+        if int(audit_at_to or 0) > 0:
+            query = query.filter(AuditRecord.audit_at <= int(audit_at_to or 0))
+        if latest_only:
+            query = query.filter(AuditRecord.is_latest == True)
+        items = (
+            query.order_by(
+                AuditRecord.audit_at.desc(),
+                AuditRecord.source_entry_time_ms.desc(),
+                AuditRecord.id.desc(),
+            )
+            .limit(1000)
+            .all()
+        )
+        last_imported_at = db.query(func.max(AuditRecord.imported_at)).scalar() or 0
+        total_records = db.query(func.count(AuditRecord.id)).scalar() or 0
+        latest_records = db.query(func.count(AuditRecord.id)).filter(AuditRecord.is_latest == True).scalar() or 0
+        return {
+            "items": [_serialize_audit_record(item) for item in items],
+            "filters": _build_rmm_audit_filter_options(db),
+            "meta": {
+                "totalRecords": int(total_records),
+                "latestRecords": int(latest_records),
+                "lastImportedAt": int(last_imported_at or 0),
+            },
+        }
+
+
+@app.post("/api/rmm/audits/import")
+def import_rmm_audits():
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        try:
+            result = RmmAuditImportService(db, settings).run()
+        except Exception as exc:
+            db.rollback()
+            logger.exception("RMM audit import failed")
+            raise HTTPException(500, f"RMM audit import failed: {exc}") from exc
+        return result
+
+
+@app.post("/api/rmm/audits/cleanup")
+def cleanup_rmm_audits(data: RmmAuditCleanupRequest):
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        try:
+            result = RmmAuditCleanupService(db, settings).run(
+                scope=data.scope,
+                customer=data.customer,
+                topic=data.topic,
+            )
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            db.rollback()
+            logger.exception("RMM audit cleanup failed")
+            raise HTTPException(500, f"RMM audit cleanup failed: {exc}") from exc
+        return result
 
 
 @app.get("/health")
