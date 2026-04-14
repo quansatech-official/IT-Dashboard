@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  Building2,
   BookmarkPlus,
   Check,
   ChevronDown,
@@ -16,7 +17,9 @@ import {
   Link,
   Plus,
   Copy,
+  FileText,
   Pencil,
+  Paperclip,
   Receipt,
   Save,
   Send,
@@ -43,6 +46,8 @@ const priceInputClass = `${inputClass} pr-8 appearance-none [appearance:textfiel
 const quantityInputClass = `${inputClass} appearance-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 const inlinePriceInputClass =
   "w-full bg-transparent py-1 text-[13px] text-sand-900 outline-none appearance-none [appearance:textfield] [-moz-appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+const sectionTitleClass = "text-base font-semibold tracking-tight text-sand-900";
+const modalTitleClass = "text-lg font-semibold tracking-tight text-sand-900";
 
 const statusOptions = ["Entwurf", "gesendet", "angenommen", "abgelehnt"];
 const complexityOptions = ["niedrig", "mittel", "hoch"];
@@ -903,6 +908,26 @@ const parseNumberInput = (value) => {
     ? raw.replace(/\./g, "").replace(",", ".")
     : raw;
   return Number(normalized);
+};
+
+const formatDateInputValue = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : "";
+  }
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const toIsoDateString = (value, fallback = "") => {
+  const normalized = String(value || "").trim();
+  if (!normalized) return fallback;
+  return `${normalized}T12:00:00.000Z`;
 };
 
 const normalizeQuantityInput = (value, fallback = 1) => {
@@ -1838,7 +1863,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
     <div
       ref={containerRef}
       data-detail-ready={detailPagesReady ? "true" : "false"}
-      className={isExport ? "bg-white" : "space-y-6 overflow-auto"}
+      className={isExport ? "bg-white" : "space-y-3 overflow-visible"}
       style={isExport ? { backgroundColor: "#ffffff" } : undefined}
     >
       {offer.coverEnabled ? (
@@ -1870,7 +1895,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           >
             <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
               <img src="/QTLogo.jpg" alt="QT" className="h-28 w-auto mb-8" />
-              <h2 className="text-4xl font-display text-sand-900">Angebot</h2>
+              <h2 className="text-4xl font-semibold tracking-tight text-sand-900">Angebot</h2>
               {offer.coverHeadline ? (
                 <p className="mt-4 text-lg text-sand-700">{offer.coverHeadline}</p>
               ) : null}
@@ -2598,7 +2623,7 @@ function HandoverModal({
         <div className="flex items-center justify-between border-b border-sand-100 px-6 py-4">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Pre-Check</p>
-            <h3 className="text-lg font-display text-sand-900">Übergabe an Faktura</h3>
+            <h3 className={modalTitleClass}>Übergabe an Faktura</h3>
           </div>
           <button
             type="button"
@@ -2792,6 +2817,28 @@ function Field({ label, children }) {
     <div className="text-[11px] uppercase tracking-[0.2em] text-sand-500">
       <span>{label}</span>
       <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
+function SectionHeader({ icon: Icon, kicker, title, description, badge }) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex items-start gap-3">
+        {Icon ? (
+          <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl border border-sand-200 bg-sand-50 text-sand-700">
+            <Icon size={18} />
+          </div>
+        ) : null}
+        <div>
+          {kicker ? (
+            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">{kicker}</p>
+          ) : null}
+          <h2 className={sectionTitleClass}>{title}</h2>
+          {description ? <p className="text-xs text-sand-600">{description}</p> : null}
+        </div>
+      </div>
+      {badge}
     </div>
   );
 }
@@ -3842,11 +3889,13 @@ export default function OffersView() {
         0;
       const a4WidthPx = 210 * 3.7795275591;
       if (!width) {
-        setPreviewScale(0.75);
+        setPreviewScale(0.68);
         return;
       }
-      const next = Math.min(1, width / a4WidthPx);
-      setPreviewScale(Math.max(0.5, next * 0.9));
+      const chromeOffset = 4;
+      const usableWidth = Math.max(0, width - chromeOffset);
+      const next = Math.min(1, usableWidth / a4WidthPx);
+      setPreviewScale(Math.max(0.52, next * 0.88));
     };
     updateScale();
     if (typeof ResizeObserver === "undefined") {
@@ -3911,12 +3960,17 @@ export default function OffersView() {
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const computeHeight = () => {
-      const headerEl = offerHeaderRef.current;
       const previewEl = previewWrapperRef.current;
-      if (!headerEl || !previewEl) return;
-      const available = headerEl.getBoundingClientRect().height;
-      if (available > 0) {
-        const px = `${Math.max(240, available)}px`;
+      if (!previewEl) return;
+      const firstPage = previewEl.querySelector("[data-pdf-page]");
+      const measuredHeight = firstPage
+        ? Math.round(firstPage.getBoundingClientRect().height)
+        : 0;
+      const a4HeightPx = 297 * 3.7795275591;
+      const fallbackHeight = Math.round(a4HeightPx * previewScale);
+      const nextHeight = Math.max(220, measuredHeight || fallbackHeight);
+      if (nextHeight > 0) {
+        const px = `${nextHeight}px`;
         setPreviewMaxHeight(px);
         previewEl.style.height = px;
       }
@@ -3926,13 +3980,15 @@ export default function OffersView() {
     let observer;
     if (typeof ResizeObserver !== "undefined") {
       observer = new ResizeObserver(computeHeight);
-      if (offerHeaderRef.current) observer.observe(offerHeaderRef.current);
+      if (previewWrapperRef.current?.parentElement) {
+        observer.observe(previewWrapperRef.current.parentElement);
+      }
     }
     return () => {
       window.removeEventListener("resize", computeHeight);
       if (observer) observer.disconnect();
     };
-  }, [mainTab, activeOffer?.id]);
+  }, [mainTab, activeOffer?.id, previewScale]);
 
   useEffect(() => {
     if (!importerOpen) return;
@@ -6015,7 +6071,7 @@ export default function OffersView() {
           </div>
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-            <h1 className="text-2xl font-display text-sand-900">Angebote</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-sand-900">Angebote</h1>
           </div>
         </div>
       </header>
@@ -6105,21 +6161,19 @@ export default function OffersView() {
         {mainTab === "new" ? (
           activeOffer ? (
             <>
-              <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-2 items-start">
-                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/80 backdrop-blur p-2 shadow-soft animate-fade-in">
-                  <div className="grid grid-cols-1 xl:grid-cols-[1.5fr_1fr] gap-2 items-start">
+              <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_0.95fr] gap-4 items-start">
+                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/80 backdrop-blur p-4 shadow-soft animate-fade-in">
+                  <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_0.95fr] gap-4 items-start">
                     <section
                       ref={offerHeaderRef}
-                      className="self-start rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-2"
+                      className="self-start rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4"
                     >
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div>
-                          <h2 className="text-lg font-display text-sand-900 leading-tight">Angebotskopf</h2>
-                          <p className="text-xs text-sand-600">
-                            Kunde, Anlass, Status und Referenzen.
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
+                      <SectionHeader
+                        icon={Receipt}
+                        kicker="Angebotskopf"
+                        title="Stammdaten & Konditionen"
+                        description="Kunde, Anlass, Status und kaufmännische Eckdaten."
+                        badge={<div className="flex flex-wrap items-center gap-2">
                           <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                             {activeOffer.status}
                           </span>
@@ -6164,14 +6218,17 @@ export default function OffersView() {
                               Marge {formatMoney(marginTotal)}
                             </span>
                           </div>
-                        </div>
-                      </div>
+                        </div>}
+                      />
 
-                      <div className="mt-3 grid gap-2 md:grid-cols-2 items-stretch">
-                        <div className="rounded-xl border border-sand-200 bg-sand-100 p-2 h-full">
-                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                            Referenz
-                          </p>
+                      <div className="mt-4 grid gap-3 md:grid-cols-2 items-stretch">
+                        <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3 h-full">
+                          <div className="flex items-center gap-2 text-sand-600">
+                            <FileText size={14} />
+                            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                              Referenz
+                            </p>
+                          </div>
                           <p className="mt-1 text-sm font-semibold text-sand-900">
                             {getOfferReferenceLabel(activeOffer)}
                           </p>
@@ -6184,10 +6241,13 @@ export default function OffersView() {
                             </p>
                           ) : null}
                         </div>
-                        <div className="rounded-xl border border-sand-200 bg-sand-100 p-2 h-full flex flex-col">
-                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                            Kunde
-                          </p>
+                        <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3 h-full flex flex-col">
+                          <div className="flex items-center gap-2 text-sand-600">
+                            <Building2 size={14} />
+                            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                              Kunde
+                            </p>
+                          </div>
                           <p className="mt-1 text-sm font-semibold text-sand-900">
                             {activeOffer.customer || "Noch offen"}
                           </p>
@@ -6219,8 +6279,14 @@ export default function OffersView() {
                         </div>
                       </div>
 
-                      <div className="mt-3">
-                        <div className="rounded-2xl border border-sand-200 bg-sand-50/60 p-3">
+                      <div className="mt-4 space-y-4">
+                        <div className="rounded-2xl border border-sand-200 bg-sand-50/60 p-4">
+                          <div className="mb-3 flex items-center gap-2 text-sand-700">
+                            <Info size={15} />
+                            <p className="text-[11px] uppercase tracking-[0.3em] text-sand-500">
+                              Basisdaten
+                            </p>
+                          </div>
                           <div className="grid gap-2 md:grid-cols-2">
                             <Field label="Kunde">
                               <input
@@ -6254,7 +6320,7 @@ export default function OffersView() {
                               </SelectField>
                             </Field>
                           </div>
-                          <div className="mt-2 grid gap-1 md:grid-cols-[minmax(0,200px)_120px_160px_1fr]">
+                          <div className="mt-3 grid gap-2 md:grid-cols-2">
                             <Field label="MwSt Modus">
                               <SelectField
                                 value={activeOffer.vatMode || "standard"}
@@ -6284,6 +6350,22 @@ export default function OffersView() {
                                   }))
                                 }
                                 disabled={activeOffer.vatMode !== "standard"}
+                              />
+                            </Field>
+                            <Field label="Angebotsdatum">
+                              <input
+                                className={inputClass}
+                                type="date"
+                                value={formatDateInputValue(activeOffer.createdAt)}
+                                onChange={(event) =>
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    createdAt: toIsoDateString(
+                                      event.target.value,
+                                      offer.createdAt || new Date().toISOString()
+                                    )
+                                  }))
+                                }
                               />
                             </Field>
                           
@@ -6330,56 +6412,66 @@ export default function OffersView() {
                             </Field>
                           </div>
                         </div>
-                      </div>
 
-                      <div className="mt-2 space-y-2">
-                        <Field label="Anrede">
-                          <input
-                            className={inputClass}
-                            value={activeOffer.salutation || ""}
-                            onChange={(event) =>
-                              updateOffer(activeOffer.id, (offer) => ({
-                                ...offer,
-                                salutation: event.target.value
-                              }))
-                            }
-                            placeholder="Sehr geehrte Damen und Herren,"
-                          />
-                        </Field>
-                        <Field label="Einleitung">
-                          <textarea
-                            className={noteTextareaClass}
-                            value={activeOffer.introText || ""}
-                            onChange={(event) =>
-                              updateOffer(activeOffer.id, (offer) => ({
-                                ...offer,
-                                introText: event.target.value
-                              }))
-                            }
-                            placeholder="Vielen Dank für Ihre Anfrage..."
-                          />
-                        </Field>
+                        <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                          <div className="mb-3 flex items-center gap-2 text-sand-700">
+                            <MessageSquare size={15} />
+                            <p className="text-[11px] uppercase tracking-[0.3em] text-sand-500">
+                              Ansprache
+                            </p>
+                          </div>
+                          <div className="space-y-3">
+                            <Field label="Anrede">
+                              <input
+                                className={inputClass}
+                                value={activeOffer.salutation || ""}
+                                onChange={(event) =>
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    salutation: event.target.value
+                                  }))
+                                }
+                                placeholder="Sehr geehrte Damen und Herren,"
+                              />
+                            </Field>
+                            <Field label="Einleitung">
+                              <textarea
+                                className={noteTextareaClass}
+                                value={activeOffer.introText || ""}
+                                onChange={(event) =>
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    introText: event.target.value
+                                  }))
+                                }
+                                placeholder="Vielen Dank für Ihre Anfrage..."
+                              />
+                            </Field>
+                          </div>
+                        </div>
                       </div>
                     </section>
 
                     <aside
-                      className="space-y-3 xl:sticky xl:top-4 self-start"
+                      className="space-y-3 xl:sticky xl:top-5 self-start"
                       ref={previewSectionRef}
                     >
-                      <section className="rounded-3xl border border-sand-200 bg-white p-2 shadow-soft">
-                        <div className="flex items-center justify-between mb-3">
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                              Live Vorschau
-                            </p>
-                            <h3 className="text-base font-display text-sand-900">PDF Layout</h3>
-                          </div>
-                          {activeOffer ? (
-                            <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600">
-                              {activeOffer.status}
-                            </span>
-                          ) : null}
-                        </div>
+                      <div className="rounded-3xl border border-sand-200 bg-white/80 p-3 shadow-soft backdrop-blur">
+                        <SectionHeader
+                          icon={Eye}
+                          kicker="Live Vorschau"
+                          title="PDF Layout"
+                          description="Auf eine A4-Seite in der Höhe begrenzt, vertikal scrollbar."
+                          badge={
+                            activeOffer ? (
+                              <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600">
+                                {activeOffer.status}
+                              </span>
+                            ) : null
+                          }
+                        />
+                      </div>
+                      <section className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
                         <button
                           type="button"
                           onClick={() => {
@@ -6393,7 +6485,7 @@ export default function OffersView() {
                           <div
                             ref={previewWrapperRef}
                             style={{ maxHeight: previewMaxHeight, height: previewMaxHeight }}
-                            className={`w-full overflow-auto ${activeOffer ? "cursor-zoom-in" : ""}`}
+                            className={`w-full overflow-auto bg-sand-50 ${activeOffer ? "cursor-zoom-in" : ""}`}
                           >
                             <OfferPreview offer={activeOffer} scale={previewScale} />
                           </div>
@@ -6403,32 +6495,25 @@ export default function OffersView() {
                   </div>
                 </section>
 
-                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-2 shadow-soft animate-fade-in">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                        Positionen
-                      </p>
-                      <h2 className="text-base font-display text-sand-900">
-                        Positionen zusammenstellen
-                      </h2>
-                      <p className="text-xs text-sand-600">
-                        Leistung oder Material anlegen, Vorlagen nutzen.
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
+                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
+                  <SectionHeader
+                    icon={ShoppingCart}
+                    kicker="Positionen"
+                    title="Positionen zusammenstellen"
+                    description="Leistung oder Material anlegen, Vorlagen nutzen."
+                    badge={<div className="flex flex-wrap items-center gap-2">
                       <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                         {activeOffer.lineItems.filter((item) => !item?.optional).length} Leistungspositionen
                       </span>
                       <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
                         {activeOffer.deviceItems.filter((item) => !item?.optional).length} Materialpositionen
                       </span>
-                    </div>
-                  </div>
+                    </div>}
+                  />
 
-                  <div className="mt-3 space-y-2">
-                    <div className="grid gap-2 md:grid-cols-4">
-                      <div className="bg-white border border-sand-200 rounded-2xl p-2 shadow-sm flex flex-col gap-2">
+                  <div className="mt-4 space-y-4">
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <div className="bg-white border border-sand-200 rounded-2xl p-3 shadow-sm flex flex-col gap-2">
                         <div className="flex items-center gap-2 text-sand-700">
                           <Plus size={16} />
                           <p className="text-xs uppercase tracking-wide text-sand-600">
@@ -6618,21 +6703,14 @@ export default function OffersView() {
                 <div className="space-y-3 xl:col-span-2">
                   <section
                     ref={documentBuildRef}
-                    className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft animate-fade-in"
+                    className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft animate-fade-in"
                   >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="space-y-1">
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-                        Dokumentaufbau
-                      </p>
-                      <h2 className="text-base font-display text-sand-900">
-                        Deckblatt & Abschnitte
-                      </h2>
-                      <p className="text-xs text-sand-600">
-                        Struktur & optionale Bereiche.
-                      </p>
-                    </div>
-                    <label className="flex items-center gap-2 text-sm text-sand-700">
+                  <SectionHeader
+                    icon={FileText}
+                    kicker="Dokumentaufbau"
+                    title="Deckblatt & Abschnitte"
+                    description="Struktur und optionale Bereiche."
+                    badge={<label className="flex items-center gap-2 text-sm text-sand-700">
                       <input
                         id="offer-cover-enabled"
                         type="checkbox"
@@ -6646,9 +6724,9 @@ export default function OffersView() {
                         className="h-4 w-4"
                       />
                       Deckblatt aktivieren
-                    </label>
-                  </div>
-                  <div className="mt-2 space-y-2">
+                    </label>}
+                  />
+                  <div className="mt-4 space-y-3">
                     {activeOffer.coverEnabled ? (
                       <div className="space-y-2">
                         <Field label="Deckblatt Titel">
@@ -6835,27 +6913,20 @@ export default function OffersView() {
                   </div>
                 </section>
 
-                  <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-3 shadow-soft animate-fade-in">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                          Angebotsdetail
-                        </p>
-                        <h2 className="text-lg font-display text-sand-900">
-                          Ablauf & Erläuterung
-                        </h2>
-                        <p className="text-sm text-sand-600">
-                          Optionaler Text, z.B. Projektablauf oder Detailbeschreibung.
-                        </p>
-                      </div>
-                    </div>
+                  <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
+                    <SectionHeader
+                      icon={MessageSquare}
+                      kicker="Angebotsdetail"
+                      title="Ablauf & Erläuterung"
+                      description="Optionaler Text, z.B. Projektablauf oder Detailbeschreibung."
+                    />
                     <div className="mt-3">
                       <NotesRichTextEditor
                         value={detailDraft}
                         onChange={setDetailDraft}
                         placeholder="Projektablauf, Hintergrund, Vorgehen..."
                         minHeight="160px"
-                        fontFamily="inherit"
+                        fontFamily={'"Roboto", "Helvetica Neue", Arial, sans-serif'}
                       />
                     </div>
                     {!detailDraft ? (
@@ -6865,15 +6936,15 @@ export default function OffersView() {
                     ) : null}
                   </section>
 
-                  <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-3 shadow-soft animate-fade-in">
+                  <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                          Beilagen
-                        </p>
-                        <p className="text-sm text-sand-600">
-                          Dokumente und Bilder zum Angebot.
-                        </p>
+                      <div className="flex-1 min-w-[240px]">
+                        <SectionHeader
+                          icon={Paperclip}
+                          kicker="Beilagen"
+                          title="Dokumente & Medien"
+                          description="Dokumente und Bilder zum Angebot."
+                        />
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                       <label className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100 cursor-pointer">
@@ -7000,7 +7071,7 @@ export default function OffersView() {
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
               Angebotsstatus
             </p>
-            <h2 className="text-lg font-display text-sand-900">
+            <h2 className={modalTitleClass}>
               Offene & abgeschlossene Angebote
             </h2>
           </div>
@@ -7817,7 +7888,7 @@ export default function OffersView() {
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
               Textbausteine
             </p>
-            <h2 className="text-base font-display text-sand-900">
+            <h2 className={sectionTitleClass}>
               Service & Material pflegen
             </h2>
           </div>
@@ -8508,7 +8579,7 @@ export default function OffersView() {
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
                 Vorschau
               </p>
-              <h3 className="text-lg font-display text-sand-900">
+              <h3 className={modalTitleClass}>
                 {previewMode === "confirmation"
                   ? "Auftragsbestätigung"
                   : previewOffer.customer || "Angebot"}
@@ -8547,7 +8618,7 @@ export default function OffersView() {
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
                 Materialimporter
               </p>
-              <h3 className="text-lg font-display text-sand-900">
+              <h3 className={modalTitleClass}>
                 Marketplace durchsuchen
               </h3>
             </div>

@@ -5,6 +5,7 @@ import {
   ClipboardList,
   FileText,
   Moon,
+  Pin,
   Receipt,
   Settings,
   ShoppingCart,
@@ -27,6 +28,7 @@ import StatsView from "./stats/StatsView";
 import PurchasingView from "./purchasing/PurchasingView";
 import KnowledgeBaseView from "./knowledge/KnowledgeBaseView";
 import IncomingCallQuickTaskPopup from "./telephony/IncomingCallQuickTaskPopup";
+import VisionBoardView from "./vision-board/VisionBoardView";
 
 const detectDeviceClass = () => {
   if (typeof window === "undefined" || typeof navigator === "undefined") return "desktop";
@@ -129,6 +131,16 @@ export default function App() {
               } flex items-center gap-3`}
             >
               <ClipboardList size={18} /> Aufgaben
+            </button>
+            <button
+              onClick={() => setActiveView("visionboard")}
+              className={`w-full text-left px-4 py-3 rounded-2xl border ${
+                activeView === "visionboard"
+                  ? "bg-sand-900 text-white border-sand-900"
+                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
+              } flex items-center gap-3`}
+            >
+              <Pin size={18} /> VisionBoard
             </button>
             <button
               onClick={() => setActiveView("notes")}
@@ -253,6 +265,8 @@ export default function App() {
         <div className="flex-1">
           {activeView === "dayplan" ? (
             <DayPlanView />
+          ) : activeView === "visionboard" ? (
+            <VisionBoardView />
           ) : activeView === "notes" ? (
             <ErrorBoundary>
               <NotesView />

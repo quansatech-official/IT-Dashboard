@@ -546,6 +546,23 @@ class PinNote(Base):
     id = Column(Integer, primary_key=True)
     content = Column(String, default="")
 
+
+class VisionBoardNote(Base):
+    __tablename__ = "vision_board_notes"
+
+    id = Column(String, primary_key=True)
+    text = Column(Text, default="")
+    color = Column(String, default="lemon")
+    x = Column(Float, default=0.0)
+    y = Column(Float, default=0.0)
+    width = Column(Float, default=220.0)
+    height = Column(Float, default=170.0)
+    rotation = Column(Float, default=0.0)
+    locked = Column(Boolean, default=False)
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000), index=True)
+
+
 class ReportCatalogItem(Base):
     __tablename__ = "report_catalog"
 
@@ -990,6 +1007,29 @@ def _run_db_startup_step(step_name: str, callback: Callable[[], None]) -> None:
 
 
 _run_db_startup_step("create_all", lambda: Base.metadata.create_all(bind=engine))
+
+
+def _ensure_vision_board_notes_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("vision_board_notes"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("vision_board_notes")}
+    statements = []
+    if "width" not in columns:
+        statements.append("ALTER TABLE vision_board_notes ADD COLUMN width DOUBLE PRECISION DEFAULT 220")
+    if "height" not in columns:
+        statements.append("ALTER TABLE vision_board_notes ADD COLUMN height DOUBLE PRECISION DEFAULT 170")
+    if "locked" not in columns:
+        statements.append("ALTER TABLE vision_board_notes ADD COLUMN locked BOOLEAN DEFAULT FALSE")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_run_db_startup_step("ensure_vision_board_notes_columns", _ensure_vision_board_notes_columns)
+
 
 def _ensure_purchasing_items_columns() -> None:
     inspector = inspect(engine)
@@ -1814,6 +1854,29 @@ class DayTaskGroupUpdate(BaseModel):
 
 class PinNoteUpdate(BaseModel):
     content: str
+
+
+class VisionBoardNoteCreate(BaseModel):
+    id: Optional[str] = None
+    text: Optional[str] = ""
+    color: Optional[str] = "lemon"
+    x: Optional[float] = 0
+    y: Optional[float] = 0
+    width: Optional[float] = 220
+    height: Optional[float] = 170
+    rotation: Optional[float] = 0
+    locked: Optional[bool] = False
+
+
+class VisionBoardNoteUpdate(BaseModel):
+    text: Optional[str] = None
+    color: Optional[str] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
+    rotation: Optional[float] = None
+    locked: Optional[bool] = None
 
 
 class PurchasingItemCreate(BaseModel):
@@ -18063,6 +18126,109 @@ def update_pinboard(note_id: int, data: PinNoteUpdate):
         note.content = data.content
         db.commit()
         return {"id": note.id, "content": note.content}
+
+
+# ================= VISION BOARD =================
+def _serialize_vision_board_note(note: VisionBoardNote) -> Dict[str, Any]:
+    return {
+        "id": note.id,
+        "text": note.text or "",
+        "color": note.color or "lemon",
+        "x": float(note.x or 0),
+        "y": float(note.y or 0),
+        "width": float(note.width or 220),
+        "height": float(note.height or 170),
+        "rotation": float(note.rotation or 0),
+        "locked": bool(note.locked),
+        "createdAt": int(note.created_at or 0),
+        "updatedAt": int(note.updated_at or 0),
+    }
+
+
+@app.get("/api/vision_board/notes")
+def get_vision_board_notes():
+    with SessionLocal() as db:
+        notes = db.query(VisionBoardNote).order_by(VisionBoardNote.created_at.asc()).all()
+        return {
+            "notes": [_serialize_vision_board_note(note) for note in notes],
+            "serverTime": int(time.time() * 1000),
+        }
+
+
+@app.post("/api/vision_board/notes")
+def create_vision_board_note(data: VisionBoardNoteCreate):
+    note_id = str(data.id or uuid.uuid4()).strip()
+    if not note_id:
+        note_id = str(uuid.uuid4())
+    now_ms = int(time.time() * 1000)
+    with SessionLocal() as db:
+        existing = db.query(VisionBoardNote).get(note_id)
+        if existing:
+            raise HTTPException(409, "VisionBoard note already exists")
+        note = VisionBoardNote(
+            id=note_id,
+            text=data.text or "",
+            color=data.color or "lemon",
+            x=float(data.x or 0),
+            y=float(data.y or 0),
+            width=float(data.width or 220),
+            height=float(data.height or 170),
+            rotation=float(data.rotation or 0),
+            locked=bool(data.locked),
+            created_at=now_ms,
+            updated_at=now_ms,
+        )
+        db.add(note)
+        db.commit()
+        db.refresh(note)
+        return _serialize_vision_board_note(note)
+
+
+@app.patch("/api/vision_board/notes/{note_id}")
+def update_vision_board_note(note_id: str, data: VisionBoardNoteUpdate):
+    with SessionLocal() as db:
+        note = db.query(VisionBoardNote).get(note_id)
+        if not note:
+            raise HTTPException(404, "VisionBoard note not found")
+        if data.text is not None:
+            note.text = data.text
+        if data.color is not None:
+            note.color = data.color or "lemon"
+        if data.x is not None:
+            note.x = float(data.x)
+        if data.y is not None:
+            note.y = float(data.y)
+        if data.width is not None:
+            note.width = float(data.width)
+        if data.height is not None:
+            note.height = float(data.height)
+        if data.rotation is not None:
+            note.rotation = float(data.rotation)
+        if data.locked is not None:
+            note.locked = bool(data.locked)
+        note.updated_at = int(time.time() * 1000)
+        db.commit()
+        db.refresh(note)
+        return _serialize_vision_board_note(note)
+
+
+@app.delete("/api/vision_board/notes/{note_id}", status_code=204)
+def delete_vision_board_note(note_id: str):
+    with SessionLocal() as db:
+        note = db.query(VisionBoardNote).get(note_id)
+        if not note:
+            return Response(status_code=204)
+        db.delete(note)
+        db.commit()
+        return Response(status_code=204)
+
+
+@app.delete("/api/vision_board/notes", status_code=204)
+def clear_vision_board_notes():
+    with SessionLocal() as db:
+        db.query(VisionBoardNote).delete()
+        db.commit()
+        return Response(status_code=204)
 
 
 # ================= PURCHASING =================
