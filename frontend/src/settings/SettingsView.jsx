@@ -4,25 +4,11 @@ import { telephonyService } from "../telephony/telephonyService";
 import NotesRichTextEditor from "../components/NotesRichTextEditor";
 
 const API = "/api";
-const STORAGE_KEY = "qt_smtp_settings_cache";
 const DEBUG_TABLE_LABELS = {
   day_tasks: "Aufgaben",
   day_task_groups: "Aufgabengruppen"
 };
 const DEBUG_CLEARABLE_TABLES = new Set(Object.keys(DEBUG_TABLE_LABELS));
-
-const defaultSmtp = {
-  host: "",
-  port: 587,
-  username: "",
-  password: "",
-  sender_name: "",
-  sender_email: "",
-  use_tls: true,
-  use_ssl: false,
-  signature_html: "",
-  has_password: false
-};
 
 const defaultMailAccount = () => ({
   id: "",
@@ -191,22 +177,6 @@ const defaultAiConnection = {
   ai_customer_development_model: "",
   ai_offer_model: "",
   ai_invoice_model: ""
-};
-
-const loadCachedSmtp = () => {
-  if (typeof window === "undefined") return defaultSmtp;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultSmtp;
-    const cached = JSON.parse(raw);
-    return {
-      ...defaultSmtp,
-      ...cached,
-      password: ""
-    };
-  } catch (error) {
-    return defaultSmtp;
-  }
 };
 
 const defaultContractTemplates = {
@@ -683,16 +653,13 @@ const getMetaHubEmailSummary = ({ metaHub, metaHubRuntimeStatus, activeMailboxCo
 
 
 export default function SettingsView() {
-  const [smtp, setSmtp] = useState(loadCachedSmtp);
   const [mailSettings, setMailSettings] = useState({ accounts: [], routes: {}, functions: [] });
   const [mailDraft, setMailDraft] = useState(defaultMailAccount);
   const [mailEditId, setMailEditId] = useState("");
   const [mailStatus, setMailStatus] = useState("idle");
   const [mailMessage, setMailMessage] = useState("");
-  const [mailOpen, setMailOpen] = useState(true);
+  const [mailOpen, setMailOpen] = useState(false);
   const [mailTestRecipient, setMailTestRecipient] = useState("");
-  const [status, setStatus] = useState("idle");
-  const [loadStatus, setLoadStatus] = useState("loading");
   const [employees, setEmployees] = useState([]);
   const [employeeDraft, setEmployeeDraft] = useState({
     name: "",
@@ -845,7 +812,6 @@ export default function SettingsView() {
   const [dbMaintenanceStatus, setDbMaintenanceStatus] = useState("idle");
   const [dbMaintenanceInfo, setDbMaintenanceInfo] = useState("");
   const [debugTablesOpen, setDebugTablesOpen] = useState(false);
-  const [smtpOpen, setSmtpOpen] = useState(false);
   const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
   const [contractTemplatesOpen, setContractTemplatesOpen] = useState(false);
   const [contractTariffsOpen, setContractTariffsOpen] = useState(false);
@@ -901,31 +867,6 @@ export default function SettingsView() {
   const hasCtiPasswordAuth = cti.hasPassword && cti.username?.trim();
   const hasCtiRefreshAuth = cti.hasRefreshToken;
   const hasCtiCredentials = Boolean(hasCtiPasswordAuth || hasCtiRefreshAuth);
-
-  useEffect(() => {
-    let active = true;
-    fetch(`${API}/smtp_settings`)
-      .then((res) => {
-        if (!res.ok) throw new Error("load_failed");
-        return res.json();
-      })
-      .then((data) => {
-        if (!active) return;
-        setSmtp((prev) => ({
-          ...prev,
-          ...data,
-          password: ""
-        }));
-        setLoadStatus("ready");
-      })
-      .catch(() => {
-        if (!active) return;
-        setLoadStatus("error");
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   const loadMailSettings = async () => {
     setMailStatus("loading");
@@ -1294,45 +1235,6 @@ export default function SettingsView() {
       setDbMaintenanceInfo(error?.message ? String(error.message) : "Datenbankpflege fehlgeschlagen.");
     }
     setTimeout(() => setDbMaintenanceStatus("idle"), 3000);
-  };
-
-  const save = async () => {
-    setStatus("saving");
-    try {
-      const res = await fetch(`${API}/smtp_settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          host: smtp.host,
-          port: Number(smtp.port) || 587,
-          username: smtp.username,
-          password: smtp.password,
-          sender_name: smtp.sender_name,
-          sender_email: smtp.sender_email,
-          use_tls: smtp.use_tls,
-          use_ssl: smtp.use_ssl,
-          signature_html: smtp.signature_html
-        })
-      });
-      if (!res.ok) throw new Error("save_failed");
-      const data = await res.json();
-      const next = {
-        ...smtp,
-        ...data,
-        password: ""
-      };
-      setSmtp(next);
-      try {
-        const { password, ...cacheable } = next;
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cacheable));
-      } catch (error) {
-        // Ignore cache write errors (private mode, etc.)
-      }
-      setStatus("saved");
-    } catch (error) {
-      setStatus("error");
-    }
-    setTimeout(() => setStatus("idle"), 2000);
   };
 
   const selectMailAccount = (accountId) => {
@@ -3105,7 +3007,10 @@ export default function SettingsView() {
                   )}
 
                   <div className="mt-4">
-                    <label className="text-xs text-sand-500">Signatur</label>
+                    <label className="text-xs text-sand-500">Kontosignatur</label>
+                    <p className="mt-1 text-[11px] text-sand-500">
+                      Wird wie in Outlook pro Mailkonto gepflegt und bei den zugeordneten Versandfunktionen verwendet.
+                    </p>
                     <div className="mt-2">
                       <NotesRichTextEditor
                         value={mailDraft.signature_html}
@@ -3192,133 +3097,6 @@ export default function SettingsView() {
                 </p>
               ) : null}
             </div>
-          ) : null}
-        </div>
-
-        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
-          <button
-            type="button"
-            onClick={() => setSmtpOpen((current) => !current)}
-            className="flex w-full items-center justify-between gap-2 text-sand-700"
-          >
-            <div className="flex items-center gap-2">
-              <Mail size={18} />
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">SMTP Versand</p>
-            </div>
-            <span className="text-sm text-sand-500">{smtpOpen ? "–" : "+"}</span>
-          </button>
-          {smtpOpen ? (
-            <>
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs text-sand-500">SMTP Host</label>
-                  <input
-                    value={smtp.host}
-                    onChange={(event) => setSmtp((prev) => ({ ...prev, host: event.target.value }))}
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="smtp.example.com"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Port</label>
-                  <input
-                    value={smtp.port}
-                    onChange={(event) => setSmtp((prev) => ({ ...prev, port: event.target.value }))}
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="587"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Benutzername</label>
-                  <input
-                    value={smtp.username}
-                    onChange={(event) => setSmtp((prev) => ({ ...prev, username: event.target.value }))}
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="user@example.com"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Passwort</label>
-                  <input
-                    type="password"
-                    value={smtp.password}
-                    onChange={(event) => setSmtp((prev) => ({ ...prev, password: event.target.value }))}
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder={smtp.has_password ? "Gespeichert" : "••••••••"}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Absender Name</label>
-                  <input
-                    value={smtp.sender_name}
-                    onChange={(event) =>
-                      setSmtp((prev) => ({ ...prev, sender_name: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="Quansatech"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-sand-500">Absender E-Mail</label>
-                  <input
-                    value={smtp.sender_email}
-                    onChange={(event) =>
-                      setSmtp((prev) => ({ ...prev, sender_email: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="reports@example.com"
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="text-xs text-sand-500">Signatur</label>
-                  <div className="mt-2">
-                    <NotesRichTextEditor
-                      value={smtp.signature_html}
-                      onChange={(value) =>
-                        setSmtp((prev) => ({ ...prev, signature_html: value }))
-                      }
-                      placeholder="Mit freundlichen Gruessen"
-                      minHeight="140px"
-                    />
-                  </div>
-                </div>
-                <label className="flex items-center gap-2 text-sm text-sand-700">
-                  <input
-                    type="checkbox"
-                    checked={smtp.use_tls}
-                    onChange={(event) =>
-                      setSmtp((prev) => ({ ...prev, use_tls: event.target.checked }))
-                    }
-                  />
-                  TLS verwenden
-                </label>
-                <label className="flex items-center gap-2 text-sm text-sand-700">
-                  <input
-                    type="checkbox"
-                    checked={smtp.use_ssl}
-                    onChange={(event) =>
-                      setSmtp((prev) => ({ ...prev, use_ssl: event.target.checked }))
-                    }
-                  />
-                  SSL verwenden
-                </label>
-              </div>
-              <div className="mt-6 flex items-center gap-3">
-                <button
-                  onClick={save}
-                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
-                >
-                  Speichern
-                </button>
-                {loadStatus === "error" && (
-                  <span className="text-sm text-rose-600">Laden fehlgeschlagen</span>
-                )}
-                {status === "saved" && <span className="text-sm text-emerald-600">Gespeichert</span>}
-                {status === "error" && (
-                  <span className="text-sm text-rose-600">Speichern fehlgeschlagen</span>
-                )}
-              </div>
-            </>
           ) : null}
         </div>
 

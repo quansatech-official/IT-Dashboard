@@ -40,6 +40,7 @@ import logging
 import xml.etree.ElementTree as ET
 
 from sevdesk_service import SevdeskClient, SevdeskConfig, SevdeskError
+from ai.workbench import WorkbenchAiRuntime, WorkbenchAiService, WORKBENCH_USE_CASES
 # ================= DATABASE =================
 DATABASE_URL = os.environ.get("DATABASE_URL") or (
     "postgresql+psycopg2://it_user:it_secret_password@db:5432/it_dashboard"
@@ -115,6 +116,29 @@ MAIL_FUNCTIONS = [
     },
 ]
 MAIL_FUNCTION_BY_KEY = {item["key"]: item for item in MAIL_FUNCTIONS}
+REMOTE_DEPLOY_PUBLIC_BASE_URL = str(
+    os.environ.get("REMOTE_DEPLOY_PUBLIC_BASE_URL") or "https://fw.quansatech.at"
+).strip().rstrip("/")
+REMOTE_DEPLOY_DEFAULT_TEAMVIEWER_CUSTOM_CONFIG_ID = str(
+    os.environ.get("REMOTE_DEPLOY_TEAMVIEWER_CUSTOM_CONFIG_ID") or "6uxwetg"
+).strip()
+REMOTE_DEPLOY_DEFAULT_TEAMVIEWER_ASSIGNMENT_ID = str(
+    os.environ.get("REMOTE_DEPLOY_TEAMVIEWER_ASSIGNMENT_ID") or ""
+).strip()
+REMOTE_DEPLOY_DEFAULT_RMM_INSTALLER_URL = str(os.environ.get("REMOTE_DEPLOY_RMM_INSTALLER_URL") or "").strip()
+REMOTE_DEPLOY_DEFAULT_MAX_INSTALLS = int(os.environ.get("REMOTE_DEPLOY_DEFAULT_MAX_INSTALLS") or "0")
+REMOTE_DEPLOY_DEFAULT_EXPIRY_DAYS = int(os.environ.get("REMOTE_DEPLOY_DEFAULT_EXPIRY_DAYS") or "0")
+REMOTE_DEPLOY_PACKAGE_TYPES = {"tv", "tv_rmm", "rmm"}
+REMOTE_DEPLOY_STATUS_VALUES = {
+    "started",
+    "downloaded",
+    "install_tv_started",
+    "install_tv_success",
+    "install_rmm_started",
+    "install_rmm_success",
+    "finished",
+    "failed",
+}
 OPENAI_COMPATIBLE_PROMPT_MAX_CHARS = max(
     0,
     int(os.environ.get("OPENAI_COMPATIBLE_PROMPT_MAX_CHARS") or "0"),
@@ -744,6 +768,12 @@ class IntegrationSettings(Base):
     meta_hub_email_enabled = Column(Boolean, default=False)
     meta_hub_refresh_seconds = Column(Integer, default=300)
     meta_hub_mailboxes_json = Column(Text, default="[]")
+    remote_deploy_public_base_url = Column(String, default="")
+    remote_deploy_teamviewer_customconfigid = Column(String, default="")
+    remote_deploy_teamviewer_assignmentid = Column(String, default="")
+    remote_deploy_rmm_installer_url = Column(String, default="")
+    remote_deploy_default_max_installs = Column(Integer, default=0)
+    remote_deploy_default_expiry_days = Column(Integer, default=0)
     ai_provider = Column(String, default="ollama")
     ai_base_url = Column(String, default="")
     ai_api_key = Column(String, default="")
@@ -876,6 +906,55 @@ class MailRoute(Base):
     updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
     account = relationship("MailAccount")
+
+
+class RemoteDeployLink(Base):
+    __tablename__ = "remote_deploy_links"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+    customer_name = Column(String, default="")
+    slug = Column(String, unique=True, nullable=False, index=True)
+    public_url = Column(String, default="")
+    package_type = Column(String, default="tv")
+    install_teamviewer = Column(Boolean, default=True)
+    install_rmm = Column(Boolean, default=False)
+    alias_prefix = Column(String, default="")
+    teamviewer_customconfigid = Column(String, default="")
+    teamviewer_assignmentid = Column(String, default="")
+    rmm_installer_url = Column(String, default="")
+    is_active = Column(Boolean, default=True)
+    expires_at = Column(BigInteger, nullable=True)
+    max_installs = Column(Integer, nullable=True)
+    current_installs = Column(Integer, default=0)
+    internal_note = Column(Text, default="")
+    internal_token = Column(String, default=lambda: str(uuid.uuid4()))
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    created_by = Column(String, default="")
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_by = Column(String, default="")
+    deleted_at = Column(BigInteger, nullable=True)
+
+    customer = relationship("Customer")
+    events = relationship("RemoteDeployEvent", back_populates="link")
+
+
+class RemoteDeployEvent(Base):
+    __tablename__ = "remote_deploy_events"
+
+    id = Column(Integer, primary_key=True)
+    remote_deploy_link_id = Column(Integer, ForeignKey("remote_deploy_links.id"), nullable=False, index=True)
+    event_type = Column(String, default="status", index=True)
+    status = Column(String, default="")
+    hostname = Column(String, default="")
+    username = Column(String, default="")
+    device_alias = Column(String, default="")
+    message = Column(Text, default="")
+    ip_address = Column(String, default="")
+    user_agent = Column(String, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000), index=True)
+
+    link = relationship("RemoteDeployLink", back_populates="events")
 
 
 class OfferSettings(Base):
@@ -1224,6 +1303,18 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_refresh_seconds INTEGER DEFAULT 300")
     if "meta_hub_mailboxes_json" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_mailboxes_json TEXT DEFAULT '[]'")
+    if "remote_deploy_public_base_url" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN remote_deploy_public_base_url VARCHAR DEFAULT ''")
+    if "remote_deploy_teamviewer_customconfigid" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN remote_deploy_teamviewer_customconfigid VARCHAR DEFAULT ''")
+    if "remote_deploy_teamviewer_assignmentid" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN remote_deploy_teamviewer_assignmentid VARCHAR DEFAULT ''")
+    if "remote_deploy_rmm_installer_url" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN remote_deploy_rmm_installer_url VARCHAR DEFAULT ''")
+    if "remote_deploy_default_max_installs" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN remote_deploy_default_max_installs INTEGER DEFAULT 0")
+    if "remote_deploy_default_expiry_days" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN remote_deploy_default_expiry_days INTEGER DEFAULT 0")
     if "ai_provider" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN ai_provider VARCHAR DEFAULT 'ollama'")
     if "ai_base_url" not in columns:
@@ -1454,6 +1545,7 @@ def _ensure_mail_accounts_seed() -> None:
                 updated_at=now_ms,
             )
             db.add(default_send_account)
+            db.flush()
 
         integration_settings = db.query(IntegrationSettings).first()
         raw_mailboxes = []
@@ -1465,6 +1557,32 @@ def _ensure_mail_accounts_seed() -> None:
                 raw_mailboxes = []
         for index, mailbox in enumerate(raw_mailboxes):
             if not isinstance(mailbox, dict):
+                continue
+            mailbox_email = str(mailbox.get("email") or mailbox.get("username") or "").strip().lower()
+            send_email = str(
+                (default_send_account.sender_email if default_send_account else "")
+                or (default_send_account.smtp_username if default_send_account else "")
+                or ""
+            ).strip().lower()
+            if default_send_account and mailbox_email and send_email and mailbox_email == send_email:
+                use_ssl = bool(mailbox.get("use_ssl", False))
+                try:
+                    imap_port = int(mailbox.get("port") or 993)
+                except Exception:
+                    imap_port = 993
+                default_send_account.name = (
+                    str(default_send_account.name or "").strip()
+                    or str(mailbox.get("name") or mailbox.get("email") or "Mailkonto")
+                )
+                default_send_account.mailbox_email = str(mailbox.get("email") or default_send_account.mailbox_email or "").strip()
+                default_send_account.imap_host = str(mailbox.get("host") or "")
+                default_send_account.imap_port = max(1, min(imap_port, 65535))
+                default_send_account.imap_username = str(mailbox.get("username") or "")
+                default_send_account.imap_password = str(mailbox.get("password") or "")
+                default_send_account.imap_folder = str(mailbox.get("folder") or "INBOX") or "INBOX"
+                default_send_account.imap_use_tls = bool(mailbox.get("use_tls", not use_ssl))
+                default_send_account.imap_use_ssl = use_ssl
+                default_send_account.updated_at = now_ms
                 continue
             account_id = f"legacy_meta_hub_{str(mailbox.get('id') or index).strip() or index}"
             if db.query(MailAccount).filter(MailAccount.id == account_id).first():
@@ -1495,6 +1613,47 @@ def _ensure_mail_accounts_seed() -> None:
             )
 
         db.flush()
+        send_only = [
+            account
+            for account in db.query(MailAccount)
+            .filter(MailAccount.provider == MAIL_PROVIDER_SMTP_IMAP, MailAccount.smtp_host != "")
+            .all()
+            if not str(account.imap_host or "").strip()
+        ]
+        read_only = [
+            account
+            for account in db.query(MailAccount)
+            .filter(MailAccount.provider == MAIL_PROVIDER_SMTP_IMAP, MailAccount.imap_host != "")
+            .all()
+            if not str(account.smtp_host or "").strip()
+        ]
+        for send_account_candidate in send_only:
+            send_email = str(send_account_candidate.sender_email or send_account_candidate.smtp_username or "").strip().lower()
+            if not send_email:
+                continue
+            matching_read = next(
+                (
+                    account
+                    for account in read_only
+                    if str(account.mailbox_email or account.imap_username or "").strip().lower() == send_email
+                ),
+                None,
+            )
+            if not matching_read:
+                continue
+            send_account_candidate.mailbox_email = matching_read.mailbox_email or send_account_candidate.mailbox_email
+            send_account_candidate.imap_host = matching_read.imap_host or ""
+            send_account_candidate.imap_port = int(matching_read.imap_port or 993)
+            send_account_candidate.imap_username = matching_read.imap_username or ""
+            send_account_candidate.imap_password = matching_read.imap_password or ""
+            send_account_candidate.imap_folder = matching_read.imap_folder or "INBOX"
+            send_account_candidate.imap_use_tls = bool(matching_read.imap_use_tls)
+            send_account_candidate.imap_use_ssl = bool(matching_read.imap_use_ssl)
+            send_account_candidate.updated_at = now_ms
+            db.query(MailRoute).filter(MailRoute.account_id == matching_read.id).update({"account_id": send_account_candidate.id})
+            db.delete(matching_read)
+            read_only = [account for account in read_only if account.id != matching_read.id]
+        db.flush()
         send_account = (
             db.query(MailAccount)
             .filter(MailAccount.provider == MAIL_PROVIDER_SMTP_IMAP, MailAccount.smtp_host != "")
@@ -1521,6 +1680,44 @@ def _ensure_mail_accounts_seed() -> None:
 
 
 _run_db_startup_step("ensure_mail_accounts_seed", _ensure_mail_accounts_seed)
+
+
+def _ensure_remote_deploy_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("remote_deploy_links"):
+        return
+    link_columns = {column["name"] for column in inspector.get_columns("remote_deploy_links")}
+    link_statements = []
+    if "deleted_at" not in link_columns:
+        link_statements.append("ALTER TABLE remote_deploy_links ADD COLUMN deleted_at BIGINT")
+    if "public_url" not in link_columns:
+        link_statements.append("ALTER TABLE remote_deploy_links ADD COLUMN public_url VARCHAR DEFAULT ''")
+    if "customer_name" not in link_columns:
+        link_statements.append("ALTER TABLE remote_deploy_links ADD COLUMN customer_name VARCHAR DEFAULT ''")
+    if "current_installs" not in link_columns:
+        link_statements.append("ALTER TABLE remote_deploy_links ADD COLUMN current_installs INTEGER DEFAULT 0")
+    if "internal_token" not in link_columns:
+        link_statements.append("ALTER TABLE remote_deploy_links ADD COLUMN internal_token VARCHAR")
+    if inspector.has_table("remote_deploy_events"):
+        event_columns = {column["name"] for column in inspector.get_columns("remote_deploy_events")}
+    else:
+        event_columns = set()
+    event_statements = []
+    if event_columns and "device_alias" not in event_columns:
+        event_statements.append("ALTER TABLE remote_deploy_events ADD COLUMN device_alias VARCHAR DEFAULT ''")
+    if event_columns and "user_agent" not in event_columns:
+        event_statements.append("ALTER TABLE remote_deploy_events ADD COLUMN user_agent VARCHAR DEFAULT ''")
+    if link_statements or event_statements:
+        with engine.begin() as connection:
+            for statement in link_statements + event_statements:
+                connection.execute(text(statement))
+    customer_id_column = next((column for column in inspector.get_columns("remote_deploy_links") if column["name"] == "customer_id"), None)
+    if customer_id_column and not customer_id_column.get("nullable") and engine.dialect.name != "sqlite":
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE remote_deploy_links ALTER COLUMN customer_id DROP NOT NULL"))
+
+
+_run_db_startup_step("ensure_remote_deploy_columns", _ensure_remote_deploy_columns)
 
 
 def _ensure_customer_columns() -> None:
@@ -2314,6 +2511,12 @@ class IntegrationSettingsUpdate(BaseModel):
     meta_hub_email_enabled: Optional[bool] = None
     meta_hub_refresh_seconds: Optional[int] = None
     meta_hub_mailboxes: Optional[List[Dict[str, Any]]] = None
+    remote_deploy_public_base_url: Optional[str] = None
+    remote_deploy_teamviewer_customconfigid: Optional[str] = None
+    remote_deploy_teamviewer_assignmentid: Optional[str] = None
+    remote_deploy_rmm_installer_url: Optional[str] = None
+    remote_deploy_default_max_installs: Optional[int] = None
+    remote_deploy_default_expiry_days: Optional[int] = None
     ai_provider: Optional[str] = None
     ai_base_url: Optional[str] = None
     ai_api_key: Optional[str] = None
@@ -2933,6 +3136,7 @@ class AiPromptsUpdate(BaseModel):
     customer_invoice_summary_prompt: Optional[str] = None
     customer_development_mode_prompts: Optional[Dict[str, str]] = None
     customer_signal_newsletter_prompt: Optional[str] = None
+    workbench_use_case_prompts: Optional[Dict[str, str]] = None
     contract_header_html: Optional[str] = None
     contract_footer_html: Optional[str] = None
     contract_templates: Optional[Dict[str, Dict[str, str]]] = None
@@ -3010,8 +3214,71 @@ class OfferAiRequest(BaseModel):
     context: Optional[str] = ""
 
 
+class WorkbenchAiUseCaseRequest(BaseModel):
+    mode: Optional[str] = ""
+    text: Optional[str] = ""
+    source_text: Optional[str] = ""
+    current_text: Optional[str] = ""
+    context: Optional[str] = ""
+    customer_name: Optional[str] = ""
+    topic: Optional[str] = ""
+    tone: Optional[str] = "sachlich"
+    count: Optional[int] = 3
+    technical_text: Optional[str] = ""
+    audience_level: Optional[str] = ""
+
+
 class DebugClearRequest(BaseModel):
     table: str
+
+
+class RemoteDeployLinkCreate(BaseModel):
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    package_type: str = "tv"
+    slug: Optional[str] = None
+    alias_prefix: Optional[str] = None
+    expires_at: Optional[int] = None
+    max_installs: Optional[int] = None
+    is_active: Optional[bool] = True
+    internal_note: Optional[str] = ""
+    teamviewer_customconfigid: Optional[str] = None
+    teamviewer_assignmentid: Optional[str] = None
+    rmm_installer_url: Optional[str] = None
+
+
+class RemoteDeployLinkUpdate(BaseModel):
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    package_type: Optional[str] = None
+    slug: Optional[str] = None
+    alias_prefix: Optional[str] = None
+    expires_at: Optional[int] = None
+    max_installs: Optional[int] = None
+    is_active: Optional[bool] = None
+    internal_note: Optional[str] = None
+    teamviewer_customconfigid: Optional[str] = None
+    teamviewer_assignmentid: Optional[str] = None
+    rmm_installer_url: Optional[str] = None
+
+
+class RemoteDeploySlugSuggestRequest(BaseModel):
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    preferred: Optional[str] = None
+
+
+class RemoteDeployStatusRequest(BaseModel):
+    slug: str
+    hostname: Optional[str] = ""
+    username: Optional[str] = ""
+    status: str
+    step: Optional[str] = ""
+    message: Optional[str] = ""
+    timestamp: Optional[int] = None
+    externalIp: Optional[str] = None
+    deviceAlias: Optional[str] = None
+
 
 # ================= APP ======================
 app = FastAPI(title="QT-Workbench Backend")
@@ -6090,6 +6357,362 @@ def serialize_customer_phone(p: CustomerPhone) -> Dict[str, Any]:
     }
 
 
+def _remote_deploy_settings(db) -> Dict[str, Any]:
+    settings = _get_settings(db)
+    public_base_url = str(settings.remote_deploy_public_base_url or REMOTE_DEPLOY_PUBLIC_BASE_URL).strip().rstrip("/")
+    teamviewer_customconfigid = (
+        str(settings.remote_deploy_teamviewer_customconfigid or "").strip()
+        or REMOTE_DEPLOY_DEFAULT_TEAMVIEWER_CUSTOM_CONFIG_ID
+        or ""
+    )
+    teamviewer_assignmentid = (
+        str(settings.remote_deploy_teamviewer_assignmentid or "").strip()
+        or REMOTE_DEPLOY_DEFAULT_TEAMVIEWER_ASSIGNMENT_ID
+        or ""
+    )
+    rmm_installer_url = (
+        str(settings.remote_deploy_rmm_installer_url or "").strip()
+        or REMOTE_DEPLOY_DEFAULT_RMM_INSTALLER_URL
+        or ""
+    )
+    return {
+        "publicBaseUrl": public_base_url or REMOTE_DEPLOY_PUBLIC_BASE_URL,
+        "teamViewerCustomConfigId": teamviewer_customconfigid.strip(),
+        "teamViewerAssignmentId": teamviewer_assignmentid.strip(),
+        "rmmInstallerUrl": rmm_installer_url.strip(),
+        "defaultMaxInstalls": int(settings.remote_deploy_default_max_installs or REMOTE_DEPLOY_DEFAULT_MAX_INSTALLS or 0),
+        "defaultExpiryDays": int(settings.remote_deploy_default_expiry_days or REMOTE_DEPLOY_DEFAULT_EXPIRY_DAYS or 0),
+    }
+
+
+def _remote_deploy_public_url(db, slug: Any) -> str:
+    base_url = str(_remote_deploy_settings(db).get("publicBaseUrl") or REMOTE_DEPLOY_PUBLIC_BASE_URL).rstrip("/")
+    return f"{base_url}/{str(slug or '').strip()}"
+
+
+def _remote_deploy_teamviewer_download_url(value: Any) -> str:
+    text_value = str(value or "").strip()
+    if not text_value:
+        return ""
+    if re.match(r"^https?://", text_value, flags=re.IGNORECASE):
+        return text_value
+    code = text_value.strip().strip("/")
+    if "/" in code:
+        code = code.rsplit("/", 1)[-1]
+    code = re.sub(r"[^A-Za-z0-9_-]+", "", code)
+    return f"https://get.teamviewer.com/{code}" if code else ""
+
+
+def _remote_deploy_package_flags(package_type: Any) -> Tuple[bool, bool]:
+    key = str(package_type or "tv").strip().lower()
+    if key not in REMOTE_DEPLOY_PACKAGE_TYPES:
+        raise HTTPException(400, "Ungueltiger Pakettyp")
+    return key in {"tv", "tv_rmm"}, key in {"rmm", "tv_rmm"}
+
+
+def _remote_deploy_rmm_deployment_url(host: str, uid: Any) -> str:
+    clean_uid = str(uid or "").strip()
+    if not host or not clean_uid:
+        return ""
+    return _tactical_url(host, f"/clients/{quote(clean_uid)}/deploy/")
+
+
+def _remote_deploy_serialize_rmm_deployment(row: Dict[str, Any], host: str) -> Dict[str, Any]:
+    uid = str(row.get("uid") or row.get("deployment_uid") or row.get("id") or "").strip()
+    client_name = str(row.get("client_name") or row.get("clientName") or row.get("client") or "").strip()
+    site_name = str(row.get("site_name") or row.get("siteName") or row.get("site") or "").strip()
+    return {
+        "id": row.get("id"),
+        "uid": uid,
+        "clientId": row.get("client_id") or row.get("clientId"),
+        "siteId": row.get("site_id") or row.get("siteId"),
+        "clientName": client_name,
+        "siteName": site_name,
+        "agentType": row.get("mon_type") or row.get("agenttype") or row.get("agentType") or "",
+        "architecture": row.get("goarch") or row.get("arch") or "",
+        "expiresAt": row.get("expiry") or row.get("expires") or "",
+        "createdAt": row.get("created") or "",
+        "installFlags": row.get("install_flags") if isinstance(row.get("install_flags"), dict) else {},
+        "downloadUrl": _remote_deploy_rmm_deployment_url(host, uid),
+    }
+
+
+def _remote_deploy_fetch_rmm_deployments(db) -> Dict[str, Any]:
+    settings = _get_settings(db)
+    session, host = _build_tactical_rmm_session(settings)
+    if not session or not host:
+        return {
+            "success": False,
+            "deployments": [],
+            "host": host,
+            "message": "RMM Host oder API-Key fehlt.",
+        }
+    paths = [
+        "/clients/deployments/",
+        "/clients/deployments",
+        "/api/clients/deployments/",
+        "/api/clients/deployments",
+        "/api/v3/clients/deployments/",
+        "/api/v3/clients/deployments",
+    ]
+    last_error = ""
+    for path in paths:
+        response, request_error = _tactical_request(session, host, "GET", path, timeout=10, retries=1)
+        if response is None:
+            last_error = request_error or last_error
+            continue
+        if response.status_code >= 400:
+            last_error = f"HTTP {response.status_code}"
+            continue
+        try:
+            payload = response.json()
+        except Exception:
+            last_error = "RMM Deployment-Antwort ist kein JSON."
+            continue
+        rows = [row for row in _tactical_payload_rows(payload) if isinstance(row, dict)]
+        deployments = [
+            item
+            for item in (_remote_deploy_serialize_rmm_deployment(row, host) for row in rows)
+            if str(item.get("uid") or "").strip() and str(item.get("downloadUrl") or "").strip()
+        ]
+        return {
+            "success": True,
+            "deployments": deployments,
+            "host": host,
+            "sourcePath": path,
+            "message": "",
+        }
+    return {
+        "success": False,
+        "deployments": [],
+        "host": host,
+        "message": last_error or "RMM Deployments konnten nicht geladen werden.",
+    }
+
+
+def _remote_deploy_choose_rmm_deployment(deployments: List[Dict[str, Any]], link: RemoteDeployLink) -> Optional[Dict[str, Any]]:
+    if not deployments:
+        return None
+    if len(deployments) == 1:
+        return deployments[0]
+    targets = [
+        _normalize_remote_deploy_slug(link.customer_name),
+        _normalize_remote_deploy_slug(link.alias_prefix),
+        _normalize_remote_deploy_slug(link.slug),
+    ]
+    targets = [target for target in targets if target]
+    scored: List[Tuple[int, Dict[str, Any]]] = []
+    for deployment in deployments:
+        haystack = _normalize_remote_deploy_slug(
+            " ".join(
+                [
+                    deployment.get("clientName") or "",
+                    deployment.get("siteName") or "",
+                    deployment.get("agentType") or "",
+                ]
+            )
+        )
+        score = 0
+        for target in targets:
+            if not target:
+                continue
+            if haystack == target:
+                score = max(score, 100)
+            elif target in haystack or haystack in target:
+                score = max(score, 70)
+        if any(word in haystack for word in ("default", "standard", "generic", "allgemein")):
+            score = max(score, 20)
+        if score > 0:
+            scored.append((score, deployment))
+    if scored:
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return scored[0][1]
+    return None
+
+
+def _remote_deploy_resolve_rmm_installer_url(db, link: RemoteDeployLink) -> Tuple[str, Dict[str, Any]]:
+    manual_url = str(link.rmm_installer_url or "").strip()
+    if manual_url:
+        return manual_url, {"source": "manual"}
+    fetched = _remote_deploy_fetch_rmm_deployments(db)
+    deployments = fetched.get("deployments") if isinstance(fetched.get("deployments"), list) else []
+    selected = _remote_deploy_choose_rmm_deployment(deployments, link)
+    if selected:
+        return str(selected.get("downloadUrl") or "").strip(), {
+            "source": "rmm_api",
+            "deployment": selected,
+            "sourcePath": fetched.get("sourcePath") or "",
+        }
+    return "", {
+        "source": "rmm_api",
+        "message": fetched.get("message") or "Kein passendes RMM Deployment gefunden.",
+    }
+
+
+def _remote_deploy_ms_from_date(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = int(value)
+        return numeric if numeric > 0 else None
+    except Exception:
+        pass
+    text_value = str(value or "").strip()
+    if not text_value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+        return int(parsed.timestamp() * 1000)
+    except Exception:
+        raise HTTPException(400, "Ungueltiges Ablaufdatum")
+
+
+def _remote_deploy_request_user(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    for header in ("x-auth-request-email", "x-forwarded-email", "x-auth-request-user"):
+        value = str(request.headers.get(header) or "").strip()
+        if value:
+            return value[:255]
+    return ""
+
+
+def _remote_deploy_request_ip(request: Optional[Request]) -> str:
+    if request is None:
+        return ""
+    forwarded = str(request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+    if forwarded:
+        return forwarded[:120]
+    return str(getattr(request.client, "host", "") or "")[:120]
+
+
+def _normalize_remote_deploy_slug(value: Any) -> str:
+    text_value = unicodedata.normalize("NFKD", str(value or "").strip().lower())
+    text_value = "".join(ch for ch in text_value if not unicodedata.combining(ch))
+    text_value = (
+        text_value.replace("ä", "ae")
+        .replace("ö", "oe")
+        .replace("ü", "ue")
+        .replace("ß", "ss")
+    )
+    text_value = re.sub(r"[^a-z0-9-]+", "-", text_value)
+    text_value = re.sub(r"-{2,}", "-", text_value).strip("-")
+    return text_value[:48].strip("-")
+
+
+def _base_remote_deploy_slug_from_customer(customer_name: Any) -> str:
+    normalized = _normalize_remote_deploy_slug(customer_name)
+    parts = [part for part in normalized.split("-") if part]
+    clean_parts = [part for part in parts if part not in COMPANY_SUFFIX_STOPWORDS and len(part) > 1]
+    if clean_parts:
+        parts = clean_parts
+    if not parts:
+        return "kunde"
+    if len(parts) >= 2 and all(len(part) <= 12 for part in parts[:2]):
+        initials = "".join(part[0] for part in parts[:3])
+        if 2 <= len(initials) <= 5:
+            return initials
+    first = parts[0]
+    if len(first) <= 10:
+        return first
+    return first[:10].strip("-") or "kunde"
+
+
+def _remote_deploy_slug_available(db, slug: str, exclude_id: Optional[int] = None) -> bool:
+    query = db.query(RemoteDeployLink).filter(RemoteDeployLink.slug == slug)
+    if exclude_id:
+        query = query.filter(RemoteDeployLink.id != exclude_id)
+    return query.first() is None
+
+
+def _remote_deploy_slug_suggestions(db, base: Any, *, exclude_id: Optional[int] = None, limit: int = 5) -> List[str]:
+    root = _normalize_remote_deploy_slug(base) or "kunde"
+    root = root[:20].strip("-") or "kunde"
+    suggestions: List[str] = []
+    candidates = [root]
+    candidates.extend(f"{root}{idx}" for idx in range(1, 50))
+    if "-" in root:
+        compact = root.replace("-", "")
+        candidates.insert(1, compact[:20])
+    for candidate in candidates:
+        candidate = _normalize_remote_deploy_slug(candidate)
+        if not candidate or candidate in suggestions:
+            continue
+        if _remote_deploy_slug_available(db, candidate, exclude_id=exclude_id):
+            suggestions.append(candidate)
+        if len(suggestions) >= limit:
+            break
+    return suggestions
+
+
+def _serialize_remote_deploy_event(event: RemoteDeployEvent) -> Dict[str, Any]:
+    return {
+        "id": event.id,
+        "eventType": event.event_type or "",
+        "status": event.status or "",
+        "hostname": event.hostname or "",
+        "username": event.username or "",
+        "deviceAlias": event.device_alias or "",
+        "message": event.message or "",
+        "ipAddress": event.ip_address or "",
+        "userAgent": event.user_agent or "",
+        "createdAt": int(event.created_at or 0),
+    }
+
+
+def serialize_remote_deploy_link(link: RemoteDeployLink, *, include_events: bool = False) -> Dict[str, Any]:
+    customer = link.customer
+    customer_name = str(link.customer_name or "").strip() or (customer.name if customer else "")
+    latest_event = (
+        max(link.events, key=lambda item: int(item.created_at or 0))
+        if include_events and link.events
+        else None
+    )
+    return {
+        "id": link.id,
+        "customerId": link.customer_id,
+        "customerName": customer_name,
+        "slug": link.slug,
+        "publicUrl": link.public_url or "",
+        "packageType": link.package_type or "tv",
+        "installTeamViewer": bool(link.install_teamviewer),
+        "installRmm": bool(link.install_rmm),
+        "aliasPrefix": link.alias_prefix or "",
+        "teamViewerCustomConfigId": link.teamviewer_customconfigid or "",
+        "teamViewerDownloadUrl": _remote_deploy_teamviewer_download_url(link.teamviewer_customconfigid),
+        "teamViewerAssignmentId": link.teamviewer_assignmentid or "",
+        "rmmInstallerUrl": link.rmm_installer_url or "",
+        "isActive": bool(link.is_active),
+        "expiresAt": int(link.expires_at or 0) or None,
+        "maxInstalls": link.max_installs,
+        "currentInstalls": int(link.current_installs or 0),
+        "internalNote": link.internal_note or "",
+        "internalToken": link.internal_token or "",
+        "createdAt": int(link.created_at or 0),
+        "createdBy": link.created_by or "",
+        "updatedAt": int(link.updated_at or 0),
+        "updatedBy": link.updated_by or "",
+        "deletedAt": int(link.deleted_at or 0) or None,
+        "lastUsedAt": int(latest_event.created_at or 0) if latest_event else 0,
+        "events": [_serialize_remote_deploy_event(event) for event in sorted(link.events, key=lambda item: int(item.created_at or 0), reverse=True)[:50]]
+        if include_events
+        else [],
+    }
+
+
+def _remote_deploy_link_validity(link: RemoteDeployLink, now_ms: Optional[int] = None) -> Tuple[bool, str, str]:
+    now_ms = now_ms or int(time.time() * 1000)
+    if link.deleted_at:
+        return False, "deleted", "Fernwartungslink wurde geloescht."
+    if not link.is_active:
+        return False, "inactive", "Fernwartungslink ist deaktiviert."
+    if link.expires_at and int(link.expires_at) < now_ms:
+        return False, "expired", "Fernwartungslink ist abgelaufen."
+    if link.max_installs is not None and int(link.max_installs) > 0 and int(link.current_installs or 0) >= int(link.max_installs):
+        return False, "max_installs_reached", "Maximale Installationsanzahl ist erreicht."
+    return True, "", ""
+
+
 def _normalize_customer_license_billing_cycle(value: Any, default: str = "monthly") -> str:
     key = str(value or "").strip().lower()
     if key in {"monthly", "monatlich", "month"}:
@@ -7331,6 +7954,12 @@ def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, A
         "meta_hub_refresh_seconds": int(settings.meta_hub_refresh_seconds or 300),
         "meta_hub_mailboxes": meta_hub_mailboxes,
         "meta_hub_mailbox_count": len(meta_hub_mailboxes),
+        "remote_deploy_public_base_url": settings.remote_deploy_public_base_url or REMOTE_DEPLOY_PUBLIC_BASE_URL,
+        "remote_deploy_teamviewer_customconfigid": settings.remote_deploy_teamviewer_customconfigid or "",
+        "remote_deploy_teamviewer_assignmentid": settings.remote_deploy_teamviewer_assignmentid or "",
+        "remote_deploy_rmm_installer_url": settings.remote_deploy_rmm_installer_url or "",
+        "remote_deploy_default_max_installs": int(settings.remote_deploy_default_max_installs or 0),
+        "remote_deploy_default_expiry_days": int(settings.remote_deploy_default_expiry_days or 0),
         "ai_provider": ai_config["provider"],
         "ai_base_url": ai_config["base_url"],
         "ai_default_model": _normalize_model_setting_value(settings.ai_default_model),
@@ -8099,6 +8728,26 @@ def _default_ai_prompts() -> Dict[str, Any]:
             "Haeufige Signale:\n{signal_lines}\n"
             "Antwort als reiner Text, kein JSON, kein Markdown."
         ),
+        "workbench_use_case_prompts": {
+            "customer_text_suggestions": (
+                "Erzeuge kundenfreundliche Textvorschlaege fuer das Tagesgeschaeft einer IT-Firma.\n"
+                "Ton: {tone}. Modus: {mode}.\n"
+                "Antworte ausschliesslich als JSON mit dem Feld suggestions. "
+                "suggestions ist eine Liste aus maximal {count} Objekten mit title, text und purpose.\n"
+                "Schreibe auf Deutsch, konkret, ohne Marketingfloskeln und ohne Markdown.\n\n"
+                "Kunde: {customer_name}\n"
+                "Thema: {topic}\n"
+                "Kontext:\n{context}"
+            ),
+            "technical_to_customer_language": (
+                "Uebersetze den technischen Inhalt in verstaendliche Kundensprache.\n"
+                "Ton: {tone}. Zielgruppe: {audience_level}.\n"
+                "Erklaere Nutzen, Auswirkung und naechsten Schritt. "
+                "Keine internen Details, keine Schuldzuweisungen, kein Markdown.\n\n"
+                "Technischer Text:\n{technical_text}\n\n"
+                "Zusaetzlicher Kontext:\n{context}"
+            ),
+        },
         "contract_header_html": (
             "<div style=\"margin-bottom:10px; padding:10px 12px; border:1px solid #dbe4ef; border-radius:12px; "
             "background:#f8fafc; color:#1e3a5f;\">"
@@ -8348,6 +8997,12 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
         }
     else:
         merged_customer_development_prompts = customer_development_defaults
+    workbench_defaults = defaults.get("workbench_use_case_prompts") or {}
+    workbench_data = data.get("workbench_use_case_prompts")
+    if isinstance(workbench_data, dict):
+        merged_workbench_prompts = {**workbench_defaults, **workbench_data}
+    else:
+        merged_workbench_prompts = workbench_defaults
     contract_defaults = defaults.get("contract_templates") or {}
     contract_data = data.get("contract_templates")
     merged_contract_templates: Dict[str, Dict[str, str]] = {}
@@ -8428,6 +9083,7 @@ def serialize_ai_prompts(store: AiPromptSettings) -> Dict[str, Any]:
             "customer_signal_newsletter_prompt",
             defaults.get("customer_signal_newsletter_prompt") or "",
         ),
+        "workbench_use_case_prompts": merged_workbench_prompts,
         "contract_header_html": str(
             data.get("contract_header_html")
             or defaults.get("contract_header_html")
@@ -8486,6 +9142,7 @@ def _migrate_contract_templates_to_supported_types() -> None:
             "customer_invoice_summary_prompt": payload.get("customer_invoice_summary_prompt") or defaults.get("customer_invoice_summary_prompt") or "",
             "customer_development_mode_prompts": payload.get("customer_development_mode_prompts") or defaults.get("customer_development_mode_prompts") or {},
             "customer_signal_newsletter_prompt": payload.get("customer_signal_newsletter_prompt") or defaults.get("customer_signal_newsletter_prompt") or "",
+            "workbench_use_case_prompts": payload.get("workbench_use_case_prompts") or defaults.get("workbench_use_case_prompts") or {},
             "contract_header_html": defaults.get("contract_header_html") or "",
             "contract_footer_html": defaults.get("contract_footer_html") or "",
             "contract_templates": default_templates,
@@ -8538,6 +9195,7 @@ def _refresh_contract_templates_professional_defaults_v2() -> None:
             "customer_invoice_summary_prompt": payload.get("customer_invoice_summary_prompt") or "",
             "customer_development_mode_prompts": payload.get("customer_development_mode_prompts") or {},
             "customer_signal_newsletter_prompt": payload.get("customer_signal_newsletter_prompt") or "",
+            "workbench_use_case_prompts": payload.get("workbench_use_case_prompts") or {},
             "contract_header_html": payload.get("contract_header_html") or "",
             "contract_footer_html": payload.get("contract_footer_html") or "",
             "contract_templates": updated_templates,
@@ -16462,6 +17120,283 @@ def get_customers():
         ]
 
 
+# ================= REMOTE DEPLOY =================
+@app.get("/api/remote-deploy/settings")
+def get_remote_deploy_settings():
+    with SessionLocal() as db:
+        return _remote_deploy_settings(db)
+
+
+@app.get("/api/remote-deploy/rmm_deployments")
+def get_remote_deploy_rmm_deployments():
+    with SessionLocal() as db:
+        result = _remote_deploy_fetch_rmm_deployments(db)
+        if not result.get("success"):
+            raise HTTPException(502, result.get("message") or "RMM Deployments konnten nicht geladen werden.")
+        return result
+
+
+@app.get("/api/remote-deploy/links")
+def list_remote_deploy_links(customer_id: Optional[int] = None, q: Optional[str] = None, include_deleted: bool = False):
+    with SessionLocal() as db:
+        query = db.query(RemoteDeployLink).outerjoin(Customer)
+        if not include_deleted:
+            query = query.filter(RemoteDeployLink.deleted_at.is_(None))
+        if customer_id:
+            query = query.filter(RemoteDeployLink.customer_id == customer_id)
+        search = str(q or "").strip().lower()
+        if search:
+            like = f"%{search}%"
+            query = query.filter(
+                or_(
+                    func.lower(RemoteDeployLink.slug).like(like),
+                    func.lower(RemoteDeployLink.alias_prefix).like(like),
+                    func.lower(RemoteDeployLink.customer_name).like(like),
+                    func.lower(Customer.name).like(like),
+                )
+            )
+        rows = query.order_by(RemoteDeployLink.created_at.desc()).all()
+        return [serialize_remote_deploy_link(row) for row in rows]
+
+
+@app.post("/api/remote-deploy/slug_suggestions")
+def suggest_remote_deploy_slug(data: RemoteDeploySlugSuggestRequest):
+    with SessionLocal() as db:
+        source = str(data.preferred or "").strip()
+        if not source and data.customer_id:
+            customer = db.query(Customer).get(data.customer_id)
+            source = customer.name if customer else ""
+        if not source:
+            source = data.customer_name or "kunde"
+        base = _normalize_remote_deploy_slug(source) if data.preferred else _base_remote_deploy_slug_from_customer(source)
+        return {
+            "base": base,
+            "suggestions": _remote_deploy_slug_suggestions(db, base),
+        }
+
+
+def _apply_remote_deploy_payload(
+    db,
+    link: RemoteDeployLink,
+    payload: Dict[str, Any],
+    *,
+    request: Optional[Request],
+    creating: bool = False,
+) -> RemoteDeployLink:
+    now_ms = int(time.time() * 1000)
+    settings = _remote_deploy_settings(db)
+    if creating or "customer_id" in payload:
+        raw_customer_id = payload.get("customer_id")
+        if raw_customer_id in (None, "", 0):
+            link.customer_id = None
+        else:
+            customer_id = int(raw_customer_id)
+            customer = db.query(Customer).get(customer_id)
+            if not customer:
+                raise HTTPException(404, "Kunde nicht gefunden")
+            link.customer_id = customer_id
+            if not str(payload.get("customer_name") or "").strip():
+                payload["customer_name"] = str(customer.name or "").strip()
+            if creating and not str(payload.get("alias_prefix") or "").strip():
+                payload["alias_prefix"] = str(customer.short_code or customer.name or "").strip()
+    if creating or "customer_name" in payload:
+        customer_name = str(payload.get("customer_name") or "").strip()
+        if not customer_name and link.customer_id:
+            customer = db.query(Customer).get(link.customer_id)
+            customer_name = str(customer.name or "").strip() if customer else ""
+        if creating and not customer_name:
+            raise HTTPException(400, "Kunde fehlt")
+        link.customer_name = customer_name[:255]
+        if creating and not str(payload.get("alias_prefix") or "").strip() and customer_name:
+            payload["alias_prefix"] = customer_name
+
+    package_type = str(payload.get("package_type") or link.package_type or "tv").strip().lower()
+    install_tv, install_rmm = _remote_deploy_package_flags(package_type)
+    link.package_type = package_type
+    link.install_teamviewer = install_tv
+    link.install_rmm = install_rmm
+
+    if creating or "slug" in payload:
+        raw_slug = payload.get("slug")
+        if not raw_slug and str(link.customer_name or "").strip():
+            raw_slug = _base_remote_deploy_slug_from_customer(link.customer_name)
+        if not raw_slug and link.customer_id:
+            customer = db.query(Customer).get(link.customer_id)
+            raw_slug = _base_remote_deploy_slug_from_customer(customer.name if customer else "kunde")
+        slug = _normalize_remote_deploy_slug(raw_slug)
+        if not slug:
+            raise HTTPException(400, "Kürzel fehlt")
+        if not re.match(r"^[a-z0-9][a-z0-9-]{1,47}$", slug):
+            raise HTTPException(400, "Kürzel darf nur a-z, 0-9 und Bindestrich enthalten und muss mindestens 2 Zeichen lang sein")
+        if not _remote_deploy_slug_available(db, slug, exclude_id=None if creating else int(link.id or 0)):
+            suggestions = _remote_deploy_slug_suggestions(db, slug, exclude_id=None if creating else int(link.id or 0))
+            raise HTTPException(409, {"message": "Kürzel ist bereits vergeben", "suggestions": suggestions})
+        link.slug = slug
+
+    if "alias_prefix" in payload:
+        link.alias_prefix = str(payload.get("alias_prefix") or "").strip()[:80]
+    if "expires_at" in payload:
+        link.expires_at = _remote_deploy_ms_from_date(payload.get("expires_at"))
+    elif creating and int(settings.get("defaultExpiryDays") or 0) > 0:
+        link.expires_at = now_ms + int(settings["defaultExpiryDays"]) * 86400000
+    if "max_installs" in payload:
+        raw_max = payload.get("max_installs")
+        link.max_installs = None if raw_max in (None, "", 0) else max(1, int(raw_max))
+    elif creating and int(settings.get("defaultMaxInstalls") or 0) > 0:
+        link.max_installs = int(settings["defaultMaxInstalls"])
+    if "is_active" in payload:
+        link.is_active = bool(payload.get("is_active"))
+    elif creating:
+        link.is_active = True
+    if "internal_note" in payload:
+        link.internal_note = str(payload.get("internal_note") or "").strip()
+    if "teamviewer_customconfigid" in payload:
+        link.teamviewer_customconfigid = str(payload.get("teamviewer_customconfigid") or "").strip()
+    elif creating:
+        link.teamviewer_customconfigid = str(settings.get("teamViewerCustomConfigId") or "").strip()
+    if "teamviewer_assignmentid" in payload:
+        link.teamviewer_assignmentid = str(payload.get("teamviewer_assignmentid") or "").strip()
+    elif creating:
+        link.teamviewer_assignmentid = str(settings.get("teamViewerAssignmentId") or "").strip()
+    if "rmm_installer_url" in payload:
+        link.rmm_installer_url = str(payload.get("rmm_installer_url") or "").strip()
+    elif creating:
+        link.rmm_installer_url = str(settings.get("rmmInstallerUrl") or "").strip()
+
+    link.public_url = _remote_deploy_public_url(db, link.slug)
+    link.updated_at = now_ms
+    link.updated_by = _remote_deploy_request_user(request)
+    if creating:
+        link.created_at = now_ms
+        link.created_by = link.updated_by
+        link.internal_token = str(uuid.uuid4())
+    return link
+
+
+@app.post("/api/remote-deploy/links")
+def create_remote_deploy_link(data: RemoteDeployLinkCreate, request: Request):
+    with SessionLocal() as db:
+        link = RemoteDeployLink()
+        _apply_remote_deploy_payload(db, link, data.dict(exclude_unset=True), request=request, creating=True)
+        db.add(link)
+        db.commit()
+        db.refresh(link)
+        return serialize_remote_deploy_link(link, include_events=True)
+
+
+@app.get("/api/remote-deploy/links/{link_id}")
+def get_remote_deploy_link(link_id: int):
+    with SessionLocal() as db:
+        link = db.query(RemoteDeployLink).get(link_id)
+        if not link or link.deleted_at:
+            raise HTTPException(404, "Fernwartungslink nicht gefunden")
+        return serialize_remote_deploy_link(link, include_events=True)
+
+
+@app.patch("/api/remote-deploy/links/{link_id}")
+def update_remote_deploy_link(link_id: int, data: RemoteDeployLinkUpdate, request: Request):
+    with SessionLocal() as db:
+        link = db.query(RemoteDeployLink).get(link_id)
+        if not link or link.deleted_at:
+            raise HTTPException(404, "Fernwartungslink nicht gefunden")
+        _apply_remote_deploy_payload(db, link, data.dict(exclude_unset=True), request=request)
+        db.commit()
+        db.refresh(link)
+        return serialize_remote_deploy_link(link, include_events=True)
+
+
+@app.delete("/api/remote-deploy/links/{link_id}")
+def delete_remote_deploy_link(link_id: int, request: Request):
+    with SessionLocal() as db:
+        link = db.query(RemoteDeployLink).get(link_id)
+        if not link or link.deleted_at:
+            raise HTTPException(404, "Fernwartungslink nicht gefunden")
+        now_ms = int(time.time() * 1000)
+        link.deleted_at = now_ms
+        link.is_active = False
+        link.updated_at = now_ms
+        link.updated_by = _remote_deploy_request_user(request)
+        db.commit()
+        return {"status": "deleted"}
+
+
+@app.get("/api/remote-deploy/resolve/{slug}")
+def resolve_remote_deploy_link(slug: str, request: Request):
+    normalized_slug = _normalize_remote_deploy_slug(slug)
+    with SessionLocal() as db:
+        link = db.query(RemoteDeployLink).filter(RemoteDeployLink.slug == normalized_slug).first()
+        if not link:
+            return {"success": False, "code": "not_found", "message": "Fernwartungslink nicht gefunden."}
+        valid, code, message = _remote_deploy_link_validity(link)
+        if not valid:
+            return {"success": False, "code": code, "message": message}
+        event = RemoteDeployEvent(
+            remote_deploy_link_id=link.id,
+            event_type="resolve",
+            status="resolved",
+            ip_address=_remote_deploy_request_ip(request),
+            user_agent=str(request.headers.get("user-agent") or "")[:500],
+        )
+        db.add(event)
+        db.commit()
+        customer = link.customer
+        customer_name = str(link.customer_name or "").strip() or (customer.name if customer else "")
+        if link.install_rmm:
+            rmm_installer_url, rmm_installer_meta = _remote_deploy_resolve_rmm_installer_url(db, link)
+        else:
+            rmm_installer_url, rmm_installer_meta = "", {"source": ""}
+        return {
+            "success": True,
+            "customerId": link.customer_id,
+            "customerName": customer_name,
+            "slug": link.slug,
+            "packageType": link.package_type,
+            "installTeamViewer": bool(link.install_teamviewer),
+            "installRmm": bool(link.install_rmm),
+            "aliasPrefix": link.alias_prefix or "",
+            "teamViewerCustomConfigId": link.teamviewer_customconfigid or "",
+            "teamViewerDownloadUrl": _remote_deploy_teamviewer_download_url(link.teamviewer_customconfigid),
+            "teamViewerAssignmentId": link.teamviewer_assignmentid or "",
+            "rmmInstallerUrl": rmm_installer_url,
+            "rmmInstallerSource": rmm_installer_meta.get("source") or "",
+            "rmmDeployment": rmm_installer_meta.get("deployment") or None,
+            "expiresAt": int(link.expires_at or 0) or None,
+            "maxInstalls": link.max_installs,
+            "currentInstalls": int(link.current_installs or 0),
+        }
+
+
+@app.post("/api/remote-deploy/status")
+def post_remote_deploy_status(data: RemoteDeployStatusRequest, request: Request):
+    normalized_slug = _normalize_remote_deploy_slug(data.slug)
+    status = str(data.status or "").strip().lower()
+    if status not in REMOTE_DEPLOY_STATUS_VALUES:
+        raise HTTPException(400, "Ungueltiger Installationsstatus")
+    with SessionLocal() as db:
+        link = db.query(RemoteDeployLink).filter(RemoteDeployLink.slug == normalized_slug).first()
+        if not link:
+            return {"success": False, "code": "not_found", "message": "Fernwartungslink nicht gefunden."}
+        event_type = "install" if status in {"started", "downloaded", "finished", "failed"} or status.startswith("install_") else "status"
+        event = RemoteDeployEvent(
+            remote_deploy_link_id=link.id,
+            event_type=event_type,
+            status=status,
+            hostname=str(data.hostname or "").strip()[:255],
+            username=str(data.username or "").strip()[:255],
+            device_alias=str(data.deviceAlias or "").strip()[:255],
+            message=str(data.message or data.step or "").strip()[:4000],
+            ip_address=str(data.externalIp or _remote_deploy_request_ip(request) or "").strip()[:120],
+            user_agent=str(request.headers.get("user-agent") or "")[:500],
+            created_at=int(data.timestamp or 0) or int(time.time() * 1000),
+        )
+        if status == "started":
+            link.current_installs = int(link.current_installs or 0) + 1
+            link.updated_at = int(time.time() * 1000)
+        db.add(event)
+        db.commit()
+        return {"success": True, "eventId": event.id, "currentInstalls": int(link.current_installs or 0)}
+
+
 @app.get("/api/customer_development")
 def get_customer_development(
     request: Request,
@@ -20673,36 +21608,49 @@ def pbx_phonebook_health():
         }
 
 # ============== AI =================
+def _workbench_ai_service() -> WorkbenchAiService:
+    return WorkbenchAiService(
+        WorkbenchAiRuntime(
+            load_prompts=_load_ai_prompts_payload,
+            render_prompt=_render_prompt,
+            resolve_models=_resolve_ai_models,
+            generate=_ai_generate,
+            parse_action_json=parse_action_json,
+            build_action_fallback=_build_action_ai_fallback,
+            build_offer_fallback=_build_offer_ai_fallback_text,
+            sanitize_invoice_text=_sanitize_invoice_position_ai_text,
+            tool_timeout_seconds=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
+            tool_max_tokens=INTERNAL_AI_TOOL_MAX_TOKENS,
+        )
+    )
+
+
+@app.post("/api/ai/use-cases/{use_case}")
+def run_workbench_ai_use_case(use_case: str, data: WorkbenchAiUseCaseRequest):
+    if use_case not in WORKBENCH_USE_CASES:
+        raise HTTPException(404, "Workbench KI-Use-Case nicht gefunden")
+    try:
+        payload = data.dict(exclude_unset=True)
+        result = _workbench_ai_service().execute(use_case, payload)
+        return {
+            "useCase": use_case,
+            **result,
+        }
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.post("/api/ai_action")
 def generate_action(data: ActionAiRequest):
-    text = (data.text or "").strip()
-    if not text:
-        raise HTTPException(400, "Text required")
-
-    with SessionLocal() as db:
-        prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
-    prompt = _render_prompt(prompts["action_prompt"], {"text": text})
-    if "{text}" not in prompts["action_prompt"] and "Text:" not in prompt:
-        prompt = f"{prompt}\n\nText: {text}"
-
-    model_candidates = _resolve_ai_models(purpose="action")
-    payload, _, _ = _ai_generate(
-        prompt,
-        model_candidates=model_candidates,
-        response_format="json",
-        temperature=0.2,
-        max_tokens=INTERNAL_AI_TOOL_MAX_TOKENS,
-        timeout=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
-    )
-    if not payload:
-        logger.warning("AI action fallback used due to provider failure")
-        return _build_action_ai_fallback(text)
-
-    action = parse_action_json(payload.get("response"))
-    if not action:
-        logger.warning("AI action fallback used due to invalid AI response")
-        return _build_action_ai_fallback(text)
-    return action
+    try:
+        result = _workbench_ai_service().generate_customer_report_entry({"text": data.text})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in {"provider", "model", "usedFallback"}
+    }
 
 
 def _truncate_middle_text(value: str, limit: int) -> str:
@@ -20824,44 +21772,16 @@ def _build_action_ai_fallback(text: str) -> Dict[str, str]:
 
 @app.post("/api/offer_ai_text")
 def generate_offer_text(data: OfferAiRequest):
-    mode = (data.mode or "").strip().lower()
-    current_text = (data.current_text or "").strip()
-    context = (data.context or "").strip()
-    if not mode:
-        raise HTTPException(400, "Mode required")
-
-    with SessionLocal() as db:
-        prompts = serialize_ai_prompts(_get_ai_prompt_settings(db))
-    mode_instructions = prompts.get("offer_mode_instructions") or {}
-    instruction = mode_instructions.get(mode, "Schreibe einen kurzen, passenden Text.")
-    prompt = _render_prompt(
-        prompts["offer_base_prompt"],
-        {
-            "instruction": instruction,
-            "context": context if context else "n/a",
-            "current_text": current_text if current_text else "n/a",
-        },
-    )
-
-    model_candidates = _resolve_ai_models(purpose="offer_text")
-    payload, _, provider = _ai_generate(
-        prompt,
-        model_candidates=model_candidates,
-        temperature=0.2,
-        max_tokens=220,
-        timeout=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
-    )
-    if not payload:
-        return {"text": _build_offer_ai_fallback_text(mode, current_text, context), "provider": "fallback"}
-
-    text = (payload.get("response") or "").strip()
-    if not text:
-        return {"text": _build_offer_ai_fallback_text(mode, current_text, context), "provider": "fallback"}
-    if mode == "invoice_position_text":
-        text = _sanitize_invoice_position_ai_text(text)
-        if not text:
-            return {"text": _build_offer_ai_fallback_text(mode, current_text, context), "provider": "fallback"}
-    return {"text": text, "provider": provider}
+    try:
+        return _workbench_ai_service().improve_offer_text(
+            {
+                "mode": data.mode,
+                "current_text": data.current_text,
+                "context": data.context,
+            }
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 # ============== REPORT CATALOG =============
 @app.get("/api/report_catalog")
@@ -21738,6 +22658,7 @@ def update_ai_prompts(data: AiPromptsUpdate):
             "customer_signal_newsletter_prompt": (
                 data.customer_signal_newsletter_prompt or current["customer_signal_newsletter_prompt"]
             ),
+            "workbench_use_case_prompts": data.workbench_use_case_prompts or current.get("workbench_use_case_prompts", {}),
             "contract_header_html": data.contract_header_html if data.contract_header_html is not None else current.get("contract_header_html", ""),
             "contract_footer_html": data.contract_footer_html if data.contract_footer_html is not None else current.get("contract_footer_html", ""),
             "contract_templates": data.contract_templates or current["contract_templates"],

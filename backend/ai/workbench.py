@@ -1,0 +1,279 @@
+import json
+import re
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+
+WORKBENCH_USE_CASE_IMPROVE_OFFER_TEXT = "ImproveOfferText"
+WORKBENCH_USE_CASE_GENERATE_CUSTOMER_TEXT_SUGGESTIONS = "GenerateCustomerTextSuggestions"
+WORKBENCH_USE_CASE_TRANSLATE_TECHNICAL_TO_CUSTOMER_LANGUAGE = "TranslateTechnicalToCustomerLanguage"
+WORKBENCH_USE_CASE_GENERATE_CUSTOMER_REPORT_ENTRY = "GenerateCustomerReportEntry"
+
+WORKBENCH_USE_CASES = {
+    WORKBENCH_USE_CASE_IMPROVE_OFFER_TEXT,
+    WORKBENCH_USE_CASE_GENERATE_CUSTOMER_TEXT_SUGGESTIONS,
+    WORKBENCH_USE_CASE_TRANSLATE_TECHNICAL_TO_CUSTOMER_LANGUAGE,
+    WORKBENCH_USE_CASE_GENERATE_CUSTOMER_REPORT_ENTRY,
+}
+
+
+@dataclass
+class WorkbenchAiRuntime:
+    load_prompts: Callable[[], Dict[str, Any]]
+    render_prompt: Callable[[str, Dict[str, str]], str]
+    resolve_models: Callable[..., List[str]]
+    generate: Callable[..., Tuple[Dict[str, Any], str, str]]
+    parse_action_json: Callable[[Any], Optional[Dict[str, str]]]
+    build_action_fallback: Callable[[str], Dict[str, str]]
+    build_offer_fallback: Callable[[str, str, str], str]
+    sanitize_invoice_text: Callable[[Any], str]
+    tool_timeout_seconds: int
+    tool_max_tokens: int
+
+
+def clean_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def normalize_tone(value: Any) -> str:
+    tone = clean_text(value).lower().replace(" ", "_")
+    allowed = {
+        "kurz",
+        "sachlich",
+        "kundenfreundlich",
+        "technisch",
+        "leicht_verstaendlich",
+        "leicht_verst\u00e4ndlich",
+    }
+    if tone == "leicht_verst\u00e4ndlich":
+        tone = "leicht_verstaendlich"
+    return tone if tone in allowed else "sachlich"
+
+
+def extract_json_object(raw: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    text = raw.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(text[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
+def normalize_suggestions(raw: Any) -> List[Dict[str, str]]:
+    payload = extract_json_object(raw)
+    items = None
+    if payload:
+        items = payload.get("suggestions")
+    elif isinstance(raw, list):
+        items = raw
+    if not isinstance(items, list):
+        return []
+    normalized: List[Dict[str, str]] = []
+    for item in items[:5]:
+        if isinstance(item, str):
+            text = clean_text(item)
+            if text:
+                normalized.append({"title": "", "text": text})
+            continue
+        if not isinstance(item, dict):
+            continue
+        text = clean_text(item.get("text") or item.get("body") or item.get("suggestion"))
+        if not text:
+            continue
+        normalized.append(
+            {
+                "title": clean_text(item.get("title") or item.get("label")),
+                "text": text,
+                "purpose": clean_text(item.get("purpose") or item.get("use")),
+            }
+        )
+    return normalized
+
+
+def default_workbench_prompts() -> Dict[str, str]:
+    return {
+        "customer_text_suggestions": (
+            "Erzeuge kundenfreundliche Textvorschlaege fuer das Tagesgeschaeft einer IT-Firma.\n"
+            "Ton: {tone}. Modus: {mode}.\n"
+            "Antworte ausschliesslich als JSON mit dem Feld suggestions. "
+            "suggestions ist eine Liste aus maximal {count} Objekten mit title, text und purpose.\n"
+            "Schreibe auf Deutsch, konkret, ohne Marketingfloskeln und ohne Markdown.\n\n"
+            "Kunde: {customer_name}\n"
+            "Thema: {topic}\n"
+            "Kontext:\n{context}"
+        ),
+        "technical_to_customer_language": (
+            "Uebersetze den technischen Inhalt in verstaendliche Kundensprache.\n"
+            "Ton: {tone}. Zielgruppe: {audience_level}.\n"
+            "Erklaere Nutzen, Auswirkung und naechsten Schritt. "
+            "Keine internen Details, keine Schuldzuweisungen, kein Markdown.\n\n"
+            "Technischer Text:\n{technical_text}\n\n"
+            "Zusaetzlicher Kontext:\n{context}"
+        ),
+    }
+
+
+class WorkbenchAiService:
+    def __init__(self, runtime: WorkbenchAiRuntime):
+        self.runtime = runtime
+
+    def execute(self, use_case: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = clean_text(use_case)
+        if normalized == WORKBENCH_USE_CASE_IMPROVE_OFFER_TEXT:
+            return self.improve_offer_text(data)
+        if normalized == WORKBENCH_USE_CASE_GENERATE_CUSTOMER_REPORT_ENTRY:
+            return self.generate_customer_report_entry(data)
+        if normalized == WORKBENCH_USE_CASE_GENERATE_CUSTOMER_TEXT_SUGGESTIONS:
+            return self.generate_customer_text_suggestions(data)
+        if normalized == WORKBENCH_USE_CASE_TRANSLATE_TECHNICAL_TO_CUSTOMER_LANGUAGE:
+            return self.translate_technical_to_customer_language(data)
+        raise ValueError(f"Unsupported Workbench AI use case: {use_case}")
+
+    def improve_offer_text(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        mode = clean_text(data.get("mode")).lower()
+        current_text = clean_text(data.get("current_text") or data.get("currentText"))
+        context = clean_text(data.get("context"))
+        if not mode:
+            raise ValueError("Mode required")
+
+        prompts = self.runtime.load_prompts()
+        mode_instructions = prompts.get("offer_mode_instructions") or {}
+        instruction = mode_instructions.get(mode, "Schreibe einen kurzen, passenden Text.")
+        prompt = self.runtime.render_prompt(
+            prompts.get("offer_base_prompt") or "",
+            {
+                "instruction": instruction,
+                "context": context or "n/a",
+                "current_text": current_text or "n/a",
+            },
+        )
+
+        payload, model, provider = self.runtime.generate(
+            prompt,
+            model_candidates=self.runtime.resolve_models(purpose="offer_text"),
+            temperature=0.2,
+            max_tokens=220,
+            timeout=self.runtime.tool_timeout_seconds,
+        )
+        text = clean_text((payload or {}).get("response"))
+        if mode == "invoice_position_text":
+            text = self.runtime.sanitize_invoice_text(text)
+        if not text:
+            return {
+                "text": self.runtime.build_offer_fallback(mode, current_text, context),
+                "provider": "fallback",
+                "model": "",
+                "usedFallback": True,
+            }
+        return {"text": text, "provider": provider, "model": model, "usedFallback": False}
+
+    def generate_customer_report_entry(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        text = clean_text(data.get("text") or data.get("source_text") or data.get("sourceText"))
+        if not text:
+            raise ValueError("Text required")
+
+        prompts = self.runtime.load_prompts()
+        action_prompt = prompts.get("action_prompt") or ""
+        prompt = self.runtime.render_prompt(action_prompt, {"text": text})
+        if "{text}" not in action_prompt and "Text:" not in prompt:
+            prompt = f"{prompt}\n\nText: {text}"
+
+        payload, model, provider = self.runtime.generate(
+            prompt,
+            model_candidates=self.runtime.resolve_models(purpose="action"),
+            response_format="json",
+            temperature=0.2,
+            max_tokens=self.runtime.tool_max_tokens,
+            timeout=self.runtime.tool_timeout_seconds,
+        )
+        action = self.runtime.parse_action_json((payload or {}).get("response"))
+        if not action:
+            fallback = self.runtime.build_action_fallback(text)
+            fallback.update({"provider": "fallback", "model": "", "usedFallback": True})
+            return fallback
+        action.update({"provider": provider, "model": model, "usedFallback": False})
+        return action
+
+    def generate_customer_text_suggestions(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        prompts = self.runtime.load_prompts()
+        workbench_prompts = {
+            **default_workbench_prompts(),
+            **(prompts.get("workbench_use_case_prompts") or {}),
+        }
+        count = max(1, min(5, int(data.get("count") or 3)))
+        prompt = self.runtime.render_prompt(
+            workbench_prompts["customer_text_suggestions"],
+            {
+                "tone": normalize_tone(data.get("tone")),
+                "mode": clean_text(data.get("mode")) or "kundenfreundlich",
+                "count": str(count),
+                "customer_name": clean_text(data.get("customer_name") or data.get("customerName")) or "n/a",
+                "topic": clean_text(data.get("topic")) or "n/a",
+                "context": clean_text(data.get("context")) or "n/a",
+            },
+        )
+        payload, model, provider = self.runtime.generate(
+            prompt,
+            model_candidates=self.runtime.resolve_models(purpose="customer_development"),
+            response_format="json",
+            temperature=0.35,
+            max_tokens=min(700, self.runtime.tool_max_tokens),
+            timeout=self.runtime.tool_timeout_seconds,
+        )
+        suggestions = normalize_suggestions((payload or {}).get("response"))
+        if not suggestions:
+            source = clean_text(data.get("context") or data.get("topic"))
+            fallback_text = source[:420].rstrip(" ,;:-") or "Wir melden uns mit einer klaren Einschaetzung und dem naechsten sinnvollen Schritt."
+            suggestions = [{"title": "Vorschlag", "text": fallback_text, "purpose": "fallback"}]
+            return {
+                "suggestions": suggestions,
+                "provider": "fallback",
+                "model": "",
+                "usedFallback": True,
+            }
+        return {"suggestions": suggestions, "provider": provider, "model": model, "usedFallback": False}
+
+    def translate_technical_to_customer_language(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        technical_text = clean_text(data.get("technical_text") or data.get("technicalText") or data.get("text"))
+        if not technical_text:
+            raise ValueError("Technical text required")
+        prompts = self.runtime.load_prompts()
+        workbench_prompts = {
+            **default_workbench_prompts(),
+            **(prompts.get("workbench_use_case_prompts") or {}),
+        }
+        prompt = self.runtime.render_prompt(
+            workbench_prompts["technical_to_customer_language"],
+            {
+                "tone": normalize_tone(data.get("tone")),
+                "audience_level": clean_text(data.get("audience_level") or data.get("audienceLevel")) or "leicht verstaendlich",
+                "technical_text": technical_text,
+                "context": clean_text(data.get("context")) or "n/a",
+            },
+        )
+        payload, model, provider = self.runtime.generate(
+            prompt,
+            model_candidates=self.runtime.resolve_models(purpose="offer_text"),
+            temperature=0.25,
+            max_tokens=min(600, self.runtime.tool_max_tokens),
+            timeout=self.runtime.tool_timeout_seconds,
+        )
+        text = clean_text((payload or {}).get("response"))
+        if not text:
+            text = technical_text[:520].rstrip(" ,;:-") + "."
+            return {"text": text, "provider": "fallback", "model": "", "usedFallback": True}
+        return {"text": text, "provider": provider, "model": model, "usedFallback": False}
