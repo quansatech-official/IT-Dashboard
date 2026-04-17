@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Loader2, Palette, Pin, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Loader2, Minus, Palette, Pin, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 const API = "/api";
 const NOTE_WIDTH = 220;
@@ -10,6 +10,11 @@ const NOTE_MAX_WIDTH = 520;
 const NOTE_MAX_HEIGHT = 420;
 const BOARD_MIN_WIDTH = 960;
 const BOARD_MIN_HEIGHT = 680;
+const BOARD_SCALE_MIN = 0.55;
+const BOARD_SCALE_MAX = 1;
+const BOARD_SCALE_STEP = 0.1;
+const NOTE_FOCUS_SCALE = 1.35;
+const NOTE_FOCUS_DELAY_MS = 1000;
 const LIVE_REFRESH_MS = 1200;
 const SAVE_DEBOUNCE_MS = 350;
 
@@ -124,6 +129,7 @@ export default function VisionBoardView() {
   const boardRef = useRef(null);
   const dragRef = useRef(null);
   const resizeRef = useRef(null);
+  const hoverZoomTimerRef = useRef(null);
   const saveTimersRef = useRef({});
   const pendingPatchesRef = useRef({});
   const saveSequenceRef = useRef({});
@@ -133,6 +139,9 @@ export default function VisionBoardView() {
   const pollInFlightRef = useRef(false);
   const [notes, setNotes] = useState([]);
   const [activeNoteId, setActiveNoteId] = useState("");
+  const [boardScale, setBoardScale] = useState(1);
+  const [hoverZoomNoteId, setHoverZoomNoteId] = useState("");
+  const [pinnedZoomNoteId, setPinnedZoomNoteId] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState("idle");
   const [savedAt, setSavedAt] = useState("");
@@ -195,9 +204,20 @@ export default function VisionBoardView() {
     const interval = window.setInterval(() => loadNotes(false), LIVE_REFRESH_MS);
     return () => {
       window.clearInterval(interval);
+      if (hoverZoomTimerRef.current) window.clearTimeout(hoverZoomTimerRef.current);
       Object.values(saveTimersRef.current).forEach((timer) => window.clearTimeout(timer));
     };
   }, [loadNotes]);
+
+  useEffect(() => {
+    if (boardScale < 1) return;
+    if (hoverZoomTimerRef.current) {
+      window.clearTimeout(hoverZoomTimerRef.current);
+      hoverZoomTimerRef.current = null;
+    }
+    setHoverZoomNoteId("");
+    setPinnedZoomNoteId("");
+  }, [boardScale]);
 
   const scheduleSave = useCallback((id, patch) => {
     dirtyNotesRef.current.add(id);
@@ -296,6 +316,8 @@ export default function VisionBoardView() {
     }
     setNotes((current) => current.filter((note) => note.id !== id));
     if (activeNoteId === id) setActiveNoteId("");
+    if (hoverZoomNoteId === id) setHoverZoomNoteId("");
+    if (pinnedZoomNoteId === id) setPinnedZoomNoteId("");
     try {
       await api.remove(id);
       setError("");
@@ -310,6 +332,8 @@ export default function VisionBoardView() {
     if (!window.confirm("VisionBoard leeren?")) return;
     setNotes([]);
     setActiveNoteId("");
+    setHoverZoomNoteId("");
+    setPinnedZoomNoteId("");
     dirtyNotesRef.current.clear();
     creatingNotesRef.current.clear();
     pendingPatchesRef.current = {};
@@ -331,7 +355,6 @@ export default function VisionBoardView() {
     const board = boardRef.current;
     if (!board) return;
     const card = event.currentTarget.closest("[data-note-card]");
-    const boardRect = board.getBoundingClientRect();
     const noteWidth = card?.offsetWidth || NOTE_WIDTH;
     const noteHeight = card?.offsetHeight || NOTE_MIN_HEIGHT;
     dragRef.current = {
@@ -341,10 +364,11 @@ export default function VisionBoardView() {
       startY: event.clientY,
       originX: note.x,
       originY: note.y,
-      boardWidth: boardRect.width,
-      boardHeight: boardRect.height,
+      boardWidth: board.offsetWidth,
+      boardHeight: board.offsetHeight,
       noteWidth,
-      noteHeight
+      noteHeight,
+      boardScale
     };
     setActiveNoteId(note.id);
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -353,8 +377,8 @@ export default function VisionBoardView() {
   const moveDrag = (event) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const deltaX = ((event.clientX - drag.startX) / drag.boardWidth) * 100;
-    const deltaY = ((event.clientY - drag.startY) / drag.boardHeight) * 100;
+    const deltaX = ((event.clientX - drag.startX) / (drag.boardWidth * drag.boardScale)) * 100;
+    const deltaY = ((event.clientY - drag.startY) / (drag.boardHeight * drag.boardScale)) * 100;
     const maxX = Math.max(1, 100 - (drag.noteWidth / drag.boardWidth) * 100 - 1);
     const maxY = Math.max(1, 100 - (drag.noteHeight / drag.boardHeight) * 100 - 1);
     const x = clamp(drag.originX + deltaX, 1, maxX);
@@ -372,7 +396,6 @@ export default function VisionBoardView() {
     if (note.locked) return;
     const board = boardRef.current;
     if (!board) return;
-    const boardRect = board.getBoundingClientRect();
     resizeRef.current = {
       id: note.id,
       pointerId: event.pointerId,
@@ -380,8 +403,9 @@ export default function VisionBoardView() {
       startY: event.clientY,
       originWidth: note.width,
       originHeight: note.height,
-      maxWidth: Math.max(NOTE_MIN_WIDTH, Math.min(NOTE_MAX_WIDTH, boardRect.width - (note.x / 100) * boardRect.width - 12)),
-      maxHeight: Math.max(NOTE_MIN_HEIGHT, Math.min(NOTE_MAX_HEIGHT, boardRect.height - (note.y / 100) * boardRect.height - 12))
+      boardScale,
+      maxWidth: Math.max(NOTE_MIN_WIDTH, Math.min(NOTE_MAX_WIDTH, board.offsetWidth - (note.x / 100) * board.offsetWidth - 12)),
+      maxHeight: Math.max(NOTE_MIN_HEIGHT, Math.min(NOTE_MAX_HEIGHT, board.offsetHeight - (note.y / 100) * board.offsetHeight - 12))
     };
     setActiveNoteId(note.id);
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -390,8 +414,16 @@ export default function VisionBoardView() {
   const moveResize = (event) => {
     const resize = resizeRef.current;
     if (!resize || resize.pointerId !== event.pointerId) return;
-    const width = clamp(resize.originWidth + event.clientX - resize.startX, NOTE_MIN_WIDTH, resize.maxWidth);
-    const height = clamp(resize.originHeight + event.clientY - resize.startY, NOTE_MIN_HEIGHT, resize.maxHeight);
+    const width = clamp(
+      resize.originWidth + (event.clientX - resize.startX) / resize.boardScale,
+      NOTE_MIN_WIDTH,
+      resize.maxWidth
+    );
+    const height = clamp(
+      resize.originHeight + (event.clientY - resize.startY) / resize.boardScale,
+      NOTE_MIN_HEIGHT,
+      resize.maxHeight
+    );
     updateNote(resize.id, { width, height });
   };
 
@@ -399,6 +431,40 @@ export default function VisionBoardView() {
     if (!resizeRef.current || resizeRef.current.pointerId !== event.pointerId) return;
     resizeRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
+  };
+
+  const changeBoardScale = (direction) => {
+    setBoardScale((current) => {
+      const next = clamp(current + direction * BOARD_SCALE_STEP, BOARD_SCALE_MIN, BOARD_SCALE_MAX);
+      return Number(next.toFixed(2));
+    });
+  };
+
+  const startHoverZoom = (id) => {
+    if (boardScale >= 1 || pinnedZoomNoteId) return;
+    if (hoverZoomTimerRef.current) window.clearTimeout(hoverZoomTimerRef.current);
+    hoverZoomTimerRef.current = window.setTimeout(() => {
+      setHoverZoomNoteId(id);
+      hoverZoomTimerRef.current = null;
+    }, NOTE_FOCUS_DELAY_MS);
+  };
+
+  const stopHoverZoom = (id) => {
+    if (hoverZoomTimerRef.current) {
+      window.clearTimeout(hoverZoomTimerRef.current);
+      hoverZoomTimerRef.current = null;
+    }
+    if (hoverZoomNoteId === id) setHoverZoomNoteId("");
+  };
+
+  const focusNoteZoom = (id) => {
+    if (boardScale >= 1) return;
+    if (hoverZoomTimerRef.current) {
+      window.clearTimeout(hoverZoomTimerRef.current);
+      hoverZoomTimerRef.current = null;
+    }
+    setPinnedZoomNoteId(id);
+    setHoverZoomNoteId("");
   };
 
   return (
@@ -464,13 +530,29 @@ export default function VisionBoardView() {
           <span>{notes.length === 1 ? "1 Notizzettel" : `${notes.length} Notizzettel`}</span>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-sand-300 bg-white p-3 shadow-soft">
+        <div
+          className="min-h-0 flex-1 overflow-auto rounded-lg border border-sand-300 bg-white p-3 shadow-soft"
+          onPointerDown={(event) => {
+            if (!event.target.closest("[data-note-card]")) setPinnedZoomNoteId("");
+          }}
+        >
+          <div
+            className="relative"
+            style={{
+              width: `${BOARD_MIN_WIDTH * boardScale}px`,
+              minWidth: `${BOARD_MIN_WIDTH * boardScale}px`,
+              height: `calc(100% * ${boardScale})`,
+              minHeight: `${BOARD_MIN_HEIGHT * boardScale}px`
+            }}
+          >
           <div
             ref={boardRef}
             className="relative h-full min-h-[680px] overflow-hidden rounded-lg border border-sand-200 bg-[#f8fafc]"
             style={{
               minWidth: `${BOARD_MIN_WIDTH}px`,
               minHeight: `${BOARD_MIN_HEIGHT}px`,
+              transform: `scale(${boardScale})`,
+              transformOrigin: "top left",
               backgroundImage:
                 "linear-gradient(rgba(31, 41, 55, 0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(31, 41, 55, 0.07) 1px, transparent 1px)",
               backgroundSize: "28px 28px"
@@ -491,19 +573,26 @@ export default function VisionBoardView() {
 
             {notes.map((note) => {
               const color = colorLookup[note.color] || COLOR_OPTIONS[0];
+              const isZoomed = boardScale < 1 && (pinnedZoomNoteId === note.id || hoverZoomNoteId === note.id);
               return (
                 <section
                   key={note.id}
                   data-note-card
-                  className={`absolute flex flex-col rounded-lg border p-3 shadow-[0_12px_22px_rgba(31,41,55,0.18)] transition-shadow ${
+                  onMouseEnter={() => startHoverZoom(note.id)}
+                  onMouseLeave={() => stopHoverZoom(note.id)}
+                  onClick={() => focusNoteZoom(note.id)}
+                  className={`absolute flex flex-col rounded-lg border p-3 shadow-[0_12px_22px_rgba(31,41,55,0.18)] transition-[box-shadow,transform] duration-200 ${
                     color.noteClass
-                  } ${activeNoteId === note.id ? "z-20 ring-2 ring-[var(--bg-900)]" : "z-10"}`}
+                  } ${
+                    activeNoteId === note.id ? "ring-2 ring-[var(--bg-900)]" : ""
+                  } ${isZoomed ? "z-30" : activeNoteId === note.id ? "z-20" : "z-10"}`}
                   style={{
                     left: `${note.x}%`,
                     top: `${note.y}%`,
                     width: `${note.width}px`,
                     height: `${note.height}px`,
-                    transform: `rotate(${note.rotation || 0}deg)`
+                    transform: `rotate(${note.rotation || 0}deg) scale(${isZoomed ? NOTE_FOCUS_SCALE : 1})`,
+                    transformOrigin: "center"
                   }}
                 >
                   <div
@@ -586,8 +675,32 @@ export default function VisionBoardView() {
               );
             })}
           </div>
+          </div>
         </div>
       </main>
+      <div className="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded-lg border border-sand-200 bg-white/95 p-2 text-xs text-sand-700 shadow-soft backdrop-blur">
+        <button
+          type="button"
+          onClick={() => changeBoardScale(-1)}
+          disabled={boardScale <= BOARD_SCALE_MIN}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-sand-200 bg-white hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="VisionBoard verkleinern"
+          title="VisionBoard verkleinern"
+        >
+          <Minus size={15} />
+        </button>
+        <span className="w-12 text-center font-metrics">{Math.round(boardScale * 100)}%</span>
+        <button
+          type="button"
+          onClick={() => changeBoardScale(1)}
+          disabled={boardScale >= BOARD_SCALE_MAX}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-sand-200 bg-white hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="VisionBoard vergrößern"
+          title="VisionBoard vergrößern"
+        >
+          <Plus size={15} />
+        </button>
+      </div>
     </div>
   );
 }

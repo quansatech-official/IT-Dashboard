@@ -524,7 +524,8 @@ const formatMoney = (value) => {
   return number.toLocaleString("de-DE", {
     style: "currency",
     currency: "EUR",
-    maximumFractionDigits: 0
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   });
 };
 
@@ -5295,6 +5296,7 @@ export default function OffersView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           offer_id: offer.serverId,
+          mail_function: "offer_send",
           to: sendTo,
           subject: sendSubject || `Angebot ${offer.reference || ""}`.trim(),
           html,
@@ -5363,6 +5365,7 @@ export default function OffersView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           offer_id: offer.serverId,
+          mail_function: "offer_confirmation_send",
           to: sendTo,
           subject: sendSubject || `Auftragsbestätigung ${offer.reference || ""}`.trim(),
           html: buildOfferEmailHtml(offer, confirmUrl, "confirmation", {

@@ -24,6 +24,50 @@ const defaultSmtp = {
   has_password: false
 };
 
+const defaultMailAccount = () => ({
+  id: "",
+  name: "Neues Mailkonto",
+  provider: "smtp_imap",
+  enabled: true,
+  sender_name: "",
+  sender_email: "",
+  mailbox_email: "",
+  signature_html: "",
+  smtp_host: "",
+  smtp_port: 587,
+  smtp_username: "",
+  smtp_password: "",
+  smtp_use_tls: true,
+  smtp_use_ssl: false,
+  has_smtp_password: false,
+  imap_host: "",
+  imap_port: 993,
+  imap_username: "",
+  imap_password: "",
+  imap_folder: "INBOX",
+  imap_use_tls: false,
+  imap_use_ssl: true,
+  has_imap_password: false,
+  graph_tenant_id: "",
+  graph_client_id: "",
+  graph_client_secret: "",
+  graph_mailbox_upn: "",
+  has_graph_client_secret: false,
+  can_send: false,
+  can_read: false
+});
+
+const normalizeMailAccount = (raw) => ({
+  ...defaultMailAccount(),
+  ...(raw && typeof raw === "object" ? raw : {}),
+  id: String(raw?.id || ""),
+  name: String(raw?.name || "Mailkonto"),
+  provider: String(raw?.provider || "smtp_imap"),
+  smtp_password: "",
+  imap_password: "",
+  graph_client_secret: ""
+});
+
 const defaultCti = {
   baseUrl: "https://providersupportdata.cloud-cfg.com",
   username: "",
@@ -640,6 +684,13 @@ const getMetaHubEmailSummary = ({ metaHub, metaHubRuntimeStatus, activeMailboxCo
 
 export default function SettingsView() {
   const [smtp, setSmtp] = useState(loadCachedSmtp);
+  const [mailSettings, setMailSettings] = useState({ accounts: [], routes: {}, functions: [] });
+  const [mailDraft, setMailDraft] = useState(defaultMailAccount);
+  const [mailEditId, setMailEditId] = useState("");
+  const [mailStatus, setMailStatus] = useState("idle");
+  const [mailMessage, setMailMessage] = useState("");
+  const [mailOpen, setMailOpen] = useState(true);
+  const [mailTestRecipient, setMailTestRecipient] = useState("");
   const [status, setStatus] = useState("idle");
   const [loadStatus, setLoadStatus] = useState("loading");
   const [employees, setEmployees] = useState([]);
@@ -874,6 +925,34 @@ export default function SettingsView() {
     return () => {
       active = false;
     };
+  }, []);
+
+  const loadMailSettings = async () => {
+    setMailStatus("loading");
+    setMailMessage("");
+    try {
+      const res = await fetch(`${API}/mail_settings`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "Mailprofile konnten nicht geladen werden.");
+      const accounts = Array.isArray(data?.accounts) ? data.accounts.map((row) => normalizeMailAccount(row)) : [];
+      setMailSettings({
+        accounts,
+        routes: data?.routes && typeof data.routes === "object" ? data.routes : {},
+        functions: Array.isArray(data?.functions) ? data.functions : []
+      });
+      if (!mailEditId && accounts.length) {
+        setMailEditId(accounts[0].id);
+        setMailDraft(accounts[0]);
+      }
+      setMailStatus("ready");
+    } catch (error) {
+      setMailStatus("error");
+      setMailMessage(error?.message ? String(error.message) : "Mailprofile konnten nicht geladen werden.");
+    }
+  };
+
+  useEffect(() => {
+    loadMailSettings();
   }, []);
 
   useEffect(() => {
@@ -1254,6 +1333,119 @@ export default function SettingsView() {
       setStatus("error");
     }
     setTimeout(() => setStatus("idle"), 2000);
+  };
+
+  const selectMailAccount = (accountId) => {
+    const account = mailSettings.accounts.find((item) => item.id === accountId);
+    setMailEditId(accountId || "");
+    setMailDraft(account ? normalizeMailAccount(account) : defaultMailAccount());
+    setMailMessage("");
+  };
+
+  const newMailAccount = () => {
+    setMailEditId("");
+    setMailDraft(defaultMailAccount());
+    setMailMessage("");
+  };
+
+  const saveMailAccount = async () => {
+    setMailStatus("saving");
+    setMailMessage("");
+    try {
+      const payload = {
+        ...mailDraft,
+        smtp_port: Number(mailDraft.smtp_port) || 587,
+        imap_port: Number(mailDraft.imap_port) || 993
+      };
+      const res = await fetch(`${API}/mail_accounts${mailEditId ? `/${mailEditId}` : ""}`, {
+        method: mailEditId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "Mailkonto konnte nicht gespeichert werden.");
+      const saved = normalizeMailAccount(data);
+      setMailEditId(saved.id);
+      setMailDraft(saved);
+      await loadMailSettings();
+      setMailStatus("saved");
+      setMailMessage("Mailkonto gespeichert.");
+    } catch (error) {
+      setMailStatus("error");
+      setMailMessage(error?.message ? String(error.message) : "Mailkonto konnte nicht gespeichert werden.");
+    }
+  };
+
+  const deleteMailAccount = async (accountId) => {
+    if (!accountId || !window.confirm("Mailkonto wirklich entfernen?")) return;
+    setMailStatus("saving");
+    setMailMessage("");
+    try {
+      const res = await fetch(`${API}/mail_accounts/${accountId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "Mailkonto konnte nicht entfernt werden.");
+      newMailAccount();
+      await loadMailSettings();
+      setMailStatus("saved");
+      setMailMessage("Mailkonto entfernt.");
+    } catch (error) {
+      setMailStatus("error");
+      setMailMessage(error?.message ? String(error.message) : "Mailkonto konnte nicht entfernt werden.");
+    }
+  };
+
+  const updateMailRoute = async (functionKey, accountId) => {
+    const routes = { ...(mailSettings.routes || {}), [functionKey]: accountId || null };
+    setMailSettings((prev) => ({ ...prev, routes }));
+    setMailStatus("saving");
+    setMailMessage("");
+    try {
+      const res = await fetch(`${API}/mail_routes`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ routes })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "Zuordnung konnte nicht gespeichert werden.");
+      setMailSettings({
+        accounts: Array.isArray(data?.accounts) ? data.accounts.map((row) => normalizeMailAccount(row)) : [],
+        routes: data?.routes && typeof data.routes === "object" ? data.routes : {},
+        functions: Array.isArray(data?.functions) ? data.functions : []
+      });
+      setMailStatus("saved");
+      setMailMessage("Zuordnung gespeichert.");
+    } catch (error) {
+      setMailStatus("error");
+      setMailMessage(error?.message ? String(error.message) : "Zuordnung konnte nicht gespeichert werden.");
+    }
+  };
+
+  const testMailAccount = async (mode) => {
+    if (!mailEditId) return;
+    setMailStatus("testing");
+    setMailMessage("");
+    try {
+      const endpoint = mode === "send" ? "test_send" : "test_read";
+      const body =
+        mode === "send"
+          ? JSON.stringify({
+              to: mailTestRecipient || mailDraft.sender_email || mailDraft.mailbox_email,
+              subject: "IT-Dashboard Mailkonto Test"
+            })
+          : undefined;
+      const res = await fetch(`${API}/mail_accounts/${mailEditId}/${endpoint}`, {
+        method: "POST",
+        headers: mode === "send" ? { "Content-Type": "application/json" } : undefined,
+        body
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "Mailkonto-Test fehlgeschlagen.");
+      setMailStatus("saved");
+      setMailMessage(data?.message || "Mailkonto-Test erfolgreich.");
+    } catch (error) {
+      setMailStatus("error");
+      setMailMessage(error?.message ? String(error.message) : "Mailkonto-Test fehlgeschlagen.");
+    }
   };
 
 
@@ -2649,6 +2841,360 @@ export default function SettingsView() {
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setMailOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Mail size={18} />
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Mailprofile & Zuordnung</p>
+                <p className="text-xs text-sand-500">SMTP/IMAP oder Microsoft 365 pro Funktion auswählen.</p>
+              </div>
+            </div>
+            <span className="text-sm text-sand-500">{mailOpen ? "–" : "+"}</span>
+          </button>
+          {mailOpen ? (
+            <div className="mt-4 space-y-5">
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_1.3fr]">
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Mailkonten</p>
+                    <button
+                      type="button"
+                      onClick={newMailAccount}
+                      className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700"
+                    >
+                      Neu
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {mailSettings.accounts.map((account) => (
+                      <button
+                        key={account.id}
+                        type="button"
+                        onClick={() => selectMailAccount(account.id)}
+                        className={`w-full rounded-xl border px-3 py-2 text-left text-xs ${
+                          mailEditId === account.id
+                            ? "border-sand-900 bg-white text-sand-900"
+                            : "border-sand-200 bg-white text-sand-600"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold">{account.name}</span>
+                          <span className="rounded-full border border-sand-200 px-2 py-0.5 text-[10px]">
+                            {account.provider === "microsoft_graph" ? "M365" : "SMTP/IMAP"}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-[11px] text-sand-500">
+                          {account.sender_email || account.mailbox_email || "ohne Adresse"} ·{" "}
+                          {account.can_send ? "Senden" : "kein Versand"} / {account.can_read ? "Lesen" : "kein Lesen"}
+                        </div>
+                      </button>
+                    ))}
+                    {!mailSettings.accounts.length ? (
+                      <p className="rounded-xl border border-dashed border-sand-300 bg-white px-3 py-2 text-xs text-sand-500">
+                        Noch keine Mailkonten angelegt.
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-white p-3">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <div>
+                      <label className="text-xs text-sand-500">Name</label>
+                      <input
+                        value={mailDraft.name}
+                        onChange={(event) => setMailDraft((prev) => ({ ...prev, name: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-sand-500">Typ</label>
+                      <select
+                        value={mailDraft.provider}
+                        onChange={(event) => setMailDraft((prev) => ({ ...prev, provider: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      >
+                        <option value="smtp_imap">SMTP / IMAP</option>
+                        <option value="microsoft_graph">Microsoft 365 / Graph</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-sand-500">Absender Name</label>
+                      <input
+                        value={mailDraft.sender_name}
+                        onChange={(event) => setMailDraft((prev) => ({ ...prev, sender_name: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-sand-500">Absender E-Mail</label>
+                      <input
+                        value={mailDraft.sender_email}
+                        onChange={(event) => setMailDraft((prev) => ({ ...prev, sender_email: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs text-sand-500">Postfach E-Mail</label>
+                      <input
+                        value={mailDraft.mailbox_email}
+                        onChange={(event) => setMailDraft((prev) => ({ ...prev, mailbox_email: event.target.value }))}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 pt-6 text-xs text-sand-700">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(mailDraft.enabled)}
+                        onChange={(event) => setMailDraft((prev) => ({ ...prev, enabled: event.target.checked }))}
+                      />
+                      Aktiv
+                    </label>
+                  </div>
+
+                  {mailDraft.provider === "microsoft_graph" ? (
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div>
+                        <label className="text-xs text-sand-500">Tenant ID</label>
+                        <input
+                          value={mailDraft.graph_tenant_id}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, graph_tenant_id: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">Client ID</label>
+                        <input
+                          value={mailDraft.graph_client_id}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, graph_client_id: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">Client Secret</label>
+                        <input
+                          type="password"
+                          value={mailDraft.graph_client_secret}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, graph_client_secret: event.target.value }))}
+                          placeholder={mailDraft.has_graph_client_secret ? "Gespeichert" : ""}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">Mailbox UPN</label>
+                        <input
+                          value={mailDraft.graph_mailbox_upn}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, graph_mailbox_upn: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                          placeholder="mailbox@example.com"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div>
+                        <label className="text-xs text-sand-500">SMTP Host</label>
+                        <input
+                          value={mailDraft.smtp_host}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, smtp_host: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">SMTP Port</label>
+                        <input
+                          type="number"
+                          value={mailDraft.smtp_port}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, smtp_port: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">SMTP Benutzer</label>
+                        <input
+                          value={mailDraft.smtp_username}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, smtp_username: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">SMTP Passwort</label>
+                        <input
+                          type="password"
+                          value={mailDraft.smtp_password}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, smtp_password: event.target.value }))}
+                          placeholder={mailDraft.has_smtp_password ? "Gespeichert" : ""}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">IMAP Host</label>
+                        <input
+                          value={mailDraft.imap_host}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, imap_host: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">IMAP Port</label>
+                        <input
+                          type="number"
+                          value={mailDraft.imap_port}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, imap_port: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">IMAP Benutzer</label>
+                        <input
+                          value={mailDraft.imap_username}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, imap_username: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">IMAP Passwort</label>
+                        <input
+                          type="password"
+                          value={mailDraft.imap_password}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, imap_password: event.target.value }))}
+                          placeholder={mailDraft.has_imap_password ? "Gespeichert" : ""}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-sand-500">IMAP Ordner</label>
+                        <input
+                          value={mailDraft.imap_folder}
+                          onChange={(event) => setMailDraft((prev) => ({ ...prev, imap_folder: event.target.value }))}
+                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                        />
+                      </div>
+                      <div className="flex flex-wrap items-center gap-4 pt-6 text-xs text-sand-700">
+                        <label className="inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(mailDraft.smtp_use_tls)}
+                            onChange={(event) => setMailDraft((prev) => ({ ...prev, smtp_use_tls: event.target.checked }))}
+                          />
+                          SMTP TLS
+                        </label>
+                        <label className="inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(mailDraft.smtp_use_ssl)}
+                            onChange={(event) => setMailDraft((prev) => ({ ...prev, smtp_use_ssl: event.target.checked }))}
+                          />
+                          SMTP SSL
+                        </label>
+                        <label className="inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(mailDraft.imap_use_ssl)}
+                            onChange={(event) => setMailDraft((prev) => ({ ...prev, imap_use_ssl: event.target.checked }))}
+                          />
+                          IMAP SSL
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-4">
+                    <label className="text-xs text-sand-500">Signatur</label>
+                    <div className="mt-2">
+                      <NotesRichTextEditor
+                        value={mailDraft.signature_html}
+                        onChange={(value) => setMailDraft((prev) => ({ ...prev, signature_html: value }))}
+                        placeholder="Mit freundlichen Gruessen"
+                        minHeight="120px"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={saveMailAccount}
+                      className="rounded-full bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white"
+                    >
+                      Mailkonto speichern
+                    </button>
+                    {mailEditId ? (
+                      <button
+                        type="button"
+                        onClick={() => deleteMailAccount(mailEditId)}
+                        className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs uppercase tracking-wide text-rose-700"
+                      >
+                        Entfernen
+                      </button>
+                    ) : null}
+                    <input
+                      value={mailTestRecipient}
+                      onChange={(event) => setMailTestRecipient(event.target.value)}
+                      className="min-w-[220px] rounded-full border border-sand-200 px-4 py-2 text-xs"
+                      placeholder="Testempfänger"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => testMailAccount("send")}
+                      disabled={!mailEditId}
+                      className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 disabled:opacity-50"
+                    >
+                      Senden testen
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => testMailAccount("read")}
+                      disabled={!mailEditId}
+                      className="rounded-full border border-sand-200 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 disabled:opacity-50"
+                    >
+                      Lesen testen
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                <p className="mb-3 text-xs uppercase tracking-[0.2em] text-sand-500">Funktionszuordnung</p>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {(mailSettings.functions || []).map((fn) => (
+                    <div key={fn.key} className="rounded-xl border border-sand-200 bg-white p-3">
+                      <label className="text-xs text-sand-500">{fn.label || fn.key}</label>
+                      <select
+                        value={mailSettings.routes?.[fn.key] || ""}
+                        onChange={(event) => updateMailRoute(fn.key, event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                      >
+                        <option value="">Nicht zugeordnet</option>
+                        {mailSettings.accounts
+                          .filter((account) => (fn.capability === "read" ? account.can_read : account.can_send))
+                          .map((account) => (
+                            <option key={account.id} value={account.id}>
+                              {account.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {mailStatus === "loading" || mailStatus === "saving" || mailStatus === "testing" ? (
+                <p className="text-xs text-sand-500">Mailkonfiguration wird verarbeitet...</p>
+              ) : null}
+              {mailMessage ? (
+                <p className={`text-xs ${mailStatus === "error" ? "text-rose-700" : "text-emerald-700"}`}>
+                  {mailMessage}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
           <button
             type="button"

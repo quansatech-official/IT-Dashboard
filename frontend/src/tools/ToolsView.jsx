@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ArrowLeft, ExternalLink, KeyRound, ShieldCheck, Wrench } from "lucide-react";
+import { ArrowLeft, ExternalLink, FileSpreadsheet, KeyRound, ShieldCheck, Wrench } from "lucide-react";
+import CustomerExportPanel from "./CustomerExportPanel";
 import RmmAuditsPanel from "./RmmAuditsPanel";
 
 const YOPASS_URL = "https://share.quansatech.at";
@@ -90,6 +91,38 @@ export default function ToolsView() {
     );
   }
 
+  if (activeTool === "exports") {
+    return (
+      <div className="min-h-screen bg-sand-50">
+        <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
+          <div className="flex items-center justify-between gap-3 px-6 py-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sand-900 text-white">
+                <FileSpreadsheet size={18} />
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
+                <h1 className="text-2xl font-display text-sand-900">Export</h1>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTool("home")}
+              className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+            >
+              <ArrowLeft size={14} />
+              Zurueck zu Tools
+            </button>
+          </div>
+        </header>
+
+        <main className="px-6 py-8">
+          <CustomerExportPanel />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
@@ -105,6 +138,29 @@ export default function ToolsView() {
       </header>
 
       <main className="mx-auto max-w-6xl space-y-5 px-6 py-8">
+        <section className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+          <button
+            type="button"
+            onClick={() => setActiveTool("exports")}
+            className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left hover:bg-sand-50"
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-sand-900 text-white">
+                <FileSpreadsheet size={16} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Export</p>
+                <p className="mt-1 text-sm text-sand-700">
+                  Kundenlisten fuer Excel mit Status-, Newsletter-, Kontakt- und Vertragsfiltern exportieren.
+                </p>
+              </div>
+            </div>
+            <span className="shrink-0 rounded-full border border-sand-900 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white">
+              Oeffnen
+            </span>
+          </button>
+        </section>
+
         <section className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
           <button
             type="button"

@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from urllib.parse import quote
 
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -542,6 +543,149 @@ def _imap_fetch_message_bytes(connection: imaplib.IMAP4, uid: str) -> bytes:
     raise RuntimeError(f"Keine Nachrichtendaten fuer UID {uid}")
 
 
+def _graph_access_token(mailbox: Dict[str, Any]) -> str:
+    tenant_id = str(mailbox.get("graph_tenant_id") or "").strip()
+    client_id = str(mailbox.get("graph_client_id") or "").strip()
+    client_secret = str(mailbox.get("graph_client_secret") or "").strip()
+    if not tenant_id or not client_id or not client_secret:
+        raise RuntimeError("Microsoft 365 OAuth Konfiguration unvollstaendig")
+    response = requests.post(
+        f"https://login.microsoftonline.com/{quote(tenant_id)}/oauth2/v2.0/token",
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": "https://graph.microsoft.com/.default",
+            "grant_type": "client_credentials",
+        },
+        timeout=EMAIL_IMAP_TIMEOUT_SECONDS,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Graph Token fehlgeschlagen ({response.status_code}): {response.text[:300]}")
+    token = str(response.json().get("access_token") or "").strip()
+    if not token:
+        raise RuntimeError("Graph Token Antwort ohne access_token")
+    return token
+
+
+def _graph_mailbox_upn(mailbox: Dict[str, Any]) -> str:
+    return str(
+        mailbox.get("graph_mailbox_upn")
+        or mailbox.get("email")
+        or mailbox.get("mailbox_email")
+        or mailbox.get("username")
+        or ""
+    ).strip()
+
+
+def _graph_address(value: Any) -> Dict[str, str]:
+    email_address = value.get("emailAddress") if isinstance(value, dict) else {}
+    if not isinstance(email_address, dict):
+        email_address = {}
+    email_value = _normalize_email_address(email_address.get("address"))
+    name_value = _decode_mime_header(email_address.get("name")) if email_address.get("name") else ""
+    return {"name": name_value, "email": email_value}
+
+
+def _graph_addresses(values: Any) -> List[Dict[str, str]]:
+    raw_values = values if isinstance(values, list) else []
+    addresses: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    for item in raw_values:
+        parsed = _graph_address(item)
+        email_value = parsed.get("email")
+        if not email_value or email_value in seen:
+            continue
+        seen.add(email_value)
+        addresses.append(parsed)
+    return addresses
+
+
+def _graph_timestamp_ms(message: Dict[str, Any]) -> int:
+    raw_value = str(message.get("receivedDateTime") or message.get("sentDateTime") or "").strip()
+    if not raw_value:
+        return 0
+    try:
+        parsed = datetime.datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        return int(parsed.timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def _build_graph_message_entry(
+    mailbox: Dict[str, Any],
+    message: Dict[str, Any],
+    *,
+    own_addresses: Set[str],
+) -> Dict[str, Any]:
+    from_addresses = [_graph_address(message.get("from") or {})]
+    from_addresses = [item for item in from_addresses if item.get("email")]
+    to_addresses = _graph_addresses(message.get("toRecipients"))
+    cc_addresses = _graph_addresses(message.get("ccRecipients"))
+    reply_to_addresses = _graph_addresses(message.get("replyTo"))
+    address_pool = from_addresses + to_addresses + cc_addresses + reply_to_addresses
+    external_addresses = []
+    seen_external: Set[str] = set()
+    for item in address_pool:
+        email_value = _normalize_email_address(item.get("email"))
+        if not email_value or email_value in own_addresses or email_value in seen_external:
+            continue
+        seen_external.add(email_value)
+        external_addresses.append(email_value)
+    sender_addresses = {_normalize_email_address(item.get("email")) for item in from_addresses if item.get("email")}
+    body_preview = _normalize_space(message.get("bodyPreview") or "")
+    if not body_preview:
+        body = message.get("body") if isinstance(message.get("body"), dict) else {}
+        body_preview = _normalize_space(_strip_html_tags(body.get("content") or ""))
+    message_id = _normalize_space(message.get("internetMessageId") or "")
+    uid = str(message.get("id") or "")
+    timestamp_ms = _graph_timestamp_ms(message)
+    return {
+        "id": message_id or uid or f"{mailbox.get('id') or 'mailbox'}:{timestamp_ms}",
+        "uid": uid,
+        "messageId": message_id,
+        "mailboxId": str(mailbox.get("id") or "").strip(),
+        "mailboxName": str(mailbox.get("name") or mailbox.get("email") or mailbox.get("graph_mailbox_upn") or "").strip(),
+        "mailbox": str(mailbox.get("folder") or "INBOX").strip() or "INBOX",
+        "subject": _decode_mime_header(message.get("subject")) or "(ohne Betreff)",
+        "from": _format_email_addresses(from_addresses),
+        "fromEmail": from_addresses[0]["email"] if from_addresses else "",
+        "to": _format_email_addresses(to_addresses),
+        "toEmail": to_addresses[0]["email"] if to_addresses else "",
+        "cc": _format_email_addresses(cc_addresses),
+        "snippet": _truncate_text(body_preview, EMAIL_SNIPPET_MAX_CHARS),
+        "timestamp": int(timestamp_ms or 0),
+        "direction": "outgoing" if sender_addresses & own_addresses else "incoming",
+        "externalAddresses": external_addresses,
+    }
+
+
+def _fetch_graph_mailbox_messages(mailbox: Dict[str, Any], own_addresses: Set[str]) -> List[Dict[str, Any]]:
+    mailbox_upn = _graph_mailbox_upn(mailbox)
+    if not mailbox_upn:
+        raise RuntimeError("Microsoft 365 Mailbox fehlt")
+    folder = str(mailbox.get("folder") or "INBOX").strip() or "INBOX"
+    folder_id = "inbox" if folder.upper() == "INBOX" else folder
+    headers = {"Authorization": f"Bearer {_graph_access_token(mailbox)}"}
+    response = requests.get(
+        f"https://graph.microsoft.com/v1.0/users/{quote(mailbox_upn)}/mailFolders/{quote(folder_id)}/messages",
+        headers=headers,
+        params={
+            "$top": EMAIL_MAX_MESSAGES_PER_MAILBOX,
+            "$orderby": "receivedDateTime desc",
+            "$select": "id,internetMessageId,subject,from,toRecipients,ccRecipients,replyTo,receivedDateTime,sentDateTime,bodyPreview,body",
+        },
+        timeout=EMAIL_IMAP_TIMEOUT_SECONDS,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Graph Nachrichtenabruf fehlgeschlagen ({response.status_code}): {response.text[:500]}")
+    values = response.json().get("value") if isinstance(response.json(), dict) else []
+    return [
+        _build_graph_message_entry(mailbox, message, own_addresses=own_addresses)
+        for message in (values if isinstance(values, list) else [])
+        if isinstance(message, dict)
+    ]
+
+
 def _build_email_message_entry(
     mailbox: Dict[str, Any],
     uid: str,
@@ -591,6 +735,8 @@ def _build_email_message_entry(
 
 
 def _fetch_mailbox_messages(mailbox: Dict[str, Any], own_addresses: Set[str]) -> List[Dict[str, Any]]:
+    if str(mailbox.get("provider") or "smtp_imap").strip().lower() == "microsoft_graph":
+        return _fetch_graph_mailbox_messages(mailbox, own_addresses)
     connection: Optional[imaplib.IMAP4] = None
     try:
         connection = _imap_connect_read_only(mailbox)
@@ -692,7 +838,7 @@ def _enrich_payload_with_emails(raw: Dict[str, Any], meta_hub_config: Dict[str, 
     ]
     own_addresses: Set[str] = set()
     for mailbox in active_mailboxes:
-        for value in (mailbox.get("email"), mailbox.get("username")):
+        for value in (mailbox.get("email"), mailbox.get("username"), mailbox.get("graph_mailbox_upn")):
             normalized = _normalize_email_address(value)
             if normalized:
                 own_addresses.add(normalized)

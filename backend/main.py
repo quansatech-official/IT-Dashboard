@@ -78,6 +78,43 @@ OLLAMA_MAX_TOKENS_HARD_LIMIT = max(
     64,
     int(os.environ.get("OLLAMA_MAX_TOKENS_HARD_LIMIT") or "320"),
 )
+
+MAIL_PROVIDER_SMTP_IMAP = "smtp_imap"
+MAIL_PROVIDER_GRAPH = "microsoft_graph"
+MAIL_PROVIDERS = {MAIL_PROVIDER_SMTP_IMAP, MAIL_PROVIDER_GRAPH}
+MAIL_FUNCTIONS = [
+    {
+        "key": "newsletter_send",
+        "label": "Newsletterversand",
+        "capability": "send",
+        "default_account_name": "Standard SMTP",
+    },
+    {
+        "key": "customer_report_send",
+        "label": "Kundenbericht Versand",
+        "capability": "send",
+        "default_account_name": "Standard SMTP",
+    },
+    {
+        "key": "offer_send",
+        "label": "Angebot Versand",
+        "capability": "send",
+        "default_account_name": "Standard SMTP",
+    },
+    {
+        "key": "offer_confirmation_send",
+        "label": "Auftragsbestätigung Versand",
+        "capability": "send",
+        "default_account_name": "Standard SMTP",
+    },
+    {
+        "key": "meta_hub_email_sync",
+        "label": "Meta-Hub E-Mail Sync",
+        "capability": "read",
+        "default_account_name": "Meta-Hub Postfach",
+    },
+]
+MAIL_FUNCTION_BY_KEY = {item["key"]: item for item in MAIL_FUNCTIONS}
 OPENAI_COMPATIBLE_PROMPT_MAX_CHARS = max(
     0,
     int(os.environ.get("OPENAI_COMPATIBLE_PROMPT_MAX_CHARS") or "0"),
@@ -798,6 +835,49 @@ class SmtpSettings(Base):
     signature_html = Column(String, default="")
 
 
+class MailAccount(Base):
+    __tablename__ = "mail_accounts"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, default="")
+    provider = Column(String, default="smtp_imap")
+    enabled = Column(Boolean, default=True)
+    sender_name = Column(String, default="")
+    sender_email = Column(String, default="")
+    mailbox_email = Column(String, default="")
+    signature_html = Column(Text, default="")
+    smtp_host = Column(String, default="")
+    smtp_port = Column(Integer, default=587)
+    smtp_username = Column(String, default="")
+    smtp_password = Column(String, default="")
+    smtp_use_tls = Column(Boolean, default=True)
+    smtp_use_ssl = Column(Boolean, default=False)
+    imap_host = Column(String, default="")
+    imap_port = Column(Integer, default=993)
+    imap_username = Column(String, default="")
+    imap_password = Column(String, default="")
+    imap_folder = Column(String, default="INBOX")
+    imap_use_tls = Column(Boolean, default=True)
+    imap_use_ssl = Column(Boolean, default=True)
+    graph_tenant_id = Column(String, default="")
+    graph_client_id = Column(String, default="")
+    graph_client_secret = Column(String, default="")
+    graph_mailbox_upn = Column(String, default="")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
+class MailRoute(Base):
+    __tablename__ = "mail_routes"
+
+    id = Column(Integer, primary_key=True)
+    function_key = Column(String, unique=True, index=True, nullable=False)
+    account_id = Column(String, ForeignKey("mail_accounts.id"), nullable=True)
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+    account = relationship("MailAccount")
+
+
 class OfferSettings(Base):
     __tablename__ = "offer_settings"
 
@@ -1342,6 +1422,105 @@ def _ensure_smtp_settings_columns() -> None:
 
 
 _run_db_startup_step("ensure_smtp_settings_columns", _ensure_smtp_settings_columns)
+
+
+def _ensure_mail_accounts_seed() -> None:
+    with SessionLocal() as db:
+        now_ms = int(time.time() * 1000)
+        smtp_settings = db.query(SmtpSettings).first()
+        default_send_account = db.query(MailAccount).filter(MailAccount.id == "legacy_smtp_default").first()
+        if smtp_settings and not default_send_account and (
+            smtp_settings.host
+            or smtp_settings.sender_email
+            or smtp_settings.username
+            or smtp_settings.signature_html
+        ):
+            default_send_account = MailAccount(
+                id="legacy_smtp_default",
+                name="Standard SMTP",
+                provider=MAIL_PROVIDER_SMTP_IMAP,
+                enabled=True,
+                sender_name=smtp_settings.sender_name or "",
+                sender_email=smtp_settings.sender_email or "",
+                mailbox_email=smtp_settings.sender_email or smtp_settings.username or "",
+                signature_html=smtp_settings.signature_html or "",
+                smtp_host=smtp_settings.host or "",
+                smtp_port=int(smtp_settings.port or 587),
+                smtp_username=smtp_settings.username or "",
+                smtp_password=smtp_settings.password or "",
+                smtp_use_tls=bool(smtp_settings.use_tls),
+                smtp_use_ssl=bool(smtp_settings.use_ssl),
+                created_at=now_ms,
+                updated_at=now_ms,
+            )
+            db.add(default_send_account)
+
+        integration_settings = db.query(IntegrationSettings).first()
+        raw_mailboxes = []
+        if integration_settings and integration_settings.meta_hub_mailboxes_json:
+            try:
+                parsed = json.loads(integration_settings.meta_hub_mailboxes_json)
+                raw_mailboxes = parsed if isinstance(parsed, list) else []
+            except Exception:
+                raw_mailboxes = []
+        for index, mailbox in enumerate(raw_mailboxes):
+            if not isinstance(mailbox, dict):
+                continue
+            account_id = f"legacy_meta_hub_{str(mailbox.get('id') or index).strip() or index}"
+            if db.query(MailAccount).filter(MailAccount.id == account_id).first():
+                continue
+            use_ssl = bool(mailbox.get("use_ssl", False))
+            try:
+                imap_port = int(mailbox.get("port") or 993)
+            except Exception:
+                imap_port = 993
+            db.add(
+                MailAccount(
+                    id=account_id,
+                    name=str(mailbox.get("name") or mailbox.get("email") or mailbox.get("host") or "Meta-Hub Postfach"),
+                    provider=MAIL_PROVIDER_SMTP_IMAP,
+                    enabled=bool(mailbox.get("enabled", True)),
+                    sender_email=str(mailbox.get("email") or ""),
+                    mailbox_email=str(mailbox.get("email") or mailbox.get("username") or ""),
+                    imap_host=str(mailbox.get("host") or ""),
+                    imap_port=max(1, min(imap_port, 65535)),
+                    imap_username=str(mailbox.get("username") or ""),
+                    imap_password=str(mailbox.get("password") or ""),
+                    imap_folder=str(mailbox.get("folder") or "INBOX") or "INBOX",
+                    imap_use_tls=bool(mailbox.get("use_tls", not use_ssl)),
+                    imap_use_ssl=use_ssl,
+                    created_at=now_ms,
+                    updated_at=now_ms,
+                )
+            )
+
+        db.flush()
+        send_account = (
+            db.query(MailAccount)
+            .filter(MailAccount.provider == MAIL_PROVIDER_SMTP_IMAP, MailAccount.smtp_host != "")
+            .first()
+        )
+        read_account = (
+            db.query(MailAccount)
+            .filter(MailAccount.provider == MAIL_PROVIDER_SMTP_IMAP, MailAccount.imap_host != "")
+            .first()
+        )
+        for function in MAIL_FUNCTIONS:
+            existing_route = db.query(MailRoute).filter(MailRoute.function_key == function["key"]).first()
+            if existing_route:
+                continue
+            account = send_account if function["capability"] == "send" else read_account
+            db.add(
+                MailRoute(
+                    function_key=function["key"],
+                    account_id=account.id if account else None,
+                    updated_at=now_ms,
+                )
+            )
+        db.commit()
+
+
+_run_db_startup_step("ensure_mail_accounts_seed", _ensure_mail_accounts_seed)
 
 
 def _ensure_customer_columns() -> None:
@@ -2179,6 +2358,44 @@ class SmtpSettingsUpdate(BaseModel):
     signature_html: Optional[str] = None
 
 
+class MailAccountUpdate(BaseModel):
+    name: Optional[str] = None
+    provider: Optional[str] = None
+    enabled: Optional[bool] = None
+    sender_name: Optional[str] = None
+    sender_email: Optional[str] = None
+    mailbox_email: Optional[str] = None
+    signature_html: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: Optional[int] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_use_tls: Optional[bool] = None
+    smtp_use_ssl: Optional[bool] = None
+    imap_host: Optional[str] = None
+    imap_port: Optional[int] = None
+    imap_username: Optional[str] = None
+    imap_password: Optional[str] = None
+    imap_folder: Optional[str] = None
+    imap_use_tls: Optional[bool] = None
+    imap_use_ssl: Optional[bool] = None
+    graph_tenant_id: Optional[str] = None
+    graph_client_id: Optional[str] = None
+    graph_client_secret: Optional[str] = None
+    graph_mailbox_upn: Optional[str] = None
+
+
+class MailRoutesUpdate(BaseModel):
+    routes: Dict[str, Optional[str]]
+
+
+class MailSendTestRequest(BaseModel):
+    to: str
+    subject: Optional[str] = None
+    text: Optional[str] = None
+    html: Optional[str] = None
+
+
 class MetaHubMailboxTestRequest(BaseModel):
     mailbox: Optional[Dict[str, Any]] = None
 
@@ -2357,13 +2574,13 @@ class ReportSendRequest(BaseModel):
     subject: Optional[str] = None
     html: str
     text: Optional[str] = None
+    attachments: Optional[List["EmailAttachment"]] = None
 
 
 class RmmAuditCleanupRequest(BaseModel):
     scope: str = "all"
     customer: Optional[str] = None
     topic: Optional[str] = None
-    attachments: Optional[List["EmailAttachment"]] = None
 
 
 class ReportPdfRequest(BaseModel):
@@ -2380,6 +2597,7 @@ class EmailAttachment(BaseModel):
 
 class OfferSendRequest(BaseModel):
     offer_id: Optional[int] = None
+    mail_function: Optional[str] = None
     to: str
     subject: Optional[str] = None
     html: str
@@ -2469,6 +2687,218 @@ def _build_smtp_message(
     msg.add_alternative(str(html_body or ""), subtype="html")
     _attach_email_attachments(msg, attachments)
     return msg
+
+
+def _mail_account_sender_email(account: MailAccount) -> str:
+    return str(account.sender_email or account.mailbox_email or account.smtp_username or account.graph_mailbox_upn or "").strip()
+
+
+def _send_mail_with_account(
+    account: MailAccount,
+    *,
+    to: Any,
+    subject: Any,
+    text_body: Any = "",
+    html_body: Any = "",
+    attachments: Optional[List["EmailAttachment"]] = None,
+) -> None:
+    provider = _normalize_mail_provider(account.provider)
+    if provider == MAIL_PROVIDER_GRAPH:
+        _send_mail_via_graph(
+            account,
+            to=to,
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+            attachments=attachments,
+        )
+        return
+    _send_mail_via_smtp(
+        account,
+        to=to,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+        attachments=attachments,
+    )
+
+
+def _send_mail_via_smtp(
+    account: MailAccount,
+    *,
+    to: Any,
+    subject: Any,
+    text_body: Any = "",
+    html_body: Any = "",
+    attachments: Optional[List["EmailAttachment"]] = None,
+) -> None:
+    import smtplib
+
+    sender_email = _mail_account_sender_email(account)
+    if not account.smtp_host or not sender_email:
+        raise RuntimeError("SMTP Mailkonto unvollstaendig")
+    msg = _build_smtp_message(
+        sender_email=sender_email,
+        sender_name=account.sender_name,
+        to=to,
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+        attachments=attachments,
+    )
+    if account.smtp_use_ssl:
+        server = smtplib.SMTP_SSL(account.smtp_host, account.smtp_port or 465, timeout=20)
+    else:
+        server = smtplib.SMTP(account.smtp_host, account.smtp_port or 587, timeout=20)
+    try:
+        if account.smtp_use_tls and not account.smtp_use_ssl:
+            server.starttls()
+        if account.smtp_username:
+            server.login(account.smtp_username, account.smtp_password or "")
+        server.send_message(msg, from_addr=sender_email)
+    finally:
+        server.quit()
+
+
+def _graph_mailbox(account: MailAccount) -> str:
+    return str(account.graph_mailbox_upn or account.mailbox_email or account.sender_email or "").strip()
+
+
+def _graph_access_token(account: MailAccount) -> str:
+    tenant_id = str(account.graph_tenant_id or "").strip()
+    client_id = str(account.graph_client_id or "").strip()
+    client_secret = str(account.graph_client_secret or "").strip()
+    if not tenant_id or not client_id or not client_secret:
+        raise RuntimeError("Microsoft 365 OAuth Konfiguration unvollstaendig")
+    response = requests.post(
+        f"https://login.microsoftonline.com/{quote(tenant_id)}/oauth2/v2.0/token",
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": "https://graph.microsoft.com/.default",
+            "grant_type": "client_credentials",
+        },
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Graph Token fehlgeschlagen ({response.status_code}): {response.text[:300]}")
+    payload = response.json()
+    token = str(payload.get("access_token") or "").strip()
+    if not token:
+        raise RuntimeError("Graph Token Antwort ohne access_token")
+    return token
+
+
+def _graph_headers(account: MailAccount) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {_graph_access_token(account)}",
+        "Content-Type": "application/json",
+    }
+
+
+def _graph_attachment_payload(attachments: Optional[List["EmailAttachment"]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for attachment in attachments or []:
+        content_bytes = str(attachment.content_base64 or "").strip()
+        if not content_bytes:
+            continue
+        item = {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "name": attachment.filename or "attachment",
+            "contentType": attachment.content_type or "application/octet-stream",
+            "contentBytes": content_bytes,
+        }
+        content_id = str(attachment.content_id or "").strip().strip("<>")
+        if attachment.inline and content_id:
+            item["isInline"] = True
+            item["contentId"] = content_id
+        out.append(item)
+    return out
+
+
+def _send_mail_via_graph(
+    account: MailAccount,
+    *,
+    to: Any,
+    subject: Any,
+    text_body: Any = "",
+    html_body: Any = "",
+    attachments: Optional[List["EmailAttachment"]] = None,
+) -> None:
+    mailbox = _graph_mailbox(account)
+    if not mailbox:
+        raise RuntimeError("Microsoft 365 Mailbox fehlt")
+    recipients = _normalize_newsletter_email_list([to] if isinstance(to, str) else to)
+    if not recipients:
+        raise RuntimeError("Keine Empfaenger angegeben")
+    message: Dict[str, Any] = {
+        "subject": str(subject or "").strip(),
+        "body": {
+            "contentType": "HTML" if str(html_body or "").strip() else "Text",
+            "content": str(html_body or text_body or ""),
+        },
+        "toRecipients": [{"emailAddress": {"address": recipient}} for recipient in recipients],
+    }
+    graph_attachments = _graph_attachment_payload(attachments)
+    if graph_attachments:
+        message["attachments"] = graph_attachments
+    response = requests.post(
+        f"https://graph.microsoft.com/v1.0/users/{quote(mailbox)}/sendMail",
+        headers=_graph_headers(account),
+        json={"message": message, "saveToSentItems": True},
+        timeout=30,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Graph sendMail fehlgeschlagen ({response.status_code}): {response.text[:500]}")
+
+
+def _connect_imap_with_account(account: MailAccount):
+    host = str(account.imap_host or "").strip()
+    username = str(account.imap_username or "").strip()
+    password = str(account.imap_password or "")
+    folder = str(account.imap_folder or "INBOX").strip() or "INBOX"
+    if not host or not username or not password:
+        raise RuntimeError("IMAP Mailkonto unvollstaendig")
+    if account.imap_use_ssl:
+        connection = imaplib.IMAP4_SSL(host, account.imap_port or 993, timeout=META_HUB_MAILBOX_TEST_TIMEOUT_SECONDS)
+    else:
+        connection = imaplib.IMAP4(host, account.imap_port or 993, timeout=META_HUB_MAILBOX_TEST_TIMEOUT_SECONDS)
+        if account.imap_use_tls:
+            connection.starttls(ssl_context=ssl.create_default_context())
+    connection.login(username, password)
+    status, _ = connection.select(folder, readonly=True)
+    if status != "OK":
+        try:
+            connection.logout()
+        except Exception:
+            pass
+        raise RuntimeError(f"Read-only select fuer {folder} fehlgeschlagen")
+    return connection
+
+
+def _test_mail_account_read(account: MailAccount) -> Dict[str, Any]:
+    provider = _normalize_mail_provider(account.provider)
+    if provider == MAIL_PROVIDER_GRAPH:
+        mailbox = _graph_mailbox(account)
+        if not mailbox:
+            raise RuntimeError("Microsoft 365 Mailbox fehlt")
+        folder = str(account.imap_folder or "inbox").strip() or "inbox"
+        folder_id = "inbox" if folder.upper() == "INBOX" else folder
+        response = requests.get(
+            f"https://graph.microsoft.com/v1.0/users/{quote(mailbox)}/mailFolders/{quote(folder_id)}/messages",
+            headers=_graph_headers(account),
+            params={"$top": 1, "$select": "id,subject,receivedDateTime"},
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Graph Mailbox-Test fehlgeschlagen ({response.status_code}): {response.text[:500]}")
+        return {"ok": True, "provider": provider, "message": "Microsoft 365 Mailbox lesbar."}
+    connection = _connect_imap_with_account(account)
+    try:
+        connection.logout()
+    except Exception:
+        pass
+    return {"ok": True, "provider": provider, "message": "IMAP Verbindung und Ordnerzugriff erfolgreich."}
 
 
 class OfferSaveRequest(BaseModel):
@@ -9600,6 +10030,140 @@ def _get_smtp_settings(db) -> SmtpSettings:
         db.commit()
         db.refresh(settings)
     return settings
+
+
+def _normalize_mail_provider(value: Any) -> str:
+    provider = str(value or MAIL_PROVIDER_SMTP_IMAP).strip().lower()
+    return provider if provider in MAIL_PROVIDERS else MAIL_PROVIDER_SMTP_IMAP
+
+
+def _normalize_mail_account_name(account: MailAccount) -> str:
+    return (
+        str(account.name or "").strip()
+        or str(account.sender_email or "").strip()
+        or str(account.mailbox_email or "").strip()
+        or str(account.smtp_username or "").strip()
+        or str(account.imap_username or "").strip()
+        or str(account.graph_mailbox_upn or "").strip()
+        or "Mailkonto"
+    )
+
+
+def serialize_mail_account(account: MailAccount) -> Dict[str, Any]:
+    provider = _normalize_mail_provider(account.provider)
+    can_send = bool(
+        provider == MAIL_PROVIDER_GRAPH
+        and account.graph_tenant_id
+        and account.graph_client_id
+        and account.graph_client_secret
+        and (account.graph_mailbox_upn or account.sender_email or account.mailbox_email)
+    ) or bool(
+        provider == MAIL_PROVIDER_SMTP_IMAP
+        and account.smtp_host
+        and (account.sender_email or account.smtp_username)
+    )
+    can_read = bool(
+        provider == MAIL_PROVIDER_GRAPH
+        and account.graph_tenant_id
+        and account.graph_client_id
+        and account.graph_client_secret
+        and (account.graph_mailbox_upn or account.mailbox_email or account.sender_email)
+    ) or bool(
+        provider == MAIL_PROVIDER_SMTP_IMAP
+        and account.imap_host
+        and account.imap_username
+        and account.imap_password
+    )
+    return {
+        "id": account.id,
+        "name": _normalize_mail_account_name(account),
+        "provider": provider,
+        "enabled": bool(account.enabled),
+        "sender_name": account.sender_name or "",
+        "sender_email": account.sender_email or "",
+        "mailbox_email": account.mailbox_email or "",
+        "signature_html": account.signature_html or "",
+        "smtp_host": account.smtp_host or "",
+        "smtp_port": int(account.smtp_port or 587),
+        "smtp_username": account.smtp_username or "",
+        "smtp_password": "",
+        "smtp_use_tls": bool(account.smtp_use_tls),
+        "smtp_use_ssl": bool(account.smtp_use_ssl),
+        "has_smtp_password": bool(account.smtp_password),
+        "imap_host": account.imap_host or "",
+        "imap_port": int(account.imap_port or 993),
+        "imap_username": account.imap_username or "",
+        "imap_password": "",
+        "imap_folder": account.imap_folder or "INBOX",
+        "imap_use_tls": bool(account.imap_use_tls),
+        "imap_use_ssl": bool(account.imap_use_ssl),
+        "has_imap_password": bool(account.imap_password),
+        "graph_tenant_id": account.graph_tenant_id or "",
+        "graph_client_id": account.graph_client_id or "",
+        "graph_client_secret": "",
+        "graph_mailbox_upn": account.graph_mailbox_upn or "",
+        "has_graph_client_secret": bool(account.graph_client_secret),
+        "can_send": can_send,
+        "can_read": can_read,
+        "created_at": int(account.created_at or 0),
+        "updated_at": int(account.updated_at or 0),
+    }
+
+
+def _mail_routes_snapshot(db) -> Dict[str, Optional[str]]:
+    rows = db.query(MailRoute).all()
+    routes = {row.function_key: row.account_id for row in rows}
+    for function in MAIL_FUNCTIONS:
+        routes.setdefault(function["key"], None)
+    return routes
+
+
+def serialize_mail_settings(db) -> Dict[str, Any]:
+    return {
+        "accounts": [serialize_mail_account(account) for account in db.query(MailAccount).order_by(MailAccount.name).all()],
+        "routes": _mail_routes_snapshot(db),
+        "functions": MAIL_FUNCTIONS,
+    }
+
+
+def _apply_mail_account_update(account: MailAccount, data: MailAccountUpdate) -> MailAccount:
+    incoming = data.dict(exclude_unset=True)
+    for field, value in incoming.items():
+        if field in {"smtp_password", "imap_password", "graph_client_secret"} and value in (None, ""):
+            continue
+        if field == "provider":
+            value = _normalize_mail_provider(value)
+        if field in {"smtp_port", "imap_port"}:
+            try:
+                value = max(1, min(int(value or (587 if field == "smtp_port" else 993)), 65535))
+            except Exception:
+                value = 587 if field == "smtp_port" else 993
+        if isinstance(value, str):
+            value = value.strip()
+        setattr(account, field, value)
+    account.provider = _normalize_mail_provider(account.provider)
+    if not str(account.name or "").strip():
+        account.name = _normalize_mail_account_name(account)
+    account.updated_at = int(time.time() * 1000)
+    return account
+
+
+def _get_mail_account_for_function(db, function_key: str, *, require_send: bool = False, require_read: bool = False) -> MailAccount:
+    function_key = str(function_key or "").strip()
+    if function_key not in MAIL_FUNCTION_BY_KEY:
+        raise HTTPException(400, f"Unknown mail function: {function_key}")
+    route = db.query(MailRoute).filter(MailRoute.function_key == function_key).first()
+    account = route.account if route and route.account_id else None
+    if account is None:
+        account = db.query(MailAccount).filter(MailAccount.enabled.is_(True)).first()
+    if account is None or not account.enabled:
+        raise HTTPException(400, f"Mailkonto fuer {function_key} fehlt")
+    serialized = serialize_mail_account(account)
+    if require_send and not serialized["can_send"]:
+        raise HTTPException(400, f"Mailkonto '{serialized['name']}' kann nicht senden")
+    if require_read and not serialized["can_read"]:
+        raise HTTPException(400, f"Mailkonto '{serialized['name']}' kann nicht lesen")
+    return account
 
 
 def _get_offer_settings(db) -> OfferSettings:
@@ -19070,13 +19634,41 @@ def get_internal_customer_development_rmm_snapshot(request: Request):
             settings = IntegrationSettings()
             db.add(settings)
             db.commit()
-        meta_hub_mailboxes = _parse_meta_hub_mailboxes(settings.meta_hub_mailboxes_json)
+        meta_hub_route = db.query(MailRoute).filter(MailRoute.function_key == "meta_hub_email_sync").first()
+        meta_hub_account = meta_hub_route.account if meta_hub_route and meta_hub_route.account_id else None
+        meta_hub_mailboxes = [] if meta_hub_account else _parse_meta_hub_mailboxes(settings.meta_hub_mailboxes_json)
         mailbox_summaries: List[Dict[str, Any]] = []
+        if meta_hub_account:
+            provider = _normalize_mail_provider(meta_hub_account.provider)
+            mailbox_summaries.append(
+                {
+                    "id": str(meta_hub_account.id or "").strip(),
+                    "name": _normalize_mail_account_name(meta_hub_account),
+                    "provider": provider,
+                    "email": str(meta_hub_account.mailbox_email or meta_hub_account.sender_email or "").strip(),
+                    "host": str(meta_hub_account.imap_host or "").strip(),
+                    "port": int(meta_hub_account.imap_port or 993),
+                    "username": str(meta_hub_account.imap_username or "").strip(),
+                    "password": str(meta_hub_account.imap_password or ""),
+                    "folder": str(meta_hub_account.imap_folder or "INBOX").strip() or "INBOX",
+                    "enabled": bool(meta_hub_account.enabled),
+                    "use_tls": bool(meta_hub_account.imap_use_tls),
+                    "use_ssl": bool(meta_hub_account.imap_use_ssl),
+                    "has_password": bool(str(meta_hub_account.imap_password or "").strip()),
+                    "graph_tenant_id": str(meta_hub_account.graph_tenant_id or "").strip(),
+                    "graph_client_id": str(meta_hub_account.graph_client_id or "").strip(),
+                    "graph_client_secret": str(meta_hub_account.graph_client_secret or ""),
+                    "graph_mailbox_upn": str(meta_hub_account.graph_mailbox_upn or "").strip(),
+                    "has_graph_client_secret": bool(str(meta_hub_account.graph_client_secret or "").strip()),
+                    "read_only": True,
+                }
+            )
         for row in meta_hub_mailboxes:
             mailbox_summaries.append(
                 {
                     "id": str(row.get("id") or "").strip(),
                     "name": str(row.get("name") or "").strip(),
+                    "provider": MAIL_PROVIDER_SMTP_IMAP,
                     "email": str(row.get("email") or "").strip(),
                     "host": str(row.get("host") or "").strip(),
                     "port": int(row.get("port") or 993),
@@ -20831,9 +21423,7 @@ def send_newsletter(newsletter_id: int, data: NewsletterSendRequest):
         newsletter = db.query(Newsletter).get(newsletter_id)
         if not newsletter:
             raise HTTPException(404, "Newsletter not found")
-        settings = _get_smtp_settings(db)
-        if not settings.host or not settings.sender_email:
-            raise HTTPException(400, "SMTP settings missing")
+        account = _get_mail_account_for_function(db, "newsletter_send", require_send=True)
         recipients = _normalize_newsletter_email_list(data.recipient_emails)
         if not recipients:
             recipients = _parse_json_string_list(newsletter.recipient_emails_json)
@@ -20854,37 +21444,23 @@ def send_newsletter(newsletter_id: int, data: NewsletterSendRequest):
         if not subject:
             raise HTTPException(400, "Subject required")
 
-        import smtplib
-
-        if settings.use_ssl:
-            server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
-        else:
-            server = smtplib.SMTP(settings.host, settings.port or 587, timeout=20)
         try:
-            if settings.use_tls and not settings.use_ssl:
-                server.starttls()
-            if settings.username:
-                server.login(settings.username, settings.password or "")
             for recipient in recipients:
-                msg = _build_smtp_message(
-                    sender_email=settings.sender_email,
-                    sender_name=settings.sender_name,
+                _send_mail_with_account(
+                    account,
                     to=recipient,
                     subject=subject,
                     text_body=data.text,
                     html_body=data.html,
                     attachments=data.attachments,
                 )
-                server.send_message(msg, from_addr=str(settings.sender_email or "").strip(), to_addrs=[recipient])
         except Exception as exc:  # noqa: BLE001
-            logger.exception("SMTP newsletter send failed: %s", exc)
-            raise HTTPException(502, f"SMTP send failed: {exc}") from exc
-        finally:
-            server.quit()
+            logger.exception("Newsletter mail send failed: %s", exc)
+            raise HTTPException(502, f"Mail send failed: {exc}") from exc
 
         now_ms = int(time.time() * 1000)
         newsletter.sent_at = now_ms
-        newsletter.sent_via = "smtp"
+        newsletter.sent_via = _normalize_mail_provider(account.provider)
         newsletter.sent_to = json.dumps(recipients)
         newsletter.recipient_emails_json = json.dumps(recipients)
         newsletter.recipient_count = len(recipients)
@@ -20894,9 +21470,123 @@ def send_newsletter(newsletter_id: int, data: NewsletterSendRequest):
         return serialize_newsletter(newsletter)
 
 
+@app.get("/api/mail_settings")
+def get_mail_settings():
+    with SessionLocal() as db:
+        return serialize_mail_settings(db)
+
+
+@app.post("/api/mail_accounts")
+def create_mail_account(data: MailAccountUpdate):
+    with SessionLocal() as db:
+        account = MailAccount(id=str(uuid.uuid4()), created_at=int(time.time() * 1000))
+        _apply_mail_account_update(account, data)
+        db.add(account)
+        db.commit()
+        db.refresh(account)
+        return serialize_mail_account(account)
+
+
+@app.put("/api/mail_accounts/{account_id}")
+def update_mail_account(account_id: str, data: MailAccountUpdate):
+    with SessionLocal() as db:
+        account = db.query(MailAccount).filter(MailAccount.id == account_id).first()
+        if not account:
+            raise HTTPException(404, "Mail account not found")
+        _apply_mail_account_update(account, data)
+        db.commit()
+        db.refresh(account)
+        return serialize_mail_account(account)
+
+
+@app.delete("/api/mail_accounts/{account_id}")
+def delete_mail_account(account_id: str):
+    with SessionLocal() as db:
+        account = db.query(MailAccount).filter(MailAccount.id == account_id).first()
+        if not account:
+            raise HTTPException(404, "Mail account not found")
+        db.query(MailRoute).filter(MailRoute.account_id == account_id).update({"account_id": None})
+        db.delete(account)
+        db.commit()
+        return {"status": "deleted"}
+
+
+@app.put("/api/mail_routes")
+def update_mail_routes(data: MailRoutesUpdate):
+    with SessionLocal() as db:
+        now_ms = int(time.time() * 1000)
+        for function_key, account_id in (data.routes or {}).items():
+            function_key = str(function_key or "").strip()
+            if function_key not in MAIL_FUNCTION_BY_KEY:
+                continue
+            normalized_account_id = str(account_id or "").strip() or None
+            if normalized_account_id and not db.query(MailAccount).filter(MailAccount.id == normalized_account_id).first():
+                raise HTTPException(400, f"Mail account not found: {normalized_account_id}")
+            route = db.query(MailRoute).filter(MailRoute.function_key == function_key).first()
+            if not route:
+                route = MailRoute(function_key=function_key)
+                db.add(route)
+            route.account_id = normalized_account_id
+            route.updated_at = now_ms
+        db.commit()
+        return serialize_mail_settings(db)
+
+
+@app.post("/api/mail_accounts/{account_id}/test_send")
+def test_mail_account_send(account_id: str, data: MailSendTestRequest):
+    with SessionLocal() as db:
+        account = db.query(MailAccount).filter(MailAccount.id == account_id).first()
+        if not account:
+            raise HTTPException(404, "Mail account not found")
+        try:
+            _send_mail_with_account(
+                account,
+                to=data.to,
+                subject=data.subject or "IT-Dashboard Mailkonto Test",
+                text_body=data.text or "Testnachricht aus dem IT-Dashboard.",
+                html_body=data.html or "<p>Testnachricht aus dem IT-Dashboard.</p>",
+            )
+            return {"ok": True, "message": f"{_normalize_mail_account_name(account)}: Versand erfolgreich."}
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(502, f"{_normalize_mail_account_name(account)}: {exc}") from exc
+
+
+@app.post("/api/mail_accounts/{account_id}/test_read")
+def test_mail_account_read(account_id: str):
+    with SessionLocal() as db:
+        account = db.query(MailAccount).filter(MailAccount.id == account_id).first()
+        if not account:
+            raise HTTPException(404, "Mail account not found")
+        try:
+            result = _test_mail_account_read(account)
+            return {
+                **result,
+                "checked_at": int(time.time() * 1000),
+                "message": f"{_normalize_mail_account_name(account)}: {result.get('message') or 'Lesetest erfolgreich.'}",
+            }
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(502, f"{_normalize_mail_account_name(account)}: {exc}") from exc
+
+
 @app.get("/api/smtp_settings")
 def get_smtp_settings():
     with SessionLocal() as db:
+        try:
+            account = _get_mail_account_for_function(db, "offer_send")
+            return {
+                "id": account.id,
+                "host": account.smtp_host or "",
+                "port": account.smtp_port or 587,
+                "username": account.smtp_username or "",
+                "sender_name": account.sender_name or "",
+                "sender_email": _mail_account_sender_email(account),
+                "use_tls": bool(account.smtp_use_tls),
+                "use_ssl": bool(account.smtp_use_ssl),
+                "signature_html": account.signature_html or "",
+                "has_password": bool(account.smtp_password),
+            }
+        except Exception:
+            pass
         settings = _get_smtp_settings(db)
         return serialize_smtp_settings(settings)
 
@@ -20909,6 +21599,28 @@ def update_smtp_settings(data: SmtpSettingsUpdate):
             if field == "password" and (value is None or value == ""):
                 continue
             setattr(settings, field, value)
+        account = db.query(MailAccount).filter(MailAccount.id == "legacy_smtp_default").first()
+        if not account:
+            account = MailAccount(id="legacy_smtp_default", name="Standard SMTP", provider=MAIL_PROVIDER_SMTP_IMAP)
+            db.add(account)
+        account.name = account.name or "Standard SMTP"
+        account.provider = MAIL_PROVIDER_SMTP_IMAP
+        account.enabled = True
+        account.sender_name = settings.sender_name or ""
+        account.sender_email = settings.sender_email or ""
+        account.mailbox_email = settings.sender_email or settings.username or ""
+        account.signature_html = settings.signature_html or ""
+        account.smtp_host = settings.host or ""
+        account.smtp_port = int(settings.port or 587)
+        account.smtp_username = settings.username or ""
+        account.smtp_password = settings.password or ""
+        account.smtp_use_tls = bool(settings.use_tls)
+        account.smtp_use_ssl = bool(settings.use_ssl)
+        account.updated_at = int(time.time() * 1000)
+        for function_key in ("newsletter_send", "customer_report_send", "offer_send", "offer_confirmation_send"):
+            route = db.query(MailRoute).filter(MailRoute.function_key == function_key).first()
+            if not route:
+                db.add(MailRoute(function_key=function_key, account_id=account.id))
         db.commit()
         db.refresh(settings)
         return serialize_smtp_settings(settings)
@@ -22719,43 +23431,26 @@ def send_report(report_id: int, data: ReportSendRequest):
         report = db.query(Report).get(report_id)
         if not report:
             raise HTTPException(404, "Report not found")
-        settings = _get_smtp_settings(db)
-        if not settings.host or not settings.sender_email:
-            raise HTTPException(400, "SMTP settings missing")
+        account = _get_mail_account_for_function(db, "customer_report_send", require_send=True)
         if not report.guid:
             report.guid = str(uuid.uuid4())
         subject = data.subject or f"IT-Kundenbericht – {report.customer} ({report.period or 'ohne Zeitraum'})"
 
-        import smtplib
-
-        msg = _build_smtp_message(
-            sender_email=settings.sender_email,
-            sender_name=settings.sender_name,
-            to=data.to,
-            subject=subject,
-            text_body=data.text,
-            html_body=data.html,
-            attachments=data.attachments,
-        )
-
-        if settings.use_ssl:
-            server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
-        else:
-            server = smtplib.SMTP(settings.host, settings.port or 587, timeout=20)
         try:
-            if settings.use_tls and not settings.use_ssl:
-                server.starttls()
-            if settings.username:
-                server.login(settings.username, settings.password or "")
-            server.send_message(msg, from_addr=str(settings.sender_email or "").strip())
+            _send_mail_with_account(
+                account,
+                to=data.to,
+                subject=subject,
+                text_body=data.text,
+                html_body=data.html,
+                attachments=data.attachments,
+            )
         except Exception as exc:  # noqa: BLE001
-            logger.exception("SMTP report send failed: %s", exc)
-            raise HTTPException(502, f"SMTP send failed: {exc}") from exc
-        finally:
-            server.quit()
+            logger.exception("Report mail send failed: %s", exc)
+            raise HTTPException(502, f"Mail send failed: {exc}") from exc
 
         report.sent_at = int(time.time() * 1000)
-        report.sent_via = "smtp"
+        report.sent_via = _normalize_mail_provider(account.provider)
         report.sent_to = data.to
         db.commit()
         db.refresh(report)
@@ -22783,45 +23478,34 @@ def build_report_pdf(payload: ReportPdfRequest):
 @app.post("/api/offers/send")
 def send_offer(data: OfferSendRequest):
     with SessionLocal() as db:
-        settings = _get_smtp_settings(db)
-        if not settings.host or not settings.sender_email:
-            raise HTTPException(400, "SMTP settings missing")
+        route_key = str(data.mail_function or "offer_send").strip()
+        if route_key not in {"offer_send", "offer_confirmation_send"}:
+            route_key = "offer_send"
+        account = _get_mail_account_for_function(db, route_key, require_send=True)
         logger.info("offer_send start offer_id=%s to=%s", data.offer_id, data.to)
 
         subject = data.subject or "Angebot"
         html = data.html or ""
 
-        import smtplib
-
-        msg = _build_smtp_message(
-            sender_email=settings.sender_email,
-            sender_name=settings.sender_name,
-            to=data.to,
-            subject=subject,
-            text_body=data.text,
-            html_body=html,
-            attachments=data.attachments,
-        )
-
-        if settings.use_ssl:
-            server = smtplib.SMTP_SSL(settings.host, settings.port or 465, timeout=20)
-        else:
-            server = smtplib.SMTP(settings.host, settings.port or 587, timeout=20)
         try:
-            if settings.use_tls and not settings.use_ssl:
-                server.starttls()
-            if settings.username:
-                server.login(settings.username, settings.password or "")
-            server.send_message(msg, from_addr=str(settings.sender_email or "").strip())
-        finally:
-            server.quit()
+            _send_mail_with_account(
+                account,
+                to=data.to,
+                subject=subject,
+                text_body=data.text,
+                html_body=html,
+                attachments=data.attachments,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Offer mail send failed: %s", exc)
+            raise HTTPException(502, f"Mail send failed: {exc}") from exc
 
         sent_at = int(time.time() * 1000)
         if data.offer_id:
             offer = db.query(Offer).get(data.offer_id)
             if offer:
                 offer.sent_at = sent_at
-                offer.sent_via = "smtp"
+                offer.sent_via = _normalize_mail_provider(account.provider)
                 offer.sent_to = data.to
                 offer.updated_at = sent_at
                 db.commit()
