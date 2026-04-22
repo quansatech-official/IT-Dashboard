@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import EmailComposerModal from "../components/EmailComposerModal";
 import NotesRichTextEditor from "../components/NotesRichTextEditor";
+import { sanitizeHtml } from "../utils/sanitizeHtml";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
@@ -1457,7 +1458,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               ? formatUnitQuantity(item.quantity, item.unit)
               : formatPieceQuantity(item.quantity)}
           </div>
-          <div className="text-[9px] uppercase tracking-[0.18em] text-sand-300">
+          <div className="text-[11px] uppercase tracking-[0.15em] font-medium text-sand-400">
             {formatBillingCycleLabel(item.billingCycle)}
           </div>
         </div>
@@ -1652,7 +1653,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       return;
     }
     const source = document.createElement("div");
-    source.innerHTML = detailHtml;
+    source.innerHTML = sanitizeHtml(detailHtml);
     const nodes = Array.from(source.childNodes);
     const pages = [];
     const getSplitDescriptor = (node) => {
@@ -2076,7 +2077,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                   </div>
                                   <div className="text-right">
                                     <div>{formatUnitQuantity(item.quantity, item.unit)}</div>
-                                    <div className="text-[9px] uppercase tracking-[0.18em] text-sand-300">
+                                    <div className="text-[11px] uppercase tracking-[0.15em] font-medium text-sand-400">
                                       {formatBillingCycleLabel(item.billingCycle)}
                                     </div>
                                   </div>
@@ -2134,7 +2135,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                                   </div>
                                   <div className="text-right">
                                     <div>{formatPieceQuantity(item.quantity)}</div>
-                                    <div className="text-[9px] uppercase tracking-[0.18em] text-sand-300">
+                                    <div className="text-[11px] uppercase tracking-[0.15em] font-medium text-sand-400">
                                       {formatBillingCycleLabel(item.billingCycle)}
                                     </div>
                                   </div>
@@ -2393,7 +2394,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                     </p>
                     <div
                       className="offer-detail-html mt-2 text-sm text-sand-700"
-                      dangerouslySetInnerHTML={{ __html: pageHtml }}
+                      dangerouslySetInnerHTML={{ __html: sanitizeHtml(pageHtml) }}
                     />
                   </div>
                 </div>
@@ -2706,7 +2707,7 @@ function HandoverModal({
                         </div>
                         <div className="text-right">
                           {item.optional ? (
-                            <span className="mb-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-amber-600">
+                            <span className="mb-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-600">
                               Optional
                             </span>
                           ) : null}
@@ -2750,7 +2751,7 @@ function HandoverModal({
                         </div>
                         <div className="text-right">
                           {item.optional ? (
-                            <span className="mb-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-amber-600">
+                            <span className="mb-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-600">
                               Optional
                             </span>
                           ) : null}
@@ -6069,12 +6070,12 @@ export default function OffersView() {
       ) : null}
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-2">
-          <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
+          <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)] shadow-soft">
             <Receipt size={18} />
           </div>
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-            <h1 className="text-2xl font-semibold tracking-tight text-sand-900">Angebote</h1>
+            <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+            <h1 className="text-xl font-display text-sand-900">Angebote</h1>
           </div>
         </div>
       </header>
@@ -6198,7 +6199,7 @@ export default function OffersView() {
                             Laufend {formatMoney(costTotals.monthly)} / {formatMoney(costTotals.yearly)}
                           </span>
                           <div className="flex flex-wrap items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-1">
-                            <span className="text-[9px] uppercase tracking-[0.3em] text-sand-400">
+                            <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-400">
                               Interne Kennzahlen
                             </span>
                             <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
@@ -7905,7 +7906,7 @@ export default function OffersView() {
               <button
                 type="button"
                 onClick={addServiceBlock}
-                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[9px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
               >
                 <Plus size={12} /> Neu
               </button>
@@ -7936,7 +7937,7 @@ export default function OffersView() {
                         <button
                           type="button"
                           onClick={() => toggleBlockOpen(key)}
-                          className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[9px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                          className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                         >
                           {isOpen ? "Schließen" : "Bearbeiten"}
                         </button>
@@ -8174,7 +8175,7 @@ export default function OffersView() {
               <button
                 type="button"
                 onClick={addDeviceBlock}
-                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[9px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
               >
                 <Plus size={12} /> Neu
               </button>
@@ -8204,7 +8205,7 @@ export default function OffersView() {
                         <button
                           type="button"
                           onClick={() => toggleBlockOpen(key)}
-                          className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[9px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                          className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                         >
                           {isOpen ? "Schließen" : "Bearbeiten"}
                         </button>
@@ -8497,7 +8498,7 @@ export default function OffersView() {
               <button
                 type="button"
                 onClick={addCalcBlock}
-                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[9px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
               >
                 <Plus size={12} /> Neu
               </button>
@@ -8524,7 +8525,7 @@ export default function OffersView() {
                         <button
                           type="button"
                           onClick={() => toggleBlockOpen(key)}
-                          className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[9px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                          className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
                         >
                           {isOpen ? "Schließen" : "Bearbeiten"}
                         </button>

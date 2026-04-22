@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { X } from "lucide-react";
+import { sanitizeHtml } from "../utils/sanitizeHtml";
 
 const inputClass =
   "w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200";
@@ -35,7 +36,7 @@ export default function EmailComposerModal({
   const signatureBlock = previewSignatureHtml
     ? `<div style="margin-top:16px;border-top:1px solid #e5e7eb;padding-top:12px;">${previewSignatureHtml}</div>`
     : "";
-  const previewHtml = `${body || ""}${signatureBlock}`;
+  const previewHtml = sanitizeHtml(`${body || ""}${signatureBlock}`);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
       <div className="relative w-full max-w-lg overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">

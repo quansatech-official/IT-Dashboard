@@ -78,12 +78,12 @@ export default function ToolsView() {
         <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
           <div className="flex items-center justify-between gap-3 px-6 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sand-900 text-white">
+              <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
                 <KeyRound size={18} />
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-                <h1 className="text-2xl font-display text-sand-900">YoPass</h1>
+                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+                <h1 className="text-xl font-display text-sand-900">YoPass</h1>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -128,12 +128,12 @@ export default function ToolsView() {
         <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
           <div className="flex items-center justify-between gap-3 px-6 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sand-900 text-white">
+              <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
                 <ShieldCheck size={18} />
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-                <h1 className="text-2xl font-display text-sand-900">RMM Audits</h1>
+                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+                <h1 className="text-xl font-display text-sand-900">RMM Audits</h1>
               </div>
             </div>
             <button
@@ -160,12 +160,12 @@ export default function ToolsView() {
         <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
           <div className="flex items-center justify-between gap-3 px-6 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sand-900 text-white">
+              <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
                 <FileSpreadsheet size={18} />
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-                <h1 className="text-2xl font-display text-sand-900">Export</h1>
+                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+                <h1 className="text-xl font-display text-sand-900">Export</h1>
               </div>
             </div>
             <button
@@ -192,12 +192,12 @@ export default function ToolsView() {
         <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
           <div className="flex items-center justify-between gap-3 px-6 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sand-900 text-white">
+              <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
                 <MonitorDown size={18} />
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-                <h1 className="text-2xl font-display text-sand-900">Fernwartungslink-Generator</h1>
+                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+                <h1 className="text-xl font-display text-sand-900">Fernwartungslink-Generator</h1>
               </div>
             </div>
             <button
@@ -223,12 +223,12 @@ export default function ToolsView() {
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-5">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-sand-900 text-white">
+            <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
               <Wrench size={18} />
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-              <h1 className="text-2xl font-display text-sand-900">Tools</h1>
+              <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+              <h1 className="text-xl font-display text-sand-900">Tools</h1>
             </div>
           </div>
           <div className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">

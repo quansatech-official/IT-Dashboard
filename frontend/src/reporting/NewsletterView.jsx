@@ -23,6 +23,7 @@ import {
   paragraphsToHtml
 } from "./newsletterUtils";
 import NotesRichTextEditor from "../components/NotesRichTextEditor";
+import { sanitizeHtml } from "../utils/sanitizeHtml";
 
 const defaultDraft = {
   id: null,
@@ -355,7 +356,7 @@ export default function NewsletterView() {
 
   const resolvedDraft = useMemo(() => buildDraftPayload(draft), [draft]);
   const previewHtml = useMemo(
-    () => buildNewsletterHtml({ ...resolvedDraft, logo_src: "/QTLogo.jpg" }),
+    () => sanitizeHtml(buildNewsletterHtml({ ...resolvedDraft, logo_src: "/QTLogo.jpg" })),
     [resolvedDraft]
   );
 
@@ -849,7 +850,7 @@ export default function NewsletterView() {
             </div>
             <div className="max-h-[74vh] overflow-y-auto bg-sand-50 p-6">
               <div className="overflow-hidden rounded-2xl border border-sand-200 bg-white">
-                <div dangerouslySetInnerHTML={{ __html: previewModal.html }} />
+                <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(previewModal.html) }} />
               </div>
             </div>
           </div>
@@ -1152,12 +1153,12 @@ export default function NewsletterView() {
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-6 py-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-600 text-white">
+            <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
               <Mail size={18} />
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Quansatech</p>
-              <h1 className="text-2xl font-display text-sand-900">Newsletter</h1>
+              <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+              <h1 className="text-xl font-display text-sand-900">Newsletter</h1>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">

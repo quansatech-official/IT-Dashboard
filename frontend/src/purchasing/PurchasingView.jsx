@@ -862,13 +862,13 @@ export default function PurchasingView() {
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-[1880px] items-center gap-3 px-4 py-4 md:px-6">
-          <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
+        <div className="mx-auto flex w-full max-w-[1880px] items-center gap-3 px-5 py-3 md:px-6">
+          <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
             <ShoppingCart size={18} />
           </div>
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-            <h1 className="text-2xl font-display text-sand-900">Einkauf</h1>
+            <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+            <h1 className="text-xl font-display text-sand-900">Einkauf</h1>
           </div>
           {trackingNumbers.length ? (
             <button

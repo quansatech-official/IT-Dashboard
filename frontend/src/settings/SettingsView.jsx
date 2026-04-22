@@ -39,6 +39,7 @@ const defaultMailAccount = () => ({
   graph_client_secret: "",
   graph_mailbox_upn: "",
   has_graph_client_secret: false,
+  has_graph_oauth: false,
   can_send: false,
   can_read: false
 });
@@ -886,9 +887,11 @@ export default function SettingsView() {
         setMailDraft(accounts[0]);
       }
       setMailStatus("ready");
+      return accounts;
     } catch (error) {
       setMailStatus("error");
       setMailMessage(error?.message ? String(error.message) : "Mailprofile konnten nicht geladen werden.");
+      return [];
     }
   };
 
@@ -1272,9 +1275,67 @@ export default function SettingsView() {
       await loadMailSettings();
       setMailStatus("saved");
       setMailMessage("Mailkonto gespeichert.");
+      return saved;
     } catch (error) {
       setMailStatus("error");
       setMailMessage(error?.message ? String(error.message) : "Mailkonto konnte nicht gespeichert werden.");
+      return null;
+    }
+  };
+
+  const connectMicrosoft365 = async () => {
+    setMailStatus("saving");
+    setMailMessage("");
+    try {
+      const saved = await saveMailAccount();
+      if (!saved?.id) throw new Error("Mailkonto konnte nicht vorbereitet werden.");
+      setMailStatus("testing");
+      setMailMessage("Microsoft 365 Anmeldung wird geöffnet...");
+      const res = await fetch(`${API}/mail_accounts/${saved.id}/microsoft_oauth/start`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "Microsoft 365 Anmeldung konnte nicht gestartet werden.");
+      if (!data?.authorize_url) throw new Error("Microsoft 365 Anmelde-URL fehlt.");
+      const width = 760;
+      const height = 760;
+      const left = Math.max(0, window.screenX + (window.outerWidth - width) / 2);
+      const top = Math.max(0, window.screenY + (window.outerHeight - height) / 2);
+      const popup = window.open(
+        data.authorize_url,
+        "m365-oauth",
+        `popup=yes,width=${width},height=${height},left=${left},top=${top}`
+      );
+      if (!popup) throw new Error("Popup wurde blockiert. Bitte Popups fuer diese Seite erlauben.");
+      let oauthFinished = false;
+
+      const onMessage = async (event) => {
+        if (event.origin !== window.location.origin || event.data?.type !== "m365-oauth-result") return;
+        oauthFinished = true;
+        window.removeEventListener("message", onMessage);
+        if (!event.data?.ok) {
+          setMailStatus("error");
+          setMailMessage(event.data?.message || "Microsoft 365 Anmeldung fehlgeschlagen.");
+          return;
+        }
+        const accounts = await loadMailSettings();
+        const refreshed = accounts.find((account) => account.id === saved.id);
+        if (refreshed) {
+          setMailEditId(refreshed.id);
+          setMailDraft(refreshed);
+        }
+        setMailStatus("saved");
+        setMailMessage(event.data?.message || "Microsoft 365 Anmeldung abgeschlossen.");
+      };
+      window.addEventListener("message", onMessage);
+      const popupWatcher = window.setInterval(() => {
+        if (!popup.closed || oauthFinished) return;
+        window.clearInterval(popupWatcher);
+        window.removeEventListener("message", onMessage);
+        setMailStatus("error");
+        setMailMessage("Microsoft 365 Anmeldung wurde geschlossen, bevor das Konto verbunden wurde.");
+      }, 1000);
+    } catch (error) {
+      setMailStatus("error");
+      setMailMessage(error?.message ? String(error.message) : "Microsoft 365 Anmeldung fehlgeschlagen.");
     }
   };
 
@@ -2731,13 +2792,13 @@ export default function SettingsView() {
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
+        <div className="max-w-6xl mx-auto px-5 py-3 flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
             <Settings size={18} />
           </div>
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-            <h1 className="text-2xl font-display text-sand-900">Allgemeine Einstellungen</h1>
+            <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+            <h1 className="text-xl font-display text-sand-900">Allgemeine Einstellungen</h1>
           </div>
         </div>
       </header>
@@ -2860,41 +2921,28 @@ export default function SettingsView() {
                   </div>
 
                   {mailDraft.provider === "microsoft_graph" ? (
-                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-                      <div>
-                        <label className="text-xs text-sand-500">Tenant ID</label>
-                        <input
-                          value={mailDraft.graph_tenant_id}
-                          onChange={(event) => setMailDraft((prev) => ({ ...prev, graph_tenant_id: event.target.value }))}
-                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-sand-500">Client ID</label>
-                        <input
-                          value={mailDraft.graph_client_id}
-                          onChange={(event) => setMailDraft((prev) => ({ ...prev, graph_client_id: event.target.value }))}
-                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-sand-500">Client Secret</label>
-                        <input
-                          type="password"
-                          value={mailDraft.graph_client_secret}
-                          onChange={(event) => setMailDraft((prev) => ({ ...prev, graph_client_secret: event.target.value }))}
-                          placeholder={mailDraft.has_graph_client_secret ? "Gespeichert" : ""}
-                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-sand-500">Mailbox UPN</label>
-                        <input
-                          value={mailDraft.graph_mailbox_upn}
-                          onChange={(event) => setMailDraft((prev) => ({ ...prev, graph_mailbox_upn: event.target.value }))}
-                          className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-                          placeholder="mailbox@example.com"
-                        />
+                    <div className="mt-4 rounded-xl border border-sand-200 bg-sand-50 px-3 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-xs font-semibold text-sand-800">
+                            {mailDraft.has_graph_oauth ? "Microsoft 365 verbunden" : "Microsoft 365 verbinden"}
+                          </p>
+                          <p className="mt-1 text-[11px] text-sand-500">
+                            Meldet das Postfach bei Microsoft an und übernimmt die Kontodaten automatisch.
+                          </p>
+                          {mailDraft.has_graph_oauth ? (
+                            <p className="mt-1 text-[11px] text-sand-600">
+                              {mailDraft.graph_mailbox_upn || mailDraft.mailbox_email || mailDraft.sender_email}
+                            </p>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={connectMicrosoft365}
+                          className="rounded-full border border-sand-900 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-900"
+                        >
+                          {mailDraft.has_graph_oauth ? "Neu anmelden" : "Mit Microsoft anmelden"}
+                        </button>
                       </div>
                     </div>
                   ) : (

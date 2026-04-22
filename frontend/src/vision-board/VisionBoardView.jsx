@@ -10,11 +10,11 @@ const NOTE_MAX_WIDTH = 520;
 const NOTE_MAX_HEIGHT = 420;
 const BOARD_MIN_WIDTH = 960;
 const BOARD_MIN_HEIGHT = 680;
-const BOARD_SCALE_MIN = 0.55;
+const BOARD_SCALE_MIN = 0.3;
 const BOARD_SCALE_MAX = 1;
 const BOARD_SCALE_STEP = 0.1;
 const NOTE_FOCUS_SCALE = 1.35;
-const NOTE_FOCUS_DELAY_MS = 1000;
+const NOTE_FOCUS_DELAY_MS = 350;
 const LIVE_REFRESH_MS = 1200;
 const SAVE_DEBOUNCE_MS = 350;
 
@@ -127,6 +127,7 @@ const api = {
 
 export default function VisionBoardView() {
   const boardRef = useRef(null);
+  const containerRef = useRef(null);
   const dragRef = useRef(null);
   const resizeRef = useRef(null);
   const hoverZoomTimerRef = useRef(null);
@@ -139,6 +140,7 @@ export default function VisionBoardView() {
   const pollInFlightRef = useRef(false);
   const [notes, setNotes] = useState([]);
   const [activeNoteId, setActiveNoteId] = useState("");
+  const [draggingNoteId, setDraggingNoteId] = useState("");
   const [boardScale, setBoardScale] = useState(1);
   const [hoverZoomNoteId, setHoverZoomNoteId] = useState("");
   const [pinnedZoomNoteId, setPinnedZoomNoteId] = useState("");
@@ -146,6 +148,7 @@ export default function VisionBoardView() {
   const [saveState, setSaveState] = useState("idle");
   const [savedAt, setSavedAt] = useState("");
   const [error, setError] = useState("");
+  const [containerSize, setContainerSize] = useState({ width: BOARD_MIN_WIDTH, height: BOARD_MIN_HEIGHT });
 
   const colorLookup = useMemo(
     () =>
@@ -208,6 +211,19 @@ export default function VisionBoardView() {
       Object.values(saveTimersRef.current).forEach((timer) => window.clearTimeout(timer));
     };
   }, [loadNotes]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect) setContainerSize({ width: Math.floor(rect.width), height: Math.floor(rect.height) });
+    });
+    observer.observe(el);
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 0) setContainerSize({ width: Math.floor(rect.width), height: Math.floor(rect.height) });
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (boardScale < 1) return;
@@ -371,6 +387,7 @@ export default function VisionBoardView() {
       boardScale
     };
     setActiveNoteId(note.id);
+    setDraggingNoteId(note.id);
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
@@ -389,6 +406,7 @@ export default function VisionBoardView() {
   const endDrag = (event) => {
     if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return;
     dragRef.current = null;
+    setDraggingNoteId("");
     event.currentTarget.releasePointerCapture?.(event.pointerId);
   };
 
@@ -469,15 +487,15 @@ export default function VisionBoardView() {
 
   return (
     <div className="flex h-[100dvh] min-h-[100dvh] flex-col overflow-hidden bg-sand-50 text-sand-900">
-      <header className="shrink-0 border-b border-sand-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2">
+      <header className="shrink-0 border-b border-sand-200 bg-white/80 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-sand-900 text-white">
-              <Pin size={16} />
+            <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
+              <Pin size={18} />
             </div>
             <div>
-              <p className="text-[9px] uppercase tracking-[0.25em] text-sand-500">Aufgaben</p>
-              <h1 className="font-display text-lg text-sand-900">VisionBoard</h1>
+              <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+              <h1 className="text-xl font-display text-sand-900">VisionBoard</h1>
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-sand-600">
@@ -511,7 +529,7 @@ export default function VisionBoardView() {
             <button
               type="button"
               onClick={addNote}
-              className="inline-flex items-center gap-2 rounded-lg border border-sand-900 bg-sand-900 px-3 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90"
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--nav-accent)] bg-[var(--nav-accent)] px-3 py-2 text-xs uppercase tracking-wide text-white hover:opacity-85 transition-opacity duration-150"
             >
               <Plus size={14} />
               Sticky Note
@@ -531,26 +549,18 @@ export default function VisionBoardView() {
         </div>
 
         <div
-          className="min-h-0 flex-1 overflow-auto rounded-lg border border-sand-300 bg-white p-3 shadow-soft"
+          ref={containerRef}
+          className="min-h-0 flex-1 overflow-hidden rounded-lg border border-sand-300 bg-white shadow-soft relative"
           onPointerDown={(event) => {
             if (!event.target.closest("[data-note-card]")) setPinnedZoomNoteId("");
           }}
         >
           <div
-            className="relative"
-            style={{
-              width: `${BOARD_MIN_WIDTH * boardScale}px`,
-              minWidth: `${BOARD_MIN_WIDTH * boardScale}px`,
-              height: `calc(100% * ${boardScale})`,
-              minHeight: `${BOARD_MIN_HEIGHT * boardScale}px`
-            }}
-          >
-          <div
             ref={boardRef}
-            className="relative h-full min-h-[680px] overflow-hidden rounded-lg border border-sand-200 bg-[#f8fafc]"
+            className="absolute top-0 left-0 overflow-hidden rounded-lg border border-sand-200 bg-[#f8fafc]"
             style={{
-              minWidth: `${BOARD_MIN_WIDTH}px`,
-              minHeight: `${BOARD_MIN_HEIGHT}px`,
+              width: `${Math.round(containerSize.width / boardScale)}px`,
+              height: `${Math.round(containerSize.height / boardScale)}px`,
               transform: `scale(${boardScale})`,
               transformOrigin: "top left",
               backgroundImage:
@@ -563,7 +573,7 @@ export default function VisionBoardView() {
                 <button
                   type="button"
                   onClick={addNote}
-                  className="inline-flex items-center gap-2 rounded-lg border border-sand-900 bg-sand-900 px-4 py-3 text-sm uppercase tracking-wide text-white shadow-soft hover:opacity-90"
+                  className="inline-flex items-center gap-2 rounded-lg border border-[var(--nav-accent)] bg-[var(--nav-accent)] px-4 py-3 text-sm uppercase tracking-wide text-white shadow-soft hover:opacity-85 transition-opacity duration-150"
                 >
                   <Plus size={16} />
                   Erste Sticky Note
@@ -581,18 +591,23 @@ export default function VisionBoardView() {
                   onMouseEnter={() => startHoverZoom(note.id)}
                   onMouseLeave={() => stopHoverZoom(note.id)}
                   onClick={() => focusNoteZoom(note.id)}
-                  className={`absolute flex flex-col rounded-lg border p-3 shadow-[0_12px_22px_rgba(31,41,55,0.18)] transition-[box-shadow,transform] duration-200 ${
+                  className={`absolute flex flex-col rounded-lg border p-3 transition-[box-shadow,transform] duration-200 ${
                     color.noteClass
                   } ${
-                    activeNoteId === note.id ? "ring-2 ring-[var(--bg-900)]" : ""
+                    activeNoteId === note.id ? "ring-2 ring-black/20" : ""
                   } ${isZoomed ? "z-30" : activeNoteId === note.id ? "z-20" : "z-10"}`}
                   style={{
                     left: `${note.x}%`,
                     top: `${note.y}%`,
                     width: `${note.width}px`,
                     height: `${note.height}px`,
-                    transform: `rotate(${note.rotation || 0}deg) scale(${isZoomed ? NOTE_FOCUS_SCALE : 1})`,
-                    transformOrigin: "center"
+                    transform: `rotate(${note.rotation || 0}deg) scale(${isZoomed ? NOTE_FOCUS_SCALE : draggingNoteId === note.id ? 1.03 : 1})`,
+                    transformOrigin: "center",
+                    boxShadow: draggingNoteId === note.id
+                      ? "0 24px 48px rgba(31,41,55,0.32), 0 8px 16px rgba(31,41,55,0.18)"
+                      : activeNoteId === note.id
+                      ? "0 18px 34px rgba(31,41,55,0.22), 0 6px 12px rgba(31,41,55,0.12)"
+                      : "0 6px 16px rgba(31,41,55,0.12), 0 2px 6px rgba(31,41,55,0.08)"
                   }}
                 >
                   <div
@@ -641,16 +656,19 @@ export default function VisionBoardView() {
                     spellCheck="false"
                   />
 
-                  <div className="mt-3 flex items-center gap-1">
+                  <div className="mt-2 flex items-center gap-1.5">
                     {COLOR_OPTIONS.map((option) => (
                       <button
                         key={option.id}
                         type="button"
                         onClick={() => updateNote(note.id, { color: option.id })}
-                        className={`flex h-5 w-5 items-center justify-center rounded-md border ${option.swatchClass}`}
+                        onPointerDown={(event) => event.stopPropagation()}
+                        className={`flex h-6 w-6 items-center justify-center rounded-md border-2 transition-transform duration-100 hover:scale-110 ${option.swatchClass} ${
+                          note.color === option.id ? "ring-2 ring-black/30 ring-offset-1" : "opacity-70 hover:opacity-100"
+                        }`}
                         title={option.label}
                       >
-                        {note.color === option.id ? <Check size={12} /> : null}
+                        {note.color === option.id ? <Check size={11} strokeWidth={2.5} /> : null}
                       </button>
                     ))}
                   </div>
@@ -663,18 +681,20 @@ export default function VisionBoardView() {
                     onPointerMove={moveResize}
                     onPointerUp={endResize}
                     onPointerCancel={endResize}
-                    className={`absolute bottom-1.5 right-1.5 h-4 w-4 touch-none rounded border border-black/15 bg-white/50 ${
-                      note.locked ? "cursor-not-allowed opacity-40" : "cursor-nwse-resize hover:bg-white/80"
+                    className={`absolute bottom-2 right-2 h-5 w-5 touch-none rounded border border-black/20 bg-white/60 transition-colors duration-100 ${
+                      note.locked ? "cursor-not-allowed opacity-30" : "cursor-nwse-resize hover:bg-white/90"
                     }`}
                     title={note.locked ? "Fixiert" : "Größe ändern"}
                     aria-label={note.locked ? "Note ist fixiert" : "Größe ändern"}
                   >
-                    <span className="block h-full w-full rounded-sm bg-[linear-gradient(135deg,transparent_0_45%,rgba(0,0,0,0.28)_45%_52%,transparent_52%_64%,rgba(0,0,0,0.28)_64%_71%,transparent_71%)]" />
+                    <svg viewBox="0 0 10 10" className="h-full w-full p-0.5 opacity-60">
+                      <line x1="3" y1="9" x2="9" y2="3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                      <line x1="6" y1="9" x2="9" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
                   </button>
                 </section>
               );
             })}
-          </div>
           </div>
         </div>
       </main>

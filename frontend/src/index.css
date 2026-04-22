@@ -154,6 +154,11 @@
     --text-700: #3f4f5f;
     --text-800: #2f3d4a;
     --text-900: #1c2733;
+    --nav-active-bg: #e8eef5;
+    --nav-active-text: #1c2733;
+    --nav-accent: #3b6cb7;
+    --bg-overlay-60: rgba(226, 232, 240, 0.6);
+    --bg-overlay-70: rgba(226, 232, 240, 0.7);
   }
 
   :root[data-theme="dark"] {
@@ -168,6 +173,11 @@
     --text-700: #d2dbe7;
     --text-800: #e1e8f0;
     --text-900: #f6f8fb;
+    --nav-active-bg: #1e2d42;
+    --nav-active-text: #e1e8f0;
+    --nav-accent: #6b9fd4;
+    --bg-overlay-60: rgba(27, 36, 51, 0.6);
+    --bg-overlay-70: rgba(27, 36, 51, 0.7);
   }
 
   body {
@@ -212,11 +222,11 @@
   }
 
   .bg-sand-100-70 {
-    background-color: rgba(239, 231, 219, 0.7);
+    background-color: var(--bg-overlay-70);
   }
 
   .bg-sand-100-60 {
-    background-color: rgba(239, 231, 219, 0.6);
+    background-color: var(--bg-overlay-60);
   }
 
   .border-sand-200 {

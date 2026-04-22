@@ -16,6 +16,7 @@ import {
   summarySuggestions as defaultSummarySuggestions
 } from "./constants";
 import { buildPlainText, escapeHTML, renderReportHTML, uid } from "./utils";
+import { sanitizeHtml } from "../utils/sanitizeHtml";
 
 const SMTP_STORAGE_KEY = "qt_smtp_settings_cache";
 
@@ -319,7 +320,7 @@ export default function CustomerReportView() {
   const handleReportBodyChange = (value) =>
     updateReportEmailComposer({ body: value });
 
-  const previewHtml = useMemo(() => renderReportHTML(report), [report]);
+  const previewHtml = useMemo(() => sanitizeHtml(renderReportHTML(report)), [report]);
   const suggestedCustomers = useMemo(() => {
     const seen = new Set();
     const merged = [];
@@ -1664,7 +1665,7 @@ export default function CustomerReportView() {
             </div>
             <div className="max-h-[70vh] overflow-y-auto p-6 bg-sand-50">
               <div className="bg-white border border-sand-200 rounded-2xl p-4">
-                <div dangerouslySetInnerHTML={{ __html: previewModal.html }} />
+                <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(previewModal.html) }} />
               </div>
             </div>
           </div>
@@ -1674,12 +1675,12 @@ export default function CustomerReportView() {
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
+            <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
               <FileText size={18} />
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-              <h1 className="text-2xl font-display text-sand-900">IT-Kundenbericht</h1>
+              <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+              <h1 className="text-xl font-display text-sand-900">IT-Kundenbericht</h1>
             </div>
           </div>
           <div className="flex flex-wrap gap-3 items-center justify-end">

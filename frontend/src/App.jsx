@@ -14,6 +14,27 @@ import {
   Users,
   Wrench
 } from "lucide-react";
+
+function NavButton({ view, active, onClick, icon: Icon, children, className = "" }) {
+  const isActive = active === view;
+  return (
+    <button
+      onClick={() => onClick(view)}
+      className={`relative w-full text-left pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium
+        flex items-center gap-3 transition-colors duration-150
+        ${isActive
+          ? "bg-[var(--nav-active-bg)] text-[var(--nav-active-text)]"
+          : "text-sand-700 hover:bg-sand-100 hover:text-sand-900"
+        } ${className}`}
+    >
+      {isActive && (
+        <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full bg-[var(--nav-accent)]" />
+      )}
+      <Icon size={16} className="shrink-0 opacity-80" />
+      {children}
+    </button>
+  );
+}
 import ReportView from "./reporting/ReportView";
 import TelephonyMenu from "./telephony/TelephonyMenu";
 import TelephonyView from "./telephony/TelephonyView";
@@ -115,150 +136,73 @@ export default function App() {
         >
           <div className="flex flex-col items-start gap-2">
             <img src="/QTLogo.jpg" alt="Quansatech" className="h-12 w-auto object-contain" />
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
+            <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
           </div>
 
-          <nav className="space-y-2">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400 px-2">
+          <nav className="space-y-0.5">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500 px-2 pb-1 font-medium">
               Tagesgeschäft
             </p>
-            <button
-              onClick={() => setActiveView("dayplan")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "dayplan"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <ClipboardList size={18} /> Aufgaben
-            </button>
-            <button
-              onClick={() => setActiveView("visionboard")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "visionboard"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <Pin size={18} /> VisionBoard
-            </button>
-            <button
-              onClick={() => setActiveView("notes")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "notes"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <StickyNote size={18} /> Notizen
-            </button>
+            <NavButton view="dayplan" active={activeView} onClick={setActiveView} icon={ClipboardList}>
+              Aufgaben
+            </NavButton>
+            <NavButton view="visionboard" active={activeView} onClick={setActiveView} icon={Pin}>
+              VisionBoard
+            </NavButton>
+            <NavButton view="notes" active={activeView} onClick={setActiveView} icon={StickyNote}>
+              Notizen
+            </NavButton>
             <div className="border-t border-sand-200 my-2" />
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400 px-2">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500 px-2 pb-1 font-medium">
               Kundenorientierung
             </p>
-            <button
-              onClick={() => setActiveView("offers")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "offers"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <Receipt size={18} /> Angebote
-            </button>
-            <button
-              onClick={() => setActiveView("purchasing")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "purchasing"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <ShoppingCart size={18} /> Einkauf
-            </button>
-            <button
-              onClick={() => setActiveView("report")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "report"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <FileText size={18} /> Kundenbericht
-            </button>
+            <NavButton view="offers" active={activeView} onClick={setActiveView} icon={Receipt}>
+              Angebote
+            </NavButton>
+            <NavButton view="purchasing" active={activeView} onClick={setActiveView} icon={ShoppingCart}>
+              Einkauf
+            </NavButton>
+            <NavButton view="report" active={activeView} onClick={setActiveView} icon={FileText}>
+              Kundenbericht
+            </NavButton>
             <TelephonyMenu
               active={activeView === "telephony"}
               onClick={() => setActiveView("telephony")}
             />
             <div className="border-t border-sand-200 my-2" />
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400 px-2">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500 px-2 pb-1 font-medium">
               Betriebsintern
             </p>
-            <button
-              onClick={() => setActiveView("customers")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "customers"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <Users size={18} /> Kundenstamm
-            </button>
-            <button
-              onClick={() => setActiveView("stats")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "stats"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <BarChart3 size={18} /> Statistik
-            </button>
-            <button
-              onClick={() => setActiveView("tools")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "tools"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <Wrench size={18} /> Tools
-            </button>
-            <button
-              onClick={() => setActiveView("knowledge")}
-              className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                activeView === "knowledge"
-                  ? "bg-sand-900 text-white border-sand-900"
-                  : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-              } flex items-center gap-3`}
-            >
-              <Brain size={18} className="shrink-0" /> Wissens-DB
-            </button>
+            <NavButton view="customers" active={activeView} onClick={setActiveView} icon={Users}>
+              Kundenstamm
+            </NavButton>
+            <NavButton view="stats" active={activeView} onClick={setActiveView} icon={BarChart3}>
+              Statistik
+            </NavButton>
+            <NavButton view="tools" active={activeView} onClick={setActiveView} icon={Wrench}>
+              Tools
+            </NavButton>
+            <NavButton view="knowledge" active={activeView} onClick={setActiveView} icon={Brain}>
+              Wissens-DB
+            </NavButton>
           </nav>
 
-          <div className="mt-auto space-y-3">
-            <div className="border-t border-sand-200 pt-3">
-              <button
-                onClick={() => setActiveView("settings")}
-                className={`w-full text-left px-4 py-3 rounded-2xl border ${
-                  activeView === "settings"
-                    ? "bg-sand-900 text-white border-sand-900"
-                    : "bg-sand-50 border-sand-200 text-sand-700 hover:bg-sand-100"
-                } flex items-center gap-3`}
-              >
-                <Settings size={18} /> Einstellungen
-              </button>
+          <div className="mt-auto space-y-2">
+            <div className="border-t border-sand-200 pt-2">
+              <NavButton view="settings" active={activeView} onClick={setActiveView} icon={Settings}>
+                Einstellungen
+              </NavButton>
             </div>
             <button
               type="button"
               onClick={() => setTheme((prev) => (prev === "dark" ? "light" : "dark"))}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600 shadow-soft hover:bg-sand-100"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-sand-200 bg-sand-50 px-3 py-2 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 transition-colors duration-150"
               title={theme === "dark" ? "Tagmodus" : "Nachtmodus"}
             >
-              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+              {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
               {theme === "dark" ? "Tag" : "Nacht"}
             </button>
-            <div className="text-xs text-sand-500">Version 1.3</div>
+            <div className="text-xs text-sand-500 px-1">Version 1.3</div>
           </div>
         </aside>
 

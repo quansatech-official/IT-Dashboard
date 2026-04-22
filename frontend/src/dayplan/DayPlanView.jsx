@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle,
   ChevronDown,
+  ChevronRight,
   ClipboardList,
   Clock,
   DollarSign,
+  GripVertical,
   Heart,
   Loader2,
   Mail,
@@ -159,6 +161,7 @@ const getNextUrgencyFlag = (value) => {
 export default function DayPlanView() {
   const [tasks, setTasks] = useState([]);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -266,17 +269,23 @@ export default function DayPlanView() {
     };
   }, []);
 
+  const loadTasks = () =>
+    api.list()
+      .then((data) => {
+        setTasks(Array.isArray(data) ? data : []);
+        setLoadError(null);
+      })
+      .catch(() => setLoadError("tasks"));
+
   useEffect(() => {
-    api.list().then((data) => {
-      setTasks(Array.isArray(data) ? data : []);
-    });
+    loadTasks();
   }, []);
 
   useEffect(() => {
     const refreshTasks = () => {
       api.list().then((data) => {
         setTasks(Array.isArray(data) ? data : []);
-      });
+      }).catch(() => {});
     };
     const handleTaskCreated = (event) => {
       const createdTaskId = Number(event?.detail?.task?.id || 0);
@@ -292,7 +301,7 @@ export default function DayPlanView() {
   const refreshCustomers = () =>
     api.customers().then((data) => {
       setCustomers(Array.isArray(data) ? data : []);
-    });
+    }).catch(() => {});
 
   useEffect(() => {
     refreshCustomers();
@@ -315,7 +324,7 @@ export default function DayPlanView() {
   useEffect(() => {
     api.groups().then((data) => {
       setGroups(Array.isArray(data) ? data : []);
-    });
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1725,10 +1734,23 @@ export default function DayPlanView() {
       : `Deadline in ${Math.ceil(deadlineDiffMs / 86400000)} Tagen`;
     const isDetailsCollapsed = detailOpenId !== task.id;
     const isNewlyCreated = Boolean(highlightedTaskIds[task.id]);
+    const urgencyAccentClass = !isDone && urgencyMeta
+      ? urgencyMeta.value === "red" ? "border-l-[3px] border-l-rose-500"
+      : urgencyMeta.value === "orange" ? "border-l-[3px] border-l-amber-400"
+      : urgencyMeta.value === "blue" ? "border-l-[3px] border-l-sky-400"
+      : urgencyMeta.value === "green" ? "border-l-[3px] border-l-emerald-400"
+      : ""
+      : "";
+    const openDays = isDone ? 0 : Number(openSinceDays(task.created_at) || 0);
+    const agingClass = isDone || !task.created_at ? "text-sand-400"
+      : openDays > 21 ? "text-rose-500 font-medium"
+      : openDays > 7 ? "text-amber-500"
+      : "text-sand-400";
     return (
       <div
         key={task.id}
-        className={`relative rounded-lg border px-3 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] transition-colors duration-500 md:px-2 md:py-1.5 ${
+        className={`relative rounded-lg border shadow-[0_2px_6px_rgba(150,120,60,0.08)] transition-colors duration-500
+          px-3 py-2 md:px-2 md:py-1.5 ${urgencyAccentClass} ${
           isNewlyCreated
             ? "border-amber-300 bg-amber-50/60 ring-1 ring-amber-200/70"
             : "border-sand-200 bg-white"
@@ -2020,7 +2042,7 @@ export default function DayPlanView() {
                           }`}
                         />
                       </button>
-                      <span className="whitespace-nowrap text-[10px] text-sand-400">
+                      <span className={`whitespace-nowrap text-[10px] ${agingClass}`}>
                         offen seit {openSinceDays(task.created_at)} Tagen
                       </span>
                     </>
@@ -2052,7 +2074,11 @@ export default function DayPlanView() {
                       key={name}
                       type="button"
                       onClick={() => {
-                        updateTask(task, { customer: name });
+                        const matchedCustomer = findCustomerByTaskName(name);
+                        updateTask(task, {
+                          customer: name,
+                          customer_number: getCustomerReferenceNumber(matchedCustomer)
+                        });
                         setSuggestionOpenId(null);
                         setSuggestionQuery("");
                       }}
@@ -2242,12 +2268,12 @@ export default function DayPlanView() {
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-7xl mx-auto px-4 md:px-6 py-3 md:py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center shadow-soft">
+            <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
               <ClipboardList size={18} />
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-              <h1 className="text-2xl font-display text-sand-900">Tagesplan</h1>
+              <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+              <h1 className="text-xl font-display text-sand-900">Tagesplan</h1>
             </div>
           </div>
           <div className="flex flex-col items-end gap-2 md:flex-row md:items-center">
@@ -2258,7 +2284,7 @@ export default function DayPlanView() {
             </div>
             <div className="w-full rounded-xl border border-sand-200 bg-white/70 p-2 shadow-soft">
               <div className="grid gap-1.5 md:grid-cols-12 md:items-end">
-                <label className="md:col-span-3 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                <label className="md:col-span-3 text-[11px] uppercase tracking-[0.18em] text-sand-500 font-medium">
                   Kunde
                   <div className="relative mt-1">
                     <input
@@ -2279,7 +2305,7 @@ export default function DayPlanView() {
                     ) : null}
                   </div>
                 </label>
-                <label className="md:col-span-3 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                <label className="md:col-span-3 text-[11px] uppercase tracking-[0.18em] text-sand-500 font-medium">
                   Inhalt
                   <div className="relative mt-1">
                     <input
@@ -2300,7 +2326,7 @@ export default function DayPlanView() {
                     ) : null}
                   </div>
                 </label>
-                <label className="md:col-span-2 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                <label className="md:col-span-2 text-[11px] uppercase tracking-[0.18em] text-sand-500 font-medium">
                   Offen seit
                   <input
                     type="number"
@@ -2311,7 +2337,7 @@ export default function DayPlanView() {
                     className="mt-1 w-full rounded-lg border border-sand-200 bg-white px-2 py-1 text-[11px] text-sand-700 focus:outline-none focus:ring-2 focus:ring-sand-200"
                   />
                 </label>
-                <label className="md:col-span-2 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                <label className="md:col-span-2 text-[11px] uppercase tracking-[0.18em] text-sand-500 font-medium">
                   Mitarbeiter
                   <select
                     value={employeeFilter}
@@ -2328,7 +2354,7 @@ export default function DayPlanView() {
                     ))}
                   </select>
                 </label>
-                <label className="md:col-span-2 text-[9px] uppercase tracking-[0.25em] text-sand-500">
+                <label className="md:col-span-2 text-[11px] uppercase tracking-[0.18em] text-sand-500 font-medium">
                   Sortierung
                   <select
                     value={openSort}
@@ -2348,6 +2374,18 @@ export default function DayPlanView() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 md:px-6 py-4 md:py-6 space-y-4 md:space-y-6">
+        {loadError ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600 flex items-center justify-between gap-3">
+            <span>Aufgaben konnten nicht geladen werden.</span>
+            <button
+              type="button"
+              onClick={() => { setLoadError(null); loadTasks(); }}
+              className="shrink-0 rounded-lg border border-rose-300 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+            >
+              Erneut laden
+            </button>
+          </div>
+        ) : null}
         {error ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
             {error}
@@ -2378,7 +2416,7 @@ export default function DayPlanView() {
                   {column.id === "todo" ? (
                     <div
                       ref={emailDropBadgeRef}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-[0.12em] ${
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.1em] ${
                         emailDropHover
                           ? "border-blue-300 bg-blue-50 text-blue-700"
                           : "border-sand-200 bg-sand-50 text-sand-500"
@@ -2445,17 +2483,17 @@ export default function DayPlanView() {
                 </div>
               </div>
               <div className="grid gap-3 lg:grid-cols-2">
-                <div className="space-y-2 max-h-[70vh] overflow-auto pr-1">
+                <div className="space-y-2 max-h-[calc(100vh-320px)] min-h-[200px] overflow-auto pr-1">
                   <div
-                    className="rounded-xl border border-dashed border-sand-200 bg-white px-3 py-2"
+                    className="rounded-xl border border-sand-200 bg-white px-3 py-2"
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={(event) => handleUngroupedDrop(event, column.id)}
                   >
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-xs uppercase tracking-[0.25em] text-sand-400">
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className="text-[11px] font-medium uppercase tracking-[0.18em] text-sand-400">
                         Ohne Gruppe
                       </h3>
-                      <span className="text-[10px] text-sand-400">
+                      <span className="text-[11px] text-sand-400 font-metrics">
                         {grouped[column.id].filter((task) => !task.group_id).length}
                       </span>
                     </div>
@@ -2471,7 +2509,7 @@ export default function DayPlanView() {
                           }
                         }}
                         placeholder="Neue Aufgabe…"
-                        className="w-full rounded-full border border-amber-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
+                        className="w-full rounded-xl border border-amber-200 bg-white px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
                       />
                       {grouped[column.id].filter((task) => !task.group_id).length ? (
                         grouped[column.id]
@@ -2483,7 +2521,7 @@ export default function DayPlanView() {
                     </div>
                   </div>
                 </div>
-                <div className="space-y-2 max-h-[70vh] overflow-auto pr-1">
+                <div className="space-y-2 max-h-[calc(100vh-320px)] min-h-[200px] overflow-auto pr-1">
                   {groupsByColumn[column.id].map((group) => (
                     <div
                       key={group.id}
@@ -2505,10 +2543,10 @@ export default function DayPlanView() {
                           onDragStart={(event) => {
                             event.dataTransfer.setData("text/plain", `group:${group.id}`);
                           }}
-                          className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-400 hover:bg-sand-100"
+                          className="rounded-md border border-sand-200 bg-white p-1 text-sand-400 hover:bg-sand-100 cursor-grab active:cursor-grabbing"
                           title="Gruppe verschieben"
                         >
-                          ::
+                          <GripVertical size={13} />
                         </button>
                         {editingGroupId === group.id ? (
                           <input
@@ -2582,7 +2620,7 @@ export default function DayPlanView() {
                             }
                           }}
                           placeholder="Neue Aufgabe…"
-                          className="w-full rounded-full border border-amber-200 bg-white px-4 py-2 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
+                          className="w-full rounded-xl border border-amber-200 bg-white px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
                         />
                       </div>
                     </div>
@@ -2605,7 +2643,7 @@ export default function DayPlanView() {
                   value={doneFilter}
                   onChange={(event) => setDoneFilter(event.target.value)}
                   placeholder="Suche..."
-                  className="w-full rounded-full border border-amber-200 bg-white px-4 py-2 pr-9 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
+                  className="w-full rounded-xl border border-amber-200 bg-white px-3 py-1.5 pr-8 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
                 />
                 {doneFilter.trim() ? (
                   <button
@@ -2624,7 +2662,7 @@ export default function DayPlanView() {
                     ? `${filteredDoneTasks.length} / ${doneTasks.length}`
                     : doneTasks.length}
                 </span>
-                <label className="flex items-center gap-1 text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                <label className="flex items-center gap-1 text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
                   <input
                     type="checkbox"
                     checked={showKulantDone}
@@ -2637,7 +2675,7 @@ export default function DayPlanView() {
             </div>
           </div>
           <div
-            className="space-y-2 max-h-[45vh] overflow-auto pr-1"
+            className="space-y-2 max-h-[38vh] overflow-auto pr-1"
             onDragOver={(event) => event.preventDefault()}
             onDrop={handleDoneDrop}
           >
@@ -2661,7 +2699,7 @@ export default function DayPlanView() {
                   value={billedFilter}
                   onChange={(event) => setBilledFilter(event.target.value)}
                   placeholder="Suche..."
-                  className="w-full rounded-full border border-amber-200 bg-white px-4 py-2 pr-9 text-base focus:outline-none focus:ring-2 focus:ring-amber-200 md:px-3 md:py-1 md:text-xs"
+                  className="w-full rounded-xl border border-amber-200 bg-white px-3 py-1.5 pr-8 text-xs focus:outline-none focus:ring-2 focus:ring-amber-200"
                 />
                 {billedFilter.trim() ? (
                   <button
@@ -2681,7 +2719,7 @@ export default function DayPlanView() {
               </span>
             </div>
           </div>
-          <div className="space-y-2 max-h-[45vh] overflow-auto pr-1">
+          <div className="space-y-2 max-h-[38vh] overflow-auto pr-1">
             {filteredBilledTasks.length ? (
               filteredBilledTasks.map((task) => renderTaskCard(task))
             ) : (
@@ -2780,7 +2818,7 @@ function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubm
             </div>
           ) : null}
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Titel</span>
+            <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Titel</span>
             <input
               value={draft.title || ""}
               onChange={(event) => onChange("title", event.target.value)}
@@ -2789,7 +2827,7 @@ function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubm
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Kunde</span>
+            <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Kunde</span>
             <input
               value={draft.customer || ""}
               onChange={(event) => onChange("customer", event.target.value)}
@@ -2800,7 +2838,7 @@ function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubm
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Notiz</span>
+            <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Notiz</span>
             <textarea
               value={draft.details || ""}
               onChange={(event) => onChange("details", event.target.value)}
@@ -2824,7 +2862,7 @@ function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubm
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-sand-200 px-4 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+            className="rounded-lg border border-sand-200 px-4 py-2 text-xs font-medium uppercase tracking-wide text-sand-600 hover:bg-sand-50 transition-colors duration-150"
           >
             Abbrechen
           </button>
@@ -2832,7 +2870,7 @@ function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubm
             type="button"
             onClick={onSubmit}
             disabled={saving || analyzing || !String(draft.title || "").trim()}
-            className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center justify-center rounded-lg bg-[var(--nav-accent)] px-4 py-2 text-xs font-medium uppercase tracking-wide text-white hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50 transition-opacity duration-150"
           >
             {analyzing ? "Analysiere..." : saving ? "Erstelle..." : "Aufgabe anlegen"}
           </button>
@@ -2917,10 +2955,10 @@ function FakturaTaskModal({
       : "border-sand-200 bg-sand-50 text-sand-600";
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
-      <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
-        <div className="flex items-center justify-between border-b border-sand-100 px-6 py-4">
+      <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft flex flex-col max-h-[90vh]">
+        <div className="flex shrink-0 items-center justify-between border-b border-sand-100 px-6 py-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Faktura</p>
+            <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Faktura</p>
             <h3 className="text-lg font-display text-sand-900">Rechnungsentwurf aus Aufgabe</h3>
           </div>
           <button
@@ -2931,7 +2969,7 @@ function FakturaTaskModal({
             <X size={16} />
           </button>
         </div>
-        <div className="px-6 py-4 space-y-4">
+        <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
           <div>
             <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Aufgabe</p>
             <p className="text-sm text-sand-900">{task.title}</p>
@@ -2969,15 +3007,15 @@ function FakturaTaskModal({
           ) : null}
           {hasToken && contactFound && hasDraft ? (
             <div className="flex flex-wrap items-center gap-2 text-xs text-sand-600">
-              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
                 Entwurf wählen
               </span>
               <button
                 type="button"
                 onClick={() => onChange("use_existing_draft", true)}
-                className={`rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
                   form.use_existing_draft !== false
-                    ? "border-sand-900 bg-sand-900 text-white"
+                    ? "border-[var(--nav-accent)] bg-[var(--nav-accent)] text-white"
                     : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
                 }`}
               >
@@ -2986,9 +3024,9 @@ function FakturaTaskModal({
               <button
                 type="button"
                 onClick={() => onChange("use_existing_draft", false)}
-                className={`rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
                   form.use_existing_draft === false
-                    ? "border-sand-900 bg-sand-900 text-white"
+                    ? "border-[var(--nav-accent)] bg-[var(--nav-accent)] text-white"
                     : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
                 }`}
               >
@@ -3031,9 +3069,9 @@ function FakturaTaskModal({
                 <button
                   type="button"
                   onClick={() => onChange("include_mileage", !form.include_mileage)}
-                  className={`rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
                     form.include_mileage
-                      ? "border-sand-900 bg-sand-900 text-white"
+                      ? "border-[var(--nav-accent)] bg-[var(--nav-accent)] text-white"
                       : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
                   }`}
                 >
@@ -3045,7 +3083,7 @@ function FakturaTaskModal({
           <div className="rounded-2xl border border-sand-200 bg-sand-50/80 px-3 py-2.5 space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Aufwandsübersicht</p>
+                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Aufwandsübersicht</p>
                 <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-600">
                   Ist-Zeit bleibt Dokumentation
                 </span>
@@ -3062,7 +3100,7 @@ function FakturaTaskModal({
 
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 text-xs text-sand-600">
               <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
-                <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Tatsächlich</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">Tatsächlich</p>
                 <p className="text-base font-semibold text-sand-900">
                   {actualHours > 0 ? `${formatHourValue(actualHours)} h` : "Keine Zeit"}
                 </p>
@@ -3080,7 +3118,7 @@ function FakturaTaskModal({
               </div>
 
               <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
-                <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Mindestens wert</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">Mindestens wert</p>
                 <input
                   type="number"
                   min="0"
@@ -3109,7 +3147,7 @@ function FakturaTaskModal({
               </div>
 
               <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
-                <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">Rechnungsmenge</p>
+                <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">Rechnungsmenge</p>
                 <p className="text-base font-semibold text-sand-900">
                   {invoiceQuantity > 0 ? `${formatHourValue(invoiceQuantity)} h` : "Nicht gesetzt"}
                 </p>
@@ -3130,7 +3168,7 @@ function FakturaTaskModal({
 
               <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[10px] uppercase tracking-[0.25em] text-sand-500">KI Schätzung</p>
+                  <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">KI Schätzung</p>
                   {hasScopeEstimate ? (
                     <span className="rounded-full border border-sky-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-700">
                       {confidenceLabel}
@@ -3189,7 +3227,7 @@ function FakturaTaskModal({
             ) : null}
 
             <label className="flex flex-col gap-2 text-xs text-sand-600">
-              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
                 Interner Abrechnungsvermerk
               </span>
               <textarea
@@ -3208,7 +3246,7 @@ function FakturaTaskModal({
           </div>
           <div className="grid gap-3 md:grid-cols-2 text-xs text-sand-600">
             <label className="flex flex-col gap-2">
-              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
                 Kundennummer (Kundenstamm)
               </span>
               <input
@@ -3220,7 +3258,7 @@ function FakturaTaskModal({
               />
             </label>
             <label className="flex flex-col gap-2">
-              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
                 Rechnungsheader
               </span>
               <input
@@ -3231,7 +3269,7 @@ function FakturaTaskModal({
               />
             </label>
             <label className="flex flex-col gap-2">
-              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Menge (h)</span>
+              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Menge (h)</span>
               <input
                 type="number"
                 min="0"
@@ -3242,7 +3280,7 @@ function FakturaTaskModal({
               />
             </label>
             <label className="flex flex-col gap-2">
-              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
                 Preis (EUR)
               </span>
               <input
@@ -3255,7 +3293,7 @@ function FakturaTaskModal({
               />
             </label>
             <label className="flex flex-col gap-2 md:col-span-2">
-              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
                 Positionsname
               </span>
               <input
@@ -3267,7 +3305,7 @@ function FakturaTaskModal({
             </label>
           </div>
           <label className="flex flex-col gap-2 text-xs text-sand-600">
-            <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+            <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
               Positionstext
             </span>
             <textarea
@@ -3291,14 +3329,15 @@ function FakturaTaskModal({
           <button
             type="button"
             onClick={onToggleAdvanced}
-            className="text-xs uppercase tracking-[0.3em] text-sand-500"
+            className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-sand-500 hover:text-sand-700 transition-colors duration-150"
           >
+            {advancedOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             {advancedOpen ? "Erweiterte Felder ausblenden" : "Erweiterte Felder anzeigen"}
           </button>
           {advancedOpen ? (
             <div className="grid gap-3 md:grid-cols-2 text-xs text-sand-600">
               <label className="flex flex-col gap-2">
-                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
                   Steuer (Rate)
                 </span>
                 <input
@@ -3311,7 +3350,7 @@ function FakturaTaskModal({
                 />
               </label>
               <label className="flex flex-col gap-2">
-                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
                   Unity ID
                 </span>
                 <input
@@ -3331,11 +3370,11 @@ function FakturaTaskModal({
             </div>
           ) : null}
         </div>
-        <div className="flex items-center justify-end gap-3 border-t border-sand-100 px-6 py-4">
+        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-sand-100 px-6 py-4">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-sand-200 px-4 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+            className="rounded-lg border border-sand-200 px-4 py-2 text-xs font-medium uppercase tracking-wide text-sand-600 hover:bg-sand-50 transition-colors duration-150"
           >
             Abbrechen
           </button>
@@ -3343,7 +3382,7 @@ function FakturaTaskModal({
             type="button"
             onClick={onSubmit}
             disabled={!hasToken || !hasCustomerNumber || isSaving || hasMissingInvoiceFields}
-            className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center justify-center rounded-lg bg-[var(--nav-accent)] px-4 py-2 text-xs font-medium uppercase tracking-wide text-white hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50 transition-opacity duration-150"
           >
             {isSaving
               ? "Übergabe läuft..."

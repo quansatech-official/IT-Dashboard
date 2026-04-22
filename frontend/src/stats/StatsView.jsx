@@ -44,20 +44,26 @@ const formatHoursDelta = (value) => {
   return `${prefix}${formatNumber(numeric, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} h`;
 };
 const round2 = (value) => Math.round(Number(value || 0) * 100) / 100;
+const deltaValueClass = (value) => {
+  const n = Number(value || 0);
+  if (n > 0) return "text-rose-600 font-medium";
+  if (n < 0) return "text-emerald-600";
+  return "text-sand-500";
+};
 
-const StatCard = ({ title, value, subtitle }) => (
-  <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
-    <p className="text-[9px] uppercase tracking-[0.28em] text-sand-500">{title}</p>
-    <p className="text-lg font-metrics text-sand-900 mt-1.5">{value}</p>
+const StatCard = ({ title, value, subtitle, valueClassName, className }) => (
+  <div className={`rounded-2xl border border-sand-200 bg-white p-3 shadow-soft ${className || ""}`}>
+    <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">{title}</p>
+    <p className={`text-lg font-metrics mt-1.5 ${valueClassName || "text-sand-900"}`}>{value}</p>
     {subtitle ? <p className="text-[11px] text-sand-500 mt-1">{subtitle}</p> : null}
   </div>
 );
 
-const ContractMetricLine = ({ icon: Icon, label, value }) => (
-  <div className="flex items-center gap-1.5 text-[10px] text-sand-500">
-    <Icon size={11} className="text-sand-400" />
-    <span className="text-sand-400">{label}:</span>
-    <span className="text-sand-700">{value}</span>
+const ContractMetricLine = ({ icon: Icon, label, value, valueClassName }) => (
+  <div className="flex items-center gap-1.5 text-[11px] text-sand-500">
+    <Icon size={11} className="text-sand-400 shrink-0" />
+    <span className="text-sand-400 shrink-0">{label}:</span>
+    <span className={valueClassName || "text-sand-700"}>{value}</span>
   </div>
 );
 
@@ -66,24 +72,25 @@ const TopCustomerCard = ({ title, items }) => {
   const maxValue = Math.max(1, ...safeItems.map((item) => Number(item?.totalEur || 0)));
   return (
     <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
-      <p className="text-[9px] uppercase tracking-[0.28em] text-sand-500">{title}</p>
+      <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">{title}</p>
       {safeItems.length ? (
         <div className="mt-2 space-y-2">
           {safeItems.map((item, index) => (
             <div key={`${title}-${item.name || "unknown"}-${index}`} className="space-y-1">
-              <div className="flex items-center justify-between text-[11px] text-sand-600">
-                <span className="truncate pr-2">{item.name || "Unbekannt"}</span>
-                <span className="font-metrics">{formatEur(item.totalEur || 0)}</span>
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sand-100 text-[10px] font-bold text-sand-500">{index + 1}</span>
+                <span className="truncate flex-1 text-sand-700">{item.name || "Unbekannt"}</span>
+                <span className="font-metrics font-semibold text-sand-900">{formatEur(item.totalEur || 0)}</span>
               </div>
-              <div className="h-2 w-full rounded-full bg-sand-100">
+              <div className="h-1.5 w-full rounded-full bg-sand-100 ml-6">
                 <div
-                  className="h-2 rounded-full bg-amber-400"
+                  className="h-1.5 rounded-full bg-[var(--nav-accent)]"
                   style={{
                     width: `${Math.max(6, (Number(item.totalEur || 0) / maxValue) * 100)}%`
                   }}
                 />
               </div>
-              <div className="text-[10px] text-sand-400">
+              <div className="text-[11px] text-sand-400 pl-6">
                 {formatNumber(item.count || 0)} Rechnungen
               </div>
             </div>
@@ -392,17 +399,23 @@ export default function StatsView() {
         {
           title: "Überfällige Rechnungen",
           value: formatNumber(sevdesk?.overdue?.count || 0),
-          subtitle: formatEur(sevdesk?.overdue?.sumEur || 0)
+          subtitle: formatEur(sevdesk?.overdue?.sumEur || 0),
+          valueClassName: Number(sevdesk?.overdue?.count || 0) > 0 ? "text-rose-600 font-semibold" : undefined,
+          className: Number(sevdesk?.overdue?.count || 0) > 0 ? "border-l-[3px] border-l-rose-400" : undefined
         },
         {
           title: "SLA-Risiko (Monat)",
           value: formatHours(contractsHours.deltaCurrentMonth || 0),
-          subtitle: `Trend: ${formatHoursDelta(trendSla)}`
+          subtitle: `Trend: ${formatHoursDelta(trendSla)}`,
+          valueClassName: Number(contractsHours.deltaCurrentMonth || 0) > 0 ? "text-amber-600 font-semibold" : undefined,
+          className: Number(contractsHours.deltaCurrentMonth || 0) > 0 ? "border-l-[3px] border-l-amber-400" : undefined
         },
         {
           title: "Churn-Risiko Kunden",
           value: formatNumber(churnRiskCustomers),
-          subtitle: "Klasse C (Zahlungsmoral)"
+          subtitle: "Klasse C (Zahlungsmoral)",
+          valueClassName: churnRiskCustomers > 0 ? "text-amber-600 font-semibold" : undefined,
+          className: churnRiskCustomers > 0 ? "border-l-[3px] border-l-amber-400" : undefined
         },
         {
           title: "Berichte ungelesen",
@@ -480,11 +493,11 @@ export default function StatsView() {
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
         <div className="max-w-6xl mx-auto px-5 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl bg-sand-900 text-white flex items-center justify-center">
+            <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
               <BarChart3 size={18} />
             </div>
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
+              <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
               <h1 className="text-xl font-display text-sand-900">Statistik</h1>
             </div>
           </div>
@@ -507,7 +520,7 @@ export default function StatsView() {
                   onClick={() => setActiveTab(tab.key)}
                   className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs uppercase tracking-wide ${
                     active
-                      ? "bg-sand-900 text-white"
+                      ? "bg-[var(--nav-accent)] text-white shadow-sm"
                       : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
                   }`}
                 >
@@ -547,12 +560,12 @@ export default function StatsView() {
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   {leadershipKpis.cards.map((card) => (
-                    <StatCard key={card.title} title={card.title} value={card.value} subtitle={card.subtitle} />
+                    <StatCard key={card.title} title={card.title} value={card.value} subtitle={card.subtitle} valueClassName={card.valueClassName} className={card.className} />
                   ))}
                 </div>
                 <div className="mt-4 grid gap-3 lg:grid-cols-2">
                   <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
-                    <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Trends</p>
+                    <p className="text-[11px] uppercase tracking-[0.28em] text-sand-500">Trends</p>
                     <div className="mt-2 space-y-1.5 text-[11px] text-sand-700">
                       <p>Umsatzschätzung heute: {formatEur(stats.revenueEstimateTodayEur ?? 0)}</p>
                       <p>Umsatzschätzung Woche: {formatEur(stats.revenueEstimateWeekEur ?? 0)}</p>
@@ -563,21 +576,34 @@ export default function StatsView() {
                     </div>
                   </div>
                   <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
-                    <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Alerts & Nächste Aktion</p>
-                    <div className="mt-2 space-y-1.5 text-[11px] text-sand-700">
+                    <p className="text-[11px] uppercase tracking-[0.28em] text-sand-500 mb-2">Alerts & Nächste Aktion</p>
+                    <div className="space-y-1.5">
                       {leadershipKpis.alerts.length ? (
-                        leadershipKpis.alerts.map((entry, index) => <p key={`alert-${index}`}>• {entry}</p>)
+                        leadershipKpis.alerts.map((entry, index) => {
+                          const isOverdue = entry.startsWith("Faktura:");
+                          const isSla = entry.startsWith("SLA:");
+                          const borderColor = isOverdue ? "border-l-rose-500" : isSla ? "border-l-amber-400" : "border-l-sky-400";
+                          const textColor = isOverdue ? "text-rose-700" : isSla ? "text-amber-700" : "text-sky-700";
+                          const bgColor = isOverdue ? "bg-rose-50" : isSla ? "bg-amber-50" : "bg-sky-50";
+                          return (
+                            <div key={`alert-${index}`} className={`border-l-[3px] ${borderColor} ${bgColor} rounded-r-lg px-2.5 py-1.5 text-[11px] ${textColor}`}>
+                              {entry}
+                            </div>
+                          );
+                        })
                       ) : (
-                        <p>• Keine kritischen Alerts.</p>
+                        <div className="border-l-[3px] border-l-emerald-400 bg-emerald-50 rounded-r-lg px-2.5 py-1.5 text-[11px] text-emerald-700">
+                          Keine kritischen Alerts.
+                        </div>
                       )}
-                      <p className="pt-1 font-semibold text-sand-900">Nächste Aktion: {leadershipKpis.nextAction}</p>
+                      <p className="pt-1 text-[11px] font-semibold text-sand-900">→ {leadershipKpis.nextAction}</p>
                     </div>
                   </div>
                 </div>
                 <div className="mt-4 rounded-2xl border border-emerald-200 bg-gradient-to-br from-white via-emerald-50/40 to-emerald-100/30 p-3.5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <p className="text-[10px] uppercase tracking-[0.28em] text-emerald-700">Aufgaben-Leistung</p>
+                      <p className="text-[11px] uppercase tracking-[0.28em] text-emerald-700">Aufgaben-Leistung</p>
                       <p className="mt-1 text-[11px] text-sand-600">
                         Erledigte Aufgaben auf einen Blick, inklusive geschätztem Tages- und Wochenwert.
                       </p>
@@ -588,19 +614,19 @@ export default function StatsView() {
                   </div>
                   <div className="mt-3 grid gap-3 lg:grid-cols-3">
                     <div className="rounded-2xl border border-emerald-200 bg-white p-3 shadow-soft">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-700">Heute</p>
+                      <p className="text-[11px] uppercase tracking-[0.24em] text-emerald-700">Heute</p>
                       <p className="mt-2 text-2xl font-metrics text-emerald-900">
                         {formatEur(taskPerformanceToday.revenueEur ?? 0)}
                       </p>
                       <div className="mt-2 grid gap-2 sm:grid-cols-2">
                         <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Erledigt</p>
+                          <p className="text-[11px] uppercase tracking-wide text-sand-500">Erledigt</p>
                           <p className="text-sm font-semibold text-sand-900">
                             {formatNumber(taskPerformanceToday.doneCount ?? stats.dayTasks?.doneToday ?? 0)}
                           </p>
                         </div>
                         <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</p>
+                          <p className="text-[11px] uppercase tracking-wide text-sand-500">Stunden</p>
                           <p className="text-sm font-semibold text-sand-900">
                             {formatHours(taskPerformanceToday.doneHours ?? stats.timeTracking?.doneTodayHours ?? 0)}
                           </p>
@@ -608,19 +634,19 @@ export default function StatsView() {
                       </div>
                     </div>
                     <div className="rounded-2xl border border-emerald-200 bg-white p-3 shadow-soft">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-700">Diese Woche</p>
+                      <p className="text-[11px] uppercase tracking-[0.24em] text-emerald-700">Diese Woche</p>
                       <p className="mt-2 text-2xl font-metrics text-emerald-900">
                         {formatEur(taskPerformanceWeek.revenueEur ?? 0)}
                       </p>
                       <div className="mt-2 grid gap-2 sm:grid-cols-2">
                         <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Erledigt</p>
+                          <p className="text-[11px] uppercase tracking-wide text-sand-500">Erledigt</p>
                           <p className="text-sm font-semibold text-sand-900">
                             {formatNumber(taskPerformanceWeek.doneCount ?? stats.dayTasks?.doneWeek ?? 0)}
                           </p>
                         </div>
                         <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</p>
+                          <p className="text-[11px] uppercase tracking-wide text-sand-500">Stunden</p>
                           <p className="text-sm font-semibold text-sand-900">
                             {formatHours(taskPerformanceWeek.doneHours ?? stats.timeTracking?.doneWeekHours ?? 0)}
                           </p>
@@ -628,7 +654,7 @@ export default function StatsView() {
                       </div>
                     </div>
                     <div className="rounded-2xl border border-emerald-200 bg-white p-3 shadow-soft">
-                      <p className="text-[10px] uppercase tracking-[0.24em] text-emerald-700">Ø pro Werktag</p>
+                      <p className="text-[11px] uppercase tracking-[0.24em] text-emerald-700">Ø pro Werktag</p>
                       <p className="mt-2 text-2xl font-metrics text-emerald-900">
                         {formatEur(taskPerformanceWeekAverage.revenueEur ?? 0)}
                       </p>
@@ -637,7 +663,7 @@ export default function StatsView() {
                       </p>
                       <div className="mt-2 grid gap-2 sm:grid-cols-2">
                         <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Erledigt</p>
+                          <p className="text-[11px] uppercase tracking-wide text-sand-500">Erledigt</p>
                           <p className="text-sm font-semibold text-sand-900">
                             {formatNumber(taskPerformanceWeekAverage.doneCount ?? 0, {
                               minimumFractionDigits: 0,
@@ -646,7 +672,7 @@ export default function StatsView() {
                           </p>
                         </div>
                         <div className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-2">
-                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Stunden</p>
+                          <p className="text-[11px] uppercase tracking-wide text-sand-500">Stunden</p>
                           <p className="text-sm font-semibold text-sand-900">
                             {formatHours(taskPerformanceWeekAverage.doneHours ?? 0)}
                           </p>
@@ -677,21 +703,28 @@ export default function StatsView() {
                         title="Entwurfsrechnungen"
                         value={formatNumber(stats.sevdesk?.drafts?.count ?? 0)}
                         subtitle={`Summe ${formatEur(stats.sevdesk?.drafts?.sumEur ?? 0)}`}
+                        className={Number(stats.sevdesk?.drafts?.count ?? 0) > 0 ? "border-l-[3px] border-l-sky-400" : undefined}
                       />
                       <StatCard
                         title="Fällige Rechnungen"
                         value={formatNumber(stats.sevdesk?.due?.count ?? 0)}
                         subtitle={`Summe ${formatEur(stats.sevdesk?.due?.sumEur ?? 0)}`}
+                        className={Number(stats.sevdesk?.due?.count ?? 0) > 0 ? "border-l-[3px] border-l-amber-400" : undefined}
+                        valueClassName={Number(stats.sevdesk?.due?.count ?? 0) > 0 ? "text-amber-600 font-semibold" : undefined}
                       />
                       <StatCard
                         title="Überfällige Rechnungen"
                         value={formatNumber(stats.sevdesk?.overdue?.count ?? 0)}
                         subtitle={`Summe ${formatEur(stats.sevdesk?.overdue?.sumEur ?? 0)}`}
+                        className={Number(stats.sevdesk?.overdue?.count ?? 0) > 0 ? "border-l-[3px] border-l-rose-400" : undefined}
+                        valueClassName={Number(stats.sevdesk?.overdue?.count ?? 0) > 0 ? "text-rose-600 font-semibold" : undefined}
                       />
                       <StatCard
                         title="Umsatz laufendes Jahr (bezahlt)"
                         value={formatEur(stats.sevdesk?.paidCurrentYear?.sumEur ?? 0)}
                         subtitle={`Rechnungen ${formatNumber(stats.sevdesk?.paidCurrentYear?.count ?? 0)}`}
+                        className="border-l-[3px] border-l-emerald-400"
+                        valueClassName="text-emerald-700 font-semibold"
                       />
                       <StatCard
                         title="Bezahlt (Monat)"
@@ -718,7 +751,7 @@ export default function StatsView() {
                     <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50/70 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
-                          <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Wiederkehrende Rechnungen</p>
+                          <p className="text-[11px] uppercase tracking-[0.28em] text-sand-500">Wiederkehrende Rechnungen</p>
                           <p className="mt-1 text-[11px] text-sand-600">
                             Nur sevdesk: wiederkehrende Rechnungen je Kunde und Tag, auf Monatswert normalisiert.
                           </p>
@@ -755,7 +788,7 @@ export default function StatsView() {
                       </div>
                       <div className="mt-4 grid gap-3 xl:grid-cols-[1.05fr_1.35fr]">
                         <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                          <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Nach Tag</p>
+                          <p className="text-[11px] uppercase tracking-[0.28em] text-sand-500">Nach Tag</p>
                           {topRecurringTags.length ? (
                             <div className="mt-2 space-y-2">
                               {topRecurringTags.map((entry) => (
@@ -764,7 +797,7 @@ export default function StatsView() {
                                     <span>{entry.tagName || "Ohne Tag"}</span>
                                     <span className="font-metrics">{formatEur(entry.monthlyEur || 0)}</span>
                                   </div>
-                                  <div className="mt-1 text-[10px] text-sand-400">
+                                  <div className="mt-1 text-[11px] text-sand-400">
                                     {formatNumber(entry.invoiceCount || 0)} Vorlagen · {formatNumber(entry.customersCount || 0)} Kunden
                                   </div>
                                 </div>
@@ -775,7 +808,7 @@ export default function StatsView() {
                           )}
                         </div>
                         <div className="rounded-2xl border border-sand-200 bg-white p-3">
-                          <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Alle Kunden</p>
+                          <p className="text-[11px] uppercase tracking-[0.28em] text-sand-500">Alle Kunden</p>
                           <div className="mt-2 max-h-[24rem] overflow-auto rounded-xl border border-sand-100">
                             <table className="min-w-full text-left text-[11px]">
                               <thead className="sticky top-0 z-10 bg-sand-100 text-sand-600 uppercase tracking-wide">
@@ -800,7 +833,7 @@ export default function StatsView() {
                                           {(Array.isArray(row.tags) ? row.tags : []).slice(0, 4).map((entry) => (
                                             <span
                                               key={`${row.contactId || row.customerName}-${entry.tagId || entry.tagName}`}
-                                              className="truncate rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-600"
+                                              className="truncate rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[11px] text-sand-600"
                                             >
                                               {entry.tagName}: {formatEur(entry.monthlyEur || 0)}
                                             </span>
@@ -870,7 +903,7 @@ export default function StatsView() {
                             key={item.key || `${item.year}-${item.month}`}
                             className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft"
                           >
-                            <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">
+                            <p className="text-[11px] uppercase tracking-[0.28em] text-sand-500">
                               {formatMonthLabel(item.year, item.month)}
                             </p>
                             <p className="text-lg font-metrics text-sand-900 mt-1.5">
@@ -945,16 +978,22 @@ export default function StatsView() {
                     title="Vertragsumsatz pro Monat"
                     value={formatEur(filteredContractSummary.revenueMonthly)}
                     subtitle={`Aktive Verträge: ${formatEur(filteredContractSummary.revenueMonthlyActive)}`}
+                    className="border-l-[3px] border-l-emerald-400"
+                    valueClassName="text-emerald-700 font-semibold"
                   />
                   <StatCard
                     title="Verlängerung <= 45 Tage"
                     value={formatNumber(contractPipelineStats.dueSoon)}
                     subtitle="Referenz im Kundenstamm"
+                    className={contractPipelineStats.dueSoon > 0 ? "border-l-[3px] border-l-amber-400" : undefined}
+                    valueClassName={contractPipelineStats.dueSoon > 0 ? "text-amber-600 font-semibold" : undefined}
                   />
                   <StatCard
                     title="Tarifabweichung"
                     value={formatNumber(contractPipelineStats.missingHours)}
                     subtitle="Servicevertrag ohne Inklusivstunden"
+                    className={contractPipelineStats.missingHours > 0 ? "border-l-[3px] border-l-rose-400" : undefined}
+                    valueClassName={contractPipelineStats.missingHours > 0 ? "text-rose-600 font-semibold" : undefined}
                   />
                 </div>
 
@@ -978,7 +1017,7 @@ export default function StatsView() {
                           >
                             <td className="px-3 py-2 text-sand-800">
                               {item.customerName || "Unbekannt"}
-                              <div className="text-[10px] text-sand-400">
+                              <div className="text-[11px] text-sand-400">
                                 {item.customerNumber || "Keine Kundennummer"}
                               </div>
                             </td>
@@ -987,7 +1026,7 @@ export default function StatsView() {
                                 const rowContracts = Array.isArray(item?.contracts) ? item.contracts : [];
                                 if (!rowContracts.length) {
                                   return (
-                                    <div className="text-[10px] text-sand-400">
+                                    <div className="text-[11px] text-sand-400">
                                       Keine hinterlegten Verträge
                                     </div>
                                   );
@@ -1013,21 +1052,21 @@ export default function StatsView() {
                                             {contractTypeLabel(contract.type)}
                                           </span>
                                           {contract.unpaidPayment ? (
-                                            <span className="inline-flex rounded-full border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+                                            <span className="inline-flex rounded-full border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700">
                                               !
                                             </span>
                                           ) : null}
                                         </div>
-                                        <div className="mt-1 text-[10px] text-sand-700">
+                                        <div className="mt-1 text-[11px] text-sand-700">
                                           {contract.title || "Vertrag"}
                                         </div>
-                                        <div className="text-[10px] text-sand-400">
+                                        <div className="text-[11px] text-sand-400">
                                           Inklusiv: {formatHours(contract.monthlyHoursIncluded || 0)}
                                         </div>
-                                        <div className="text-[10px] text-sand-400">
+                                        <div className="text-[11px] text-sand-400">
                                           Wert/Monat: {formatEur(contract.monthlyValue || 0)}
                                         </div>
-                                        <div className="text-[10px] text-sand-400">
+                                        <div className="text-[11px] text-sand-400">
                                           Verlängerung:{" "}
                                           {contract.nextRenewalAt || contract.createdAt
                                             ? formatDate(
@@ -1045,10 +1084,10 @@ export default function StatsView() {
                             </td>
                             <td className="px-3 py-2 text-sand-700">
                               {formatHours(item.contractHoursSoll ?? 0)}
-                              <div className="text-[10px] text-sand-400">
+                              <div className="text-[11px] text-sand-400">
                                 Umsatz/Monat: {formatEur(item.contractRevenueMonthly ?? 0)}
                               </div>
-                              <div className="text-[10px] text-sand-400">
+                              <div className="text-[11px] text-sand-400">
                                 je Vertrag: {formatEur(item.contractRevenuePerContractMonthly ?? 0)}
                               </div>
                             </td>
@@ -1073,6 +1112,7 @@ export default function StatsView() {
                                   icon={Sigma}
                                   label="Delta"
                                   value={formatHoursDelta(item.deltaHoursCurrentMonth ?? 0)}
+                                  valueClassName={deltaValueClass(item.deltaHoursCurrentMonth ?? 0)}
                                 />
                               </div>
                             </td>
@@ -1099,6 +1139,7 @@ export default function StatsView() {
                                   icon={Sigma}
                                   label="Delta"
                                   value={formatHoursDelta(item.deltaHoursPreviousMonth ?? 0)}
+                                  valueClassName={deltaValueClass(item.deltaHoursPreviousMonth ?? 0)}
                                 />
                               </div>
                             </td>
@@ -1130,9 +1171,9 @@ export default function StatsView() {
                 ) : (
                   <>
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                      <StatCard title="A-Kunden" value={formatNumber(customerGradeCounts.A)} subtitle="Zahlungsmoral stabil" />
-                      <StatCard title="B-Kunden" value={formatNumber(customerGradeCounts.B)} subtitle="Beobachtung empfohlen" />
-                      <StatCard title="C-Kunden" value={formatNumber(customerGradeCounts.C)} subtitle="Erhöhtes Risiko / Überfällig" />
+                      <StatCard title="A-Kunden" value={formatNumber(customerGradeCounts.A)} subtitle="Zahlungsmoral stabil" valueClassName="text-emerald-700 font-semibold" className="border-l-[3px] border-l-emerald-400" />
+                      <StatCard title="B-Kunden" value={formatNumber(customerGradeCounts.B)} subtitle="Beobachtung empfohlen" valueClassName="text-amber-600 font-semibold" className="border-l-[3px] border-l-amber-400" />
+                      <StatCard title="C-Kunden" value={formatNumber(customerGradeCounts.C)} subtitle="Erhöhtes Risiko / Überfällig" valueClassName="text-rose-600 font-semibold" className="border-l-[3px] border-l-rose-400" />
                       <StatCard
                         title="Ø Offen (alle Kunden)"
                         value={formatDays(customerPaymentSummary.avgOpenAgeDays)}
@@ -1202,20 +1243,20 @@ export default function StatsView() {
                                 </td>
                                 <td className="px-3 py-2 text-sand-700">
                                   Ø Zahlung: {formatDays(item.avgPaymentDays)}
-                                  <div className="text-[10px] text-sand-400">
+                                  <div className="text-[11px] text-sand-400">
                                     Spät: {formatPercent(item.latePaidRatePct)} ({formatNumber(item.latePaidInvoices || 0)} / {formatNumber(item.paidInvoices || 0)})
                                   </div>
-                                  <div className="text-[10px] text-sand-400">
+                                  <div className="text-[11px] text-sand-400">
                                     Sehr spät {'>'}30T: {formatNumber(item.veryLatePaidInvoices || 0)}
                                   </div>
                                 </td>
                                 <td className="px-3 py-2 text-sand-700">
                                   {formatNumber(item.remindersTotal || 0)}
-                                  <div className="text-[10px] text-sand-400">Historisch</div>
+                                  <div className="text-[11px] text-sand-400">Historisch</div>
                                 </td>
                                 <td className="px-3 py-2 text-sand-700">
                                   {formatNumber(item.openOverdueInvoices || item.openInvoices || 0)}
-                                  <div className="text-[10px] text-sand-400">
+                                  <div className="text-[11px] text-sand-400">
                                     davon überfällig: {formatNumber(item.overdueInvoices || 0)} · {formatEur(item.openOverdueAmountEur || item.openAmountEur || 0)}
                                   </div>
                                 </td>

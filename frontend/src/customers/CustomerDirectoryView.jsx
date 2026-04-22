@@ -26,6 +26,7 @@ import {
 import CustomerInventoryTab from "./CustomerInventoryTab";
 import { renderReportHTML, uid } from "../reporting/utils";
 import { telephonyService } from "../telephony/telephonyService";
+import { sanitizeHtml } from "../utils/sanitizeHtml";
 
 const API = "/api";
 
@@ -4860,7 +4861,7 @@ export default function CustomerDirectoryView() {
                       <div className="flex items-start justify-between gap-2">
                         <p className="text-[11px] font-semibold uppercase tracking-wide">{option.title}</p>
                         <span
-                          className={`rounded-full border px-2 py-0.5 text-[9px] uppercase tracking-wide ${
+                          className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
                             active ? "border-white/30 text-white" : "border-sand-200 text-sand-500"
                           }`}
                         >
@@ -5362,7 +5363,7 @@ export default function CustomerDirectoryView() {
             </div>
             <div className="max-h-[70vh] overflow-y-auto p-6 bg-sand-50">
               <div className="bg-white border border-sand-200 rounded-2xl p-4">
-                <div dangerouslySetInnerHTML={{ __html: previewModal.html }} />
+                <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(previewModal.html) }} />
               </div>
             </div>
           </div>
@@ -6108,17 +6109,14 @@ export default function CustomerDirectoryView() {
         </div>
       ) : null}
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3 rounded-2xl border border-sand-200 bg-gradient-to-r from-white via-sand-50 to-sand-100 px-3 py-2.5 shadow-soft">
-            <div className="h-12 w-12 rounded-xl border border-sand-200 bg-white text-sand-800 flex items-center justify-center">
-              <BookPlus size={20} />
+        <div className="max-w-6xl mx-auto px-5 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
+              <BookPlus size={18} />
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">QT Workbench</p>
-              <h1 className="text-xl font-display text-sand-900 leading-tight">Kundenkartei</h1>
-            </div>
-            <div className="hidden sm:flex h-8 w-8 rounded-lg bg-sand-900 text-white items-center justify-center">
-              <Users size={15} />
+              <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+              <h1 className="text-xl font-display text-sand-900">Kundenkartei</h1>
             </div>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">

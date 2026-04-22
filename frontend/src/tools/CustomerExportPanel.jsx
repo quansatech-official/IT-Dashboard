@@ -18,6 +18,11 @@ const boolLabel = (value) => (value ? "Ja" : "Nein");
 
 const cleanText = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
+const cleanExcelCell = (value) => {
+  const text = cleanText(value);
+  return /^[=+\-@]/.test(text) ? `'${text}` : text;
+};
+
 const normalizeKey = (value) => cleanText(value).toLowerCase();
 
 const slug = (value) =>
@@ -225,24 +230,24 @@ const buildRows = (customers) =>
           .join(", ")
       : "";
     return {
-      "Kundennummer": customer.creditorNumber,
-      "Name": customer.name,
+      "Kundennummer": cleanExcelCell(customer.creditorNumber),
+      "Name": cleanExcelCell(customer.name),
       "Status": customer.status === "inactive" ? "Inaktiv" : "Aktiv",
-      "Kurzcode": customer.shortCode,
-      "Sevdesk Contact ID": customer.sevdeskContactId,
-      "E-Mail": customer.email,
-      "Newsletter E-Mail": customer.newsletterEmail,
-      "Rechnungs-E-Mail": customer.billingEmail,
+      "Kurzcode": cleanExcelCell(customer.shortCode),
+      "Sevdesk Contact ID": cleanExcelCell(customer.sevdeskContactId),
+      "E-Mail": cleanExcelCell(customer.email),
+      "Newsletter E-Mail": cleanExcelCell(customer.newsletterEmail),
+      "Rechnungs-E-Mail": cleanExcelCell(customer.billingEmail),
       "Newsletter": boolLabel(customer.newsletter),
       "Kundenbericht": boolLabel(customer.customerReport),
       "Zeiterfassung": boolLabel(customer.timeTracking),
       "Wartungsvertrag": boolLabel(customer.maintenanceContract),
-      "Vertragstypen": contractText,
-      "Telefon": phoneText,
-      "Strasse": customer.street,
-      "PLZ": customer.postalCode,
-      "Ort": customer.city,
-      "Land": customer.country
+      "Vertragstypen": cleanExcelCell(contractText),
+      "Telefon": cleanExcelCell(phoneText),
+      "Strasse": cleanExcelCell(customer.street),
+      "PLZ": cleanExcelCell(customer.postalCode),
+      "Ort": cleanExcelCell(customer.city),
+      "Land": cleanExcelCell(customer.country)
     };
   });
 

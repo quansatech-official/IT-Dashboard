@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
@@ -8,7 +8,7 @@ import Color from "@tiptap/extension-color";
 import Highlight from "@tiptap/extension-highlight";
 import TextAlign from "@tiptap/extension-text-align";
 import Image from "@tiptap/extension-image";
-import { Bold, Italic, Link2, List, ListOrdered, StickyNote, Underline as UnderlineIcon } from "lucide-react";
+import { Bold, Italic, LayoutList, Link2, List, ListOrdered, PenLine, StickyNote, Underline as UnderlineIcon } from "lucide-react";
 
 const API = "/api";
 
@@ -27,16 +27,17 @@ const fetchJson = async (url, options) => {
 
 const api = {
   pinboard: () => fetchJson(`${API}/pinboard`),
-  savePinboard: (id, content) =>
+  savePinboard: (id, content, clientUpdatedAt) =>
     fetchJson(`${API}/pinboard/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content })
+      body: JSON.stringify({ content, client_updated_at: clientUpdatedAt ?? null })
     })
 };
 
 export default function NotesView() {
   const [note, setNote] = useState({ id: null, content: "" });
+  const serverUpdatedAt = useRef(null);
   const saveTimer = useRef(null);
   const lastLoadedId = useRef(null);
   const [isEmpty, setIsEmpty] = useState(true);
@@ -49,6 +50,7 @@ export default function NotesView() {
   const [filterTag, setFilterTag] = useState("");
   const imageInputRef = useRef(null);
   const [forceSaving, setForceSaving] = useState(false);
+  const [viewMode, setViewMode] = useState("editor");
   const quickTags = ["todo", "urgent", "kunde", "telefon", "termin"];
 
   const editor = useEditor({
@@ -79,6 +81,37 @@ export default function NotesView() {
     }
   });
 
+  const listItems = useMemo(() => {
+    if (!editor) return [];
+    const json = editor.getJSON();
+    const items = [];
+    const walk = (nodes) => {
+      if (!Array.isArray(nodes)) return;
+      nodes.forEach((node) => {
+        if (node.type === "heading") {
+          const text = (node.content || []).map((c) => c.text || "").join("").trim();
+          if (text) items.push({ type: "heading", level: node.attrs?.level || 2, text });
+        } else if (node.type === "paragraph") {
+          const text = (node.content || []).map((c) => c.text || "").join("").trim();
+          if (text) items.push({ type: "paragraph", text });
+        } else if (node.type === "bulletList" || node.type === "orderedList") {
+          (node.content || []).forEach((li, idx) => {
+            const text = (li.content || [])
+              .flatMap((p) => p.content || [])
+              .map((c) => c.text || "")
+              .join("")
+              .trim();
+            if (text) items.push({ type: "listItem", ordered: node.type === "orderedList", index: idx + 1, text });
+          });
+        } else if (node.content) {
+          walk(node.content);
+        }
+      });
+    };
+    walk(json.content);
+    return items;
+  }, [editor, note.content]);
+
   useEffect(() => {
     let cancelled = false;
     api
@@ -87,6 +120,7 @@ export default function NotesView() {
         if (cancelled) return;
         lastSavedContent.current = data.content || "";
         latestContentRef.current = data.content || "";
+        serverUpdatedAt.current = data.updated_at ?? null;
         setNote({
           id: data.id,
           content: data.content || ""
@@ -225,40 +259,120 @@ export default function NotesView() {
   return (
     <div className="min-h-[100dvh] h-[100dvh] bg-sand-50 overflow-hidden">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur shrink-0">
-        <div className="max-w-6xl mx-auto px-4 py-1.5 flex items-center gap-2">
-          <div className="h-7 w-7 rounded-lg bg-sand-900 text-white flex items-center justify-center">
-            <StickyNote size={14} />
+        <div className="max-w-6xl mx-auto px-5 py-3 flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
+            <StickyNote size={18} />
           </div>
           <div>
-            <p className="text-[9px] uppercase tracking-[0.25em] text-sand-500">QT Workbench</p>
-            <h1 className="text-base font-display text-sand-900">Notizen</h1>
+            <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+            <h1 className="text-xl font-display text-sand-900">Notizen</h1>
           </div>
         </div>
       </header>
 
-      <main className="h-[calc(100dvh-50px)] max-w-6xl mx-auto px-4 py-2 flex flex-col">
+      <main className="h-[calc(100dvh-68px)] max-w-6xl mx-auto px-4 py-2 flex flex-col">
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-3 flex flex-col h-full">
           <div className="flex items-center justify-between gap-3 text-sand-700 mb-3">
             <div className="flex items-center gap-2">
               <StickyNote size={16} />
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Pinboard</p>
+              <p className="text-xs uppercase tracking-[0.2em] font-medium text-sand-500">Pinboard</p>
             </div>
-            <div className="text-[11px] text-sand-500 flex items-center gap-3">
-              <span>
-                {saveState.status === "saving"
-                  ? "Speichert..."
-                  : saveState.status === "saved"
-                  ? `Gespeichert ${saveState.at}`
-                  : saveState.status === "error"
-                  ? "Speichern fehlgeschlagen"
-                  : ""}
-              </span>
-              <span className="text-sand-400">{isEmpty ? "Leer" : "Bearbeitet"}</span>
+            <div className="flex items-center gap-3">
+              <div className="text-[11px] text-sand-500 flex items-center gap-2">
+                <span>
+                  {saveState.status === "saving"
+                    ? "Speichert..."
+                    : saveState.status === "saved"
+                    ? `Gespeichert ${saveState.at}`
+                    : saveState.status === "error"
+                    ? "Speichern fehlgeschlagen"
+                    : ""}
+                </span>
+              </div>
+              <div className="flex items-center rounded-lg border border-sand-200 bg-sand-50 p-0.5 gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("editor")}
+                  title="Editor"
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors duration-150 ${
+                    viewMode === "editor"
+                      ? "bg-white text-[var(--nav-accent)] shadow-sm border border-[var(--border-200)]"
+                      : "text-sand-500 hover:text-sand-700"
+                  }`}
+                >
+                  <PenLine size={12} />
+                  Editor
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("list")}
+                  title="Listenansicht"
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium transition-colors duration-150 ${
+                    viewMode === "list"
+                      ? "bg-white text-[var(--nav-accent)] shadow-sm border border-[var(--border-200)]"
+                      : "text-sand-500 hover:text-sand-700"
+                  }`}
+                >
+                  <LayoutList size={12} />
+                  Liste
+                </button>
+              </div>
             </div>
           </div>
+          {viewMode === "list" ? (
+            <div className="flex-1 overflow-auto pb-6">
+              {listItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-sand-400 gap-3">
+                  <LayoutList size={32} className="opacity-40" />
+                  <p className="text-sm">Noch keine Inhalte. Wechsle in den Editor um Notizen zu verfassen.</p>
+                  <button
+                    type="button"
+                    onClick={() => setViewMode("editor")}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--nav-accent)] bg-[var(--nav-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-85 transition-opacity duration-150"
+                  >
+                    <PenLine size={12} />
+                    Editor öffnen
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-1 py-1">
+                  {listItems.map((item, idx) => {
+                    if (item.type === "heading") {
+                      const Tag = `h${item.level}`;
+                      const sizeClass = item.level === 1 ? "text-lg font-semibold" : "text-base font-semibold";
+                      return (
+                        <div key={idx} className={`pt-4 pb-1 border-b border-sand-100 ${sizeClass} text-sand-900 font-display`}>
+                          {item.text}
+                        </div>
+                      );
+                    }
+                    if (item.type === "listItem") {
+                      return (
+                        <div key={idx} className="flex items-start gap-3 rounded-lg px-3 py-2 hover:bg-sand-50 group">
+                          <span className="mt-0.5 shrink-0 text-[11px] font-medium text-sand-400 w-5 text-right">
+                            {item.ordered ? `${item.index}.` : "•"}
+                          </span>
+                          <span className="text-sm text-sand-800 leading-relaxed">{item.text}</span>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={idx} className="flex items-start gap-3 rounded-lg px-3 py-2 hover:bg-sand-50">
+                        <span className="mt-2 shrink-0 h-1.5 w-1.5 rounded-full bg-sand-300" />
+                        <span className="text-sm text-sand-800 leading-relaxed">{item.text}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : null}
+
           <div
             id="pinboard-toolbar"
-            className="sticky top-0 z-10 -mx-3 px-3 py-2 flex flex-wrap items-center gap-1.5 bg-white/95 backdrop-blur border-b border-sand-200 mb-3"
+            className={`sticky top-0 z-10 -mx-3 px-3 py-2 flex flex-wrap items-center gap-1.5 bg-white/95 backdrop-blur border-b border-sand-200 mb-3 ${
+              viewMode === "list" ? "hidden" : ""
+            }`}
           >
             <select
               value={editor?.getAttributes("heading").level || 0}
@@ -437,7 +551,7 @@ export default function NotesView() {
             onChange={handleImageSelect}
             className="hidden"
           />
-          <div className="flex-1 overflow-auto space-y-4 pb-6">
+          <div className={`flex-1 overflow-auto space-y-4 pb-6 ${viewMode === "list" ? "hidden" : ""}`}>
             <div className="flex gap-3">
               <div className="w-[90%] min-w-0">
                 <div className="relative">

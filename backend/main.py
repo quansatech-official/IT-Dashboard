@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Response, Request, Form, Header
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, Dict, Any, List, Tuple, Set, Callable
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
@@ -25,6 +25,7 @@ import unicodedata
 import hashlib
 import hmac
 import base64
+import secrets
 import gzip
 import imaplib
 import ssl
@@ -34,7 +35,7 @@ from email import policy
 from email.parser import Parser
 from email.utils import formataddr, formatdate, make_msgid, parseaddr, parsedate_to_datetime
 import requests
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from datetime import datetime, timedelta, timezone
 import logging
 import xml.etree.ElementTree as ET
@@ -83,6 +84,24 @@ OLLAMA_MAX_TOKENS_HARD_LIMIT = max(
 MAIL_PROVIDER_SMTP_IMAP = "smtp_imap"
 MAIL_PROVIDER_GRAPH = "microsoft_graph"
 MAIL_PROVIDERS = {MAIL_PROVIDER_SMTP_IMAP, MAIL_PROVIDER_GRAPH}
+GRAPH_DELEGATED_TOKEN_PREFIX = "delegated_refresh:"
+GRAPH_DELEGATED_SCOPES = "openid profile email offline_access User.Read Mail.Send Mail.Read"
+GRAPH_OAUTH_CLIENT_ID = str(
+    os.environ.get("M365_OAUTH_CLIENT_ID")
+    or os.environ.get("MICROSOFT_GRAPH_CLIENT_ID")
+    or os.environ.get("AZURE_CLIENT_ID")
+    or ""
+).strip()
+GRAPH_OAUTH_CLIENT_SECRET = str(
+    os.environ.get("M365_OAUTH_CLIENT_SECRET")
+    or os.environ.get("MICROSOFT_GRAPH_CLIENT_SECRET")
+    or os.environ.get("AZURE_CLIENT_SECRET")
+    or ""
+).strip()
+GRAPH_OAUTH_AUTHORITY = str(os.environ.get("M365_OAUTH_AUTHORITY") or "organizations").strip() or "organizations"
+GRAPH_OAUTH_REDIRECT_URI = str(os.environ.get("M365_OAUTH_REDIRECT_URI") or "").strip()
+_graph_oauth_states: Dict[str, Dict[str, Any]] = {}
+_graph_oauth_states_lock = threading.Lock()
 MAIL_FUNCTIONS = [
     {
         "key": "newsletter_send",
@@ -198,6 +217,12 @@ INTERNAL_AI_STREAM_TIMEOUT_SECONDS = max(
     30,
     int(os.environ.get("INTERNAL_AI_STREAM_TIMEOUT_SECONDS") or "300"),
 )
+ENABLE_DEBUG_ENDPOINTS = str(os.environ.get("ENABLE_DEBUG_ENDPOINTS") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 DB_STARTUP_RETRY_ATTEMPTS = max(
     1,
     int(os.environ.get("DB_STARTUP_RETRY_ATTEMPTS") or "30"),
@@ -606,6 +631,7 @@ class PinNote(Base):
 
     id = Column(Integer, primary_key=True)
     content = Column(String, default="")
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
 class VisionBoardNote(Base):
@@ -1732,6 +1758,13 @@ def _ensure_customer_columns() -> None:
         statements.append("ALTER TABLE customers ADD COLUMN sevdesk_contact_id VARCHAR DEFAULT ''")
     if "short_code" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN short_code VARCHAR DEFAULT ''")
+    pin_notes_columns = (
+        {column["name"] for column in inspector.get_columns("pin_notes")}
+        if inspector.has_table("pin_notes")
+        else set()
+    )
+    if pin_notes_columns and "updated_at" not in pin_notes_columns:
+        statements.append(f"ALTER TABLE pin_notes ADD COLUMN updated_at BIGINT DEFAULT {int(time.time() * 1000)}")
     if "email" not in columns:
         statements.append("ALTER TABLE customers ADD COLUMN email VARCHAR DEFAULT ''")
     if "newsletter_email" not in columns:
@@ -2035,6 +2068,17 @@ class CustomerPhoneSchema(BaseModel):
     number: Optional[str] = ""
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+def _validate_email_field(v: Optional[str]) -> Optional[str]:
+    if v is None or v == "":
+        return v
+    v = v.strip()
+    if v and not _EMAIL_RE.match(v):
+        raise ValueError(f"Invalid email address: {v!r}")
+    return v
+
+
 class CustomerCreate(BaseModel):
     name: str
     creditor_number: Optional[str] = ""
@@ -2053,6 +2097,11 @@ class CustomerCreate(BaseModel):
     city: Optional[str] = ""
     country: Optional[str] = ""
     phones: Optional[List[CustomerPhoneSchema]] = None
+
+    @field_validator("email", "newsletter_email", mode="before")
+    @classmethod
+    def validate_emails(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_email_field(v)
 
 
 class CustomerUpdate(BaseModel):
@@ -2073,6 +2122,11 @@ class CustomerUpdate(BaseModel):
     city: Optional[str] = None
     country: Optional[str] = None
     phones: Optional[List[CustomerPhoneSchema]] = None
+
+    @field_validator("email", "newsletter_email", mode="before")
+    @classmethod
+    def validate_emails(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_email_field(v)
 
 
 class DayTaskCreate(BaseModel):
@@ -2230,6 +2284,7 @@ class DayTaskGroupUpdate(BaseModel):
 
 class PinNoteUpdate(BaseModel):
     content: str
+    client_updated_at: Optional[int] = None
 
 
 class VisionBoardNoteCreate(BaseModel):
@@ -2967,14 +3022,115 @@ def _graph_mailbox(account: MailAccount) -> str:
     return str(account.graph_mailbox_upn or account.mailbox_email or account.sender_email or "").strip()
 
 
+def _graph_delegated_refresh_token(account: MailAccount) -> str:
+    raw_secret = str(account.graph_client_secret or "")
+    if not raw_secret.startswith(GRAPH_DELEGATED_TOKEN_PREFIX):
+        return ""
+    payload = raw_secret[len(GRAPH_DELEGATED_TOKEN_PREFIX) :].strip()
+    if payload.startswith("{"):
+        try:
+            parsed = json.loads(payload)
+            return str(parsed.get("refresh_token") or "").strip()
+        except Exception:
+            return ""
+    return payload
+
+
+def _graph_delegated_client_secret(account: MailAccount) -> str:
+    raw_secret = str(account.graph_client_secret or "")
+    if raw_secret.startswith(GRAPH_DELEGATED_TOKEN_PREFIX):
+        payload = raw_secret[len(GRAPH_DELEGATED_TOKEN_PREFIX) :].strip()
+        if payload.startswith("{"):
+            try:
+                parsed = json.loads(payload)
+                return str(parsed.get("client_secret") or GRAPH_OAUTH_CLIENT_SECRET or "").strip()
+            except Exception:
+                return GRAPH_OAUTH_CLIENT_SECRET
+    return GRAPH_OAUTH_CLIENT_SECRET
+
+
+def _graph_delegated_secret_payload(refresh_token: str, client_secret: str = "") -> str:
+    clean_refresh_token = str(refresh_token or "").strip()
+    clean_client_secret = str(client_secret or "").strip()
+    if clean_client_secret:
+        return f"{GRAPH_DELEGATED_TOKEN_PREFIX}{json.dumps({'refresh_token': clean_refresh_token, 'client_secret': clean_client_secret})}"
+    return f"{GRAPH_DELEGATED_TOKEN_PREFIX}{clean_refresh_token}"
+
+
+def _graph_has_delegated_oauth(account: MailAccount) -> bool:
+    return bool(_graph_delegated_refresh_token(account))
+
+
+def _graph_oauth_client_id(account: Optional[MailAccount] = None) -> str:
+    return str((account.graph_client_id if account else "") or GRAPH_OAUTH_CLIENT_ID or "").strip()
+
+
+def _graph_oauth_tenant(account: Optional[MailAccount] = None) -> str:
+    return str((account.graph_tenant_id if account else "") or GRAPH_OAUTH_AUTHORITY or "organizations").strip()
+
+
+def _graph_token_url(tenant_id: str) -> str:
+    return f"https://login.microsoftonline.com/{quote(str(tenant_id or GRAPH_OAUTH_AUTHORITY or 'organizations').strip())}/oauth2/v2.0/token"
+
+
+def _graph_pkce_challenge(verifier: str) -> str:
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _decode_jwt_payload(token: Any) -> Dict[str, Any]:
+    parts = str(token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def _graph_exchange_refresh_token(account: MailAccount) -> str:
+    refresh_token = _graph_delegated_refresh_token(account)
+    client_id = _graph_oauth_client_id(account)
+    if not refresh_token or not client_id:
+        raise RuntimeError("Microsoft 365 OAuth Anmeldung fehlt")
+    data = {
+        "client_id": client_id,
+        "scope": GRAPH_DELEGATED_SCOPES,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }
+    client_secret = _graph_delegated_client_secret(account)
+    if client_secret:
+        data["client_secret"] = client_secret
+    response = requests.post(
+        _graph_token_url(_graph_oauth_tenant(account)),
+        data=data,
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Graph Refresh-Token fehlgeschlagen ({response.status_code}): {response.text[:300]}")
+    payload = response.json()
+    new_refresh_token = str(payload.get("refresh_token") or "").strip()
+    if new_refresh_token and new_refresh_token != refresh_token:
+        account.graph_client_secret = _graph_delegated_secret_payload(new_refresh_token, client_secret)
+        account.updated_at = int(time.time() * 1000)
+    token = str(payload.get("access_token") or "").strip()
+    if not token:
+        raise RuntimeError("Graph Token Antwort ohne access_token")
+    return token
+
+
 def _graph_access_token(account: MailAccount) -> str:
+    if _graph_has_delegated_oauth(account):
+        return _graph_exchange_refresh_token(account)
     tenant_id = str(account.graph_tenant_id or "").strip()
     client_id = str(account.graph_client_id or "").strip()
     client_secret = str(account.graph_client_secret or "").strip()
     if not tenant_id or not client_id or not client_secret:
         raise RuntimeError("Microsoft 365 OAuth Konfiguration unvollstaendig")
     response = requests.post(
-        f"https://login.microsoftonline.com/{quote(tenant_id)}/oauth2/v2.0/token",
+        _graph_token_url(tenant_id),
         data={
             "client_id": client_id,
             "client_secret": client_secret,
@@ -2997,6 +3153,15 @@ def _graph_headers(account: MailAccount) -> Dict[str, str]:
         "Authorization": f"Bearer {_graph_access_token(account)}",
         "Content-Type": "application/json",
     }
+
+
+def _graph_user_base_path(account: MailAccount) -> str:
+    mailbox = _graph_mailbox(account)
+    if _graph_has_delegated_oauth(account):
+        return "me"
+    if not mailbox:
+        raise RuntimeError("Microsoft 365 Mailbox fehlt")
+    return f"users/{quote(mailbox)}"
 
 
 def _graph_attachment_payload(attachments: Optional[List["EmailAttachment"]]) -> List[Dict[str, Any]]:
@@ -3046,7 +3211,7 @@ def _send_mail_via_graph(
     if graph_attachments:
         message["attachments"] = graph_attachments
     response = requests.post(
-        f"https://graph.microsoft.com/v1.0/users/{quote(mailbox)}/sendMail",
+        f"https://graph.microsoft.com/v1.0/{_graph_user_base_path(account)}/sendMail",
         headers=_graph_headers(account),
         json={"message": message, "saveToSentItems": True},
         timeout=30,
@@ -3082,13 +3247,10 @@ def _connect_imap_with_account(account: MailAccount):
 def _test_mail_account_read(account: MailAccount) -> Dict[str, Any]:
     provider = _normalize_mail_provider(account.provider)
     if provider == MAIL_PROVIDER_GRAPH:
-        mailbox = _graph_mailbox(account)
-        if not mailbox:
-            raise RuntimeError("Microsoft 365 Mailbox fehlt")
         folder = str(account.imap_folder or "inbox").strip() or "inbox"
         folder_id = "inbox" if folder.upper() == "INBOX" else folder
         response = requests.get(
-            f"https://graph.microsoft.com/v1.0/users/{quote(mailbox)}/mailFolders/{quote(folder_id)}/messages",
+            f"https://graph.microsoft.com/v1.0/{_graph_user_base_path(account)}/mailFolders/{quote(folder_id)}/messages",
             headers=_graph_headers(account),
             params={"$top": 1, "$select": "id,subject,receivedDateTime"},
             timeout=20,
@@ -3109,6 +3271,7 @@ class OfferSaveRequest(BaseModel):
     customer: Optional[str] = ""
     status: Optional[str] = ""
     data: Dict[str, Any]
+    client_updated_at: Optional[int] = None
 
 
 class OfferSaveResponse(BaseModel):
@@ -10709,11 +10872,16 @@ def _normalize_mail_account_name(account: MailAccount) -> str:
 
 def serialize_mail_account(account: MailAccount) -> Dict[str, Any]:
     provider = _normalize_mail_provider(account.provider)
-    can_send = bool(
-        provider == MAIL_PROVIDER_GRAPH
-        and account.graph_tenant_id
+    has_graph_delegated_oauth = _graph_has_delegated_oauth(account)
+    has_graph_app_credentials = bool(
+        account.graph_tenant_id
         and account.graph_client_id
         and account.graph_client_secret
+        and not has_graph_delegated_oauth
+    )
+    can_send = bool(
+        provider == MAIL_PROVIDER_GRAPH
+        and (has_graph_delegated_oauth or has_graph_app_credentials)
         and (account.graph_mailbox_upn or account.sender_email or account.mailbox_email)
     ) or bool(
         provider == MAIL_PROVIDER_SMTP_IMAP
@@ -10722,9 +10890,7 @@ def serialize_mail_account(account: MailAccount) -> Dict[str, Any]:
     )
     can_read = bool(
         provider == MAIL_PROVIDER_GRAPH
-        and account.graph_tenant_id
-        and account.graph_client_id
-        and account.graph_client_secret
+        and (has_graph_delegated_oauth or has_graph_app_credentials)
         and (account.graph_mailbox_upn or account.mailbox_email or account.sender_email)
     ) or bool(
         provider == MAIL_PROVIDER_SMTP_IMAP
@@ -10760,7 +10926,8 @@ def serialize_mail_account(account: MailAccount) -> Dict[str, Any]:
         "graph_client_id": account.graph_client_id or "",
         "graph_client_secret": "",
         "graph_mailbox_upn": account.graph_mailbox_upn or "",
-        "has_graph_client_secret": bool(account.graph_client_secret),
+        "has_graph_client_secret": bool(account.graph_client_secret and not has_graph_delegated_oauth),
+        "has_graph_oauth": has_graph_delegated_oauth,
         "can_send": can_send,
         "can_read": can_read,
         "created_at": int(account.created_at or 0),
@@ -10787,6 +10954,12 @@ def serialize_mail_settings(db) -> Dict[str, Any]:
 def _apply_mail_account_update(account: MailAccount, data: MailAccountUpdate) -> MailAccount:
     incoming = data.dict(exclude_unset=True)
     for field, value in incoming.items():
+        if (
+            _graph_has_delegated_oauth(account)
+            and field in {"graph_tenant_id", "graph_client_id", "graph_mailbox_upn"}
+            and value in (None, "")
+        ):
+            continue
         if field in {"smtp_password", "imap_password", "graph_client_secret"} and value in (None, ""):
             continue
         if field == "provider":
@@ -19621,10 +19794,14 @@ def update_pinboard(note_id: int, data: PinNoteUpdate):
         note = db.query(PinNote).get(note_id)
         if not note:
             raise HTTPException(404, "Pinboard not found")
-
+        if data.client_updated_at is not None and note.updated_at is not None:
+            if data.client_updated_at < int(note.updated_at):
+                raise HTTPException(409, "Conflict: pinboard was updated elsewhere. Please reload.")
+        now_ms = int(time.time() * 1000)
         note.content = data.content
+        note.updated_at = now_ms
         db.commit()
-        return {"id": note.id, "content": note.content}
+        return {"id": note.id, "content": note.content, "updated_at": now_ms}
 
 
 # ================= VISION BOARD =================
@@ -20938,17 +21115,18 @@ def sevdesk_offer_to_invoice(offer_id: int, payload: Optional[SevdeskOfferDraftR
                 raise HTTPException(400, "Sevdesk unity id missing for offer positions")
 
             draft = client.find_draft_invoice(contact_id)
+            existing_invoice_id = None
             if draft:
-                invoice_id = int(draft.get("id"))
-                invoice_snapshot = client.get_invoice(invoice_id) or draft
+                existing_invoice_id = int(draft.get("id"))
+                invoice_snapshot = client.get_invoice(existing_invoice_id) or draft
                 header = _build_sevdesk_draft_header(client, config, invoice_snapshot, draft)
                 invoice_payload = client.build_invoice_payload(
-                    contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot, header=header
+                    contact_id, invoice_id=existing_invoice_id, invoice_snapshot=invoice_snapshot, header=header
                 )
             else:
                 header = _build_sevdesk_draft_header(client, config)
                 invoice_payload = client.build_invoice_payload(contact_id, header=header)
-            response = client.save_invoice(invoice_payload, client.build_positions(positions))
+            response = client.save_invoice(invoice_payload, client.build_positions(positions, invoice_id=existing_invoice_id))
         except SevdeskError as exc:
             raise HTTPException(502, str(exc)) from exc
 
@@ -21056,17 +21234,18 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
             draft = None
             if payload.use_existing_draft is not False:
                 draft = client.find_draft_invoice(contact_id)
+            existing_invoice_id = None
             if draft:
-                invoice_id = int(draft.get("id"))
-                invoice_snapshot = client.get_invoice(invoice_id) or draft
+                existing_invoice_id = int(draft.get("id"))
+                invoice_snapshot = client.get_invoice(existing_invoice_id) or draft
                 header = _build_sevdesk_draft_header(client, config, invoice_snapshot, draft)
                 invoice_payload = client.build_invoice_payload(
-                    contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot, header=header
+                    contact_id, invoice_id=existing_invoice_id, invoice_snapshot=invoice_snapshot, header=header
                 )
             else:
                 header = _build_sevdesk_draft_header(client, config)
                 invoice_payload = client.build_invoice_payload(contact_id, header=header)
-            response = client.save_invoice(invoice_payload, client.build_positions(positions))
+            response = client.save_invoice(invoice_payload, client.build_positions(positions, invoice_id=existing_invoice_id))
         except SevdeskError as exc:
             raise HTTPException(502, str(exc)) from exc
 
@@ -21214,17 +21393,18 @@ def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
                 ]
 
                 draft = client.find_draft_invoice(contact_id)
+                existing_invoice_id = None
                 if draft:
-                    invoice_id = int(draft.get("id"))
-                    invoice_snapshot = client.get_invoice(invoice_id) or draft
+                    existing_invoice_id = int(draft.get("id"))
+                    invoice_snapshot = client.get_invoice(existing_invoice_id) or draft
                     invoice_payload = client.build_invoice_payload(
-                        contact_id, invoice_id=invoice_id, invoice_snapshot=invoice_snapshot
+                        contact_id, invoice_id=existing_invoice_id, invoice_snapshot=invoice_snapshot
                     )
                 else:
                     invoice_payload = client.build_invoice_payload(
                         contact_id, header="Leistungsnachweis"
                     )
-                response = client.save_invoice(invoice_payload, client.build_positions(positions))
+                response = client.save_invoice(invoice_payload, client.build_positions(positions, invoice_id=existing_invoice_id))
 
                 for task in customer_tasks:
                     task.aberechnet = True
@@ -22431,6 +22611,172 @@ def delete_mail_account(account_id: str):
         return {"status": "deleted"}
 
 
+def _graph_oauth_callback_html(payload: Dict[str, Any]) -> HTMLResponse:
+    payload_json = json.dumps(payload)
+    title = "Microsoft 365 Anmeldung"
+    message = str(payload.get("message") or ("Anmeldung abgeschlossen." if payload.get("ok") else "Anmeldung fehlgeschlagen."))
+    message_js = json.dumps(message)
+    return HTMLResponse(
+        f"""<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <title>{escape(title)}</title>
+  </head>
+  <body style="font-family: system-ui, sans-serif; padding: 24px;">
+    <p>{escape(message)}</p>
+    <script>
+      const payload = {payload_json};
+      const targetOrigin = window.location.origin;
+      const notify = () => {{
+        if (window.opener) {{
+          window.opener.postMessage({{ type: "m365-oauth-result", ...payload }}, targetOrigin);
+        }}
+      }};
+      notify();
+      if (payload.ok) {{
+        setTimeout(() => window.close(), 700);
+      }} else {{
+        document.body.insertAdjacentHTML(
+          "beforeend",
+          "<p>Dieses Fenster kann geschlossen werden.</p><pre style='white-space: pre-wrap; background: #f6f6f6; padding: 12px;'>" + {message_js} + "</pre>"
+        );
+      }}
+    </script>
+  </body>
+</html>"""
+    )
+
+
+@app.post("/api/mail_accounts/{account_id}/microsoft_oauth/start")
+def start_mail_account_microsoft_oauth(account_id: str, request: Request):
+    with SessionLocal() as db:
+        account = db.query(MailAccount).filter(MailAccount.id == account_id).first()
+        if not account:
+            raise HTTPException(404, "Mail account not found")
+        account.provider = MAIL_PROVIDER_GRAPH
+        client_id = _graph_oauth_client_id(account)
+        if not client_id:
+            raise HTTPException(
+                400,
+                "Microsoft 365 OAuth Client ID fehlt. Bitte Client ID im Konto eintragen oder M365_OAUTH_CLIENT_ID setzen.",
+            )
+        if not str(account.graph_client_id or "").strip():
+            account.graph_client_id = client_id
+            account.updated_at = int(time.time() * 1000)
+            db.commit()
+        state = secrets.token_urlsafe(32)
+        verifier = secrets.token_urlsafe(64)
+        redirect_uri = GRAPH_OAUTH_REDIRECT_URI or str(request.url_for("finish_mail_account_microsoft_oauth"))
+        with _graph_oauth_states_lock:
+            _graph_oauth_states[state] = {
+                "account_id": account.id,
+                "client_id": client_id,
+                "client_secret": GRAPH_OAUTH_CLIENT_SECRET,
+                "tenant": _graph_oauth_tenant(account),
+                "redirect_uri": redirect_uri,
+                "verifier": verifier,
+                "created_at": time.time(),
+            }
+            cutoff = time.time() - 600
+            for key, value in list(_graph_oauth_states.items()):
+                if float(value.get("created_at") or 0) < cutoff:
+                    _graph_oauth_states.pop(key, None)
+        params = {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "response_mode": "query",
+            "scope": GRAPH_DELEGATED_SCOPES,
+            "state": state,
+            "prompt": "select_account",
+            "code_challenge": _graph_pkce_challenge(verifier),
+            "code_challenge_method": "S256",
+        }
+        authorize_url = (
+            f"https://login.microsoftonline.com/{quote(_graph_oauth_tenant(account))}/oauth2/v2.0/authorize?"
+            f"{urlencode(params)}"
+        )
+        return {"authorize_url": authorize_url}
+
+
+@app.get("/api/mail_accounts/microsoft_oauth/callback")
+def finish_mail_account_microsoft_oauth(code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None, error_description: Optional[str] = None):
+    if error:
+        logger.warning("Microsoft 365 OAuth authorization failed: %s", error_description or error)
+        return _graph_oauth_callback_html({"ok": False, "message": error_description or error})
+    if not code or not state:
+        return _graph_oauth_callback_html({"ok": False, "message": "Microsoft OAuth Antwort unvollstaendig."})
+    with _graph_oauth_states_lock:
+        oauth_state = _graph_oauth_states.pop(str(state), None)
+    if not oauth_state:
+        return _graph_oauth_callback_html({"ok": False, "message": "Microsoft OAuth Sitzung abgelaufen."})
+    try:
+        token_request_data = {
+            "client_id": str(oauth_state.get("client_id") or ""),
+            "scope": GRAPH_DELEGATED_SCOPES,
+            "code": code,
+            "redirect_uri": str(oauth_state.get("redirect_uri") or ""),
+            "grant_type": "authorization_code",
+            "code_verifier": str(oauth_state.get("verifier") or ""),
+        }
+        client_secret = str(oauth_state.get("client_secret") or "").strip()
+        if client_secret:
+            token_request_data["client_secret"] = client_secret
+        response = requests.post(
+            _graph_token_url(str(oauth_state.get("tenant") or GRAPH_OAUTH_AUTHORITY)),
+            data=token_request_data,
+            timeout=20,
+        )
+        if response.status_code >= 400:
+            logger.warning("Microsoft 365 OAuth token exchange failed (%s): %s", response.status_code, response.text[:500])
+            return _graph_oauth_callback_html(
+                {"ok": False, "message": f"Graph Token fehlgeschlagen ({response.status_code}): {response.text[:300]}"}
+            )
+        token_payload = response.json()
+        access_token = str(token_payload.get("access_token") or "").strip()
+        refresh_token = str(token_payload.get("refresh_token") or "").strip()
+        if not access_token or not refresh_token:
+            return _graph_oauth_callback_html({"ok": False, "message": "Microsoft OAuth Antwort ohne Token."})
+        me_response = requests.get(
+            "https://graph.microsoft.com/v1.0/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"$select": "displayName,mail,userPrincipalName"},
+            timeout=20,
+        )
+        if me_response.status_code >= 400:
+            logger.warning("Microsoft 365 OAuth profile fetch failed (%s): %s", me_response.status_code, me_response.text[:500])
+            return _graph_oauth_callback_html(
+                {"ok": False, "message": f"Microsoft Profil konnte nicht gelesen werden ({me_response.status_code})."}
+            )
+        me = me_response.json()
+        upn = str(me.get("mail") or me.get("userPrincipalName") or "").strip()
+        display_name = str(me.get("displayName") or "").strip()
+        id_claims = _decode_jwt_payload(token_payload.get("id_token"))
+        tenant_id = str(id_claims.get("tid") or oauth_state.get("tenant") or GRAPH_OAUTH_AUTHORITY).strip()
+        with SessionLocal() as db:
+            account = db.query(MailAccount).filter(MailAccount.id == str(oauth_state.get("account_id") or "")).first()
+            if not account:
+                return _graph_oauth_callback_html({"ok": False, "message": "Mailkonto wurde nicht gefunden."})
+            account.provider = MAIL_PROVIDER_GRAPH
+            account.graph_tenant_id = tenant_id
+            account.graph_client_id = str(oauth_state.get("client_id") or account.graph_client_id or "").strip()
+            account.graph_client_secret = _graph_delegated_secret_payload(refresh_token, client_secret)
+            if upn:
+                account.graph_mailbox_upn = upn
+                account.mailbox_email = account.mailbox_email or upn
+                account.sender_email = account.sender_email or upn
+            if display_name:
+                account.sender_name = account.sender_name or display_name
+                if not str(account.name or "").strip() or account.name == "Neues Mailkonto":
+                    account.name = display_name
+            account.updated_at = int(time.time() * 1000)
+            db.commit()
+        return _graph_oauth_callback_html({"ok": True, "message": "Microsoft 365 Anmeldung abgeschlossen.", "account_id": str(oauth_state.get("account_id") or "")})
+    except Exception as exc:  # noqa: BLE001
+        return _graph_oauth_callback_html({"ok": False, "message": f"Microsoft 365 Anmeldung fehlgeschlagen: {exc}"})
+
+
 @app.put("/api/mail_routes")
 def update_mail_routes(data: MailRoutesUpdate):
     with SessionLocal() as db:
@@ -22718,6 +23064,9 @@ def update_offer(offer_id: int, data: OfferSaveRequest, request: Request):
         offer = db.query(Offer).get(offer_id)
         if not offer:
             raise HTTPException(404, "Offer not found")
+        if data.client_updated_at is not None and offer.updated_at is not None:
+            if data.client_updated_at < int(offer.updated_at):
+                raise HTTPException(409, "Conflict: offer was updated elsewhere. Please reload.")
         payload = data.data or {}
         reference_value = str(data.reference or "").strip()
         if not reference_value and not str(offer.reference or "").strip():
@@ -24597,8 +24946,14 @@ def edit_report(
 
 
 # ================= DEBUG ====================
+def _require_debug_endpoints_enabled() -> None:
+    if not ENABLE_DEBUG_ENDPOINTS:
+        raise HTTPException(404, "Not found")
+
+
 @app.get("/api/debug/tables")
 def list_debug_tables():
+    _require_debug_endpoints_enabled()
     inspector = inspect(engine)
     tables = inspector.get_table_names()
     return {"tables": sorted(tables)}
@@ -24606,6 +24961,7 @@ def list_debug_tables():
 
 @app.post("/api/debug/clear_table")
 def clear_debug_table(data: DebugClearRequest):
+    _require_debug_endpoints_enabled()
     allowed_tables = {"day_tasks", "day_task_groups"}
     table = (data.table or "").strip()
     if not table or table not in allowed_tables:
@@ -24625,6 +24981,7 @@ def clear_debug_table(data: DebugClearRequest):
 
 @app.post("/api/debug/database_maintenance")
 def run_database_maintenance():
+    _require_debug_endpoints_enabled()
     started_at = int(time.time() * 1000)
     steps: List[str] = []
     try:

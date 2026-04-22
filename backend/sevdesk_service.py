@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time as _time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
@@ -53,6 +54,7 @@ class SevdeskClient:
         path: str,
         params: Optional[Dict[str, Any]] = None,
         payload: Optional[Dict[str, Any]] = None,
+        _retries: int = 2,
     ) -> Dict[str, Any]:
         url = f"{self.config.base_url.rstrip('/')}{path}"
         headers = {
@@ -61,23 +63,48 @@ class SevdeskClient:
             "Content-Type": "application/json",
             "User-Agent": "IT-Dashboard",
         }
-        response = requests.request(
-            method,
-            url,
-            params=params,
-            json=payload,
-            headers=headers,
-            timeout=self.timeout,
-        )
-        if not response.ok:
-            raise SevdeskError(
-                f"Sevdesk API error {response.status_code}: {response.text}",
-                status_code=response.status_code,
-                payload=response.text,
-            )
-        if not response.text:
-            return {}
-        return response.json()
+        last_exc: Optional[Exception] = None
+        for attempt in range(_retries + 1):
+            try:
+                response = requests.request(
+                    method,
+                    url,
+                    params=params,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout,
+                )
+            except requests.exceptions.ConnectionError as exc:
+                last_exc = exc
+                if attempt < _retries:
+                    _time.sleep(0.5 * (2 ** attempt))
+                    continue
+                raise SevdeskError(f"Sevdesk connection error: {exc}") from exc
+            except requests.exceptions.Timeout as exc:
+                last_exc = exc
+                if attempt < _retries:
+                    _time.sleep(0.5 * (2 ** attempt))
+                    continue
+                raise SevdeskError(f"Sevdesk request timed out after {self.timeout}s") from exc
+
+            # Retry on 429 (rate limit) and 5xx (server errors) — not on 4xx client errors
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt < _retries:
+                    retry_after = int(response.headers.get("Retry-After", 0))
+                    _time.sleep(max(retry_after, 0.5 * (2 ** attempt)))
+                    continue
+
+            if not response.ok:
+                raise SevdeskError(
+                    f"Sevdesk API error {response.status_code}: {response.text}",
+                    status_code=response.status_code,
+                    payload=response.text,
+                )
+            if not response.text:
+                return {}
+            return response.json()
+
+        raise SevdeskError(f"Sevdesk request failed after {_retries + 1} attempts") from last_exc
 
     def _extract_first(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not isinstance(payload, dict):
@@ -309,7 +336,72 @@ class SevdeskClient:
             "discountSave": [],
             "discountDelete": None,
         }
-        return self.request("POST", "/Invoice/Factory/saveInvoice", payload=payload)
+        response = self.request("POST", "/Invoice/Factory/saveInvoice", payload=payload)
+        # When adding positions to an existing draft Sevdesk does not automatically
+        # recompute sumNet/sumGross. Force a recalc so the totals are correct
+        # without requiring the user to manually open the draft in Sevdesk.
+        invoice_id = invoice_payload.get("id")
+        if invoice_id:
+            try:
+                self._recalculate_invoice_totals(int(invoice_id))
+            except Exception:
+                pass
+        return response
+
+    def _recalculate_invoice_totals(self, invoice_id: int) -> None:
+        """Fetch all positions of an invoice and PUT recomputed totals back so
+        Sevdesk reflects the correct sum without requiring a manual UI open."""
+        pos_response = self.request(
+            "GET",
+            "/InvoicePos",
+            params={
+                "invoice[id]": invoice_id,
+                "invoice[objectName]": "Invoice",
+                "limit": 500,
+                "offset": 0,
+            },
+        )
+        objects = pos_response.get("objects", [])
+        if isinstance(objects, dict):
+            objects = [objects]
+        if not isinstance(objects, list):
+            objects = []
+
+        sum_net = 0.0
+        sum_tax = 0.0
+        for pos in objects:
+            if not isinstance(pos, dict):
+                continue
+            try:
+                qty = float(pos.get("quantity") or 0)
+                price = float(pos.get("price") or 0)
+                tax_rate = float(pos.get("taxRate") or 0)
+            except (TypeError, ValueError):
+                continue
+            net = round(qty * price, 10)
+            sum_net += net
+            sum_tax += round(net * tax_rate / 100, 10)
+
+        sum_net = round(sum_net, 2)
+        sum_tax = round(sum_tax, 2)
+        sum_gross = round(sum_net + sum_tax, 2)
+
+        self.request(
+            "PUT",
+            f"/Invoice/{invoice_id}",
+            payload={
+                "id": invoice_id,
+                "objectName": "Invoice",
+                "mapAll": True,
+                "sumNet": sum_net,
+                "sumTax": sum_tax,
+                "sumGross": sum_gross,
+                "sumNetAccounting": sum_net,
+                "sumGrossAccounting": sum_gross,
+                "sumNetto": sum_net,
+                "sumBrutto": sum_gross,
+            },
+        )
 
     def build_invoice_payload(
         self,
@@ -400,7 +492,11 @@ class SevdeskClient:
             payload["id"] = invoice_id
         return payload
 
-    def build_positions(self, items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def build_positions(
+        self,
+        items: Iterable[Dict[str, Any]],
+        invoice_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         positions: List[Dict[str, Any]] = []
         for item in items:
             unity_id = item.get("unity_id") or self.config.unity_id or DEFAULT_UNITY_ID
@@ -419,7 +515,7 @@ class SevdeskClient:
                 tax_rate = float(tax_rate) if tax_rate is not None else None
             except (TypeError, ValueError):
                 tax_rate = None
-            position = {
+            position: Dict[str, Any] = {
                 "objectName": "InvoicePos",
                 "mapAll": True,
                 "quantity": quantity,
@@ -429,5 +525,9 @@ class SevdeskClient:
                 "taxRate": tax_rate,
                 "unity": {"id": unity_id, "objectName": "Unity"},
             }
+            # Explicitly linking positions to the invoice triggers Sevdesk to
+            # recompute totals on the draft rather than deferring until UI open.
+            if invoice_id is not None:
+                position["invoice"] = {"id": invoice_id, "objectName": "Invoice"}
             positions.append(position)
         return positions
