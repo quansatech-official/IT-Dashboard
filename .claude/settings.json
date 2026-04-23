@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh -o ConnectTimeout=6 192.168.100.10 \"ls /opt/it-dashboard 2>/dev/null || ls /root 2>/dev/null | head -10\")",
+      "Bash(git -C /Users/benji/Projects/IT-Dashboard diff .env.example docker-compose.yml)",
+      "Bash(git -C /Users/benji/Projects/IT-Dashboard add .env.example docker-compose.yml)",
+      "Bash(git -C /Users/benji/Projects/IT-Dashboard commit -m ' *)"
+    ]
+  }
+}
