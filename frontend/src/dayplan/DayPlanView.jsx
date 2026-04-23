@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowRight,
   CheckCircle,
   ChevronDown,
   ChevronRight,
@@ -8,11 +9,13 @@ import {
   DollarSign,
   GripVertical,
   Heart,
+  Info,
   Loader2,
   Mail,
   Pin,
   Play,
   Plus,
+  Receipt,
   Sparkles,
   Square,
   Star,
@@ -903,19 +906,20 @@ export default function DayPlanView() {
   const generateSevdeskDraftText = async () => {
     if (!sevdeskDraftTask || !sevdeskDraftForm) return;
     setSevdeskDraftAiLoading(true);
+    setSevdeskDraftStatus((prev) => ({ state: prev?.state === "saved" ? "saved" : "idle", error: "" }));
     try {
       const quantity = roundUpToQuarterHours(Number(sevdeskDraftForm.quantity));
       const contextParts = [
         sevdeskDraftTask.customer ? `Kunde: ${sevdeskDraftTask.customer}` : "",
-        sevdeskDraftTask.title ? `Leistung/Thema: ${sevdeskDraftTask.title}` : "",
-        sevdeskDraftTask.details ? `Ausgangslage/Details: ${sevdeskDraftTask.details}` : "",
+        sevdeskDraftTask.title ? `Aufgabentitel: ${sevdeskDraftTask.title}` : "",
+        sevdeskDraftTask.details ? `Details/Notizen: ${sevdeskDraftTask.details}` : "",
         sevdeskDraftTask.arrival_time || sevdeskDraftTask.departure_time
-          ? `Vor Ort: ${sevdeskDraftTask.arrival_time || "?"} bis ${sevdeskDraftTask.departure_time || "?"}`
+          ? `Einsatzzeit vor Ort: ${sevdeskDraftTask.arrival_time || "?"} bis ${sevdeskDraftTask.departure_time || "?"}`
           : "",
-        Number.isFinite(quantity) && quantity > 0 ? `Abrechenbare Zeit: ${quantity} h` : "",
-        sevdeskDraftForm.name ? `Positionsname: ${sevdeskDraftForm.name}` : "",
-        sevdeskDraftForm.include_mileage ? "Anfahrt wird separat als eigene Position berechnet." : "",
-        "Ziel: kurze, professionelle Rechnungsposition fuer sevdesk."
+        Number.isFinite(quantity) && quantity > 0 ? `Abzurechnende Stunden: ${quantity} h` : "",
+        sevdeskDraftForm.name ? `Geplanter Positionsname: ${sevdeskDraftForm.name}` : "",
+        sevdeskDraftForm.billing_note ? `Interner Abrechnungsvermerk: ${sevdeskDraftForm.billing_note}` : "",
+        sevdeskDraftForm.include_mileage ? "Hinweis: Anfahrtskosten werden als separate Position abgerechnet." : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -929,9 +933,20 @@ export default function DayPlanView() {
         })
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data?.text) {
-        updateSevdeskDraftForm("text", data.text);
+      if (!res.ok) {
+        throw new Error(data?.detail || "KI-Verbesserung fehlgeschlagen.");
       }
+      const nextText = String(data?.text || "").trim();
+      if (!nextText) {
+        throw new Error("KI hat keinen Text zurückgegeben.");
+      }
+      updateSevdeskDraftForm("text", nextText);
+      setSevdeskDraftStatus({ state: "idle", error: "" });
+    } catch (error) {
+      setSevdeskDraftStatus({
+        state: "error",
+        error: error?.message ? String(error.message) : "KI-Verbesserung fehlgeschlagen."
+      });
     } finally {
       setSevdeskDraftAiLoading(false);
     }
@@ -2921,6 +2936,8 @@ function FakturaTaskModal({
       (Number(travelMetrics?.distanceKm || 0) > 0 ? Number(travelMetrics.distanceKm) * 2 : 0)
   );
   const hasMileageSuggestion = Number.isFinite(mileageEur) && mileageEur > 0;
+  const canSubmit = hasToken && hasCustomerNumber && !isSaving && !hasMissingInvoiceFields;
+
   const formatHourValue = (value) => {
     const numeric = Number(value || 0);
     if (!Number.isFinite(numeric)) return "-";
@@ -2940,455 +2957,323 @@ function FakturaTaskModal({
   const invoiceQuantity = roundHourValue(Number(form.quantity || 0));
   const documentedMaximum = Math.max(actualRoundedHours, minimumBillableHours);
   const confidenceLabel =
-    scopeEstimate?.confidence === "high"
-      ? "Hohe Sicherheit"
-      : scopeEstimate?.confidence === "medium"
-      ? "Mittlere Sicherheit"
-      : "Niedrige Sicherheit";
+    scopeEstimate?.confidence === "high" ? "Hohe Sicherheit"
+    : scopeEstimate?.confidence === "medium" ? "Mittlere Sicherheit"
+    : "Niedrige Sicherheit";
   const comparisonToneClass =
-    scopeEstimate?.comparison === "within"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-      : scopeEstimate?.comparison === "below"
-      ? "border-sky-200 bg-sky-50 text-sky-700"
-      : scopeEstimate?.comparison === "above"
-      ? "border-amber-200 bg-amber-50 text-amber-700"
-      : "border-sand-200 bg-sand-50 text-sand-600";
+    scopeEstimate?.comparison === "within" ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+    : scopeEstimate?.comparison === "below" ? "border-sky-200 bg-sky-50 text-sky-700"
+    : scopeEstimate?.comparison === "above" ? "border-amber-200 bg-amber-50 text-amber-700"
+    : "border-sand-200 bg-sand-50 text-sand-600";
+
+  const fieldClass = "w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-[var(--border-300)]";
+  const fieldDisabledClass = "w-full rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-500";
+  const applyBtnClass = "inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:opacity-40 transition-colors";
+
+  const blockErrors = [
+    !hasToken && "sevdesk API Token fehlt in den Einstellungen.",
+    hasToken && hasMissingInvoiceFields && "Einstellungen unvollständig: Kontaktperson-ID, Adressland-ID oder Unity-ID fehlt.",
+    !task.customer && "Kein Kunde zugewiesen — bitte zuerst einen Kunden setzen.",
+    task.customer && !hasCustomerNumber && "Kundennummer fehlt im Kundenstamm.",
+    hasToken && !contactFound && "Kunde in sevdesk nicht gefunden.",
+  ].filter(Boolean);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
-      <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft flex flex-col max-h-[90vh]">
-        <div className="flex shrink-0 items-center justify-between border-b border-sand-100 px-6 py-4">
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Faktura</p>
-            <h3 className="text-lg font-display text-sand-900">Rechnungsentwurf aus Aufgabe</h3>
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center overflow-auto bg-sand-900/60 px-0 py-0 sm:px-4 sm:py-6">
+      <div className="w-full sm:max-w-xl flex flex-col overflow-hidden rounded-t-3xl sm:rounded-3xl border border-sand-200 bg-white shadow-soft max-h-[94dvh]">
+
+        {/* Header */}
+        <div className="flex shrink-0 items-center justify-between px-5 pt-5 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-sand-100">
+              <Receipt size={16} className="text-sand-600" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold tracking-tight text-sand-900">Rechnungsentwurf</h3>
+              <p className="text-[11px] text-sand-500 mt-0.5 truncate max-w-[260px]">{task.title}</p>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full border border-sand-200 bg-white p-2 text-sand-500 hover:bg-sand-50"
-          >
-            <X size={16} />
+          <button type="button" onClick={onClose} className="rounded-full p-1.5 text-sand-400 hover:bg-sand-100 hover:text-sand-700 transition-colors">
+            <X size={15} />
           </button>
         </div>
-        <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
-          <div>
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Aufgabe</p>
-            <p className="text-sm text-sand-900">{task.title}</p>
-          </div>
-          {!hasToken ? (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              Sevdesk API Token fehlt in den Einstellungen.
-            </div>
-          ) : null}
-          {hasToken && hasMissingInvoiceFields ? (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-              In den sevdesk-Einstellungen fehlen: Kontaktperson-ID, Adressland-ID,
-              Standard-Unity-ID. Bitte in den Einstellungen ergänzen.
-            </div>
-          ) : null}
-          {!task.customer ? (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-              Bitte zuerst einen Kunden zuweisen. Ohne Kunde keine Übergabe an sevdesk.
-            </div>
-          ) : null}
-          {task.customer && !hasCustomerNumber ? (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-              Kundennummer fehlt im Kundenstamm.
-            </div>
-          ) : null}
-          {hasToken && !contactFound ? (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-              Kunde in sevdesk nicht gefunden.
-            </div>
-          ) : null}
-          {hasToken && contactFound && hasDraft ? (
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-              Es existiert bereits ein offener Entwurf. Bitte wählen, ob dieser genutzt werden soll.
-            </div>
-          ) : null}
-          {hasToken && contactFound && hasDraft ? (
-            <div className="flex flex-wrap items-center gap-2 text-xs text-sand-600">
-              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
-                Entwurf wählen
-              </span>
-              <button
-                type="button"
-                onClick={() => onChange("use_existing_draft", true)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
-                  form.use_existing_draft !== false
-                    ? "border-[var(--nav-accent)] bg-[var(--nav-accent)] text-white"
-                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
-                }`}
-              >
-                Bestehenden verwenden
-              </button>
-              <button
-                type="button"
-                onClick={() => onChange("use_existing_draft", false)}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
-                  form.use_existing_draft === false
-                    ? "border-[var(--nav-accent)] bg-[var(--nav-accent)] text-white"
-                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
-                }`}
-              >
-                Neuen Entwurf erstellen
-              </button>
-            </div>
-          ) : null}
-          {travelStatus === "loading" ? (
-            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
-              Lade Anfahrtsvorschlag aus dem Kundenstamm...
-            </div>
-          ) : null}
-          {travelStatus === "error" ? (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-              Anfahrtsvorschlag konnte nicht geladen werden.
-            </div>
-          ) : null}
-          {travelStatus === "ready" && hasMileageSuggestion ? (
-            <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-3">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-sky-700">Anfahrt Vorschlag</p>
-                  <p className="mt-1 text-sm font-semibold text-sand-900">
-                    {mileageEur.toLocaleString("de-DE", {
-                      style: "currency",
-                      currency: "EUR",
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2
-                    })}
-                  </p>
-                  <p className="text-[11px] text-sand-600">
-                    {roundTripKm > 0
-                      ? `${roundTripKm.toLocaleString("de-DE", {
-                          minimumFractionDigits: 1,
-                          maximumFractionDigits: 1
-                        })} km Hin/Rueckfahrt`
-                      : "Betrag aus Kundenstamm"}
-                  </p>
+
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto px-5 pb-4 space-y-4">
+
+          {/* Block errors — consolidated */}
+          {blockErrors.length > 0 && (
+            <div className="space-y-1.5">
+              {blockErrors.map((msg) => (
+                <div key={msg} className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                  <Info size={12} className="mt-0.5 shrink-0 text-rose-500" />
+                  {msg}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onChange("include_mileage", !form.include_mileage)}
-                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors duration-150 ${
-                    form.include_mileage
-                      ? "border-[var(--nav-accent)] bg-[var(--nav-accent)] text-white"
-                      : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
-                  }`}
-                >
-                  {form.include_mileage ? "Anfahrt aktiv" : "Zur Rechnung hinzufügen"}
-                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Existing draft toggle */}
+          {hasToken && contactFound && hasDraft && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+              <p className="text-[11px] text-emerald-700 mb-2">Offener Entwurf vorhanden — wie fortfahren?</p>
+              <div className="flex gap-2">
+                {[
+                  { label: "Bestehenden verwenden", value: true },
+                  { label: "Neu erstellen", value: false },
+                ].map(({ label, value }) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => onChange("use_existing_draft", value)}
+                    className={`rounded-full border px-3 py-1 text-[11px] font-medium transition-colors ${
+                      form.use_existing_draft !== false === value
+                        ? "border-emerald-400 bg-emerald-600 text-white"
+                        : "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-100"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
-          ) : null}
-          <div className="rounded-2xl border border-sand-200 bg-sand-50/80 px-3 py-2.5 space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Aufwandsübersicht</p>
-                <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-600">
-                  Ist-Zeit bleibt Dokumentation
-                </span>
+          )}
+
+          {/* Anfahrt */}
+          {travelStatus === "loading" && (
+            <div className="flex items-center gap-2 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-500">
+              <Loader2 size={12} className="animate-spin" /> Anfahrtsvorschlag wird geladen…
+            </div>
+          )}
+          {travelStatus === "ready" && hasMileageSuggestion && (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2.5">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Anfahrt</p>
+                <p className="text-sm font-medium text-sand-900">
+                  {mileageEur.toLocaleString("de-DE", { style: "currency", currency: "EUR", minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+                {roundTripKm > 0 && (
+                  <p className="text-[11px] text-sand-400">
+                    {roundTripKm.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km Hin/Rückfahrt
+                  </p>
+                )}
               </div>
+              <button
+                type="button"
+                onClick={() => onChange("include_mileage", !form.include_mileage)}
+                className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors ${
+                  form.include_mileage
+                    ? "border-sand-400 bg-sand-900 text-white"
+                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                }`}
+              >
+                {form.include_mileage ? "Aktiv" : "Hinzufügen"}
+              </button>
+            </div>
+          )}
+
+          {/* Aufwandsübersicht */}
+          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] font-medium uppercase tracking-[0.25em] text-sand-500">Aufwand</p>
               <button
                 type="button"
                 onClick={onRefreshScopeEstimate}
-                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
               >
-                <Sparkles size={12} />
+                <Sparkles size={11} />
                 {hasScopeEstimate ? "KI neu" : "KI schätzen"}
               </button>
             </div>
 
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4 text-xs text-sand-600">
-              <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
-                <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">Tatsächlich</p>
-                <p className="text-base font-semibold text-sand-900">
-                  {actualHours > 0 ? `${formatHourValue(actualHours)} h` : "Keine Zeit"}
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {/* Tatsächlich */}
+              <div className="rounded-lg border border-white bg-white px-2.5 py-2 space-y-1">
+                <p className="text-[10px] uppercase tracking-[0.2em] text-sand-400">Tatsächlich</p>
+                <p className="text-sm font-semibold text-sand-900 tabular-nums">
+                  {actualHours > 0 ? `${formatHourValue(actualHours)} h` : "—"}
                 </p>
-                <p className="text-[10px] text-sand-500">
-                  Gerundet: {formatHourValue(actualRoundedHours)} h
-                </p>
-                <button
-                  type="button"
-                  onClick={onApplyActualHours}
-                  disabled={!actualRoundedHours}
-                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
-                >
+                <p className="text-[10px] text-sand-400">Gerundet: {formatHourValue(actualRoundedHours)} h</p>
+                <button type="button" onClick={onApplyActualHours} disabled={!actualRoundedHours} className={applyBtnClass}>
                   Übernehmen
                 </button>
               </div>
 
-              <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
-                <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">Mindestens wert</p>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.25"
-                  value={form.minimum_billable_hours || ""}
-                  onChange={(event) => onChange("minimum_billable_hours", event.target.value)}
-                  onBlur={() =>
-                    onPersistDocumentation({
-                      billing_min_hours: roundHourValue(Number(form.minimum_billable_hours || 0))
-                    })
-                  }
-                  className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                  placeholder="0,75"
-                />
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[10px] text-sand-500">Interner Mindestwert.</p>
-                  <button
-                    type="button"
-                    onClick={onApplyMinimumHours}
-                    disabled={!minimumBillableHours}
-                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
-                  >
-                    Übernehmen
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
-                <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">Rechnungsmenge</p>
-                <p className="text-base font-semibold text-sand-900">
-                  {invoiceQuantity > 0 ? `${formatHourValue(invoiceQuantity)} h` : "Nicht gesetzt"}
+              {/* Rechnungsmenge */}
+              <div className="rounded-lg border border-white bg-white px-2.5 py-2 space-y-1">
+                <p className="text-[10px] uppercase tracking-[0.2em] text-sand-400">Rechnungsmenge</p>
+                <p className="text-sm font-semibold text-sand-900 tabular-nums">
+                  {invoiceQuantity > 0 ? `${formatHourValue(invoiceQuantity)} h` : "—"}
                 </p>
-                <p className="text-[10px] text-sand-500">
-                  {documentedMaximum > 0
-                    ? `Dokumentiert: ${formatHourValue(documentedMaximum)} h`
-                    : "Kein Richtwert"}
+                <p className="text-[10px] text-sand-400">
+                  Max dok.: {documentedMaximum > 0 ? `${formatHourValue(documentedMaximum)} h` : "—"}
                 </p>
-                <button
-                  type="button"
-                  onClick={onApplyDocumentedMaximum}
-                  disabled={!documentedMaximum}
-                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
-                >
+                <button type="button" onClick={onApplyDocumentedMaximum} disabled={!documentedMaximum} className={applyBtnClass}>
                   Max übernehmen
                 </button>
               </div>
 
-              <div className="rounded-xl border border-white/80 bg-white px-3 py-2.5 space-y-1">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-[11px] uppercase tracking-[0.18em] font-medium text-sand-500">KI Schätzung</p>
-                  {hasScopeEstimate ? (
-                    <span className="rounded-full border border-sky-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-700">
-                      {confidenceLabel}
+              {/* Mindestwert */}
+              <div className="rounded-lg border border-white bg-white px-2.5 py-2 space-y-1">
+                <p className="text-[10px] uppercase tracking-[0.2em] text-sand-400">Mindestwert (h)</p>
+                <input
+                  type="number" min="0" step="0.25"
+                  value={form.minimum_billable_hours || ""}
+                  onChange={(e) => onChange("minimum_billable_hours", e.target.value)}
+                  onBlur={() => onPersistDocumentation({ billing_min_hours: roundHourValue(Number(form.minimum_billable_hours || 0)) })}
+                  className="w-full rounded-lg border border-sand-200 bg-white px-2 py-1 text-sm text-sand-900 focus:outline-none focus:ring-1 focus:ring-[var(--border-300)]"
+                  placeholder="0,75"
+                />
+                <button type="button" onClick={onApplyMinimumHours} disabled={!minimumBillableHours} className={applyBtnClass}>
+                  Übernehmen
+                </button>
+              </div>
+
+              {/* KI Schätzung */}
+              <div className="rounded-lg border border-white bg-white px-2.5 py-2 space-y-1">
+                <div className="flex items-center justify-between gap-1">
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-sand-400">KI Schätzung</p>
+                  {hasScopeEstimate && (
+                    <span className={`rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${comparisonToneClass}`}>
+                      {scopeEstimate.comparison_label}
                     </span>
-                  ) : null}
+                  )}
                 </div>
-                {hasScopeEstimate ? (
+                {isScopeEstimateLoading ? (
+                  <div className="flex items-center gap-1.5 text-[11px] text-sky-600">
+                    <Loader2 size={11} className="animate-spin" /> Analysiere…
+                  </div>
+                ) : hasScopeEstimate ? (
                   <>
-                    <p className="text-base font-semibold text-sand-900">
-                      {formatHourValue(scopeEstimate.estimated_hours)} h
+                    <p className="text-sm font-semibold text-sand-900 tabular-nums">{formatHourValue(scopeEstimate.estimated_hours)} h</p>
+                    <p className="text-[10px] text-sand-400">
+                      {formatHourValue(scopeEstimate.estimated_min_hours)}–{formatHourValue(scopeEstimate.estimated_max_hours)} h · {confidenceLabel}
                     </p>
-                    <p className="text-[10px] text-sand-500">
-                      {formatHourValue(scopeEstimate.estimated_min_hours)} bis{" "}
-                      {formatHourValue(scopeEstimate.estimated_max_hours)} h
-                    </p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={onApplyScopeEstimate}
-                        className="inline-flex items-center gap-1 rounded-full border border-sky-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sky-700 hover:bg-sky-100"
-                      >
-                        <Sparkles size={12} />
-                        Übernehmen
-                      </button>
-                      <span
-                        className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${comparisonToneClass}`}
-                      >
-                        {scopeEstimate.comparison_label}
-                      </span>
-                    </div>
+                    <button type="button" onClick={onApplyScopeEstimate} className={applyBtnClass}>
+                      <Sparkles size={10} /> Übernehmen
+                    </button>
                   </>
                 ) : (
-                  <p className="text-[10px] text-sand-500">Optional per Klick abrufen.</p>
+                  <p className="text-[10px] text-sand-400">Per Klick abrufen.</p>
+                )}
+                {hasScopeEstimateError && (
+                  <p className="text-[10px] text-rose-500">{scopeEstimateStatus?.error || "Fehler bei Schätzung."}</p>
                 )}
               </div>
             </div>
 
-            {isScopeEstimateLoading ? (
-              <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 inline-flex items-center gap-2">
-                <Loader2 size={14} className="animate-spin" />
-                KI analysiert Arbeitsumfang...
-              </div>
-            ) : null}
-            {hasScopeEstimateError ? (
-              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                {scopeEstimateStatus?.error || "Arbeitsumfang konnte nicht analysiert werden."}
-              </div>
-            ) : null}
-            {hasScopeEstimate ? (
-              <div className="text-[10px] text-sand-500">
-                Quelle: {scopeEstimate.provider === "ollama" ? "KI" : "Fallback"}
-                {scopeEstimate.provider === "ollama" && scopeEstimate.model
-                  ? ` (${scopeEstimate.model})`
-                  : ""}
-              </div>
-            ) : null}
-
-            <label className="flex flex-col gap-2 text-xs text-sand-600">
-              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
-                Interner Abrechnungsvermerk
-              </span>
+            {/* Interner Vermerk */}
+            <div>
+              <p className="mb-1 text-[10px] uppercase tracking-[0.25em] text-sand-400">Interner Abrechnungsvermerk</p>
               <textarea
                 value={form.billing_note || ""}
-                onChange={(event) => onChange("billing_note", event.target.value)}
-                onBlur={() =>
-                  onPersistDocumentation({
-                    billing_note: String(form.billing_note || "")
-                  })
-                }
+                onChange={(e) => onChange("billing_note", e.target.value)}
+                onBlur={() => onPersistDocumentation({ billing_note: String(form.billing_note || "") })}
                 rows={2}
-                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                placeholder="z. B. vor Ort Eskalation, mehrere Unterbrechungen, hoher Abstimmungsaufwand"
+                className={`${fieldClass} resize-none`}
+                placeholder="z. B. Eskalation vor Ort, mehrere Unterbrechungen…"
               />
+            </div>
+          </div>
+
+          {/* Rechnungsfelder */}
+          <div className="grid gap-2.5 grid-cols-2">
+            <label className="flex flex-col gap-1 col-span-2">
+              <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Positionsname</span>
+              <input value={form.name} onChange={(e) => onChange("name", e.target.value)} className={fieldClass} placeholder="Erledigte Aufgabe" />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Menge (h)</span>
+              <input type="number" min="0" step="0.25" value={form.quantity} onChange={(e) => onChange("quantity", e.target.value)} className={fieldClass} />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Preis (EUR/h)</span>
+              <input type="number" min="0" step="0.01" value={form.price} onChange={(e) => onChange("price", e.target.value)} className={fieldClass} />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Rechnungsheader</span>
+              <input value={form.header} onChange={(e) => onChange("header", e.target.value)} className={fieldClass} placeholder="Leistungsnachweis" />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Kundennummer</span>
+              <input value={form.customer_number} disabled className={fieldDisabledClass} placeholder="Keine Kundennummer" />
             </label>
           </div>
-          <div className="grid gap-3 md:grid-cols-2 text-xs text-sand-600">
-            <label className="flex flex-col gap-2">
-              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
-                Kundennummer (Kundenstamm)
-              </span>
-              <input
-                value={form.customer_number}
-                onChange={(event) => onChange("customer_number", event.target.value)}
-                disabled
-                className="w-full rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                placeholder="Keine Kundennummer"
-              />
-            </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
-                Rechnungsheader
-              </span>
-              <input
-                value={form.header}
-                onChange={(event) => onChange("header", event.target.value)}
-                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                placeholder="Leistungsnachweis"
-              />
-            </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Menge (h)</span>
-              <input
-                type="number"
-                min="0"
-                step="0.25"
-                value={form.quantity}
-                onChange={(event) => onChange("quantity", event.target.value)}
-                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-              />
-            </label>
-            <label className="flex flex-col gap-2">
-              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
-                Preis (EUR)
-              </span>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.price}
-                onChange={(event) => onChange("price", event.target.value)}
-                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-              />
-            </label>
-            <label className="flex flex-col gap-2 md:col-span-2">
-              <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
-                Positionsname
-              </span>
-              <input
-                value={form.name}
-                onChange={(event) => onChange("name", event.target.value)}
-                className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                placeholder="Erledigte Aufgabe"
-              />
-            </label>
-          </div>
-          <label className="flex flex-col gap-2 text-xs text-sand-600">
-            <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
-              Positionstext
-            </span>
+
+          {/* Positionstext */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Positionstext</span>
+              <button
+                type="button"
+                onClick={onGenerateAi}
+                disabled={aiLoading}
+                className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-wait transition-colors"
+              >
+                {aiLoading ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
+                {aiLoading ? "Wird verbessert…" : "KI verbessern"}
+              </button>
+            </div>
             <textarea
               value={form.text}
-              onChange={(event) => onChange("text", event.target.value)}
-              className="min-h-[120px] w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
+              onChange={(e) => onChange("text", e.target.value)}
+              rows={4}
+              className={`${fieldClass} resize-none`}
               placeholder="Leistung, Ergebnis oder Hinweise"
             />
-          </label>
-          <div className="flex items-center justify-between text-[11px] text-sand-500">
+          </div>
+
+          {/* Erweiterte Felder */}
+          <div>
             <button
               type="button"
-              onClick={onGenerateAi}
-              disabled={aiLoading}
-              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-wait"
+              onClick={onToggleAdvanced}
+              className="inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-sand-400 hover:text-sand-700 transition-colors"
             >
-              <Sparkles size={12} />
-              {aiLoading ? "KI verbessert..." : "Text verbessern"}
+              {advancedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              Erweiterte Felder
             </button>
+            {advancedOpen && (
+              <div className="mt-2.5 grid grid-cols-2 gap-2.5">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Steuer (Rate)</span>
+                  <input type="number" min="0" step="0.1" value={form.tax_rate} onChange={(e) => onChange("tax_rate", e.target.value)} className={fieldClass} />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Unity ID</span>
+                  <input type="number" min="0" step="1" value={form.unity_id} onChange={(e) => onChange("unity_id", e.target.value)} className={fieldClass} />
+                </label>
+              </div>
+            )}
           </div>
-          <button
-            type="button"
-            onClick={onToggleAdvanced}
-            className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-sand-500 hover:text-sand-700 transition-colors duration-150"
-          >
-            {advancedOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-            {advancedOpen ? "Erweiterte Felder ausblenden" : "Erweiterte Felder anzeigen"}
-          </button>
-          {advancedOpen ? (
-            <div className="grid gap-3 md:grid-cols-2 text-xs text-sand-600">
-              <label className="flex flex-col gap-2">
-                <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
-                  Steuer (Rate)
-                </span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  value={form.tax_rate}
-                  onChange={(event) => onChange("tax_rate", event.target.value)}
-                  className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                />
-              </label>
-              <label className="flex flex-col gap-2">
-                <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">
-                  Unity ID
-                </span>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={form.unity_id}
-                  onChange={(event) => onChange("unity_id", event.target.value)}
-                  className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
-                />
-              </label>
-            </div>
-          ) : null}
-          {status?.error ? (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+
+          {/* Submit error */}
+          {status?.error && (
+            <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              <Info size={12} className="mt-0.5 shrink-0 text-rose-500" />
               {status.error}
             </div>
-          ) : null}
+          )}
         </div>
-        <div className="flex shrink-0 items-center justify-end gap-3 border-t border-sand-100 px-6 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-sand-200 px-4 py-2 text-xs font-medium uppercase tracking-wide text-sand-600 hover:bg-sand-50 transition-colors duration-150"
-          >
+
+        {/* Footer */}
+        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-sand-100 px-5 py-3.5">
+          <button type="button" onClick={onClose} className="text-xs text-sand-500 hover:text-sand-800 transition-colors px-1 py-1">
             Abbrechen
           </button>
           <button
             type="button"
             onClick={onSubmit}
-            disabled={!hasToken || !hasCustomerNumber || isSaving || hasMissingInvoiceFields}
-            className="inline-flex items-center justify-center rounded-lg bg-[var(--nav-accent)] px-4 py-2 text-xs font-medium uppercase tracking-wide text-white hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50 transition-opacity duration-150"
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-2 rounded-full bg-sand-900 px-4 py-2 text-xs font-medium uppercase tracking-wide text-white hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40 transition-opacity"
           >
-            {isSaving
-              ? "Übergabe läuft..."
-              : hasDraft && form.use_existing_draft !== false
-              ? "Position hinzufügen"
-              : "Rechnungsentwurf erstellen"}
+            {isSaving ? (
+              <><Loader2 size={12} className="animate-spin" /> Läuft…</>
+            ) : hasDraft && form.use_existing_draft !== false ? (
+              <>Position hinzufügen <ArrowRight size={12} /></>
+            ) : (
+              <>Entwurf erstellen <ArrowRight size={12} /></>
+            )}
           </button>
         </div>
       </div>

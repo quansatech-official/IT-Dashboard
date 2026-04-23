@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  ArrowRight,
   Building2,
   BookmarkPlus,
   Check,
@@ -2614,71 +2615,74 @@ function HandoverModal({
   onToggleDeviceItem
 }) {
   if (!open || !offer || !summary) return null;
-  const statusLabel = summary.accepted ? "Angebot angenommen" : "Angebot nicht angenommen";
   const lineItems = offer.lineItems || [];
   const deviceItems = offer.deviceItems || [];
   const lineSelectedSet = new Set((selectedLineItemIds || []).map((id) => String(id)));
   const deviceSelectedSet = new Set((selectedDeviceItemIds || []).map((id) => String(id)));
+  const canConfirm = summary.accepted && summary.positions > 0;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
-      <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
-        <div className="flex items-center justify-between border-b border-sand-100 px-6 py-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Pre-Check</p>
-            <h3 className={modalTitleClass}>Übergabe an Faktura</h3>
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center overflow-auto bg-sand-900/60 px-0 py-0 sm:px-4 sm:py-6">
+      <div className="w-full sm:max-w-xl flex flex-col overflow-hidden rounded-t-3xl sm:rounded-3xl border border-sand-200 bg-white shadow-soft max-h-[92dvh]">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 pt-5 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-sand-100">
+              <Receipt size={16} className="text-sand-600" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold tracking-tight text-sand-900">Übergabe an Faktura</h3>
+              <p className="text-[11px] text-sand-500 mt-0.5">
+                {offer.title || "Angebot"}{summary.serverId ? ` · ID ${summary.serverId}` : ""}
+              </p>
+            </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-sand-200 bg-white p-2 text-sand-500 hover:bg-sand-50"
+            className="rounded-full p-1.5 text-sand-400 hover:bg-sand-100 hover:text-sand-700 transition-colors"
           >
-            <X size={16} />
+            <X size={15} />
           </button>
         </div>
-        <div className="px-6 py-4">
-          <div className="grid gap-2 text-xs text-sand-600 md:grid-cols-3">
-            <div>
-              <p className="font-semibold text-sand-900">{statusLabel}</p>
-              {!summary.accepted && (
-                <p className="text-rose-600">Das Angebot muss angenommen sein, bevor die Übergabe erfolgt.</p>
-              )}
-            </div>
-            <div>
-              <p className="font-semibold text-sand-900">{summary.positions} Positionen</p>
-              <p>Zeilen inkl. Gerätepositionen</p>
-            </div>
-            <div>
-              <p className="font-semibold text-sand-900">
-                {summary.serverId ? `Server ID ${summary.serverId}` : "Noch nicht synchronisiert"}
-              </p>
-              <p className="text-sand-500">Serverdaten</p>
-            </div>
+
+        {/* Status-Banner wenn nicht angenommen */}
+        {!summary.accepted && (
+          <div className="mx-5 mb-2 flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700">
+            <Info size={13} className="mt-0.5 shrink-0 text-rose-500" />
+            <span>Angebot muss erst angenommen werden, bevor die Übergabe möglich ist.</span>
           </div>
-          <div className="mt-4 grid grid-cols-3 gap-3 text-[11px] text-sand-500">
-            <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sand-600">
-              <p className="text-[10px] uppercase tracking-[0.3em]">Netto</p>
-              <p className="text-sand-900">{formatMoney(summary.totalNet)}</p>
+        )}
+
+        {/* Summen-Zeile */}
+        <div className="mx-5 mb-4 grid grid-cols-3 gap-2">
+          {[
+            { label: "Netto", value: formatMoney(summary.totalNet) },
+            { label: "MwSt", value: formatMoney(summary.totalVat) },
+            { label: "Brutto", value: formatMoney(summary.totalGross) },
+          ].map(({ label, value }) => (
+            <div key={label} className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-sand-400">{label}</p>
+              <p className="mt-0.5 text-sm font-medium text-sand-900">{value}</p>
             </div>
-            <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sand-600">
-              <p className="text-[10px] uppercase tracking-[0.3em]">MwSt</p>
-              <p className="text-sand-900">{formatMoney(summary.totalVat)}</p>
-            </div>
-            <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sand-600">
-              <p className="text-[10px] uppercase tracking-[0.3em]">Brutto</p>
-              <p className="text-sand-900">{formatMoney(summary.totalGross)}</p>
-            </div>
-          </div>
+          ))}
         </div>
-        <div className="border-t border-sand-100 px-6 py-4">
-          <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.3em] text-sand-500">
-            <span>Positionen auswählen</span>
-            <span className="text-sand-400">Optional nicht vorausgewählt</span>
+
+        {/* Trennlinie + Positions-Liste (scrollbar) */}
+        <div className="border-t border-sand-100 flex flex-col min-h-0">
+          <div className="flex items-center justify-between px-5 pt-3.5 pb-2">
+            <p className="text-[10px] font-medium uppercase tracking-[0.28em] text-sand-500">Positionen zur Übertragung</p>
+            <p className="text-[10px] text-sand-400">
+              {summary.positions} ausgewählt
+            </p>
           </div>
-          <div className="mt-3 space-y-3 text-xs text-sand-600">
-            {lineItems.length ? (
+
+          <div className="overflow-y-auto px-5 pb-4 space-y-4" style={{ maxHeight: "38vh" }}>
+            {lineItems.length > 0 && (
               <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Leistungen</p>
-                <div className="mt-2 space-y-2">
+                <p className="mb-1.5 text-[10px] uppercase tracking-[0.25em] text-sand-400">Leistungen</p>
+                <div className="space-y-1.5">
                   {lineItems.map((item, index) => {
                     const itemId = String(item?.id || "");
                     const checked = itemId ? lineSelectedSet.has(itemId) : false;
@@ -2686,43 +2690,48 @@ function HandoverModal({
                     return (
                       <label
                         key={`line-${itemId || index}`}
-                        className="flex items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-white px-3 py-2"
+                        className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border px-3 py-2 transition-colors ${
+                          checked
+                            ? "border-sand-300 bg-sand-50"
+                            : "border-sand-200 bg-white hover:bg-sand-50"
+                        }`}
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <input
                             type="checkbox"
                             checked={checked}
                             onChange={() => onToggleLineItem(itemId)}
-                            className="h-4 w-4 rounded border-sand-300 text-amber-500 focus:ring-amber-200"
+                            className="h-3.5 w-3.5 shrink-0 rounded border-sand-300 accent-sand-900"
                             disabled={!itemId}
                           />
-                          <div>
-                            <p className="text-sm text-sand-900">
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-medium text-sand-900">
                               {item.title || "Leistung"}
                             </p>
                             <p className="text-[11px] text-sand-400">
-                              {formatUnitQuantity(item.quantity, item.unit) || "Menge n/a"}
+                              {formatUnitQuantity(item.quantity, item.unit) || "—"}
                             </p>
                           </div>
                         </div>
-                        <div className="text-right">
-                          {item.optional ? (
-                            <span className="mb-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-600">
-                              Optional
+                        <div className="flex shrink-0 items-center gap-2">
+                          {item.optional && (
+                            <span className="rounded-full border border-sand-200 bg-white px-1.5 py-0.5 text-[10px] uppercase tracking-[0.15em] text-sand-400">
+                              optional
                             </span>
-                          ) : null}
-                          <p className="text-sm text-sand-900">{formatMoney(total)}</p>
+                          )}
+                          <p className="text-xs font-medium text-sand-900 tabular-nums">{formatMoney(total)}</p>
                         </div>
                       </label>
                     );
                   })}
                 </div>
               </div>
-            ) : null}
-            {deviceItems.length ? (
+            )}
+
+            {deviceItems.length > 0 && (
               <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Material</p>
-                <div className="mt-2 space-y-2">
+                <p className="mb-1.5 text-[10px] uppercase tracking-[0.25em] text-sand-400">Material</p>
+                <div className="space-y-1.5">
                   {deviceItems.map((item, index) => {
                     const itemId = String(item?.id || "");
                     const checked = itemId ? deviceSelectedSet.has(itemId) : false;
@@ -2730,64 +2739,73 @@ function HandoverModal({
                     return (
                       <label
                         key={`device-${itemId || index}`}
-                        className="flex items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-white px-3 py-2"
+                        className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl border px-3 py-2 transition-colors ${
+                          checked
+                            ? "border-sand-300 bg-sand-50"
+                            : "border-sand-200 bg-white hover:bg-sand-50"
+                        }`}
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <input
                             type="checkbox"
                             checked={checked}
                             onChange={() => onToggleDeviceItem(itemId)}
-                            className="h-4 w-4 rounded border-sand-300 text-amber-500 focus:ring-amber-200"
+                            className="h-3.5 w-3.5 shrink-0 rounded border-sand-300 accent-sand-900"
                             disabled={!itemId}
                           />
-                          <div>
-                            <p className="text-sm text-sand-900">
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-medium text-sand-900">
                               {formatDeviceTitle(item)}
                             </p>
                             <p className="text-[11px] text-sand-400">
-                              {formatUnitQuantity(item.quantity, item.unit) || "Menge n/a"}
+                              {formatUnitQuantity(item.quantity, item.unit) || "—"}
                             </p>
                           </div>
                         </div>
-                        <div className="text-right">
-                          {item.optional ? (
-                            <span className="mb-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-600">
-                              Optional
+                        <div className="flex shrink-0 items-center gap-2">
+                          {item.optional && (
+                            <span className="rounded-full border border-sand-200 bg-white px-1.5 py-0.5 text-[10px] uppercase tracking-[0.15em] text-sand-400">
+                              optional
                             </span>
-                          ) : null}
-                          <p className="text-sm text-sand-900">{formatMoney(total)}</p>
+                          )}
+                          <p className="text-xs font-medium text-sand-900 tabular-nums">{formatMoney(total)}</p>
                         </div>
                       </label>
                     );
                   })}
                 </div>
               </div>
-            ) : null}
-            {!lineItems.length && !deviceItems.length ? (
-              <p className="text-[11px] text-sand-400">Keine Positionen vorhanden.</p>
-            ) : null}
-            {summary.positions === 0 ? (
-              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-600">
-                Bitte mindestens eine Position auswählen.
-              </div>
-            ) : null}
+            )}
+
+            {!lineItems.length && !deviceItems.length && (
+              <p className="py-4 text-center text-xs text-sand-400">Keine Positionen vorhanden.</p>
+            )}
           </div>
+
+          {summary.positions === 0 && (lineItems.length > 0 || deviceItems.length > 0) && (
+            <div className="mx-5 mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] text-rose-600">
+              Bitte mindestens eine Position auswählen.
+            </div>
+          )}
         </div>
-        <div className="flex items-center justify-end gap-3 border-t border-sand-100 px-6 py-4">
+
+        {/* Footer */}
+        <div className="flex items-center justify-between gap-3 border-t border-sand-100 px-5 py-3.5">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full border border-sand-200 px-4 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+            className="text-xs text-sand-500 hover:text-sand-800 transition-colors px-1 py-1"
           >
             Abbrechen
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            disabled={!summary.accepted || summary.positions === 0}
-            className="inline-flex items-center justify-center rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!canConfirm}
+            className="inline-flex items-center gap-2 rounded-full bg-sand-900 px-4 py-2 text-xs font-medium uppercase tracking-wide text-white transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Übergabe an Faktura starten
+            Übertragen
+            <ArrowRight size={13} />
           </button>
         </div>
       </div>

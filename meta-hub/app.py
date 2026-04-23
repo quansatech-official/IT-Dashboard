@@ -74,6 +74,7 @@ BYPASS_HEADER_NAME = str(os.environ.get("META_HUB_BYPASS_HEADER") or "X-Meta-Hub
 BYPASS_HEADER_VALUE = str(os.environ.get("META_HUB_BYPASS_VALUE") or "1").strip() or "1"
 INTERNAL_TOKEN = str(os.environ.get("META_HUB_INTERNAL_TOKEN") or "").strip()
 INTERNAL_TOKEN_HEADER = str(os.environ.get("META_HUB_INTERNAL_TOKEN_HEADER") or "X-Meta-Hub-Token").strip() or "X-Meta-Hub-Token"
+GRAPH_DELEGATED_TOKEN_PREFIX = "delegated_refresh:"
 RMM_SNAPSHOT_TIMEOUT_SECONDS = float(os.environ.get("META_HUB_RMM_TIMEOUT_SECONDS") or "30")
 MAC_VENDOR_LOOKUP_ENABLED = _to_bool(os.environ.get("META_HUB_MAC_VENDOR_LOOKUP_ENABLED"), default=True)
 MAC_VENDOR_API_TEMPLATE = str(
@@ -168,13 +169,20 @@ if not logging.getLogger().handlers:
     )
 logger = logging.getLogger("meta_hub")
 _backend_http = requests.Session()
+_backend_http_retry = requests.adapters.Retry(
+    total=2,
+    backoff_factor=0.5,
+    status_forcelist=[502, 503, 504],
+    allowed_methods=["GET"],
+    raise_on_status=False,
+)
 _backend_http.mount(
     "http://",
-    requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16, max_retries=0),
+    requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16, max_retries=_backend_http_retry),
 )
 _backend_http.mount(
     "https://",
-    requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16, max_retries=0),
+    requests.adapters.HTTPAdapter(pool_connections=8, pool_maxsize=16, max_retries=_backend_http_retry),
 )
 
 app = FastAPI(title="Customer Meta Hub", version="1.1.0")
@@ -203,6 +211,9 @@ _state: Dict[str, Any] = {
     "emailMessageCount": 0,
     "emailMatchedMessageCount": 0,
     "emailConnectedMailboxes": 0,
+    "emailMailboxErrors": {},
+    "aiJobsTotal": 0,
+    "aiJobsDone": 0,
 }
 _mac_vendor_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -495,10 +506,11 @@ def _imap_connect_read_only(mailbox: Dict[str, Any]) -> imaplib.IMAP4:
     host = str(mailbox.get("host") or "").strip()
     username = str(mailbox.get("username") or "").strip()
     password = str(mailbox.get("password") or "")
-    port = _to_positive_int(mailbox.get("port"), default=993, minimum=1)
     folder = str(mailbox.get("folder") or "INBOX").strip() or "INBOX"
     use_ssl = bool(mailbox.get("use_ssl", False))
     use_tls = bool(mailbox.get("use_tls", True))
+    default_port = 993 if use_ssl else 143
+    port = _to_positive_int(mailbox.get("port"), default=default_port, minimum=1)
     if not host or not username or not password:
         raise RuntimeError("Mailbox unvollstaendig konfiguriert")
     if use_ssl:
@@ -547,6 +559,30 @@ def _graph_access_token(mailbox: Dict[str, Any]) -> str:
     tenant_id = str(mailbox.get("graph_tenant_id") or "").strip()
     client_id = str(mailbox.get("graph_client_id") or "").strip()
     client_secret = str(mailbox.get("graph_client_secret") or "").strip()
+    if _graph_has_delegated_oauth(mailbox):
+        refresh_token = _graph_delegated_refresh_token(mailbox)
+        if not tenant_id or not client_id or not refresh_token:
+            raise RuntimeError("Microsoft 365 OAuth Konfiguration unvollstaendig")
+        data = {
+            "client_id": client_id,
+            "scope": "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read",
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }
+        delegated_client_secret = _graph_delegated_client_secret(mailbox)
+        if delegated_client_secret:
+            data["client_secret"] = delegated_client_secret
+        response = requests.post(
+            f"https://login.microsoftonline.com/{quote(tenant_id)}/oauth2/v2.0/token",
+            data=data,
+            timeout=EMAIL_IMAP_TIMEOUT_SECONDS,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Graph Refresh-Token fehlgeschlagen ({response.status_code}): {response.text[:300]}")
+        token = str(response.json().get("access_token") or "").strip()
+        if not token:
+            raise RuntimeError("Graph Token Antwort ohne access_token")
+        return token
     if not tenant_id or not client_id or not client_secret:
         raise RuntimeError("Microsoft 365 OAuth Konfiguration unvollstaendig")
     response = requests.post(
@@ -565,6 +601,38 @@ def _graph_access_token(mailbox: Dict[str, Any]) -> str:
     if not token:
         raise RuntimeError("Graph Token Antwort ohne access_token")
     return token
+
+
+def _graph_delegated_refresh_token(mailbox: Dict[str, Any]) -> str:
+    raw_secret = str(mailbox.get("graph_client_secret") or "")
+    if not raw_secret.startswith(GRAPH_DELEGATED_TOKEN_PREFIX):
+        return ""
+    payload = raw_secret[len(GRAPH_DELEGATED_TOKEN_PREFIX) :].strip()
+    if payload.startswith("{"):
+        try:
+            parsed = json.loads(payload)
+            return str(parsed.get("refresh_token") or "").strip()
+        except Exception:
+            return ""
+    return payload
+
+
+def _graph_delegated_client_secret(mailbox: Dict[str, Any]) -> str:
+    raw_secret = str(mailbox.get("graph_client_secret") or "")
+    if not raw_secret.startswith(GRAPH_DELEGATED_TOKEN_PREFIX):
+        return ""
+    payload = raw_secret[len(GRAPH_DELEGATED_TOKEN_PREFIX) :].strip()
+    if payload.startswith("{"):
+        try:
+            parsed = json.loads(payload)
+            return str(parsed.get("client_secret") or "").strip()
+        except Exception:
+            return ""
+    return ""
+
+
+def _graph_has_delegated_oauth(mailbox: Dict[str, Any]) -> bool:
+    return bool(_graph_delegated_refresh_token(mailbox))
 
 
 def _graph_mailbox_upn(mailbox: Dict[str, Any]) -> str:
@@ -666,8 +734,9 @@ def _fetch_graph_mailbox_messages(mailbox: Dict[str, Any], own_addresses: Set[st
     folder = str(mailbox.get("folder") or "INBOX").strip() or "INBOX"
     folder_id = "inbox" if folder.upper() == "INBOX" else folder
     headers = {"Authorization": f"Bearer {_graph_access_token(mailbox)}"}
+    base_path = "me" if _graph_has_delegated_oauth(mailbox) else f"users/{quote(mailbox_upn)}"
     response = requests.get(
-        f"https://graph.microsoft.com/v1.0/users/{quote(mailbox_upn)}/mailFolders/{quote(folder_id)}/messages",
+        f"https://graph.microsoft.com/v1.0/{base_path}/mailFolders/{quote(folder_id)}/messages",
         headers=headers,
         params={
             "$top": EMAIL_MAX_MESSAGES_PER_MAILBOX,
@@ -766,8 +835,10 @@ def _build_customer_email_matchers(contexts: List[Dict[str, Any]]) -> Dict[str, 
         customer_id = _safe_int(row.get("customerId"), default=0)
         if customer_id <= 0:
             continue
-        email_value = _normalize_email_address(row.get("customerEmail"))
-        if email_value:
+        for email_field in ("customerEmail", "newsletterEmail", "billingEmail"):
+            email_value = _normalize_email_address(row.get(email_field))
+            if not email_value:
+                continue
             by_email[email_value] = customer_id
             domain = _extract_email_domain(email_value)
             if domain and domain not in FREE_EMAIL_DOMAINS:
@@ -861,16 +932,20 @@ def _enrich_payload_with_emails(raw: Dict[str, Any], meta_hub_config: Dict[str, 
     matchers = _build_customer_email_matchers([row for row in contexts if isinstance(row, dict)])
     emails_by_customer: Dict[int, List[Dict[str, Any]]] = {}
     mailbox_errors: List[str] = []
+    mailbox_error_map: Dict[str, str] = {}
     seen_messages: Set[str] = set()
 
     for mailbox in active_mailboxes:
         mailbox_label = str(mailbox.get("name") or mailbox.get("email") or mailbox.get("host") or "Mailbox").strip()
+        mailbox_id = str(mailbox.get("id") or mailbox.get("account_id") or mailbox_label).strip()
         try:
             mailbox_messages = _fetch_mailbox_messages(mailbox, own_addresses)
             stats["connectedMailboxes"] += 1
+            mailbox_error_map[mailbox_id] = ""
         except Exception as exc:
-            logger.warning("Meta-hub IMAP mailbox failed (%s): %s", mailbox_label, exc)
+            logger.warning("Meta-hub mailbox failed (%s): %s", mailbox_label, exc)
             mailbox_errors.append(f"{mailbox_label}: {exc}")
+            mailbox_error_map[mailbox_id] = str(exc)
             continue
         stats["messageCount"] += len(mailbox_messages)
         for message in mailbox_messages:
@@ -893,6 +968,7 @@ def _enrich_payload_with_emails(raw: Dict[str, Any], meta_hub_config: Dict[str, 
             emails_by_customer.setdefault(int(customer_id), []).append(message)
 
     stats["errors"] = mailbox_errors[:20]
+    stats["mailboxErrors"] = mailbox_error_map
     patched_contexts: List[Dict[str, Any]] = []
     for context in contexts:
         if not isinstance(context, dict):
@@ -2321,6 +2397,9 @@ def _refresh_ai_preanalysis() -> bool:
         last_job_error = ""
         backend_unreachable = False
         use_internal_context_endpoint = bool(INTERNAL_TOKEN)
+        with _state_lock:
+            _state["aiJobsTotal"] = len(jobs)
+            _state["aiJobsDone"] = 0
         for idx, (customer_id, mode) in enumerate(jobs):
             context = context_map.get(int(customer_id))
             if not isinstance(context, dict):
@@ -2376,6 +2455,8 @@ def _refresh_ai_preanalysis() -> bool:
                         },
                     )
                 )
+                with _state_lock:
+                    _state["aiJobsDone"] = idx + 1
             except Exception as exc:
                 failed_jobs += 1
                 last_job_error = str(exc)
@@ -2462,6 +2543,7 @@ def _load_snapshot() -> None:
         _state["emailMessageCount"] = int(email_meta.get("messageCount") or 0)
         _state["emailMatchedMessageCount"] = int(email_meta.get("matchedMessageCount") or 0)
         _state["emailConnectedMailboxes"] = int(email_meta.get("connectedMailboxes") or 0)
+        _state["emailMailboxErrors"] = dict(email_meta.get("mailboxErrors") or {})
 
 
 def _refresh_snapshot(force: bool = True) -> bool:
@@ -2493,6 +2575,7 @@ def _refresh_snapshot(force: bool = True) -> bool:
             _state["emailMessageCount"] = int(email_meta.get("messageCount") or 0)
             _state["emailMatchedMessageCount"] = int(email_meta.get("matchedMessageCount") or 0)
             _state["emailConnectedMailboxes"] = int(email_meta.get("connectedMailboxes") or 0)
+            _state["emailMailboxErrors"] = dict(email_meta.get("mailboxErrors") or {})
         _save_snapshot(prepared)
         _refresh_ai_in_background()
         return True
@@ -2588,6 +2671,9 @@ def get_health() -> Dict[str, Any]:
             "emailMessageCount": int(_state.get("emailMessageCount") or 0),
             "emailMatchedMessageCount": int(_state.get("emailMatchedMessageCount") or 0),
             "emailConnectedMailboxes": int(_state.get("emailConnectedMailboxes") or 0),
+            "emailMailboxErrors": dict(_state.get("emailMailboxErrors") or {}),
+            "aiJobsTotal": int(_state.get("aiJobsTotal") or 0),
+            "aiJobsDone": int(_state.get("aiJobsDone") or 0),
             "aiPreanalysisEnabled": bool(AI_PREANALYSIS_ENABLED),
             "aiPreanalysisRefreshing": bool(_state.get("aiRefreshing")),
             "aiPreanalysisLastRefreshAt": int(_state.get("aiLastRefreshAt") or 0),
@@ -2595,6 +2681,7 @@ def get_health() -> Dict[str, Any]:
             "aiPreanalysisLastError": str(_state.get("aiLastError") or ""),
             "aiBackendCooldownUntil": int(_state.get("aiBackendCooldownUntil") or 0),
             "aiPreanalysisModes": list(AI_PREANALYSIS_MODES),
+            "emailLookbackDays": int(EMAIL_LOOKBACK_DAYS),
             "count": int((payload or {}).get("count") or 0) if isinstance(payload, dict) else 0,
         }
 

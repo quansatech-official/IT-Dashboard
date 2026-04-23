@@ -78,7 +78,7 @@ OLLAMA_PROMPT_MAX_CHARS = max(
 )
 OLLAMA_MAX_TOKENS_HARD_LIMIT = max(
     64,
-    int(os.environ.get("OLLAMA_MAX_TOKENS_HARD_LIMIT") or "320"),
+    int(os.environ.get("OLLAMA_MAX_TOKENS_HARD_LIMIT") or "1024"),
 )
 
 MAIL_PROVIDER_SMTP_IMAP = "smtp_imap"
@@ -173,7 +173,7 @@ INTERNAL_AI_MAX_TOKENS = max(
 INTERNAL_AI_TOOL_MAX_TOKENS = max(
     128,
     min(
-        int(os.environ.get("INTERNAL_AI_TOOL_MAX_TOKENS") or "480"),
+        int(os.environ.get("INTERNAL_AI_TOOL_MAX_TOKENS") or "800"),
         int(INTERNAL_AI_MAX_TOKENS),
     ),
 )
@@ -919,6 +919,7 @@ class MailAccount(Base):
     graph_client_id = Column(String, default="")
     graph_client_secret = Column(String, default="")
     graph_mailbox_upn = Column(String, default="")
+    meta_hub_enabled = Column(Boolean, default=False)
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
     updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
@@ -1541,6 +1542,24 @@ def _ensure_smtp_settings_columns() -> None:
 _run_db_startup_step("ensure_smtp_settings_columns", _ensure_smtp_settings_columns)
 
 
+def _ensure_mail_accounts_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("mail_accounts"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("mail_accounts")}
+    statements = []
+    if "meta_hub_enabled" not in columns:
+        statements.append("ALTER TABLE mail_accounts ADD COLUMN meta_hub_enabled BOOLEAN DEFAULT FALSE")
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+_run_db_startup_step("ensure_mail_accounts_columns", _ensure_mail_accounts_columns)
+
+
 def _ensure_mail_accounts_seed() -> None:
     with SessionLocal() as db:
         now_ms = int(time.time() * 1000)
@@ -1608,6 +1627,7 @@ def _ensure_mail_accounts_seed() -> None:
                 default_send_account.imap_folder = str(mailbox.get("folder") or "INBOX") or "INBOX"
                 default_send_account.imap_use_tls = bool(mailbox.get("use_tls", not use_ssl))
                 default_send_account.imap_use_ssl = use_ssl
+                default_send_account.meta_hub_enabled = bool(mailbox.get("enabled", True))
                 default_send_account.updated_at = now_ms
                 continue
             account_id = f"legacy_meta_hub_{str(mailbox.get('id') or index).strip() or index}"
@@ -1633,6 +1653,7 @@ def _ensure_mail_accounts_seed() -> None:
                     imap_folder=str(mailbox.get("folder") or "INBOX") or "INBOX",
                     imap_use_tls=bool(mailbox.get("use_tls", not use_ssl)),
                     imap_use_ssl=use_ssl,
+                    meta_hub_enabled=bool(mailbox.get("enabled", True)),
                     created_at=now_ms,
                     updated_at=now_ms,
                 )
@@ -2641,6 +2662,7 @@ class MailAccountUpdate(BaseModel):
     graph_client_id: Optional[str] = None
     graph_client_secret: Optional[str] = None
     graph_mailbox_upn: Optional[str] = None
+    meta_hub_enabled: Optional[bool] = None
 
 
 class MailRoutesUpdate(BaseModel):
@@ -3987,6 +4009,13 @@ def _extract_openai_compatible_error_detail(response: Optional[requests.Response
     return str(response.text or "").strip()
 
 
+def _is_openai_compatible_loading_error(error_detail: str) -> bool:
+    detail = str(error_detail or "").strip().lower()
+    if not detail:
+        return False
+    return "loading model" in detail or "model is loading" in detail
+
+
 def _parse_openai_context_limit_error_detail(error_detail: str) -> Tuple[int, int, int]:
     detail = str(error_detail or "").strip()
     if not detail:
@@ -4303,6 +4332,7 @@ def _ollama_generate(
     max_tokens: Optional[int] = None,
     use_cache: bool = True,
     raw: bool = False,
+    system_prompt: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str]:
     request_timeout = max(1, int(timeout or OLLAMA_TIMEOUT_SECONDS))
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
@@ -4372,6 +4402,8 @@ def _ollama_generate(
             "prompt": prompt_text,
             "stream": bool(OLLAMA_STREAM_ENABLED),
         }
+        if system_prompt and not raw:
+            payload["system"] = system_prompt
         if raw:
             payload["raw"] = True
         if response_format:
@@ -4554,6 +4586,24 @@ def _summarize_openai_compatible_response(payload: Dict[str, Any]) -> str:
     )
 
 
+def _is_openai_compatible_empty_response_retryable(payload: Dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return False
+    first_choice = choices[0]
+    finish_reason = str(first_choice.get("finish_reason") or "").strip().lower()
+    message = first_choice.get("message") if isinstance(first_choice.get("message"), dict) else {}
+    content_text = _extract_openai_compatible_text_parts(message.get("content"))
+    reasoning_text = _extract_openai_compatible_text_parts(message.get("reasoning_content"))
+    if not reasoning_text:
+        reasoning_text = _extract_openai_compatible_text_parts(message.get("reasoning"))
+    if content_text:
+        return False
+    return bool(reasoning_text) or finish_reason in {"length", "max_tokens"}
+
+
 def _should_disable_openai_thinking(model: str, response_format: str) -> bool:
     model_name = str(model or "").strip().lower()
     if response_format != "json":
@@ -4596,6 +4646,52 @@ def _refresh_openai_compatible_context_limits_for_models(
     _list_openai_compatible_models(config, timeout_seconds=max(2, int(timeout_seconds or 8)))
 
 
+def _resolve_ai_health_model(config: Dict[str, Any]) -> str:
+    available_models = _list_available_ai_models(config=config, timeout_seconds=8)
+    resolved_candidates = _resolve_ai_models(purpose="internal_ai", config=config)
+    available_lookup = {str(model or "").strip().lower(): str(model or "").strip() for model in available_models}
+    for candidate in resolved_candidates:
+        normalized = str(candidate or "").strip().lower()
+        if normalized and normalized in available_lookup:
+            return available_lookup[normalized]
+    for candidate in resolved_candidates:
+        candidate_value = str(candidate or "").strip()
+        if candidate_value:
+            return candidate_value
+    return available_models[0] if available_models else ""
+
+
+def _probe_ai_health(config: Dict[str, Any]) -> Dict[str, Any]:
+    provider = str(config.get("provider") or AI_PROVIDER_OLLAMA)
+    base_url = str(config.get("base_url") or "").strip()
+    default_model = str(config.get("default_model") or "").strip()
+    configured_models = config.get("configured_models") if isinstance(config, dict) else {}
+    response_payload: Dict[str, Any] = {
+        "ok": False,
+        "provider": provider,
+        "base_url": base_url,
+        "default_model": default_model,
+        "resolved_model": "",
+        "model_count": 0,
+        "models": [],
+        "has_api_key": bool(str(config.get("api_key") or "").strip()),
+        "configured_models": configured_models if isinstance(configured_models, dict) else {},
+        "error": "",
+    }
+    if not base_url:
+        response_payload["error"] = "Base URL fehlt"
+        return response_payload
+    models = _list_available_ai_models(config=config, timeout_seconds=8)
+    response_payload["models"] = models[:12]
+    response_payload["model_count"] = len(models)
+    response_payload["resolved_model"] = _resolve_ai_health_model(config)
+    if models:
+        response_payload["ok"] = True
+        return response_payload
+    response_payload["error"] = "Keine Modelle vom Provider abrufbar"
+    return response_payload
+
+
 def _openai_compatible_generate(
     prompt: str,
     *,
@@ -4606,6 +4702,7 @@ def _openai_compatible_generate(
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
     use_cache: bool = True,
+    system_prompt: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str]:
     request_timeout = max(1, int(timeout or OLLAMA_TIMEOUT_SECONDS))
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
@@ -4654,6 +4751,7 @@ def _openai_compatible_generate(
     for model in normalized_models:
         attempt_prompt_text = prompt_text
         attempt_max_tokens = resolved_max_tokens
+        force_disable_thinking = _should_disable_openai_thinking(model, response_format)
         attempt_prompt_text, attempt_max_tokens = _fit_openai_request_to_known_context_limit(
             model,
             attempt_prompt_text,
@@ -4662,9 +4760,13 @@ def _openai_compatible_generate(
         data: Dict[str, Any] = {}
         started_at = time.time()
         for attempt_index in range(3):
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": attempt_prompt_text})
             payload = {
                 "model": model,
-                "messages": [{"role": "user", "content": attempt_prompt_text}],
+                "messages": messages,
             }
             if temperature is not None:
                 payload["temperature"] = float(temperature)
@@ -4672,7 +4774,7 @@ def _openai_compatible_generate(
                 payload["max_tokens"] = int(attempt_max_tokens)
             if response_format == "json":
                 payload["response_format"] = {"type": "json_object"}
-            if _should_disable_openai_thinking(model, response_format):
+            if force_disable_thinking:
                 payload["chat_template_kwargs"] = {"enable_thinking": False}
             try:
                 with _ollama_http.post(
@@ -4687,6 +4789,17 @@ def _openai_compatible_generate(
                     break
             except requests.HTTPError as exc:
                 detail = _extract_openai_compatible_error_detail(exc.response)
+                if exc.response is not None and exc.response.status_code == 503 and _is_openai_compatible_loading_error(detail):
+                    if attempt_index < 2:
+                        wait_seconds = min(4.0, float(1 + attempt_index))
+                        logger.info(
+                            "OpenAI-compatible model still loading model=%s attempt=%s wait_seconds=%.1f",
+                            model,
+                            attempt_index + 1,
+                            wait_seconds,
+                        )
+                        time.sleep(wait_seconds)
+                        continue
                 if exc.response is not None and exc.response.status_code == 400:
                     context_limit, _, _ = _parse_openai_context_limit_error_detail(detail)
                     if context_limit > 0:
@@ -4710,22 +4823,59 @@ def _openai_compatible_generate(
                         attempt_max_tokens = next_max_tokens
                         continue
                 logger.warning(
-                    "OpenAI-compatible request failed with model %s: %s",
+                    "OpenAI-compatible request failed model=%s status=%s detail=%s",
                     model,
+                    int(exc.response.status_code) if exc.response is not None else 0,
                     detail or exc,
                 )
                 data = {}
                 break
             except (requests.RequestException, ValueError) as exc:
-                logger.warning("OpenAI-compatible request failed with model %s: %s", model, exc)
+                logger.warning("OpenAI-compatible request failed model=%s error=%s", model, exc)
                 data = {}
                 break
         if not data:
             continue
         response_text = _extract_openai_compatible_response_text(data)
         if not response_text:
+            if _is_openai_compatible_empty_response_retryable(data) and not force_disable_thinking:
+                force_disable_thinking = True
+                attempt_max_tokens = min(int(attempt_max_tokens or 160), 160)
+                logger.info(
+                    "OpenAI-compatible empty response retry model=%s summary=%s",
+                    model,
+                    _summarize_openai_compatible_response(data),
+                )
+                try:
+                    retry_messages = []
+                    if system_prompt:
+                        retry_messages.append({"role": "system", "content": system_prompt})
+                    retry_messages.append({"role": "user", "content": attempt_prompt_text})
+                    with _ollama_http.post(
+                        request_url,
+                        headers=headers,
+                        json={
+                            "model": model,
+                            "messages": retry_messages,
+                            **({"temperature": float(temperature)} if temperature is not None else {}),
+                            **({"max_tokens": int(attempt_max_tokens)} if attempt_max_tokens is not None and attempt_max_tokens > 0 else {}),
+                            **({"response_format": {"type": "json_object"}} if response_format == "json" else {}),
+                            "chat_template_kwargs": {"enable_thinking": False},
+                        },
+                        timeout=(connect_timeout, request_timeout),
+                    ) as response:
+                        response.raise_for_status()
+                        retry_loaded = response.json()
+                        retry_data = retry_loaded if isinstance(retry_loaded, dict) else {}
+                except (requests.RequestException, ValueError) as exc:
+                    logger.warning("OpenAI-compatible empty-response retry failed model=%s error=%s", model, exc)
+                    retry_data = {}
+                retry_text = _extract_openai_compatible_response_text(retry_data)
+                if retry_text:
+                    data = retry_data
+                    response_text = retry_text
             logger.warning(
-                "OpenAI-compatible response empty for model %s: %s",
+                "OpenAI-compatible response empty model=%s summary=%s",
                 model,
                 _summarize_openai_compatible_response(data),
             )
@@ -4736,11 +4886,23 @@ def _openai_compatible_generate(
         duration_ms = int((time.time() - started_at) * 1000)
         if duration_ms >= OLLAMA_SLOW_REQUEST_MS:
             logger.info(
-                "OpenAI-compatible slow response model=%s duration_ms=%s prompt_chars=%s max_tokens=%s",
+                "OpenAI-compatible slow response model=%s duration_ms=%s prompt_chars=%s max_tokens=%s provider=%s base_url=%s",
                 model,
                 duration_ms,
                 len(attempt_prompt_text),
                 int(attempt_max_tokens or 0),
+                AI_PROVIDER_OPENAI_COMPATIBLE,
+                resolved_base_url,
+            )
+        elif response_text:
+            logger.info(
+                "OpenAI-compatible response ok model=%s duration_ms=%s prompt_chars=%s max_tokens=%s provider=%s base_url=%s",
+                model,
+                duration_ms,
+                len(attempt_prompt_text),
+                int(attempt_max_tokens or 0),
+                AI_PROVIDER_OPENAI_COMPATIBLE,
+                resolved_base_url,
             )
         if cache_key and response_text:
             _store_cached_ollama_response(cache_key, normalized_payload, model)
@@ -4761,6 +4923,7 @@ def _ai_generate(
     raw: bool = False,
     settings: Optional[IntegrationSettings] = None,
     config: Optional[Dict[str, Any]] = None,
+    system_prompt: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], str, str]:
     resolved_config = config or _get_ai_config_snapshot(settings)
     provider = str(resolved_config.get("provider") or AI_PROVIDER_OLLAMA)
@@ -4774,6 +4937,7 @@ def _ai_generate(
             temperature=temperature,
             max_tokens=max_tokens,
             use_cache=use_cache,
+            system_prompt=system_prompt,
         )
         return payload, model, provider
     payload, model = _ollama_generate(
@@ -4786,6 +4950,7 @@ def _ai_generate(
         max_tokens=max_tokens,
         use_cache=use_cache,
         raw=raw,
+        system_prompt=system_prompt,
     )
     return payload, model, AI_PROVIDER_OLLAMA
 
@@ -7912,12 +8077,17 @@ def _resolve_newsletter_recipient_emails(
 
 def _normalize_meta_hub_mailbox(raw: Dict[str, Any]) -> Dict[str, Any]:
     mailbox_id = str(raw.get("id") or "").strip() or str(uuid.uuid4())
+    provider = _normalize_mail_provider(raw.get("provider"))
     host = str(raw.get("host") or "").strip()
     username = str(raw.get("username") or "").strip()
     password = str(raw.get("password") or "").strip()
     folder = str(raw.get("folder") or "INBOX").strip() or "INBOX"
     name = str(raw.get("name") or "").strip()
     email = str(raw.get("email") or "").strip()
+    graph_tenant_id = str(raw.get("graph_tenant_id") or "").strip()
+    graph_client_id = str(raw.get("graph_client_id") or "").strip()
+    graph_client_secret = str(raw.get("graph_client_secret") or "").strip()
+    graph_mailbox_upn = str(raw.get("graph_mailbox_upn") or "").strip()
     enabled = bool(raw.get("enabled", True))
     use_tls = bool(raw.get("use_tls", True))
     use_ssl = bool(raw.get("use_ssl", False))
@@ -7933,6 +8103,7 @@ def _normalize_meta_hub_mailbox(raw: Dict[str, Any]) -> Dict[str, Any]:
         name = email or username or host or "Postfach"
     return {
         "id": mailbox_id,
+        "provider": provider,
         "name": name,
         "email": email,
         "host": host,
@@ -7943,6 +8114,10 @@ def _normalize_meta_hub_mailbox(raw: Dict[str, Any]) -> Dict[str, Any]:
         "enabled": enabled,
         "use_tls": use_tls,
         "use_ssl": use_ssl,
+        "graph_tenant_id": graph_tenant_id,
+        "graph_client_id": graph_client_id,
+        "graph_client_secret": graph_client_secret,
+        "graph_mailbox_upn": graph_mailbox_upn,
         "read_only": read_only,
     }
 
@@ -7980,6 +8155,7 @@ def _serialize_meta_hub_mailboxes_for_response(raw: Any) -> List[Dict[str, Any]]
         out.append(
             {
                 "id": row.get("id") or "",
+                "provider": _normalize_mail_provider(row.get("provider")),
                 "name": row.get("name") or "",
                 "email": row.get("email") or "",
                 "host": row.get("host") or "",
@@ -7991,6 +8167,11 @@ def _serialize_meta_hub_mailboxes_for_response(raw: Any) -> List[Dict[str, Any]]
                 "enabled": bool(row.get("enabled", True)),
                 "use_tls": bool(row.get("use_tls", True)),
                 "use_ssl": bool(row.get("use_ssl", False)),
+                "graph_tenant_id": row.get("graph_tenant_id") or "",
+                "graph_client_id": row.get("graph_client_id") or "",
+                "graph_client_secret": "",
+                "graph_mailbox_upn": row.get("graph_mailbox_upn") or "",
+                "has_graph_client_secret": bool(str(row.get("graph_client_secret") or "").strip()),
                 "read_only": True,
             }
         )
@@ -8017,6 +8198,8 @@ def _merge_meta_hub_mailboxes(existing_raw: Any, incoming_raw: Any) -> List[Dict
         previous = existing_by_id.get(row_id)
         if previous and not str(item.get("password") or "").strip():
             normalized["password"] = str(previous.get("password") or "")
+        if previous and not str(item.get("graph_client_secret") or "").strip():
+            normalized["graph_client_secret"] = str(previous.get("graph_client_secret") or "")
         if row_id in seen_ids:
             normalized["id"] = str(uuid.uuid4())
             row_id = str(normalized["id"])
@@ -8029,13 +8212,13 @@ def _connect_meta_hub_mailbox_read_only(mailbox: Dict[str, Any]) -> imaplib.IMAP
     host = str(mailbox.get("host") or "").strip()
     username = str(mailbox.get("username") or "").strip()
     password = str(mailbox.get("password") or "")
-    try:
-        port = int(mailbox.get("port") or 993)
-    except Exception:
-        port = 993
     folder = str(mailbox.get("folder") or "INBOX").strip() or "INBOX"
     use_ssl = bool(mailbox.get("use_ssl", False))
     use_tls = bool(mailbox.get("use_tls", True))
+    try:
+        port = int(mailbox.get("port") or (993 if use_ssl else 143))
+    except Exception:
+        port = 993 if use_ssl else 143
 
     if not host:
         raise RuntimeError("IMAP Host fehlt")
@@ -8066,8 +8249,145 @@ def _connect_meta_hub_mailbox_read_only(mailbox: Dict[str, Any]) -> imaplib.IMAP
         raise
 
 
-def serialize_integration_settings(settings: IntegrationSettings) -> Dict[str, Any]:
-    meta_hub_mailboxes = _serialize_meta_hub_mailboxes_for_response(settings.meta_hub_mailboxes_json)
+def _test_meta_hub_graph_mailbox_read_only(mailbox: Dict[str, Any]) -> Dict[str, Any]:
+    mailbox_upn = str(
+        mailbox.get("graph_mailbox_upn")
+        or mailbox.get("email")
+        or mailbox.get("username")
+        or ""
+    ).strip()
+    folder = str(mailbox.get("folder") or "INBOX").strip() or "INBOX"
+    if not mailbox_upn:
+        raise RuntimeError("Microsoft 365 Mailbox fehlt")
+    probe_account = MailAccount(
+        provider=MAIL_PROVIDER_GRAPH,
+        enabled=bool(mailbox.get("enabled", True)),
+        sender_email=str(mailbox.get("email") or "").strip(),
+        mailbox_email=str(mailbox.get("email") or mailbox_upn).strip(),
+        graph_tenant_id=str(mailbox.get("graph_tenant_id") or "").strip(),
+        graph_client_id=str(mailbox.get("graph_client_id") or "").strip(),
+        graph_client_secret=str(mailbox.get("graph_client_secret") or ""),
+        graph_mailbox_upn=mailbox_upn,
+    )
+    access_token = _graph_access_token(probe_account)
+    user_base_path = _graph_user_base_path(probe_account)
+    folder_id = "inbox" if folder.upper() == "INBOX" else folder
+    response = requests.get(
+        f"https://graph.microsoft.com/v1.0/{user_base_path}/mailFolders/{quote(folder_id)}/messages",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params={"$top": 1, "$select": "id,subject,receivedDateTime"},
+        timeout=META_HUB_MAILBOX_TEST_TIMEOUT_SECONDS,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Graph Mailbox-Test fehlgeschlagen ({response.status_code}): {response.text[:500]}"
+        )
+    return {
+        "provider": MAIL_PROVIDER_GRAPH,
+        "message": "Microsoft 365 Verbindung und Ordnerzugriff erfolgreich.",
+    }
+
+
+def _test_meta_hub_mailbox_read_only(mailbox: Dict[str, Any]) -> Dict[str, Any]:
+    provider = _normalize_mail_provider(mailbox.get("provider"))
+    if provider == MAIL_PROVIDER_GRAPH:
+        return _test_meta_hub_graph_mailbox_read_only(mailbox)
+    connection = _connect_meta_hub_mailbox_read_only(mailbox)
+    message_count: Optional[int] = None
+    try:
+        status, data = connection.search(None, "ALL")
+        if status == "OK" and data and data[0]:
+            message_count = len(data[0].split())
+    except Exception:
+        pass
+    try:
+        connection.logout()
+    except Exception:
+        pass
+    count_info = f" · {message_count} Nachrichten" if message_count is not None else ""
+    return {
+        "provider": MAIL_PROVIDER_SMTP_IMAP,
+        "message": f"IMAP Verbindung und Ordnerzugriff erfolgreich{count_info}.",
+        "message_count": message_count,
+    }
+
+
+def _serialize_meta_hub_mailbox_from_mail_account(account: MailAccount, *, include_secrets: bool = False) -> Dict[str, Any]:
+    serialized = serialize_mail_account(account)
+    provider = str(serialized.get("provider") or MAIL_PROVIDER_SMTP_IMAP)
+    return {
+        "id": str(serialized.get("id") or "").strip(),
+        "account_id": str(serialized.get("id") or "").strip(),
+        "source": "mail_account",
+        "provider": provider,
+        "name": str(serialized.get("name") or "").strip(),
+        "email": str(serialized.get("mailbox_email") or serialized.get("sender_email") or "").strip(),
+        "host": str(serialized.get("imap_host") or "").strip(),
+        "port": int(serialized.get("imap_port") or 993),
+        "username": str(serialized.get("imap_username") or "").strip(),
+        "password": str(account.imap_password or "") if include_secrets else "",
+        "has_password": bool(serialized.get("has_imap_password")),
+        "folder": str(serialized.get("imap_folder") or "INBOX").strip() or "INBOX",
+        "enabled": bool(serialized.get("enabled")),
+        "use_tls": bool(serialized.get("imap_use_tls")),
+        "use_ssl": bool(serialized.get("imap_use_ssl")),
+        "graph_tenant_id": str(serialized.get("graph_tenant_id") or "").strip(),
+        "graph_client_id": str(serialized.get("graph_client_id") or "").strip(),
+        "graph_client_secret": str(account.graph_client_secret or "") if include_secrets else "",
+        "graph_mailbox_upn": str(serialized.get("graph_mailbox_upn") or "").strip(),
+        "has_graph_client_secret": bool(serialized.get("has_graph_client_secret")),
+        "meta_hub_enabled": bool(serialized.get("meta_hub_enabled")),
+        "can_read": bool(serialized.get("can_read")),
+        "read_only": True,
+    }
+
+
+def _resolve_meta_hub_mailboxes(
+    db,
+    settings: IntegrationSettings,
+    *,
+    include_secrets: bool = False,
+    include_unreadable: bool = True,
+) -> List[Dict[str, Any]]:
+    mail_accounts = db.query(MailAccount).filter(MailAccount.meta_hub_enabled.is_(True)).order_by(MailAccount.name).all()
+    resolved_from_accounts = [
+        _serialize_meta_hub_mailbox_from_mail_account(account, include_secrets=include_secrets)
+        for account in mail_accounts
+        if include_unreadable or bool(serialize_mail_account(account).get("can_read"))
+    ]
+    if resolved_from_accounts:
+        return resolved_from_accounts
+
+    meta_hub_route = db.query(MailRoute).filter(MailRoute.function_key == "meta_hub_email_sync").first()
+    if meta_hub_route and meta_hub_route.account_id and meta_hub_route.account:
+        return [_serialize_meta_hub_mailbox_from_mail_account(meta_hub_route.account, include_secrets=include_secrets)]
+
+    return _serialize_meta_hub_mailboxes_for_response(settings.meta_hub_mailboxes_json)
+
+
+def _resolve_meta_hub_mailbox_input(db, mailbox_input: Dict[str, Any], settings: IntegrationSettings) -> Dict[str, Any]:
+    account_id = str(mailbox_input.get("account_id") or mailbox_input.get("id") or "").strip()
+    if account_id:
+        account = db.query(MailAccount).filter(MailAccount.id == account_id).first()
+        if account:
+            mailbox = _serialize_meta_hub_mailbox_from_mail_account(account, include_secrets=True)
+            folder_override = str(mailbox_input.get("folder") or "").strip()
+            enabled_override = mailbox_input.get("enabled")
+            if folder_override:
+                mailbox["folder"] = folder_override
+            if enabled_override is not None:
+                mailbox["enabled"] = bool(enabled_override)
+            return mailbox
+    merged_mailboxes = _merge_meta_hub_mailboxes(settings.meta_hub_mailboxes_json, [mailbox_input])
+    return merged_mailboxes[0] if merged_mailboxes else _normalize_meta_hub_mailbox(mailbox_input)
+
+
+def serialize_integration_settings(settings: IntegrationSettings, db=None) -> Dict[str, Any]:
+    meta_hub_mailboxes = (
+        _resolve_meta_hub_mailboxes(db, settings, include_secrets=False, include_unreadable=True)
+        if db is not None
+        else _serialize_meta_hub_mailboxes_for_response(settings.meta_hub_mailboxes_json)
+    )
     ai_config = _build_ai_config_snapshot(settings)
     return {
         "id": settings.id,
@@ -8613,90 +8933,115 @@ def _contract_template_entries_equal(left: Any, right: Any) -> bool:
 def _default_ai_prompts() -> Dict[str, Any]:
     return {
         "action_prompt": (
-            "Du bist ein Assistent fuer IT-Kundenberichte. "
-            "Erzeuge aus dem Text eine konkrete Massnahme als JSON. "
-            "Antworte ausschliesslich mit JSON und den Schluesseln: "
-            "title, system, why_text, impact, duration, cost, priority. "
-            "Nutze deutsche Begriffe und einfache, klare Sprache, "
-            "die Kunden ohne IT-Kenntnisse verstehen. "
-            "Alle Felder muessen befuellt sein (keine leeren Strings). "
-            "Wenn Informationen fehlen, setze plausible Standardwerte. "
-            "Fuelle fehlende Details aktiv auf, statt den Text nur zu wiederholen. "
-            "Die Antwort darf etwas ausfuehrlicher sein: "
-            "why_text 1-2 Saetze, title kurz und klar, system konkret. "
-            "priority ist Dringend, Planbar oder Hinweis.\n\n"
-            "Heuristiken: "
-            "Systeme: Server, Client, Netzwerk, Firewall, Backup, M365/Exchange, WLAN, Storage, Drucker, Allgemein. "
-            "Leite system anhand des Texts ab, sonst \"Allgemein\". "
-            "Impact abschaetzen: "
-            "Updates/Reboots/Firewall/Netzwerk -> \"Kurzunterbrechung\" oder \"Wartungsfenster\"; "
-            "Pruefungen/Monitoring/Reports -> \"Keine Unterbrechung\". "
-            "Dauer immer in 0,25h Schritten (z. B. \"0,5-1,0 h\" oder \"0,75 h\"). "
-            "Dauer fuer Updates: \"0,5-1,0 h\" (sonst \"0,5 h\"). "
-            "Kosten: 120 EUR pro Stunde; rechne passend zur Dauer. "
-            "Gib Kosten immer als zwei Werte mit Euro (z. B. \"60-120 €\").\n\n"
-            "Beispiel fuer Kurztext 'test': "
-            "{\"title\":\"Kurze Systempruefung\","
-            "\"system\":\"Allgemein\","
-            "\"why_text\":\"Kurzer Schnellcheck, um Auffaelligkeiten zu erkennen.\","
-            "\"impact\":\"Keine Unterbrechung\","
-            "\"duration\":\"0,25 h\","
-            "\"cost\":\"30-30 €\","
+            "Erzeuge aus dem folgenden Text eine konkrete IT-Massnahme als JSON-Objekt.\n"
+            "Felder (alle Pflicht, keine leeren Strings):\n"
+            "- title: kurz, aktiv formuliert, max. 60 Zeichen\n"
+            "- system: betroffenes System (Server | Client | Netzwerk | Firewall | Backup | M365/Exchange | WLAN | Storage | Drucker | Allgemein)\n"
+            "- why_text: 1-2 Saetze auf Deutsch — warum ist das relevant, was ist der Kundennutzen oder das Risiko?\n"
+            "- impact: Auswirkung auf den Betrieb (Keine Unterbrechung | Kurzunterbrechung | Wartungsfenster)\n"
+            "- duration: Schaetzung in 0,25h-Schritten, als Bereich angeben (z. B. \"0,5-1,0 h\")\n"
+            "- cost: Kosten bei 120 EUR/h, als Bereich (z. B. \"60-120 €\")\n"
+            "- priority: Dringend | Planbar | Hinweis\n\n"
+            "Regeln:\n"
+            "- Fehlende Details aktiv ersetzen durch plausible Standardwerte — nicht den Text wiederholen\n"
+            "- Sprache kundenverstaendlich, kein IT-Jargon\n"
+            "- system aus dem Text ableiten; wenn unklar: Allgemein\n"
+            "- Impact-Heuristik: Updates/Reboots/Firewall -> Kurzunterbrechung oder Wartungsfenster; Pruefungen/Monitoring -> Keine Unterbrechung\n\n"
+            "Beispiel (Eingabe: 'Serverupdate eingespielt'):\n"
+            "{\"title\":\"Windows-Updates auf Server eingespielt\","
+            "\"system\":\"Server\","
+            "\"why_text\":\"Sicherheitsupdates schliessen bekannte Schwachstellen und halten den Server stabil. Regelmaessige Aktualisierungen sind Voraussetzung fuer den Supportanspruch.\","
+            "\"impact\":\"Kurzunterbrechung\","
+            "\"duration\":\"0,5-1,0 h\","
+            "\"cost\":\"60-120 €\","
             "\"priority\":\"Planbar\"}\n\n"
+            "Antworte ausschliesslich mit dem JSON-Objekt.\n\n"
             "Text: {text}"
         ),
         "offer_base_prompt": (
-            "Du bist ein Assistent fuer Angebots-Texte. "
-            "Schreibe auf Deutsch, sachlich und klar. "
-            "Nutze die Informationen im Kontext. "
-            "Wenn bereits Text vorhanden ist, verbessere und ergaenze ihn, "
-            "ohne den Inhalt zu wiederholen. "
-            "Gib nur den Text zurueck, keine Markdown- oder JSON-Formatierung.\n\n"
+            "Schreibe einen Angebotstext fuer ein IT-Dienstleistungsunternehmen.\n"
+            "Sprache: Deutsch, sachlich, professionell — kein Marketing, kein Jargon.\n"
+            "Format: nur Fliesstext, kein Markdown, kein JSON.\n"
+            "Wenn bereits ein Text vorhanden ist: gezielt verbessern, nicht umschreiben was passt.\n\n"
             "Aufgabe: {instruction}\n\n"
             "Kontext:\n{context}\n\n"
-            "Bereits vorhandener Text:\n{current_text}\n"
+            "Vorhandener Text (ggf. leer):\n{current_text}\n"
         ),
         "offer_mode_instructions": {
-            "cover_intro": "Schreibe einen kurzen Deckblatt-Introtext (2-4 Sätze).",
-            "overview": "Schreibe einen kurzen Überblick für den Kunden (2-4 Sätze oder kurze Stichpunkte).",
-            "calculation": "Schreibe kurze Hinweise zur Kalkulation (1-3 Sätze).",
+            "cover_intro": (
+                "Schreibe einen Deckblatt-Introtext (2-3 Saetze). "
+                "Benenne den Kunden, das Thema und den Mehrwert kurz. "
+                "Professionell, keine Floskeln."
+            ),
+            "overview": (
+                "Schreibe einen Angebotsueberblick fuer den Kunden (3-5 Saetze). "
+                "Was wird geliefert, warum ist es relevant, welchen Nutzen hat der Kunde? "
+                "Kein IT-Jargon, keine Aufzaehlung."
+            ),
+            "calculation": (
+                "Schreibe 1-2 Saetze zu den Kalkulationsgrundlagen. "
+                "Nenne Tagsatz oder Stundensatz wenn vorhanden, Zahlungsbedingungen wenn relevant. "
+                "Sachlich, ohne Werbung."
+            ),
             "position_text": (
-                "Erstelle einen sehr kurzen, professionellen Positionstext "
-                "(1-2 kurze Sätze). Integriere Aufgaben-Titel und Notiz "
-                "klar und sachlich. Kein Aufsatz, keine Einleitung."
+                "Schreibe einen Positionstext fuer ein Angebot (1-2 Saetze). "
+                "Beschreibe klar was geleistet wird und welchen Nutzen das hat. "
+                "Keine Einleitung, keine Floskeln."
             ),
             "invoice_position_text": (
-                "Erstelle einen abrechenbaren Text fuer eine Rechnungsposition in sevdesk. "
-                "Schreibe auf Deutsch, sachlich, konkret und kundenlesbar. "
-                "Beschreibe die ausgefuehrte Leistung und das Ergebnis, nicht die interne Aufgabe. "
-                "Keine Woerter wie Aufgabe, Notiz, Ticket, Betreff, intern, Analyse oder erledigt. "
-                "Keine Begruessung, keine Aufzaehlung, keine Markdown-Formatierung. "
-                "Maximal 2 kurze Saetze, bevorzugt 1 Satz. "
-                "Wenn moeglich, mit technischem Ergebnis oder Nutzen abschliessen."
+                "Schreibe einen Positionstext fuer eine Rechnung an den Kunden.\n"
+                "Sprache: sachlich, professionell, aus Kundenperspektive formuliert.\n"
+                "Inhalt: beschreibe die ausgefuehrte Leistung und — wenn erkennbar — das Ergebnis oder den Nutzen.\n"
+                "Verbotene Woerter: Aufgabe, Notiz, Ticket, Betreff, intern, erledigt, durchgefuehrt.\n"
+                "Wenn ein Abrechnungsvermerk vorhanden ist, nutze ihn als Hinweis zum Rahmen oder Aufwand, "
+                "aber schreibe ihn nicht woertlich in den Rechnungstext.\n\n"
+                "Format-Regel (wichtig):\n"
+                "- Wenn der vorhandene Text aus einzelnen Zeilen besteht, die mit '- ' beginnen: "
+                "behalte diese Aufzaehlungsform bei und verbessere jeden Punkt einzeln. "
+                "Gib das Ergebnis ebenfalls als Aufzaehlung mit '- ' zurueck.\n"
+                "- Ansonsten: 1 Satz, maximal 2 Saetze als Fliesstext. Kein Markdown, keine Begruessung.\n"
+                "- Wenn bereits ein Text vorhanden ist, verbessere ihn gezielt — aendere nicht, was bereits gut ist.\n\n"
+                "Beispiele Fliesstext:\n"
+                "- 'Einrichtung und Konfiguration des neuen WLAN-Zugangspunkts; Verbindung zum bestehenden Netz hergestellt und getestet.'\n"
+                "- 'Remote-Unterstuetzung bei der Einrichtung des Druckers und Konfiguration der Druckerfreigabe.'\n\n"
+                "Beispiele Aufzaehlung (wenn Eingabe mit '- ' beginnt):\n"
+                "- Firewall-Regeln fuer neues Subnetz konfiguriert und getestet\n"
+                "- VPN-Zugang fuer zwei Mitarbeiter eingerichtet und dokumentiert"
             ),
-            "device_description": "Schreibe eine kurze Produktbeschreibung für Material (3-6 Sätze).",
+            "device_description": (
+                "Schreibe eine sachliche Produktbeschreibung fuer eine Angebots-Position (1-2 Saetze). "
+                "Nenne Typ, wesentliche Eigenschaft und Einsatzzweck. Kein Marketing."
+            ),
         },
         "task_scope_prompt": (
-            "Du analysierst IT-Service-Aufgaben fuer die Fakturierung.\n"
-            "Schaetze den fachlich plausiblen Arbeitsumfang nur anhand der beschriebenen Leistung. "
-            "Nutze die bereits erfasste Zeit nicht als Schaetzgrundlage, sie dient nur dem spaeteren Vergleich.\n"
-            "Antworte ausschliesslich als JSON mit den Feldern summary, estimated_min_hours, "
-            "estimated_hours, estimated_max_hours, confidence.\n"
-            "summary: 1-2 kurze Saetze auf Deutsch, sachlich, ohne Aufzaehlung.\n"
-            "confidence: low, medium oder high.\n"
-            "Alle Stundenwerte als Dezimalzahl in 0,25h-Schritten. Es muss gelten: "
-            "estimated_min_hours <= estimated_hours <= estimated_max_hours.\n\n"
+            "Schaetze den plausiblen Arbeitsaufwand fuer eine IT-Service-Aufgabe.\n\n"
+            "Grundregel: Schaetze ausschliesslich anhand der beschriebenen Leistung — "
+            "nicht anhand der erfassten Zeit (die dient nur spaeterem Vergleich).\n\n"
+            "Antworte ausschliesslich als JSON mit diesen Feldern:\n"
+            "- summary: 1-2 Saetze auf Deutsch — was wurde gemacht, was ist typisch fuer diesen Aufwand?\n"
+            "- estimated_min_hours: untere Grenze (Dezimalzahl, 0,25h-Schritte)\n"
+            "- estimated_hours: wahrscheinlichster Wert\n"
+            "- estimated_max_hours: obere Grenze bei Komplikationen\n"
+            "- confidence: low | medium | high\n\n"
+            "Constraint: estimated_min_hours <= estimated_hours <= estimated_max_hours\n\n"
+            "Heuristiken fuer gaengige IT-Aufgaben:\n"
+            "- Einfacher Remote-Support (Passwort, Drucker, Software): 0,25-0,5 h\n"
+            "- Konfiguration/Einrichtung (Mailkonto, VPN, Client): 0,5-1,5 h\n"
+            "- Server-Update oder Backup-Check: 0,5-1,0 h\n"
+            "- Fehlersuche/Troubleshooting ohne klare Ursache: 1,0-3,0 h\n"
+            "- Vor-Ort-Einsatz: Fahrzeit + Arbeitszeit einrechnen wenn Zeiten angegeben\n\n"
             "Titel: {title}\n"
             "Details: {details}\n"
-            "Faktura-/Positionstext: {content_text}\n"
-            "Vor Ort Zeiten: {onsite_text}\n"
-            "Erfasste Zeit nur zum Vergleich: {actual_hours} h"
+            "Rechnungstext: {content_text}\n"
+            "Vor-Ort-Zeit: {onsite_text}\n"
+            "Erfasste Zeit (nur Vergleich, nicht als Schaetzgrundlage): {actual_hours} h"
         ),
         "invoice_compact_prompt": (
-            "Fasse die folgenden erledigten Aufgaben zu einer kompakten Rechnungsposition zusammen. "
-            "Schreibe auf Deutsch, sachlich und kundenfreundlich. "
-            "Kein Markdown, keine Aufzaehlungszeichen, maximal 3 Saetze.\n\n"
-            "{task_lines}"
+            "Fasse die folgenden IT-Leistungen zu einem kompakten Rechnungstext zusammen.\n"
+            "Format: Fliesstext, 1-2 Saetze, kein Markdown, keine Aufzaehlung.\n"
+            "Inhalt: beschreibe die Gesamtleistung aus Kundenperspektive — was wurde gemacht und mit welchem Ergebnis.\n"
+            "Verbotene Woerter: erledigt, Aufgabe, Ticket, intern, durchgefuehrt.\n\n"
+            "Leistungen:\n{task_lines}"
         ),
         "newsletter_rss_prompts": {
             "newsletter": (
@@ -8729,28 +9074,31 @@ def _default_ai_prompts() -> Dict[str, Any]:
             "{choices_block}"
         ),
         "email_task_prompt": (
-            "Analysiere diese E-Mail und antworte nur als JSON mit den Feldern "
-            "title, details, customer_hint. "
-            "title: kurz, klar, maximal 78 Zeichen, keine Floskeln. "
-            "details: 1-3 saubere Sätze für eine Aufgaben-Notiz. "
-            "customer_hint: vermuteter Kundenname oder leer.\n\n"
-            "Absender Name: {sender_name}\n"
-            "Absender E-Mail: {sender_email}\n"
+            "Analysiere diese E-Mail und erstelle daraus eine interne IT-Aufgabe.\n"
+            "Antworte ausschliesslich als JSON mit diesen Feldern:\n"
+            "- title: Aufgabentitel, aktiv formuliert, max. 78 Zeichen, keine Floskeln "
+            "(Beispiel: 'VPN-Zugang fuer neuen Mitarbeiter einrichten')\n"
+            "- details: 1-3 Saetze — was ist zu tun, was ist der Hintergrund, gibt es Besonderheiten?\n"
+            "- customer_hint: vermuteter Kundenname aus Signatur oder Kontext, sonst leer\n\n"
+            "Absender: {sender_name} <{sender_email}>\n"
             "Betreff: {subject}\n"
-            "Inhalt: {content}"
+            "Inhalt:\n{content}"
         ),
         "customer_invoice_summary_prompt": (
-            "Fasse die letzten durchgefuehrten Arbeiten bei einem IT-Kunden kurz zusammen. "
-            "Antworte auf Deutsch in max. 4 Saetzen, sachlich, konkret, ohne Aufzaehlung.\n\n"
+            "Erstelle eine kurze Zusammenfassung der zuletzt abgerechneten IT-Leistungen.\n"
+            "Format: 2-3 Saetze, Fliesstext, kein Markdown.\n"
+            "Inhalt: Welche Schwerpunkte gab es? Was wurde stabilisiert oder verbessert? "
+            "Ggf. Hinweis auf wiederkehrende Themen.\n"
+            "Sprache: sachlich, aus Kundenperspektive — nicht als interne Statusliste.\n\n"
             "Kunde: {customer_name}\n"
-            "Rechnungspositionen:\n{invoice_lines}"
+            "Abgerechnete Positionen:\n{invoice_lines}"
         ),
         "customer_development_mode_prompts": {
             "summary": (
-                "Erstelle eine kompakte Management-Zusammenfassung auf Deutsch in 3-4 Saetzen "
-                "mit klarer Priorisierung und naechster Aktion.\n"
-                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
-                "Ton: {tone}\n\n"
+                "Erstelle eine Management-Zusammenfassung zur Kundensituation (3-4 Saetze).\n"
+                "Inhalt: aktuelle Lage, wichtigstes Signal, empfohlene naechste Aktion.\n"
+                "Ton: {tone} — kein Jargon, direkt formuliert.\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown.\n\n"
                 "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
                 "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
                 "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
@@ -8758,13 +9106,15 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "Quellenlage:\n{source_lines}\n\n"
                 "Aktuelle Themen:\n{work_topics}\n\n"
                 "Signale:\n{signal_lines}\n\n"
-                "Empfehlungen:\n{recommendation_lines}\n\n"
-                "Antwort als reiner Text, kein JSON, kein Markdown."
+                "Empfehlungen:\n{recommendation_lines}"
             ),
             "mail": (
-                "Erstelle eine kurze Kundenmail auf Deutsch mit Betreff und kompaktem Nachrichtentext. "
-                "Ziel: proaktiv Betreuung anbieten und naechsten Schritt ausloesen.\n"
-                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
+                "Erstelle eine Kundenmail auf Deutsch.\n"
+                "Struktur (strikt einhalten):\n"
+                "Zeile 1: Betreff: <praegnanter Betreff>\n"
+                "Zeile 2: leer\n"
+                "Ab Zeile 3: Mailtext (3-5 Saetze, kein Anredefloskeln wie 'Ich hoffe...')\n"
+                "Ziel: proaktiv Betreuung signalisieren, konkreten naechsten Schritt ausloesen.\n"
                 "Ton: {tone}\n\n"
                 "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
                 "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
@@ -8773,14 +9123,16 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "Quellenlage:\n{source_lines}\n\n"
                 "Aktuelle Themen:\n{work_topics}\n\n"
                 "Signale:\n{signal_lines}\n\n"
-                "Empfehlungen:\n{recommendation_lines}\n\n"
-                "Antwort als reiner Text, kein JSON, kein Markdown."
+                "Empfehlungen:\n{recommendation_lines}"
             ),
             "angebot": (
-                "Erstelle 3 kurze, konkrete Angebotsvorschlaege auf Deutsch. "
-                "Je Vorschlag: Titel, Nutzen, naechste Aktion.\n"
-                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
-                "Ton: {tone}\n\n"
+                "Erstelle 3 konkrete Angebotsvorschlaege fuer diesen Kunden.\n"
+                "Je Vorschlag:\n"
+                "- Titel (kurz, was wird angeboten)\n"
+                "- Nutzen (1 Satz, warum lohnt sich das fuer den Kunden)\n"
+                "- Naechste Aktion (was ist der erste Schritt)\n"
+                "Ton: {tone} — kein generisches Angebot, sondern passend zur Kundensituation.\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown.\n\n"
                 "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
                 "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
                 "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
@@ -8788,14 +9140,16 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "Quellenlage:\n{source_lines}\n\n"
                 "Aktuelle Themen:\n{work_topics}\n\n"
                 "Signale:\n{signal_lines}\n\n"
-                "Empfehlungen:\n{recommendation_lines}\n\n"
-                "Antwort als reiner Text, kein JSON, kein Markdown."
+                "Empfehlungen:\n{recommendation_lines}"
             ),
             "kundenbericht": (
-                "Erstelle 3 spezifische Vorschlaege fuer den naechsten Kundenbericht. "
-                "Je Vorschlag: Problembezug, warum jetzt, empfohlene Massnahme.\n"
-                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
-                "Ton: {tone}\n\n"
+                "Erstelle 3 Vorschlaege fuer Eintraege im naechsten Kundenbericht.\n"
+                "Je Eintrag:\n"
+                "- Thema (was wird berichtet)\n"
+                "- Warum jetzt (kurze Begruendung)\n"
+                "- Empfohlene Massnahme (konkret)\n"
+                "Ton: {tone} — kundenverstaendlich, keine internen Fachbegriffe.\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown.\n\n"
                 "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
                 "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
                 "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
@@ -8803,14 +9157,13 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "Quellenlage:\n{source_lines}\n\n"
                 "Aktuelle Themen:\n{work_topics}\n\n"
                 "Signale:\n{signal_lines}\n\n"
-                "Empfehlungen:\n{recommendation_lines}\n\n"
-                "Antwort als reiner Text, kein JSON, kein Markdown."
+                "Empfehlungen:\n{recommendation_lines}"
             ),
             "newsletter": (
-                "Erstelle 3 allgemein nutzbare Newsletter-Themen auf Deutsch. "
-                "Je Thema: Ueberschrift und 1-2 kurze Saetze.\n"
-                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
-                "Ton: {tone}\n\n"
+                "Erstelle 3 Newsletter-Themenvorschlaege passend zu diesem Kunden.\n"
+                "Je Thema: Ueberschrift + 2 Saetze (Problembezug oder Nutzen fuer den Kunden).\n"
+                "Ton: {tone} — relevant fuer einen Geschaeftskunden ohne IT-Hintergrund.\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown.\n\n"
                 "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
                 "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
                 "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
@@ -8818,13 +9171,13 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "Quellenlage:\n{source_lines}\n\n"
                 "Aktuelle Themen:\n{work_topics}\n\n"
                 "Signale:\n{signal_lines}\n\n"
-                "Empfehlungen:\n{recommendation_lines}\n\n"
-                "Antwort als reiner Text, kein JSON, kein Markdown."
+                "Empfehlungen:\n{recommendation_lines}"
             ),
             "leitfaden": (
-                "Erstelle einen Gespraechsleitfaden auf Deutsch mit 5-6 Stichpunkten und Abschlussfrage.\n"
-                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
-                "Ton: {tone}\n\n"
+                "Erstelle einen Gespraechsleitfaden fuer das naechste Kundengespräch.\n"
+                "Format: 5-6 Stichpunkte als gesprochene Fragen oder Einleitungen, abschliessend eine Abschlussfrage.\n"
+                "Ton: {tone} — gesprächsnah, nicht wie ein Formular.\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown.\n\n"
                 "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
                 "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
                 "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
@@ -8832,14 +9185,16 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "Quellenlage:\n{source_lines}\n\n"
                 "Aktuelle Themen:\n{work_topics}\n\n"
                 "Signale:\n{signal_lines}\n\n"
-                "Empfehlungen:\n{recommendation_lines}\n\n"
-                "Antwort als reiner Text, kein JSON, kein Markdown."
+                "Empfehlungen:\n{recommendation_lines}"
             ),
             "aktivierung_mail": (
-                "Erstelle eine aktivierende Kundenmail auf Deutsch mit Betreff und kurzem Fliesstext. "
-                "Fokus: Reaktivierung und klarer Call-to-Action.\n"
-                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
-                "Ton: {tone}\n\n"
+                "Erstelle eine Reaktivierungsmail an einen Kunden, der laenger keinen Kontakt hatte.\n"
+                "Struktur (strikt einhalten):\n"
+                "Zeile 1: Betreff: <praegnanter Betreff>\n"
+                "Zeile 2: leer\n"
+                "Ab Zeile 3: Mailtext (3-4 Saetze, klarer Call-to-Action am Ende)\n"
+                "Ziel: Beziehung erneuern, konkreten naechsten Schritt ausloesen.\n"
+                "Ton: {tone} — kein generisches 'Wir wollten uns mal melden'.\n\n"
                 "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
                 "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
                 "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
@@ -8847,13 +9202,14 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "Quellenlage:\n{source_lines}\n\n"
                 "Aktuelle Themen:\n{work_topics}\n\n"
                 "Signale:\n{signal_lines}\n\n"
-                "Empfehlungen:\n{recommendation_lines}\n\n"
-                "Antwort als reiner Text, kein JSON, kein Markdown."
+                "Empfehlungen:\n{recommendation_lines}"
             ),
             "aktivierung_call": (
-                "Erstelle einen Telefonleitfaden zur Kundenreaktivierung mit 6 klaren Punkten inklusive Abschlussfrage.\n"
-                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
-                "Ton: {tone}\n\n"
+                "Erstelle einen Telefonleitfaden zur Kundenreaktivierung.\n"
+                "Format: 6 nummerierte Gespraechspunkte (als konkrete Einleitungen oder Fragen), "
+                "zuletzt eine Abschlussfrage die eine klare Antwort einleitet.\n"
+                "Ton: {tone} — gesprächsnah, authentisch, keine Verkaufsfloskeln.\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown.\n\n"
                 "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
                 "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
                 "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
@@ -8861,14 +9217,16 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "Quellenlage:\n{source_lines}\n\n"
                 "Aktuelle Themen:\n{work_topics}\n\n"
                 "Signale:\n{signal_lines}\n\n"
-                "Empfehlungen:\n{recommendation_lines}\n\n"
-                "Antwort als reiner Text, kein JSON, kein Markdown."
+                "Empfehlungen:\n{recommendation_lines}"
             ),
             "analyse": (
-                "Erstelle eine strukturierte Kundenanalyse auf Deutsch in 4 kurzen Abschnitten: "
-                "Kurzlage, Chancen, Risiken, naechster Schritt.\n"
-                "Nutze die verfuegbaren Quellen gemeinsam. Fehlende Daten kurz benennen.\n"
-                "Ton: {tone}\n\n"
+                "Erstelle eine Kundenanalyse in 4 Abschnitten:\n"
+                "1. Kurzlage (1-2 Saetze: wo steht der Kunde gerade?)\n"
+                "2. Chancen (1-2 Saetze: was laesst sich ausbauen oder ansprechen?)\n"
+                "3. Risiken (1-2 Saetze: was koennte den Kunden gefaehrden oder verlieren lassen?)\n"
+                "4. Naechster Schritt (1 Satz: konkrete empfohlene Aktion)\n"
+                "Ton: {tone} — direkt, keine Allgemeinplaetze.\n"
+                "Antwort als reiner Text, kein JSON, kein Markdown.\n\n"
                 "Kunde: {customer_name} | Status: {state} | Risiko: {risk}/100 | Modell: {service_model_label}\n"
                 "Kontakt: {days_since_interaction} Tage seit Interaktion, faellig={contact_due}\n"
                 "Rechnung: {days_since_invoice} Tage, Reaktivierung={invoice_due}\n"
@@ -8876,41 +9234,21 @@ def _default_ai_prompts() -> Dict[str, Any]:
                 "Quellenlage:\n{source_lines}\n\n"
                 "Aktuelle Themen:\n{work_topics}\n\n"
                 "Signale:\n{signal_lines}\n\n"
-                "Empfehlungen:\n{recommendation_lines}\n\n"
-                "Antwort als reiner Text, kein JSON, kein Markdown."
+                "Empfehlungen:\n{recommendation_lines}"
             ),
         },
         "customer_signal_newsletter_prompt": (
-            "Erstelle 3 allgemein nutzbare Newsletter-Themen fuer IT-Kunden.\n"
-            "Die Themen sollen auf den haeufigsten Kundensignalen basieren.\n"
-            "Pro Thema: Ueberschrift + 2-3 Saetze Nutzen/Problembezug.\n"
-            "Nutze die verfuegbare Quellenlage und benenne fehlende Quellen transparent.\n"
-            "Ton: {tone}\n"
-            "Durchschnittliches Risiko (Top-Kunden): {avg_risk}\n"
-            "Quellenlage:\n{source_lines}\n"
-            "Haeufige Signale:\n{signal_lines}\n"
-            "Antwort als reiner Text, kein JSON, kein Markdown."
+            "Erstelle 3 Newsletter-Themenvorschlaege fuer IT-Kunden, basierend auf den aktuellen Signalen.\n"
+            "Je Thema:\n"
+            "- Ueberschrift (kurz, konkret — keine Clickbait-Formulierungen)\n"
+            "- 2 Saetze: welches Problem oder welche Chance wird angesprochen, was ist der Kundennutzen?\n"
+            "Ton: {tone} — fuer Geschaeftskunden ohne IT-Hintergrund verstaendlich.\n"
+            "Antwort als reiner Text, kein JSON, kein Markdown.\n\n"
+            "Durchschnittliches Risiko (Kundenstamm): {avg_risk}\n"
+            "Quellenlage:\n{source_lines}\n\n"
+            "Haeufige Signale:\n{signal_lines}"
         ),
-        "workbench_use_case_prompts": {
-            "customer_text_suggestions": (
-                "Erzeuge kundenfreundliche Textvorschlaege fuer das Tagesgeschaeft einer IT-Firma.\n"
-                "Ton: {tone}. Modus: {mode}.\n"
-                "Antworte ausschliesslich als JSON mit dem Feld suggestions. "
-                "suggestions ist eine Liste aus maximal {count} Objekten mit title, text und purpose.\n"
-                "Schreibe auf Deutsch, konkret, ohne Marketingfloskeln und ohne Markdown.\n\n"
-                "Kunde: {customer_name}\n"
-                "Thema: {topic}\n"
-                "Kontext:\n{context}"
-            ),
-            "technical_to_customer_language": (
-                "Uebersetze den technischen Inhalt in verstaendliche Kundensprache.\n"
-                "Ton: {tone}. Zielgruppe: {audience_level}.\n"
-                "Erklaere Nutzen, Auswirkung und naechsten Schritt. "
-                "Keine internen Details, keine Schuldzuweisungen, kein Markdown.\n\n"
-                "Technischer Text:\n{technical_text}\n\n"
-                "Zusaetzlicher Kontext:\n{context}"
-            ),
-        },
+        "workbench_use_case_prompts": {},
         "contract_header_html": (
             "<div style=\"margin-bottom:10px; padding:10px 12px; border:1px solid #dbe4ef; border-radius:12px; "
             "background:#f8fafc; color:#1e3a5f;\">"
@@ -10928,6 +11266,7 @@ def serialize_mail_account(account: MailAccount) -> Dict[str, Any]:
         "graph_mailbox_upn": account.graph_mailbox_upn or "",
         "has_graph_client_secret": bool(account.graph_client_secret and not has_graph_delegated_oauth),
         "has_graph_oauth": has_graph_delegated_oauth,
+        "meta_hub_enabled": bool(account.meta_hub_enabled),
         "can_send": can_send,
         "can_read": can_read,
         "created_at": int(account.created_at or 0),
@@ -14278,6 +14617,73 @@ def _find_sevdesk_contact_by_name(
     return best_contact, best_number
 
 
+def _find_sevdesk_contact_by_customer_details(
+    client: SevdeskClient,
+    customer: Optional[Customer],
+    customer_number: Any = None,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    if not customer:
+        return None, str(customer_number or "").strip()
+    email_candidates = {
+        _clean_customer_contact_value(_customer_primary_email(customer)).lower(),
+        _clean_customer_contact_value(_customer_billing_email(customer)).lower(),
+        _clean_customer_contact_value(_customer_effective_email(customer)).lower(),
+    }
+    email_candidates = {value for value in email_candidates if "@" in value}
+    address = _customer_effective_address(customer)
+    street_key = _dev_normalize_text(address.get("street"))
+    postal_key = _clean_customer_contact_value(address.get("postal_code"))
+    city_key = _dev_normalize_text(address.get("city"))
+    country_key = _dev_normalize_text(address.get("country"))
+    name_key = _dev_normalize_text(customer.name)
+    if not email_candidates and not any([street_key, postal_key, city_key, country_key]):
+        return None, str(customer_number or "").strip()
+    try:
+        contacts = client.list_contacts(limit=200, max_pages=25)
+    except SevdeskError:
+        return None, str(customer_number or "").strip()
+
+    best_contact: Optional[Dict[str, Any]] = None
+    best_number = str(customer_number or customer.creditor_number or "").strip()
+    best_score = -1
+    for contact in contacts:
+        if not isinstance(contact, dict):
+            continue
+        score = 0
+        contact_email = _extract_sevdesk_contact_email(contact).lower()
+        if contact_email and contact_email in email_candidates:
+            score += 120
+        contact_name_key = _dev_normalize_text(_sevdesk_contact_display_name(contact))
+        if name_key and contact_name_key:
+            if contact_name_key == name_key:
+                score += 35
+            elif name_key in contact_name_key or contact_name_key in name_key:
+                score += 12
+        contact_address = _extract_sevdesk_contact_billing_address(contact)
+        contact_street_key = _dev_normalize_text(contact_address.get("street"))
+        contact_postal_key = _clean_customer_contact_value(contact_address.get("postal_code"))
+        contact_city_key = _dev_normalize_text(contact_address.get("city"))
+        contact_country_key = _dev_normalize_text(contact_address.get("country"))
+        if street_key and contact_street_key and contact_street_key == street_key:
+            score += 45
+        if postal_key and contact_postal_key and contact_postal_key == postal_key:
+            score += 20
+        if city_key and contact_city_key and contact_city_key == city_key:
+            score += 20
+        if country_key and contact_country_key and contact_country_key == country_key:
+            score += 5
+        if score <= 0:
+            continue
+        status_value = str(contact.get("status") or "").strip().lower()
+        if status_value in {"100", "1000", "active"}:
+            score += 5
+        if score > best_score:
+            best_score = score
+            best_contact = contact
+            best_number = _extract_customer_number_from_contact(contact) or best_number
+    return best_contact, best_number
+
+
 def _find_local_customer_for_sevdesk(db: Session, customer_number: Any, customer_name: Any = None) -> Optional[Customer]:
     raw_number = str(customer_number or "").strip()
     normalized_number = _normalize_customer_number(raw_number)
@@ -14336,7 +14742,12 @@ def _find_sevdesk_contact_for_customer(
     contact, resolved_number = _find_sevdesk_contact_by_customer_number(client, customer_number)
     if contact:
         return contact, resolved_number
-    return _find_sevdesk_contact_by_name(client, customer_name, customer_number)
+    contact, resolved_number = _find_sevdesk_contact_by_name(client, customer_name, customer_number)
+    if contact:
+        return contact, resolved_number
+    if local_customer:
+        return _find_sevdesk_contact_by_customer_details(client, local_customer, customer_number)
+    return None, str(customer_number or "").strip()
 
 
 def _build_sevdesk_customer_rows(
@@ -16522,6 +16933,8 @@ def _build_customer_development_context(
         "customerName": customer.name or "",
         "customerNumber": customer.creditor_number or "",
         "customerEmail": _customer_effective_email(customer),
+        "newsletterEmail": _customer_newsletter_email(customer),
+        "billingEmail": _customer_billing_email(customer),
         "status": (customer.status or "active").lower(),
         "hasMaintenanceContract": has_contract,
         "isRegieCustomer": is_regie_customer,
@@ -20419,7 +20832,7 @@ def get_integrations():
             settings = IntegrationSettings()
             db.add(settings)
             db.commit()
-        return serialize_integration_settings(settings)
+        return serialize_integration_settings(settings, db=db)
 
 
 @app.put("/api/integrations")
@@ -20500,7 +20913,7 @@ def update_integrations(data: IntegrationSettingsUpdate):
             _tactical_software_endpoint_cache.clear()
             _customer_development_cache.clear()
             _customer_cve_cache.clear()
-        return serialize_integration_settings(settings)
+        return serialize_integration_settings(settings, db=db)
 
 
 @app.post("/api/integrations/ai_models")
@@ -20599,6 +21012,7 @@ def get_meta_hub_status(trigger_refresh: bool = False):
             return base_payload
         base_payload["health"] = {
             "refreshing": bool(health_payload.get("refreshing")),
+            "updated_at": int(health_payload.get("updatedAt") or 0),
             "refresh_interval_seconds": int(health_payload.get("refreshIntervalSeconds") or 0),
             "last_refresh_at": int(health_payload.get("lastRefreshAt") or 0),
             "last_duration_ms": int(health_payload.get("lastDurationMs") or 0),
@@ -20610,12 +21024,16 @@ def get_meta_hub_status(trigger_refresh: bool = False):
             "email_message_count": int(health_payload.get("emailMessageCount") or 0),
             "email_matched_message_count": int(health_payload.get("emailMatchedMessageCount") or 0),
             "email_connected_mailboxes": int(health_payload.get("emailConnectedMailboxes") or 0),
+            "email_mailbox_errors": dict(health_payload.get("emailMailboxErrors") or {}),
+            "ai_jobs_total": int(health_payload.get("aiJobsTotal") or 0),
+            "ai_jobs_done": int(health_payload.get("aiJobsDone") or 0),
             "ai_preanalysis_enabled": bool(health_payload.get("aiPreanalysisEnabled")),
             "ai_preanalysis_refreshing": bool(health_payload.get("aiPreanalysisRefreshing")),
             "ai_preanalysis_last_refresh_at": int(health_payload.get("aiPreanalysisLastRefreshAt") or 0),
             "ai_preanalysis_last_duration_ms": int(health_payload.get("aiPreanalysisLastDurationMs") or 0),
             "ai_preanalysis_last_error": str(health_payload.get("aiPreanalysisLastError") or ""),
             "ai_preanalysis_modes": list(health_payload.get("aiPreanalysisModes") or []),
+            "email_lookback_days": int(health_payload.get("emailLookbackDays") or 0),
         }
         base_payload["connected"] = True
         try:
@@ -20662,26 +21080,31 @@ def test_meta_hub_mailbox(payload: MetaHubMailboxTestRequest):
 
     with SessionLocal() as db:
         settings = _get_settings(db)
-        merged_mailboxes = _merge_meta_hub_mailboxes(settings.meta_hub_mailboxes_json, [mailbox_input])
-    mailbox = merged_mailboxes[0] if merged_mailboxes else _normalize_meta_hub_mailbox(mailbox_input)
+        mailbox = _resolve_meta_hub_mailbox_input(db, mailbox_input, settings)
 
     mailbox_label = (
-        str(mailbox.get("name") or mailbox.get("email") or mailbox.get("username") or mailbox.get("host") or "Postfach")
+        str(
+            mailbox.get("name")
+            or mailbox.get("email")
+            or mailbox.get("graph_mailbox_upn")
+            or mailbox.get("username")
+            or mailbox.get("host")
+            or "Postfach"
+        )
         .strip()
         or "Postfach"
     )
     try:
-        connection = _connect_meta_hub_mailbox_read_only(mailbox)
-        try:
-            connection.logout()
-        except Exception:
-            pass
+        result = _test_meta_hub_mailbox_read_only(mailbox)
+        provider = str(result.get("provider") or _normalize_mail_provider(mailbox.get("provider")))
         return {
             "ok": True,
             "checked_at": checked_at,
-            "message": f"{mailbox_label}: Verbindung und Ordnerzugriff erfolgreich.",
+            "message": f"{mailbox_label}: {str(result.get('message') or 'Verbindung und Ordnerzugriff erfolgreich.')}",
             "mailbox": {
                 "id": str(mailbox.get("id") or "").strip(),
+                "account_id": str(mailbox.get("account_id") or "").strip(),
+                "provider": provider,
                 "name": str(mailbox.get("name") or "").strip(),
                 "email": str(mailbox.get("email") or "").strip(),
                 "host": str(mailbox.get("host") or "").strip(),
@@ -20691,6 +21114,12 @@ def test_meta_hub_mailbox(payload: MetaHubMailboxTestRequest):
                 "use_tls": bool(mailbox.get("use_tls", True)),
                 "use_ssl": bool(mailbox.get("use_ssl", False)),
                 "has_password": bool(str(mailbox.get("password") or "").strip()),
+                "graph_tenant_id": str(mailbox.get("graph_tenant_id") or "").strip(),
+                "graph_client_id": str(mailbox.get("graph_client_id") or "").strip(),
+                "graph_mailbox_upn": str(mailbox.get("graph_mailbox_upn") or "").strip(),
+                "has_graph_client_secret": bool(str(mailbox.get("graph_client_secret") or "").strip()),
+                "meta_hub_enabled": bool(mailbox.get("meta_hub_enabled", True)),
+                "can_read": bool(mailbox.get("can_read", True)),
             },
         }
     except RuntimeError as exc:
@@ -20746,54 +21175,7 @@ def get_internal_customer_development_rmm_snapshot(request: Request):
             settings = IntegrationSettings()
             db.add(settings)
             db.commit()
-        meta_hub_route = db.query(MailRoute).filter(MailRoute.function_key == "meta_hub_email_sync").first()
-        meta_hub_account = meta_hub_route.account if meta_hub_route and meta_hub_route.account_id else None
-        meta_hub_mailboxes = [] if meta_hub_account else _parse_meta_hub_mailboxes(settings.meta_hub_mailboxes_json)
-        mailbox_summaries: List[Dict[str, Any]] = []
-        if meta_hub_account:
-            provider = _normalize_mail_provider(meta_hub_account.provider)
-            mailbox_summaries.append(
-                {
-                    "id": str(meta_hub_account.id or "").strip(),
-                    "name": _normalize_mail_account_name(meta_hub_account),
-                    "provider": provider,
-                    "email": str(meta_hub_account.mailbox_email or meta_hub_account.sender_email or "").strip(),
-                    "host": str(meta_hub_account.imap_host or "").strip(),
-                    "port": int(meta_hub_account.imap_port or 993),
-                    "username": str(meta_hub_account.imap_username or "").strip(),
-                    "password": str(meta_hub_account.imap_password or ""),
-                    "folder": str(meta_hub_account.imap_folder or "INBOX").strip() or "INBOX",
-                    "enabled": bool(meta_hub_account.enabled),
-                    "use_tls": bool(meta_hub_account.imap_use_tls),
-                    "use_ssl": bool(meta_hub_account.imap_use_ssl),
-                    "has_password": bool(str(meta_hub_account.imap_password or "").strip()),
-                    "graph_tenant_id": str(meta_hub_account.graph_tenant_id or "").strip(),
-                    "graph_client_id": str(meta_hub_account.graph_client_id or "").strip(),
-                    "graph_client_secret": str(meta_hub_account.graph_client_secret or ""),
-                    "graph_mailbox_upn": str(meta_hub_account.graph_mailbox_upn or "").strip(),
-                    "has_graph_client_secret": bool(str(meta_hub_account.graph_client_secret or "").strip()),
-                    "read_only": True,
-                }
-            )
-        for row in meta_hub_mailboxes:
-            mailbox_summaries.append(
-                {
-                    "id": str(row.get("id") or "").strip(),
-                    "name": str(row.get("name") or "").strip(),
-                    "provider": MAIL_PROVIDER_SMTP_IMAP,
-                    "email": str(row.get("email") or "").strip(),
-                    "host": str(row.get("host") or "").strip(),
-                    "port": int(row.get("port") or 993),
-                    "username": str(row.get("username") or "").strip(),
-                    "password": str(row.get("password") or ""),
-                    "folder": str(row.get("folder") or "INBOX").strip() or "INBOX",
-                    "enabled": bool(row.get("enabled", True)),
-                    "use_tls": bool(row.get("use_tls", True)),
-                    "use_ssl": bool(row.get("use_ssl", False)),
-                    "has_password": bool(str(row.get("password") or "").strip()),
-                    "read_only": True,
-                }
-            )
+        mailbox_summaries = _resolve_meta_hub_mailboxes(db, settings, include_secrets=True, include_unreadable=False)
         meta_hub_refresh_seconds = int(settings.meta_hub_refresh_seconds or 300)
         meta_hub_refresh_seconds = max(30, min(meta_hub_refresh_seconds, 86400))
         meta_hub_config = {
@@ -21032,6 +21414,13 @@ def cleanup_rmm_audits(data: RmmAuditCleanupRequest):
 @app.get("/health")
 def backend_health():
     return {"ok": True}
+
+
+@app.get("/api/ai/health")
+def ai_health():
+    config = _get_ai_config_snapshot()
+    payload = _probe_ai_health(config)
+    return payload
 
 
 @app.get("/api/sevdesk/health")
@@ -21787,6 +22176,14 @@ def pbx_phonebook_health():
             "version_preview": "",
         }
 
+_WORKBENCH_SYSTEM_PROMPT = (
+    "Du bist ein KI-Assistent fuer ein deutsches IT-Dienstleistungsunternehmen. "
+    "Du unterstuetzt das interne Team bei der Erstellung von Kundentexten, Angeboten, Berichten und Kommunikation. "
+    "Antworte immer auf Deutsch, praezise und professionell. "
+    "Halte dich strikt an das angefragte Format und die angegebene Laenge. "
+    "Verwende keine generischen Floskeln, kein uebertriebenes Marketing und kein Markdown ausser wenn explizit verlangt."
+)
+
 # ============== AI =================
 def _workbench_ai_service() -> WorkbenchAiService:
     return WorkbenchAiService(
@@ -21801,6 +22198,7 @@ def _workbench_ai_service() -> WorkbenchAiService:
             sanitize_invoice_text=_sanitize_invoice_position_ai_text,
             tool_timeout_seconds=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
             tool_max_tokens=INTERNAL_AI_TOOL_MAX_TOKENS,
+            system_prompt=_WORKBENCH_SYSTEM_PROMPT,
         )
     )
 

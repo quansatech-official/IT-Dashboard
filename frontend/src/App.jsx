@@ -51,6 +51,22 @@ import KnowledgeBaseView from "./knowledge/KnowledgeBaseView";
 import IncomingCallQuickTaskPopup from "./telephony/IncomingCallQuickTaskPopup";
 import VisionBoardView from "./vision-board/VisionBoardView";
 
+const APP_VIEW_STORAGE_KEY = "qt_active_view";
+const VALID_APP_VIEWS = new Set([
+  "dayplan",
+  "visionboard",
+  "notes",
+  "customers",
+  "tools",
+  "settings",
+  "telephony",
+  "stats",
+  "purchasing",
+  "knowledge",
+  "offers",
+  "report"
+]);
+
 const detectDeviceClass = () => {
   if (typeof window === "undefined" || typeof navigator === "undefined") return "desktop";
   const ua = String(navigator.userAgent || "").toLowerCase();
@@ -69,7 +85,11 @@ const detectDeviceClass = () => {
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState("dayplan");
+  const [activeView, setActiveView] = useState(() => {
+    if (typeof window === "undefined") return "dayplan";
+    const stored = window.localStorage.getItem(APP_VIEW_STORAGE_KEY);
+    return VALID_APP_VIEWS.has(stored) ? stored : "dayplan";
+  });
   const sidebarWidth = 207;
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "light";
@@ -83,6 +103,12 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("qt_theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!VALID_APP_VIEWS.has(activeView)) return;
+    window.localStorage.setItem(APP_VIEW_STORAGE_KEY, activeView);
+  }, [activeView]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;

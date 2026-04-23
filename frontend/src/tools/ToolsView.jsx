@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, ExternalLink, FileSpreadsheet, KeyRound, MonitorDown, Search, ShieldCheck, Wrench } from "lucide-react";
 import CustomerExportPanel from "./CustomerExportPanel";
 import RemoteDeployPanel from "./RemoteDeployPanel";
 import RmmAuditsPanel from "./RmmAuditsPanel";
 
+const ACTIVE_TOOL_STORAGE_KEY = "qt_tools_active_tool";
+const VALID_TOOL_IDS = new Set(["home", "remote-deploy", "exports", "rmm-audits", "yopass"]);
 const YOPASS_URL = "https://share.quansatech.at";
 const YOPASS_IFRAME_URL = "/tools/yopass/";
 
@@ -60,7 +62,11 @@ const TOOL_CARDS = [
 ];
 
 export default function ToolsView() {
-  const [activeTool, setActiveTool] = useState("home");
+  const [activeTool, setActiveTool] = useState(() => {
+    if (typeof window === "undefined") return "home";
+    const stored = window.localStorage.getItem(ACTIVE_TOOL_STORAGE_KEY);
+    return VALID_TOOL_IDS.has(stored) ? stored : "home";
+  });
   const [toolQuery, setToolQuery] = useState("");
   const filteredToolIds = useMemo(() => {
     const query = toolQuery.trim().toLowerCase();
@@ -71,6 +77,12 @@ export default function ToolsView() {
       ).map((tool) => tool.id)
     );
   }, [toolQuery]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!VALID_TOOL_IDS.has(activeTool)) return;
+    window.localStorage.setItem(ACTIVE_TOOL_STORAGE_KEY, activeTool);
+  }, [activeTool]);
 
   if (activeTool === "yopass") {
     return (

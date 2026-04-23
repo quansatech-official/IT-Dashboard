@@ -29,6 +29,7 @@ class WorkbenchAiRuntime:
     sanitize_invoice_text: Callable[[Any], str]
     tool_timeout_seconds: int
     tool_max_tokens: int
+    system_prompt: Optional[str] = None
 
 
 def clean_text(value: Any) -> str:
@@ -107,20 +108,26 @@ def normalize_suggestions(raw: Any) -> List[Dict[str, str]]:
 def default_workbench_prompts() -> Dict[str, str]:
     return {
         "customer_text_suggestions": (
-            "Erzeuge kundenfreundliche Textvorschlaege fuer das Tagesgeschaeft einer IT-Firma.\n"
-            "Ton: {tone}. Modus: {mode}.\n"
-            "Antworte ausschliesslich als JSON mit dem Feld suggestions. "
-            "suggestions ist eine Liste aus maximal {count} Objekten mit title, text und purpose.\n"
-            "Schreibe auf Deutsch, konkret, ohne Marketingfloskeln und ohne Markdown.\n\n"
+            "Erstelle {count} konkrete, unterschiedliche Textvorschlaege fuer einen IT-Dienstleister.\n"
+            "Ton: {tone}. Verwendungszweck: {mode}.\n\n"
+            "Anforderungen:\n"
+            "- Antworte ausschliesslich als JSON mit dem Feld \"suggestions\"\n"
+            "- Jeder Vorschlag ist ein Objekt mit \"title\" (kurze Beschriftung), \"text\" (der eigentliche Text) und \"purpose\" (Einsatzzweck)\n"
+            "- Deutsch, direkt, sachlich — keine Marketingfloskeln, kein Markdown im Text\n"
+            "- Texte sollen sofort verwendbar sein, ohne weitere Bearbeitung\n\n"
             "Kunde: {customer_name}\n"
             "Thema: {topic}\n"
-            "Kontext:\n{context}"
+            "Kontext:\n{context}\n\n"
+            "Antworte nur mit dem JSON-Objekt, ohne erklaerende Saetze darum."
         ),
         "technical_to_customer_language": (
-            "Uebersetze den technischen Inhalt in verstaendliche Kundensprache.\n"
-            "Ton: {tone}. Zielgruppe: {audience_level}.\n"
-            "Erklaere Nutzen, Auswirkung und naechsten Schritt. "
-            "Keine internen Details, keine Schuldzuweisungen, kein Markdown.\n\n"
+            "Formuliere den folgenden technischen Sachverhalt so um, dass ein Geschaeftskunde ihn versteht.\n"
+            "Ton: {tone}. Zielgruppe: {audience_level}.\n\n"
+            "Regeln:\n"
+            "- Erklaere was passiert ist, welche Auswirkung das hat und was als naechstes geschieht\n"
+            "- Keine internen Fachbegriffe, keine Schuldzuweisungen, kein IT-Jargon\n"
+            "- Kein Markdown, keine Aufzaehlungszeichen — fliesender Text\n"
+            "- Maximal 4 Saetze\n\n"
             "Technischer Text:\n{technical_text}\n\n"
             "Zusaetzlicher Kontext:\n{context}"
         ),
@@ -149,6 +156,7 @@ class WorkbenchAiService:
         context = clean_text(data.get("context"))
         if not mode:
             raise ValueError("Mode required")
+        purpose = "invoice_summary" if mode == "invoice_position_text" else "offer_text"
 
         prompts = self.runtime.load_prompts()
         mode_instructions = prompts.get("offer_mode_instructions") or {}
@@ -164,10 +172,11 @@ class WorkbenchAiService:
 
         payload, model, provider = self.runtime.generate(
             prompt,
-            model_candidates=self.runtime.resolve_models(purpose="offer_text"),
+            model_candidates=self.runtime.resolve_models(purpose=purpose),
             temperature=0.2,
-            max_tokens=220,
+            max_tokens=self.runtime.tool_max_tokens,
             timeout=self.runtime.tool_timeout_seconds,
+            system_prompt=self.runtime.system_prompt,
         )
         text = clean_text((payload or {}).get("response"))
         if mode == "invoice_position_text":
@@ -199,6 +208,7 @@ class WorkbenchAiService:
             temperature=0.2,
             max_tokens=self.runtime.tool_max_tokens,
             timeout=self.runtime.tool_timeout_seconds,
+            system_prompt=self.runtime.system_prompt,
         )
         action = self.runtime.parse_action_json((payload or {}).get("response"))
         if not action:
@@ -231,8 +241,9 @@ class WorkbenchAiService:
             model_candidates=self.runtime.resolve_models(purpose="customer_development"),
             response_format="json",
             temperature=0.35,
-            max_tokens=min(700, self.runtime.tool_max_tokens),
+            max_tokens=min(900, self.runtime.tool_max_tokens),
             timeout=self.runtime.tool_timeout_seconds,
+            system_prompt=self.runtime.system_prompt,
         )
         suggestions = normalize_suggestions((payload or {}).get("response"))
         if not suggestions:
@@ -267,10 +278,11 @@ class WorkbenchAiService:
         )
         payload, model, provider = self.runtime.generate(
             prompt,
-            model_candidates=self.runtime.resolve_models(purpose="offer_text"),
+            model_candidates=self.runtime.resolve_models(purpose="customer_development"),
             temperature=0.25,
-            max_tokens=min(600, self.runtime.tool_max_tokens),
+            max_tokens=min(800, self.runtime.tool_max_tokens),
             timeout=self.runtime.tool_timeout_seconds,
+            system_prompt=self.runtime.system_prompt,
         )
         text = clean_text((payload or {}).get("response"))
         if not text:

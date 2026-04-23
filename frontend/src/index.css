@@ -107,7 +107,7 @@
   overflow-x: auto;
   border: 1px solid var(--border-200);
   border-radius: 1rem;
-  background: rgba(15, 23, 42, 0.04);
+  background: var(--bg-100);
   padding: 0.9rem 1rem;
 }
 
@@ -162,22 +162,22 @@
   }
 
   :root[data-theme="dark"] {
-    --bg-50: #0f172a;
-    --bg-100: #1b2433;
-    --bg-900: #101826;
-    --card-bg: #1f2a3a;
-    --border-200: #2b3a52;
-    --border-300: #3b4f6c;
-    --text-500: #a9b7c8;
-    --text-600: #c0ccda;
-    --text-700: #d2dbe7;
-    --text-800: #e1e8f0;
-    --text-900: #f6f8fb;
-    --nav-active-bg: #1e2d42;
-    --nav-active-text: #e1e8f0;
-    --nav-accent: #6b9fd4;
-    --bg-overlay-60: rgba(27, 36, 51, 0.6);
-    --bg-overlay-70: rgba(27, 36, 51, 0.7);
+    --bg-50: #0d1520;
+    --bg-100: #162232;
+    --bg-900: #080e18;
+    --card-bg: #1c2d42;
+    --border-200: #2e4564;
+    --border-300: #3f5e84;
+    --text-500: #8fadc9;
+    --text-600: #aec4d8;
+    --text-700: #cad8e8;
+    --text-800: #dde8f2;
+    --text-900: #f0f5fa;
+    --nav-active-bg: #1e3554;
+    --nav-active-text: #dde8f2;
+    --nav-accent: #7cb8e8;
+    --bg-overlay-60: rgba(22, 34, 50, 0.6);
+    --bg-overlay-70: rgba(22, 34, 50, 0.7);
   }
 
   body {

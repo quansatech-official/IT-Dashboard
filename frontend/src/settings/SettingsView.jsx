@@ -40,6 +40,7 @@ const defaultMailAccount = () => ({
   graph_mailbox_upn: "",
   has_graph_client_secret: false,
   has_graph_oauth: false,
+  meta_hub_enabled: false,
   can_send: false,
   can_read: false
 });
@@ -52,7 +53,8 @@ const normalizeMailAccount = (raw) => ({
   provider: String(raw?.provider || "smtp_imap"),
   smtp_password: "",
   imap_password: "",
-  graph_client_secret: ""
+  graph_client_secret: "",
+  meta_hub_enabled: Boolean(raw?.meta_hub_enabled)
 });
 
 const defaultCti = {
@@ -85,6 +87,9 @@ const defaultRmm = {
 
 const defaultMetaHubMailbox = () => ({
   id: `mbx_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  account_id: "",
+  source: "mail_account",
+  provider: "smtp_imap",
   name: "",
   email: "",
   host: "",
@@ -96,6 +101,13 @@ const defaultMetaHubMailbox = () => ({
   enabled: true,
   use_tls: true,
   use_ssl: false,
+  graph_tenant_id: "",
+  graph_client_id: "",
+  graph_client_secret: "",
+  graph_mailbox_upn: "",
+  has_graph_client_secret: false,
+  meta_hub_enabled: false,
+  can_read: false,
   read_only: true
 });
 
@@ -103,6 +115,9 @@ const normalizeMetaHubMailbox = (raw) => ({
   ...defaultMetaHubMailbox(),
   ...(raw && typeof raw === "object" ? raw : {}),
   id: String(raw?.id || defaultMetaHubMailbox().id),
+  account_id: String(raw?.account_id || ""),
+  source: String(raw?.source || "mail_account"),
+  provider: String(raw?.provider || "smtp_imap"),
   name: String(raw?.name || ""),
   email: String(raw?.email || ""),
   host: String(raw?.host || ""),
@@ -114,8 +129,39 @@ const normalizeMetaHubMailbox = (raw) => ({
   enabled: raw?.enabled !== false,
   use_tls: raw?.use_tls !== false,
   use_ssl: Boolean(raw?.use_ssl),
+  graph_tenant_id: String(raw?.graph_tenant_id || ""),
+  graph_client_id: String(raw?.graph_client_id || ""),
+  graph_client_secret: "",
+  graph_mailbox_upn: String(raw?.graph_mailbox_upn || ""),
+  has_graph_client_secret: Boolean(raw?.has_graph_client_secret),
+  meta_hub_enabled: Boolean(raw?.meta_hub_enabled),
+  can_read: Boolean(raw?.can_read),
   read_only: true
 });
+
+const metaHubMailboxFromMailAccount = (account) =>
+  normalizeMetaHubMailbox({
+    id: String(account?.id || ""),
+    account_id: String(account?.id || ""),
+    source: "mail_account",
+    provider: String(account?.provider || "smtp_imap"),
+    name: String(account?.name || ""),
+    email: String(account?.mailbox_email || account?.sender_email || ""),
+    host: String(account?.imap_host || ""),
+    port: Number(account?.imap_port) > 0 ? Number(account.imap_port) : 993,
+    username: String(account?.imap_username || ""),
+    folder: String(account?.imap_folder || "INBOX"),
+    enabled: account?.enabled !== false,
+    use_tls: Boolean(account?.imap_use_tls),
+    use_ssl: Boolean(account?.imap_use_ssl),
+    graph_tenant_id: String(account?.graph_tenant_id || ""),
+    graph_client_id: String(account?.graph_client_id || ""),
+    graph_mailbox_upn: String(account?.graph_mailbox_upn || ""),
+    has_graph_client_secret: Boolean(account?.has_graph_client_secret),
+    meta_hub_enabled: Boolean(account?.meta_hub_enabled),
+    can_read: Boolean(account?.can_read),
+    read_only: true
+  });
 
 const defaultMetaHub = {
   rmm_enabled: true,
@@ -882,6 +928,12 @@ export default function SettingsView() {
         routes: data?.routes && typeof data.routes === "object" ? data.routes : {},
         functions: Array.isArray(data?.functions) ? data.functions : []
       });
+      setMetaHub((prev) => ({
+        ...prev,
+        mailboxes: accounts
+          .filter((account) => account?.meta_hub_enabled)
+          .map((account) => metaHubMailboxFromMailAccount(account))
+      }));
       if (!mailEditId && accounts.length) {
         setMailEditId(accounts[0].id);
         setMailDraft(accounts[0]);
@@ -1272,7 +1324,13 @@ export default function SettingsView() {
       const saved = normalizeMailAccount(data);
       setMailEditId(saved.id);
       setMailDraft(saved);
-      await loadMailSettings();
+      const accounts = await loadMailSettings();
+      setMetaHub((prev) => ({
+        ...prev,
+        mailboxes: accounts
+          .filter((account) => account?.meta_hub_enabled)
+          .map((account) => metaHubMailboxFromMailAccount(account))
+      }));
       setMailStatus("saved");
       setMailMessage("Mailkonto gespeichert.");
       return saved;
@@ -1348,7 +1406,13 @@ export default function SettingsView() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.detail || "Mailkonto konnte nicht entfernt werden.");
       newMailAccount();
-      await loadMailSettings();
+      const accounts = await loadMailSettings();
+      setMetaHub((prev) => ({
+        ...prev,
+        mailboxes: accounts
+          .filter((account) => account?.meta_hub_enabled)
+          .map((account) => metaHubMailboxFromMailAccount(account))
+      }));
       setMailStatus("saved");
       setMailMessage("Mailkonto entfernt.");
     } catch (error) {
@@ -2171,16 +2235,22 @@ export default function SettingsView() {
         body: JSON.stringify({
           mailbox: {
             id: String(mailbox?.id || ""),
+            account_id: String(mailbox?.account_id || ""),
+            provider: String(mailbox?.provider || "smtp_imap"),
             name: String(mailbox?.name || ""),
             email: String(mailbox?.email || ""),
             host: String(mailbox?.host || ""),
-            port: Number(mailbox?.port) || 993,
+            port: Number(mailbox?.port) || (mailbox?.use_ssl ? 993 : 143),
             username: String(mailbox?.username || ""),
             password: String(mailbox?.password || ""),
             folder: String(mailbox?.folder || "INBOX"),
             enabled: Boolean(mailbox?.enabled),
             use_tls: Boolean(mailbox?.use_tls),
             use_ssl: Boolean(mailbox?.use_ssl),
+            graph_tenant_id: String(mailbox?.graph_tenant_id || ""),
+            graph_client_id: String(mailbox?.graph_client_id || ""),
+            graph_client_secret: String(mailbox?.graph_client_secret || ""),
+            graph_mailbox_upn: String(mailbox?.graph_mailbox_upn || ""),
             read_only: true
           }
         })
@@ -2212,23 +2282,6 @@ export default function SettingsView() {
   const saveMetaHubSettings = async () => {
     setMetaHubStatus("saving");
     try {
-      const payloadMailboxes = (Array.isArray(metaHub.mailboxes) ? metaHub.mailboxes : [])
-        .map((row) => ({
-          id: String(row?.id || ""),
-          name: String(row?.name || ""),
-          email: String(row?.email || ""),
-          host: String(row?.host || ""),
-          port: Number(row?.port) || 993,
-          username: String(row?.username || ""),
-          password: String(row?.password || ""),
-          folder: String(row?.folder || "INBOX"),
-          enabled: Boolean(row?.enabled),
-          use_tls: Boolean(row?.use_tls),
-          use_ssl: Boolean(row?.use_ssl),
-          read_only: true
-        }))
-        .filter((row) => row.host || row.username || row.email || row.name);
-
       const res = await fetch(`${API}/integrations`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2236,8 +2289,7 @@ export default function SettingsView() {
           meta_hub_rmm_enabled: Boolean(metaHub.rmm_enabled),
           meta_hub_rmm_customer_field_name: String(metaHub.rmm_customer_field_name || "Kundennummer"),
           meta_hub_email_enabled: Boolean(metaHub.email_enabled),
-          meta_hub_refresh_seconds: Math.max(30, Number(metaHub.refresh_seconds) || 300),
-          meta_hub_mailboxes: payloadMailboxes
+          meta_hub_refresh_seconds: Math.max(30, Number(metaHub.refresh_seconds) || 300)
         })
       });
       if (!res.ok) throw new Error("save_failed");
@@ -2855,6 +2907,9 @@ export default function SettingsView() {
                           {account.sender_email || account.mailbox_email || "ohne Adresse"} ·{" "}
                           {account.can_send ? "Senden" : "kein Versand"} / {account.can_read ? "Lesen" : "kein Lesen"}
                         </div>
+                        {account.meta_hub_enabled ? (
+                          <div className="mt-1 text-[11px] text-emerald-700">Für Meta-Hub freigegeben</div>
+                        ) : null}
                       </button>
                     ))}
                     {!mailSettings.accounts.length ? (
@@ -2917,6 +2972,14 @@ export default function SettingsView() {
                         onChange={(event) => setMailDraft((prev) => ({ ...prev, enabled: event.target.checked }))}
                       />
                       Aktiv
+                    </label>
+                    <label className="flex items-center gap-2 pt-6 text-xs text-sand-700">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(mailDraft.meta_hub_enabled)}
+                        onChange={(event) => setMailDraft((prev) => ({ ...prev, meta_hub_enabled: event.target.checked }))}
+                      />
+                      Für Meta-Hub freigeben
                     </label>
                   </div>
 
@@ -4309,7 +4372,8 @@ export default function SettingsView() {
           {metaHubOpen ? (
             <>
               <p className="mt-4 text-xs text-sand-500 mb-4">
-                Steuerung der Meta-Hub Datenquellen für Kundenentwicklung: RMM-Mapping und mehrere E-Mail-Postfächer (IMAP).
+                Steuerung der Meta-Hub Datenquellen für Kundenentwicklung: RMM-Mapping und mehrere E-Mail-Postfächer
+                per IMAP oder Microsoft 365 / Graph.
                 Meta-Hub greift auf E-Mails nur lesend zu.
               </p>
               <div className="mb-4 rounded-2xl border border-sand-200 bg-sand-50 p-3">
@@ -4341,6 +4405,13 @@ export default function SettingsView() {
                 </button>
                 {metaHubRuntimeOpen ? (
                   <div className="mt-3 space-y-3 rounded-xl border border-sand-200 bg-white p-3">
+                    {metaHubRuntimeStatus.health?.updated_at > 0 &&
+                      Date.now() - metaHubRuntimeStatus.health.updated_at > 6 * 3600 * 1000 ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Snapshot ist älter als 6 Stunden — zuletzt aktualisiert:{" "}
+                        {formatTimestampOrNa(metaHubRuntimeStatus.health.updated_at)}
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <button
                         type="button"
@@ -4393,7 +4464,9 @@ export default function SettingsView() {
                       </div>
                       <div>
                         <span className="text-sand-500">KI läuft gerade:</span>{" "}
-                        {metaHubRuntimeStatus.health?.ai_preanalysis_refreshing ? "ja" : "nein"}
+                        {metaHubRuntimeStatus.health?.ai_preanalysis_refreshing
+                          ? `ja (${Number(metaHubRuntimeStatus.health?.ai_jobs_done || 0)}/${Number(metaHubRuntimeStatus.health?.ai_jobs_total || 0)})`
+                          : "nein"}
                       </div>
                       <div>
                         <span className="text-sand-500">KI Ergebnisse im Snapshot:</span>{" "}
@@ -4406,6 +4479,12 @@ export default function SettingsView() {
                       <div>
                         <span className="text-sand-500">E-Mail Sync:</span>{" "}
                         {metaHubRuntimeStatus.health?.email_sync_enabled ? "ja" : "nein"}
+                      </div>
+                      <div>
+                        <span className="text-sand-500">Rückblick (Tage):</span>{" "}
+                        {Number(metaHubRuntimeStatus.health?.email_lookback_days || 0) > 0
+                          ? `${Number(metaHubRuntimeStatus.health.email_lookback_days)} Tage`
+                          : "n/a"}
                       </div>
                       <div>
                         <span className="text-sand-500">E-Mail Zugriff:</span>{" "}
@@ -4519,126 +4598,62 @@ export default function SettingsView() {
               </div>
 
               <div className="mt-4 rounded-2xl border border-sand-200 bg-sand-50 p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-xs uppercase tracking-[0.2em] text-sand-500">E-Mail Postfächer</p>
-                  <button
-                    type="button"
-                    onClick={addMetaHubMailbox}
-                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                  >
-                    <Plus size={12} />
-                    Postfach
-                  </button>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-xs uppercase tracking-[0.2em] text-sand-500">Freigegebene E-Mail Postfächer</p>
+                  <span className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700">
+                    Zentral über Mailprofile
+                  </span>
                 </div>
                 <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-                  Zugriff ist fest auf Nur-Lesen gesetzt. Meta-Hub soll keine Nachrichten markieren,
-                  verschieben oder loeschen.
+                  Postfächer werden im Bereich Mailprofile angelegt. Dort entscheidest du pro Konto über
+                  "Für Meta-Hub freigeben". Zugriff bleibt fest auf Nur-Lesen.
                 </div>
                 <div className="space-y-2 max-h-[420px] overflow-auto pr-1">
                   {(metaHub.mailboxes || []).map((mailbox) => {
                     const mailboxTest = metaHubMailboxTests[mailbox.id] || null;
+                    const mailboxRuntimeError = metaHubRuntimeStatus.health?.email_mailbox_errors?.[mailbox.id] || "";
                     return (
                       <div key={mailbox.id} className="rounded-xl border border-sand-200 bg-white p-3">
                         <div className="mb-3 flex items-center justify-between gap-2">
-                          <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Zugriffsmodus</p>
-                          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-800">
-                            Nur Lesen
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-                          <div>
-                            <label className="text-[11px] text-sand-500">Name</label>
-                            <input
-                              value={mailbox.name || ""}
-                              onChange={(event) => updateMetaHubMailbox(mailbox.id, { name: event.target.value })}
-                              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-xs"
-                              placeholder="Support Postfach"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-sand-500">E-Mail</label>
-                            <input
-                              value={mailbox.email || ""}
-                              onChange={(event) => updateMetaHubMailbox(mailbox.id, { email: event.target.value })}
-                              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-xs"
-                              placeholder="support@example.com"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-sand-500">Host</label>
-                            <input
-                              value={mailbox.host || ""}
-                              onChange={(event) => updateMetaHubMailbox(mailbox.id, { host: event.target.value })}
-                              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-xs"
-                              placeholder="imap.example.com"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-sand-500">Port</label>
-                            <input
-                              type="number"
-                              min="1"
-                              max="65535"
-                              value={mailbox.port || 993}
-                              onChange={(event) => updateMetaHubMailbox(mailbox.id, { port: event.target.value })}
-                              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-sand-500">Benutzername</label>
-                            <input
-                              value={mailbox.username || ""}
-                              onChange={(event) => updateMetaHubMailbox(mailbox.id, { username: event.target.value })}
-                              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-xs"
-                              placeholder="imap-user"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-sand-500">Passwort</label>
-                            <input
-                              type="password"
-                              value={mailbox.password || ""}
-                              onChange={(event) => updateMetaHubMailbox(mailbox.id, { password: event.target.value })}
-                              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-xs"
-                              placeholder={mailbox.has_password ? "Gespeichert" : "••••••••"}
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-sand-500">Ordner</label>
-                            <input
-                              value={mailbox.folder || "INBOX"}
-                              onChange={(event) => updateMetaHubMailbox(mailbox.id, { folder: event.target.value })}
-                              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-xs"
-                              placeholder="INBOX"
-                            />
-                          </div>
-                          <label className="flex items-center gap-2 pt-5 text-xs text-sand-700">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(mailbox.enabled)}
-                              onChange={(event) => updateMetaHubMailbox(mailbox.id, { enabled: event.target.checked })}
-                            />
-                            Aktiv
-                          </label>
-                          <div className="flex items-center gap-3 pt-5 text-xs text-sand-700">
-                            <label className="inline-flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={Boolean(mailbox.use_tls)}
-                                onChange={(event) => updateMetaHubMailbox(mailbox.id, { use_tls: event.target.checked })}
-                              />
-                              TLS
-                            </label>
-                            <label className="inline-flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={Boolean(mailbox.use_ssl)}
-                                onChange={(event) => updateMetaHubMailbox(mailbox.id, { use_ssl: event.target.checked })}
-                              />
-                              SSL
-                            </label>
+                          <p className="text-sm font-semibold text-sand-900">{mailbox.name || mailbox.email || "Postfach"}</p>
+                          <div className="flex items-center gap-2">
+                            <span className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[10px] uppercase tracking-wide text-sand-700">
+                              {mailbox.provider === "microsoft_graph" ? "Microsoft 365 / Graph" : "IMAP"}
+                            </span>
+                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-800">
+                              Nur Lesen
+                            </span>
                           </div>
                         </div>
+                        <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
+                          <div>
+                            <div className="text-[11px] text-sand-500">E-Mail</div>
+                            <div className="mt-1 text-xs text-sand-800">{mailbox.email || mailbox.graph_mailbox_upn || "n/a"}</div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-sand-500">Quelle</div>
+                            <div className="mt-1 text-xs text-sand-800">
+                              {mailbox.provider === "microsoft_graph"
+                                ? mailbox.graph_mailbox_upn || mailbox.email || "Microsoft 365"
+                                : mailbox.host || "IMAP"}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-sand-500">Ordner</div>
+                            <div className="mt-1 text-xs text-sand-800">{mailbox.folder || "INBOX"}</div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] text-sand-500">Status</div>
+                            <div className="mt-1 text-xs text-sand-800">
+                              {mailbox.enabled ? "Aktiv" : "Deaktiviert"} · {mailbox.can_read ? "Lesen möglich" : "Lesekonfiguration fehlt"}
+                            </div>
+                          </div>
+                        </div>
+                        {mailboxRuntimeError ? (
+                          <div className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700">
+                            Letzter Sync-Fehler: {mailboxRuntimeError}
+                          </div>
+                        ) : null}
                         <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                           <div className="text-[11px] text-sand-500">
                             {mailboxTest?.status === "loading" ? "Teste Verbindung..." : null}
@@ -4657,18 +4672,10 @@ export default function SettingsView() {
                             <button
                               type="button"
                               onClick={() => testMetaHubMailbox(mailbox)}
-                              disabled={mailboxTest?.status === "loading"}
+                              disabled={mailboxTest?.status === "loading" || !mailbox.can_read}
                               className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
                             >
                               {mailboxTest?.status === "loading" ? "Teste..." : "Postfach testen"}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => removeMetaHubMailbox(mailbox.id)}
-                              className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                            >
-                              <Trash2 size={11} />
-                              Entfernen
                             </button>
                           </div>
                         </div>
@@ -4677,7 +4684,7 @@ export default function SettingsView() {
                   })}
                   {!metaHub.mailboxes?.length ? (
                     <p className="rounded-xl border border-dashed border-sand-300 bg-white px-3 py-2 text-xs text-sand-500">
-                      Noch keine Postfächer konfiguriert.
+                      Noch keine Mailkonten für Meta-Hub freigegeben. Das setzt du im Bereich Mailprofile am jeweiligen Konto.
                     </p>
                   ) : null}
                 </div>

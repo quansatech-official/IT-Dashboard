@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, ClipboardList, FileSignature, List, RefreshCw } from "lucide-react";
 
 const API = "/api";
+const ACTIVE_TAB_STORAGE_KEY = "qt_mobile_active_tab";
+const VALID_TABS = new Set(["quick", "tasks", "delivery", "stats"]);
 
 const fetchJson = async (url, options) => {
   const response = await fetch(url, options);
@@ -68,7 +70,11 @@ const detectDeviceClass = () => {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("quick");
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window === "undefined") return "quick";
+    const stored = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+    return VALID_TABS.has(stored) ? stored : "quick";
+  });
   const [customers, setCustomers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [stats, setStats] = useState(null);
@@ -114,6 +120,12 @@ export default function App() {
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!VALID_TABS.has(activeTab)) return;
+    window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
