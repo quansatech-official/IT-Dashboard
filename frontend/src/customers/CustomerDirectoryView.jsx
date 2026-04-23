@@ -6123,200 +6123,192 @@ export default function CustomerDirectoryView() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-5 space-y-4">
-        <section>
-          {/* Search + filter bar */}
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            <label className="relative flex-1 min-w-[220px]">
+        <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Übersicht</p>
+              <h2 className="text-base font-display text-sand-900">Kundendatei</h2>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-700">
+                Gesamt {totalCustomers}
+              </span>
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
+                Aktiv {activeCustomers}
+              </span>
+              <span className="rounded-full border border-slate-300 bg-slate-100 px-3 py-1 text-xs text-slate-700">
+                Inaktiv {inactiveCustomers}
+              </span>
+            </div>
+          </div>
+          <div className="mb-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] items-center">
+            <label className="relative block">
               <span className="sr-only">Suche</span>
-              <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sand-400" />
+              <Search size={14} className="absolute left-3 top-3 text-sand-400" />
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Name, Nummer, Telefon…"
-                className="w-full rounded-2xl border border-sand-200 bg-white pl-9 pr-4 py-2 text-sm shadow-soft focus:outline-none focus:ring-2 focus:ring-sand-300"
+                placeholder="Suche nach Name, Nummer, Telefon…"
+                className="w-full rounded-2xl border border-sand-200 pl-9 pr-3 py-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-sand-300"
               />
             </label>
-            <label className="flex items-center gap-2 text-xs text-sand-600 rounded-2xl border border-sand-200 bg-white px-3 py-2 cursor-pointer hover:bg-sand-50">
+            <label className="flex items-center gap-2 text-xs text-sand-600">
               <input
                 type="checkbox"
                 checked={showInactive}
                 onChange={(event) => setShowInactive(event.target.checked)}
-                className="h-3.5 w-3.5 accent-sand-900"
+                className="h-4 w-4"
               />
-              Inaktive einblenden
+              Inaktive Kunden einblenden
             </label>
-            <div className="flex items-center gap-2 ml-auto">
-              <span className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs text-sand-600 shadow-soft">
-                <span className="font-semibold text-sand-900">{activeCustomers}</span> aktiv
-              </span>
-              {inactiveCustomers > 0 ? (
-                <span className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs text-sand-500">
-                  {inactiveCustomers} inaktiv
-                </span>
-              ) : null}
-            </div>
           </div>
-
-          {/* Customer card grid */}
-          {sortedCustomers.length ? (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {sortedCustomers.map((customer) => {
-                const isActive = customer.id === activeId;
-                const context = developmentByCustomerId[customer.id];
-                const infra = context?.infra || {};
-                const managedAssets = Number(infra?.managedAssets || 0);
-                const errorCount = Number(infra?.errorCount || 0);
-                const warningCount = Number(infra?.warningCount || 0);
-                const openUpdates = Number(infra?.openUpdates || 0);
-                const contractTypeCounts =
-                  customer.id === activeId
-                    ? deriveContractTypeCountsFromContracts(customerContracts)
-                    : normalizeContractTypeCounts(customer.contractTypeCounts || {});
-                const contractEntries = sortContractTypeCountEntries(contractTypeCounts);
-                const initials = (customer.name || "?")
-                  .trim()
-                  .split(/\s+/)
-                  .slice(0, 2)
-                  .map((w) => w[0]?.toUpperCase() || "")
-                  .join("");
-                const isInactive = String(customer.status || "active") === "inactive";
-                return (
-                  <div
-                    key={customer.id}
-                    onClick={() => setActiveId(customer.id)}
-                    className={`group relative flex flex-col gap-3 rounded-2xl border p-4 cursor-pointer transition-all duration-150 ${
-                      isActive
-                        ? "border-sand-900 bg-sand-900 text-white shadow-md"
-                        : "border-sand-200 bg-white hover:border-sand-400 hover:shadow-soft"
-                    }`}
-                  >
-                    {/* Header row */}
-                    <div className="flex items-start gap-3">
-                      <div className={`flex-shrink-0 h-10 w-10 rounded-xl flex items-center justify-center text-sm font-bold select-none ${
-                        isActive ? "bg-white/15 text-white" : "bg-sand-100 text-sand-700"
-                      }`}>
-                        {initials}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className={`text-sm font-semibold leading-tight truncate ${isActive ? "text-white" : "text-sand-900"}`}>
-                          {customer.name?.trim() || "Unbenannter Kunde"}
-                        </p>
-                        <p className={`text-[11px] mt-0.5 ${isActive ? "text-white/60" : "text-sand-500"}`}>
-                          Nr. {customer.creditorNumber || "–"}
-                          {customer.shortCode ? ` · ${customer.shortCode}` : ""}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setActiveId(customer.id);
-                          setSettingsTab("details");
-                          setEditCustomerId(customer.id);
-                        }}
-                        className={`flex-shrink-0 inline-flex items-center justify-center rounded-full border p-1.5 transition-colors ${
-                          isActive
-                            ? "border-white/20 text-white/70 hover:bg-white/10"
-                            : "border-sand-200 text-sand-400 hover:bg-sand-100 hover:text-sand-700"
-                        }`}
-                        title="Bearbeiten"
-                        aria-label="Bearbeiten"
-                      >
-                        <Pencil size={12} />
-                      </button>
-                    </div>
-
-                    {/* Contract badges */}
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {contractEntries.length ? (
-                        contractEntries.map(([type, count]) => (
-                          <span
-                            key={type}
-                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                              isActive
-                                ? "border-white/20 bg-white/10 text-white"
-                                : contractTypeBadgeClass(type)
-                            }`}
-                          >
-                            {formatContractTypeLabel(type)} {count}
+          <div className="overflow-auto rounded-2xl border border-sand-200">
+            <table className="min-w-full text-xs">
+              <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
+                <tr>
+                  <th className="px-3 py-2 text-left">Kunde</th>
+                  <th className="px-3 py-2 text-left">Kommunikation</th>
+                  <th className="px-3 py-2 text-left">Kundenstatus</th>
+                  <th className="px-3 py-2 text-left">Vertragsstatus</th>
+                  <th className="px-3 py-2 text-right">Aktion</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-sand-200/70">
+                {sortedCustomers.length ? (
+                  sortedCustomers.map((customer, index) => (
+                    <tr
+                      key={customer.id}
+                      className={`${
+                        customer.id === activeId
+                          ? "bg-sand-200/70"
+                          : index % 2 === 0
+                          ? "bg-white"
+                          : "bg-slate-100"
+                      } hover:bg-sand-100 cursor-pointer`}
+                      onClick={() => setActiveId(customer.id)}
+                    >
+                      <td className="px-3 py-2 align-top">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <p className="font-semibold text-sand-900">{customer.name?.trim() || "Unbenannter Kunde"}</p>
+                          <span className="text-[11px] text-sand-500">
+                            Nr. {customer.creditorNumber || "ohne"}
                           </span>
-                        ))
-                      ) : (
-                        <span className={`text-[11px] ${isActive ? "text-white/50" : "text-sand-400"}`}>
-                          Kein Vertrag
-                        </span>
-                      )}
-                      {isInactive ? (
-                        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                          isActive ? "border-white/20 bg-white/10 text-white/70" : "border-slate-300 bg-slate-100 text-slate-600"
-                        }`}>
-                          Inaktiv
-                        </span>
-                      ) : null}
-                    </div>
-
-                    {/* Infra row */}
-                    {context ? (
-                      managedAssets > 0 || errorCount > 0 || warningCount > 0 || openUpdates > 0 ? (
-                        <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] ${isActive ? "text-white/70" : "text-sand-600"}`}>
-                          {managedAssets > 0 ? <span>{managedAssets} Agents</span> : null}
-                          {openUpdates > 0 ? <span className={isActive ? "text-amber-300" : "text-amber-600"}>{openUpdates} Updates</span> : null}
-                          {errorCount > 0 ? <span className={isActive ? "text-rose-300" : "text-rose-600"}>{errorCount} Fehler</span> : null}
-                          {warningCount > 0 ? <span className={isActive ? "text-amber-300" : "text-amber-700"}>{warningCount} Warnungen</span> : null}
+                          {customer.shortCode ? (
+                            <span className="text-[11px] text-sand-500">· {customer.shortCode}</span>
+                          ) : null}
                         </div>
-                      ) : null
-                    ) : (
-                      <p className={`text-[11px] ${isActive ? "text-white/40" : "text-sand-400"}`}>
-                        {developmentListStatus === "loading" ? "Meta-Hub lädt…" : ""}
-                      </p>
-                    )}
-
-                    {/* Quick toggles row */}
-                    <div className={`flex items-center gap-3 pt-2 border-t text-[11px] ${
-                      isActive ? "border-white/10 text-white/70" : "border-sand-100 text-sand-600"
-                    }`}>
-                      <label className="inline-flex items-center gap-1.5 cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={Boolean(customer.customerReport)}
-                          onChange={(event) => updateCustomer(customer.id, { customerReport: event.target.checked })}
-                          className="h-3.5 w-3.5 accent-sand-900"
-                        />
-                        Bericht
-                      </label>
-                      <label className="inline-flex items-center gap-1.5 cursor-pointer" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={Boolean(customer.newsletter)}
-                          onChange={(event) => updateCustomer(customer.id, { newsletter: event.target.checked })}
-                          className="h-3.5 w-3.5 accent-sand-900"
-                        />
-                        Newsletter
-                      </label>
-                      <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
+                        {(() => {
+                          const context = developmentByCustomerId[customer.id];
+                          if (!context) {
+                            return (
+                              <p className="mt-1 text-[10px] text-sand-400">
+                                {developmentListStatus === "loading" ? "Meta-Hub lädt…" : "Keine Meta-Hub Daten"}
+                              </p>
+                            );
+                          }
+                          const infra = context?.infra || {};
+                          const managedAssets = Number(infra?.managedAssets || 0);
+                          const openUpdates = Number(infra?.openUpdates || 0);
+                          const errorCount = Number(infra?.errorCount || 0);
+                          const warningCount = Number(infra?.warningCount || 0);
+                          if (managedAssets === 0 && openUpdates === 0 && errorCount === 0 && warningCount === 0) {
+                            return null;
+                          }
+                          return (
+                            <p className="mt-1 text-[10px] text-sand-600">
+                              {managedAssets} Agents · Updates {openUpdates} · Fehler {errorCount} · Warnungen {warningCount}
+                            </p>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(customer.customerReport)}
+                              onChange={(event) =>
+                                updateCustomer(customer.id, { customerReport: event.target.checked })
+                              }
+                              className="h-3.5 w-3.5"
+                            />
+                            Bericht
+                          </label>
+                          <label className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(customer.newsletter)}
+                              onChange={(event) =>
+                                updateCustomer(customer.id, { newsletter: event.target.checked })
+                              }
+                              className="h-3.5 w-3.5"
+                            />
+                            Newsletter
+                          </label>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 align-top" onClick={(e) => e.stopPropagation()}>
                         <select
                           value={String(customer.status || "active")}
                           onChange={(event) => updateCustomer(customer.id, { status: event.target.value })}
-                          className={`rounded-lg border px-2 py-0.5 text-[11px] cursor-pointer ${
-                            isActive
-                              ? "border-white/20 bg-white/10 text-white"
-                              : "border-sand-200 bg-white text-sand-700"
-                          }`}
+                          className="rounded-lg border border-sand-200 px-2 py-1 text-xs"
                         >
                           <option value="active">Aktiv</option>
                           <option value="inactive">Inaktiv</option>
                         </select>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-sand-300 bg-white px-6 py-12 text-center text-sand-500">
-              Keine Kunden gefunden.
-            </div>
-          )}
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        {(() => {
+                          const contractTypeCounts =
+                            customer.id === activeId
+                              ? deriveContractTypeCountsFromContracts(customerContracts)
+                              : normalizeContractTypeCounts(customer.contractTypeCounts || {});
+                          const entries = sortContractTypeCountEntries(contractTypeCounts);
+                          if (!entries.length) {
+                            return <span className="text-[11px] text-sand-400">Kein Vertrag</span>;
+                          }
+                          return (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {entries.map(([type, count]) => (
+                                <span
+                                  key={type}
+                                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${contractTypeBadgeClass(type)}`}
+                                >
+                                  {formatContractTypeLabel(type)} {count}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-3 py-2 align-top text-right">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setActiveId(customer.id);
+                            setSettingsTab("details");
+                            setEditCustomerId(customer.id);
+                          }}
+                          className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                          title="Bearbeiten"
+                          aria-label="Bearbeiten"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-sand-500">
+                      Keine Treffer.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
         {importPreview ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
