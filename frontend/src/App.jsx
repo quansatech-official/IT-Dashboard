@@ -4,6 +4,7 @@ import {
   Brain,
   ClipboardList,
   FileText,
+  FolderKanban,
   Moon,
   Pin,
   Receipt,
@@ -50,22 +51,7 @@ import PurchasingView from "./purchasing/PurchasingView";
 import KnowledgeBaseView from "./knowledge/KnowledgeBaseView";
 import IncomingCallQuickTaskPopup from "./telephony/IncomingCallQuickTaskPopup";
 import VisionBoardView from "./vision-board/VisionBoardView";
-
-const APP_VIEW_STORAGE_KEY = "qt_active_view";
-const VALID_APP_VIEWS = new Set([
-  "dayplan",
-  "visionboard",
-  "notes",
-  "customers",
-  "tools",
-  "settings",
-  "telephony",
-  "stats",
-  "purchasing",
-  "knowledge",
-  "offers",
-  "report"
-]);
+import ProjectFoldersView from "./project-folders/ProjectFoldersView";
 
 const detectDeviceClass = () => {
   if (typeof window === "undefined" || typeof navigator === "undefined") return "desktop";
@@ -85,12 +71,9 @@ const detectDeviceClass = () => {
 };
 
 export default function App() {
-  const [activeView, setActiveView] = useState(() => {
-    if (typeof window === "undefined") return "dayplan";
-    const stored = window.localStorage.getItem(APP_VIEW_STORAGE_KEY);
-    return VALID_APP_VIEWS.has(stored) ? stored : "dayplan";
-  });
+  const [activeView, setActiveView] = useState("dayplan");
   const sidebarWidth = 207;
+  const buildTag = "2026-04-28-1";
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "light";
     const stored = window.localStorage.getItem("qt_theme");
@@ -103,12 +86,6 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("qt_theme", theme);
   }, [theme]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!VALID_APP_VIEWS.has(activeView)) return;
-    window.localStorage.setItem(APP_VIEW_STORAGE_KEY, activeView);
-  }, [activeView]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -153,7 +130,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-sand-50 text-sand-900">
+    <div className="min-h-screen bg-sand-50 text-sand-900" data-build={buildTag}>
       <IncomingCallQuickTaskPopup />
       <div className="flex min-h-screen">
         <aside
@@ -172,11 +149,11 @@ export default function App() {
             <NavButton view="dayplan" active={activeView} onClick={setActiveView} icon={ClipboardList}>
               Aufgaben
             </NavButton>
-            <NavButton view="visionboard" active={activeView} onClick={setActiveView} icon={Pin}>
-              VisionBoard
-            </NavButton>
             <NavButton view="notes" active={activeView} onClick={setActiveView} icon={StickyNote}>
               Notizen
+            </NavButton>
+            <NavButton view="projectfolders" active={activeView} onClick={setActiveView} icon={FolderKanban}>
+              Projektmappe
             </NavButton>
             <div className="border-t border-sand-200 my-2" />
             <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500 px-2 pb-1 font-medium">
@@ -201,6 +178,9 @@ export default function App() {
             </p>
             <NavButton view="customers" active={activeView} onClick={setActiveView} icon={Users}>
               Kundenstamm
+            </NavButton>
+            <NavButton view="visionboard" active={activeView} onClick={setActiveView} icon={Pin}>
+              VisionBoard
             </NavButton>
             <NavButton view="stats" active={activeView} onClick={setActiveView} icon={BarChart3}>
               Statistik
@@ -243,6 +223,8 @@ export default function App() {
             </ErrorBoundary>
           ) : activeView === "customers" ? (
             <CustomerDirectoryView />
+          ) : activeView === "projectfolders" ? (
+            <ProjectFoldersView />
           ) : activeView === "tools" ? (
             <ToolsView />
           ) : activeView === "settings" ? (

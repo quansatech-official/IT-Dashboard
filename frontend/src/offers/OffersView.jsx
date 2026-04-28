@@ -1400,9 +1400,20 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const exportPageHeightPx = a4HeightPx - pdfMarginPx * 2;
   const exportPageSafeHeightPx = exportPageHeightPx - 2;
   const exportPhotoSafeHeightPx = exportPageHeightPx - 8;
+  const pdfPageSurfaceClass = isExport
+    ? "bg-white p-8 flex flex-col"
+    : "rounded-lg border border-sand-200 bg-white p-8 shadow-sm flex flex-col";
+  const pdfPhotoSurfaceClass = isExport
+    ? "bg-white p-6 flex flex-col"
+    : "rounded-lg border border-sand-200 bg-white p-8 shadow-sm flex flex-col";
+  const pdfMeasureSurfaceClass = "bg-white p-8 flex flex-col";
+  const pdfHeaderClass = "flex items-center justify-between border-b border-sand-200 pb-3";
+  const pdfHeaderLogoClass = "h-8 w-auto";
+  const pdfHeaderKickerClass = "text-[10px] uppercase tracking-[0.22em] text-sand-400";
+  const pdfFooterClass = "border-t border-sand-200 pt-3 text-[10px] text-sand-500";
   const totalsCardClass = isExport
-    ? "mt-3 rounded-xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-700 space-y-3"
-    : "mt-3 rounded-xl border border-sand-200 bg-sand-50 p-4 text-sm text-sand-700 space-y-4";
+    ? "mt-3 border border-sand-200 bg-sand-50 p-3 text-xs text-sand-700 space-y-3"
+    : "mt-3 rounded-lg border border-sand-200 bg-sand-50 p-4 text-sm text-sand-700 space-y-4";
   const totalsGridClass = isExport ? "grid gap-3 md:grid-cols-[1fr_auto_1fr]" : "grid gap-4 md:grid-cols-[1fr_auto_1fr]";
   const totalsSectionClass = isExport ? "space-y-2.5" : "space-y-3";
   const totalsTitleClass = isExport
@@ -1427,7 +1438,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   let measureRowIndex = 0;
   const renderMeasureSectionRow = (label, key) => (
     <div
-      className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400"
+      className="border-b border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-sand-500"
       key={key}
       data-measure-row
       data-row-type="section"
@@ -1557,7 +1568,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
       </div>
       {(offer.attachments || []).length ? (
         <div className="mt-4">
-          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Beilagen</p>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">Beilagen</p>
           <div className="mt-2 space-y-2 text-xs text-sand-600">
             {offer.attachments.map((item) => (
               <div key={item.id}>
@@ -1881,9 +1892,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
         >
           <div
             className={
-              isExport
-                ? "rounded-2xl bg-white p-8 flex flex-col"
-                : "rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+              pdfPageSurfaceClass
             }
             style={{
               width: `${a4WidthPx}px`,
@@ -1897,7 +1906,10 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               }}
           >
             <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
-              <img src="/QTLogo.jpg" alt="QT" className="h-28 w-auto mb-8" />
+              <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto mb-8" />
+              <p className="mb-4 text-[10px] uppercase tracking-[0.24em] text-sand-400">
+                {offer.reference}
+              </p>
               <h2 className="text-4xl font-semibold tracking-tight text-sand-900">Angebot</h2>
               {offer.coverHeadline ? (
                 <p className="mt-4 text-lg text-sand-700">{offer.coverHeadline}</p>
@@ -1913,11 +1925,11 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 <p>{offer.customer || "Kunde offen"}</p>
                 <p>{formatDate(offer.createdAt)}</p>
               </div>
-              <span className="text-xs uppercase tracking-[0.3em] text-sand-400">
+              <span className="text-xs uppercase tracking-[0.22em] text-sand-400">
                 {offer.reference}
               </span>
             </div>
-            <div className="mt-4 border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+            <div className={pdfFooterClass}>
               Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
             </div>
           </div>
@@ -1945,9 +1957,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           >
           <div
             className={
-              isExport
-                ? "rounded-2xl bg-white p-8 flex flex-col"
-                : "rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+              pdfPageSurfaceClass
             }
             style={{
               width: `${a4WidthPx}px`,
@@ -1966,12 +1976,12 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             ref={pageIndex === pagedPositions.length - 1 ? lastPageContentRef : null}
           >
               <div
-                className="flex items-center justify-between border-b border-sand-200 pb-4"
+                className={pdfHeaderClass}
                 data-pdf-header
               >
                 <div className="flex items-center gap-2">
-                  <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
-                  <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  <img src="/QTLogo.jpg" alt="QT" className={pdfHeaderLogoClass} />
+                  <span className={pdfHeaderKickerClass}>
                     Angebot
                   </span>
                 </div>
@@ -1985,7 +1995,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 {pageIndex === 0 ? (
                   <div className="grid gap-4 md:grid-cols-2 text-xs text-sand-600">
                     <div>
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">
                         Absender
                       </p>
                       {splitSenderLines(
@@ -1998,7 +2008,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                       ))}
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">
                         Empfänger
                       </p>
                       <p className="mt-1 text-sm font-semibold text-sand-900">
@@ -2034,7 +2044,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
 
                 {pageIndex === 0 && offer.overviewText ? (
                   <div>
-                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">
                       Übersicht
                     </p>
                     <p className="mt-2 text-sm text-sand-700 whitespace-pre-line">
@@ -2045,8 +2055,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
 
                 {pagePositions.length ? (
                   <div>
-                    <div className="mt-2 rounded-xl border border-sand-200">
-                      <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    <div className="mt-2 overflow-hidden rounded-lg border border-sand-200">
+                      <div className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-sand-500">
                         <span>Pos</span>
                         <span>Leistung</span>
                         <span className="text-right">Menge</span>
@@ -2055,7 +2065,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                       </div>
                       {pageServicePositions.length ? (
                         <>
-                          <div className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                          <div className="border-b border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-sand-500">
                             Leistungen
                           </div>
                           {pageServicePositions.map((item) => (
@@ -2113,7 +2123,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                       ) : null}
                       {pageDevicePositions.length ? (
                         <>
-                          <div className="border-b border-sand-200 bg-white/70 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                          <div className="border-b border-sand-200 bg-white px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-sand-500">
                             Material
                           </div>
                           {pageDevicePositions.map((item) => (
@@ -2186,7 +2196,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 ) : null}
               </div>
               <div
-                className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
+                className={pdfFooterClass}
                 data-pdf-footer
               >
                 Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
@@ -2209,9 +2219,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           >
             <div
               className={
-                isExport
-                  ? "rounded-2xl bg-white p-8 flex flex-col"
-                  : "rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                pdfPageSurfaceClass
               }
               style={{
                 width: `${a4WidthPx}px`,
@@ -2224,12 +2232,12 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               }}
             >
               <div
-                className="flex items-center justify-between border-b border-sand-200 pb-4"
+                className={pdfHeaderClass}
                 data-pdf-header
               >
                 <div className="flex items-center gap-2">
-                  <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
-                  <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                  <img src="/QTLogo.jpg" alt="QT" className={pdfHeaderLogoClass} />
+                  <span className={pdfHeaderKickerClass}>
                     Angebot
                   </span>
                 </div>
@@ -2239,7 +2247,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 {totalsContent}
               </div>
               <div
-                className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
+                className={pdfFooterClass}
                 data-pdf-footer
               >
                 Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
@@ -2261,9 +2269,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           }}
         >
           <div
-            className={`rounded-2xl bg-white ${
-              isExport ? "p-6 shadow-none" : "p-8 shadow-soft border border-sand-200"
-            } flex flex-col`}
+            className={pdfPhotoSurfaceClass}
             style={{
               width: `${a4WidthPx}px`,
               height: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx}px`,
@@ -2274,12 +2280,12 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             }}
           >
             <div
-              className="flex items-center justify-between border-b border-sand-200 pb-4"
+              className={pdfHeaderClass}
               data-pdf-header
             >
               <div className="flex items-center gap-2">
-                <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
-                <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                <img src="/QTLogo.jpg" alt="QT" className={pdfHeaderLogoClass} />
+                <span className={pdfHeaderKickerClass}>
                   Angebot
                 </span>
               </div>
@@ -2290,7 +2296,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               data-pdf-body
             >
               <div>
-                <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">
                   Produktfotos
                 </p>
                 <div className={`mt-2 ${isExport ? "space-y-2" : "space-y-3"}`}>
@@ -2300,7 +2306,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                     return (
                       <div
                         key={item.id}
-                        className={`rounded-xl border border-sand-200 ${
+                        className={`rounded-lg border border-sand-200 ${
                           isExport ? "p-2" : "p-3"
                         }`}
                       >
@@ -2311,12 +2317,12 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                           {item.images.map((url) => (
                             <div
                               key={url}
-                              className="rounded-xl border border-sand-200 bg-sand-50 p-2 flex items-center justify-center"
+                              className="rounded-lg border border-sand-200 bg-sand-50 p-2 flex items-center justify-center"
                             >
                               <img
                                 src={url}
                                 alt="Produkt"
-                                className={`${layout.image} max-w-full rounded-lg object-contain`}
+                                className={`${layout.image} max-w-full rounded-md object-contain`}
                                 style={{ width: "auto", height: "auto" }}
                               />
                             </div>
@@ -2329,7 +2335,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               </div>
             </div>
             <div
-              className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
+              className={pdfFooterClass}
               data-pdf-footer
             >
               Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
@@ -2354,9 +2360,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
             >
               <div
                 className={
-                  isExport
-                    ? "rounded-2xl bg-white p-8 flex flex-col"
-                    : "rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                  pdfPageSurfaceClass
                 }
               style={{
                 width: `${a4WidthPx}px`,
@@ -2369,12 +2373,12 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               }}
               >
                 <div
-                  className="flex items-center justify-between border-b border-sand-200 pb-4"
+                  className={pdfHeaderClass}
                   data-pdf-header
                 >
                   <div className="flex items-center gap-2">
-                    <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
-                    <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    <img src="/QTLogo.jpg" alt="QT" className={pdfHeaderLogoClass} />
+                    <span className={pdfHeaderKickerClass}>
                       Angebot
                     </span>
                   </div>
@@ -2390,7 +2394,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   }
                 >
                   <div>
-                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">
                       Angebotsdetails
                     </p>
                     <div
@@ -2400,7 +2404,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   </div>
                 </div>
                 <div
-                  className="border-t border-sand-200 pt-3 text-[10px] text-sand-500"
+                  className={pdfFooterClass}
                   data-pdf-footer
                 >
                   Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
@@ -2418,16 +2422,16 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           >
             <div style={{ width: `${a4WidthPx}px`, height: `${exportPageHeightPx}px` }}>
               <div
-                className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                className={pdfMeasureSurfaceClass}
                 style={{
                   width: `${a4WidthPx}px`,
                   height: `${exportPageHeightPx}px`
                 }}
               >
-                <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+                <div className={pdfHeaderClass}>
                   <div className="flex items-center gap-2">
-                    <img src="/QTLogo.jpg" alt="QT" className="h-12 w-auto" />
-                    <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    <img src="/QTLogo.jpg" alt="QT" className={pdfHeaderLogoClass} />
+                    <span className={pdfHeaderKickerClass}>
                       Angebot
                     </span>
                   </div>
@@ -2439,7 +2443,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   style={{ paddingTop: "6px", paddingBottom: "10px" }}
                 >
                   <div>
-                    <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">
                       Angebotsdetails
                     </p>
                     <div
@@ -2448,7 +2452,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                     />
                   </div>
                 </div>
-                <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+                <div className={pdfFooterClass}>
                   Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
                 </div>
               </div>
@@ -2464,16 +2468,16 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
           >
             <div style={{ width: `${a4WidthPx}px`, height: `${exportPageHeightPx}px` }}>
               <div
-                className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                className={pdfMeasureSurfaceClass}
                 style={{
                   width: `${a4WidthPx}px`,
                   height: `${exportPageHeightPx}px`
                 }}
               >
-                <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+                <div className={pdfHeaderClass}>
                   <div className="flex items-center gap-2">
-                    <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
-                    <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    <img src="/QTLogo.jpg" alt="QT" className={pdfHeaderLogoClass} />
+                    <span className={pdfHeaderKickerClass}>
                       Angebot
                     </span>
                   </div>
@@ -2485,7 +2489,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 >
                   <div className="grid gap-4 md:grid-cols-2 text-xs text-sand-600">
                     <div>
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">
                         Absender
                       </p>
                       {splitSenderLines(
@@ -2501,7 +2505,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                       ))}
                     </div>
                     <div className="text-right">
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">
                         Empfänger
                       </p>
                       <p className="mt-1 text-sm font-semibold text-sand-900">
@@ -2528,7 +2532,7 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                   </div>
                   {offer.overviewText ? (
                     <div>
-                      <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                      <p className="text-[10px] uppercase tracking-[0.22em] text-sand-500">
                         Übersicht
                       </p>
                       <p className="mt-2 text-sm text-sand-700 whitespace-pre-line">
@@ -2540,20 +2544,20 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                     <div className="mt-2 rounded-xl border border-sand-200" data-measure-table />
                   </div>
                 </div>
-                <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+                <div className={pdfFooterClass}>
                   Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
                 </div>
               </div>
             </div>
             <div style={{ width: `${a4WidthPx}px`, height: `${exportPageHeightPx}px` }}>
               <div
-                className="rounded-2xl border border-sand-200 bg-white p-8 shadow-soft flex flex-col"
+                className={pdfMeasureSurfaceClass}
                 style={{ width: `${a4WidthPx}px`, height: `${exportPageHeightPx}px` }}
               >
-                <div className="flex items-center justify-between border-b border-sand-200 pb-4">
+                <div className={pdfHeaderClass}>
                   <div className="flex items-center gap-2">
-                    <img src="/QTLogo.jpg" alt="QT" className="h-14 w-auto" />
-                    <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
+                    <img src="/QTLogo.jpg" alt="QT" className={pdfHeaderLogoClass} />
+                    <span className={pdfHeaderKickerClass}>
                       Angebot
                     </span>
                   </div>
@@ -2567,14 +2571,14 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                     <div className="mt-2 rounded-xl border border-sand-200" data-measure-table />
                   </div>
                 </div>
-                <div className="border-t border-sand-200 pt-3 text-[10px] text-sand-500">
+                <div className={pdfFooterClass}>
                   Es gelten die AGB auf unserer Homepage: https://www.quansatech.at
                 </div>
               </div>
             </div>
             <div ref={positionsMeasureTemplateRef} className="hidden">
               <div
-                className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.3em] text-sand-400"
+                className="grid grid-cols-[0.2fr_1.2fr_0.35fr_0.45fr_0.55fr] gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-sand-500"
                 data-measure-header
               >
                 <span>Pos</span>
@@ -3711,6 +3715,241 @@ function DeviceCard({
               </div>
             ) : null}
           </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function OfferBucketRow({
+  offer,
+  accentColor,
+  expandedOffers,
+  expandedOfferDetails,
+  toggleOfferExpanded,
+  toggleOfferDetails,
+  setActiveId,
+  deleteArchivedOffer,
+  updateOfferStatus,
+  editOfferFromArchive,
+  markOfferSent,
+  duplicateOffer,
+  openHandoverModal,
+  openOfferEmailComposerForOffer,
+  openConfirmationEmailComposerForOffer,
+  setPreviewMode,
+  setPreviewOfferId,
+  exportOfferPdf,
+  renderOfferReadBadge,
+  sevdeskStatus,
+  sendStatus,
+  confirmationMenuOfferId,
+  setConfirmationMenuOfferId,
+  getOfferTotal,
+  calcVat,
+  getOfferKeywords,
+  getOfferReferenceLabel,
+  getOfferSentAt,
+  formatMoney,
+  formatDate,
+  formatVatLabel,
+  stripHtml,
+  shorten,
+}) {
+  const netTotal = getOfferTotal(offer);
+  const vatTotal = calcVat(netTotal, offer);
+  const grossTotal = netTotal + vatTotal;
+  const keywords = getOfferKeywords(offer);
+  const overviewText = String(offer.overviewText || "").trim();
+  const calculationText = String(offer.calculationText || "").trim();
+  const detailText = stripHtml(offer.detailHtml || "");
+  const showDetails = Boolean(expandedOfferDetails[offer.id]);
+  const detailPreview = detailText
+    ? showDetails ? detailText : shorten(detailText, 220)
+    : "";
+  const hasMoreDetails = detailText.length > 220 || overviewText || calculationText;
+
+  const c = {
+    sand: {
+      border: "border-sand-200", bg: "bg-sand-50", text: "text-sand-600",
+      btnBorder: "border-sand-200", btnBg: "bg-white", btnHover: "hover:bg-sand-100",
+      refText: "text-sand-400", expandBg: "bg-sand-50", expandText: "text-sand-600",
+    },
+    emerald: {
+      border: "border-emerald-200", bg: "bg-emerald-50/60", text: "text-emerald-700",
+      btnBorder: "border-emerald-200", btnBg: "bg-white", btnHover: "hover:bg-emerald-50",
+      refText: "text-emerald-400", expandBg: "bg-emerald-50/60", expandText: "text-emerald-700",
+    },
+    rose: {
+      border: "border-rose-200", bg: "bg-rose-50/60", text: "text-rose-700",
+      btnBorder: "border-rose-200", btnBg: "bg-white", btnHover: "hover:bg-rose-50",
+      refText: "text-rose-400", expandBg: "bg-rose-50/60", expandText: "text-rose-700",
+    },
+  }[accentColor] || {};
+
+  const btnClass = `rounded-full border ${c.btnBorder} ${c.btnBg} p-1 ${c.text} ${c.btnHover}`;
+  const rowBorderClass = `border ${c.border}`;
+
+  return (
+    <div>
+      <div className={`w-full rounded-xl ${rowBorderClass} bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between`}>
+        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
+          <p className={`text-[10px] uppercase tracking-[0.3em] ${c.refText}`}>
+            {getOfferReferenceLabel(offer)}
+          </p>
+          <p className="text-sm font-semibold">{offer.customer || "Angebot"}</p>
+        </button>
+        <div className="flex items-center gap-2">
+          {getOfferSentAt(offer) ? (
+            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
+              Versendet
+            </span>
+          ) : null}
+          {renderOfferReadBadge(offer)}
+          <button type="button" onClick={() => toggleOfferExpanded(offer.id)} className={btnClass} title="Details">
+            {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+          {accentColor === "sand" && (
+            <>
+              <button type="button" onClick={() => updateOfferStatus(offer.id, "angenommen")} className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-600 hover:bg-emerald-50" title="Akzeptieren">
+                <Check size={14} />
+              </button>
+              <button type="button" onClick={() => updateOfferStatus(offer.id, "abgelehnt")} className="rounded-full border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50" title="Ablehnen">
+                <X size={14} />
+              </button>
+              <button type="button" onClick={() => deleteArchivedOffer(offer)} className={btnClass} title="Löschen">
+                <Trash2 size={14} />
+              </button>
+              <button type="button" onClick={() => editOfferFromArchive(offer.id)} className={btnClass} title="Bearbeiten">
+                <Pencil size={14} />
+              </button>
+            </>
+          )}
+          {accentColor === "emerald" && (
+            <>
+              <button type="button" onClick={() => openHandoverModal(offer)} disabled={sevdeskStatus[offer.serverId || offer.id]?.status === "sending"} className={`${btnClass} disabled:opacity-50`} title="Rechnungsentwurf in sevdesk">
+                <FilePlus size={14} />
+              </button>
+              <button type="button" onClick={() => duplicateOffer(offer)} className={btnClass} title="Duplizieren">
+                <Copy size={14} />
+              </button>
+              <div className="relative">
+                <button type="button" onClick={() => setConfirmationMenuOfferId((prev) => prev === offer.id ? "" : offer.id)} className={btnClass} title="Auftragsbestätigung">
+                  <Receipt size={14} />
+                </button>
+                {confirmationMenuOfferId === offer.id ? (
+                  <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-emerald-200 bg-white p-2 shadow-soft text-xs text-sand-700 z-30">
+                    <button type="button" onClick={() => { setPreviewMode("confirmation"); setPreviewOfferId(offer.id); setConfirmationMenuOfferId(""); }} className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50">Vorschau</button>
+                    <button type="button" onClick={() => { exportOfferPdf(offer, "confirmation"); setConfirmationMenuOfferId(""); }} className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50">PDF exportieren</button>
+                    <button type="button" onClick={() => { setActiveId(offer.id); openConfirmationEmailComposerForOffer(offer); setConfirmationMenuOfferId(""); }} disabled={(sendStatus === "sending" || sendStatus === "preparing") || !offer.serverId} className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50 disabled:opacity-50">E-Mail senden</button>
+                  </div>
+                ) : null}
+              </div>
+              <button type="button" onClick={() => deleteArchivedOffer(offer)} className={btnClass} title="Löschen">
+                <Trash2 size={14} />
+              </button>
+            </>
+          )}
+          {accentColor === "rose" && (
+            <>
+              <button type="button" onClick={() => duplicateOffer(offer)} className={btnClass} title="Duplizieren">
+                <Copy size={14} />
+              </button>
+              <button type="button" onClick={() => deleteArchivedOffer(offer)} className={btnClass} title="Löschen">
+                <Trash2 size={14} />
+              </button>
+            </>
+          )}
+          <button type="button" onClick={() => { setPreviewMode("offer"); setPreviewOfferId(offer.id); }} className={btnClass} title="Vorschau">
+            <Eye size={14} />
+          </button>
+          <button type="button" onClick={() => exportOfferPdf(offer)} className={btnClass} title="PDF exportieren">
+            <FileDown size={14} />
+          </button>
+          {accentColor === "sand" && (
+            <button type="button" onClick={() => openOfferEmailComposerForOffer(offer)} disabled={!offer.serverId} className={`${btnClass} disabled:opacity-50 disabled:cursor-not-allowed`} title={offer.serverId ? "Angebot per E-Mail senden" : "Bitte zuerst speichern"}>
+              <Send size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+      {expandedOffers[offer.id] ? (
+        <div className={`mt-2 rounded-xl border ${c.border} ${c.expandBg} p-3 text-xs ${c.expandText}`}>
+          <div className="flex flex-wrap items-center gap-3">
+            <span>Summe netto: {formatMoney(netTotal)}</span>
+            <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
+            <span>Summe brutto: {formatMoney(grossTotal)}</span>
+            <span>Datum: {formatDate(offer.createdAt)}</span>
+            {getOfferSentAt(offer) ? <span>Versendet: {formatDate(getOfferSentAt(offer))}</span> : null}
+          </div>
+          {keywords.length ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className={`text-[10px] uppercase tracking-[0.3em] ${c.refText}`}>Schlagworte</span>
+              {keywords.map((word) => (
+                <span key={word} className={`rounded-full border ${c.border} bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide ${c.text}`}>{word}</span>
+              ))}
+            </div>
+          ) : null}
+          {detailPreview || overviewText || calculationText ? (
+            <div className="mt-2 space-y-2">
+              {detailPreview ? (
+                <div>
+                  <p className={`text-[10px] uppercase tracking-[0.3em] ${c.refText}`}>Angebotsdetail</p>
+                  <p className={`text-xs ${c.expandText} whitespace-pre-line`}>{detailPreview}</p>
+                </div>
+              ) : null}
+              {showDetails && overviewText ? (
+                <div>
+                  <p className={`text-[10px] uppercase tracking-[0.3em] ${c.refText}`}>Überblick</p>
+                  <p className={`text-xs ${c.expandText} whitespace-pre-line`}>{overviewText}</p>
+                </div>
+              ) : null}
+              {showDetails && calculationText ? (
+                <div>
+                  <p className={`text-[10px] uppercase tracking-[0.3em] ${c.refText}`}>Kalkulation</p>
+                  <p className={`text-xs ${c.expandText} whitespace-pre-line`}>{calculationText}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {hasMoreDetails ? (
+            <div className="mt-2">
+              <button type="button" onClick={() => toggleOfferDetails(offer.id)} className={`rounded-full border ${c.border} bg-white px-3 py-1 text-[10px] uppercase tracking-wide ${c.text} ${c.btnHover}`}>
+                {showDetails ? "Weniger Details" : "Mehr Details anzeigen"}
+              </button>
+            </div>
+          ) : null}
+          {accentColor === "sand" && !getOfferSentAt(offer) ? (
+            <div className="mt-2">
+              <button type="button" onClick={() => markOfferSent(offer.id)} className={`rounded-full border ${c.border} bg-white px-3 py-1 text-[10px] uppercase tracking-wide ${c.text} ${c.btnHover}`}>
+                Als gesendet markieren
+              </button>
+            </div>
+          ) : null}
+          {accentColor === "emerald" ? (
+            <>
+              {sevdeskStatus[offer.serverId || offer.id] ? (
+                <div className="mt-2 text-xs">
+                  {sevdeskStatus[offer.serverId || offer.id].status === "sending" && <span className="text-emerald-700">Erstelle Rechnungsentwurf...</span>}
+                  {sevdeskStatus[offer.serverId || offer.id].status === "sent" && <span className="text-emerald-700">{sevdeskStatus[offer.serverId || offer.id].message}</span>}
+                  {sevdeskStatus[offer.serverId || offer.id].status === "error" && <span className="text-rose-600">{sevdeskStatus[offer.serverId || offer.id].message}</span>}
+                </div>
+              ) : null}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => updateOfferStatus(offer.id, "Entwurf")} disabled={offer.handoverLocked} className={`rounded-full border ${c.border} bg-white px-3 py-1 text-[10px] uppercase tracking-wide ${c.text} ${c.btnHover} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                  Wieder öffnen
+                </button>
+                {offer.handoverLocked ? <span className="text-[10px] uppercase tracking-wide text-sand-500">an Faktura übergeben</span> : null}
+              </div>
+            </>
+          ) : null}
+          {accentColor === "rose" ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button type="button" onClick={() => updateOfferStatus(offer.id, "Entwurf")} className={`rounded-full border ${c.border} bg-white px-3 py-1 text-[10px] uppercase tracking-wide ${c.text} ${c.btnHover}`}>
+                Wieder öffnen
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -6099,39 +6338,39 @@ export default function OffersView() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-4">
-        <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="flex flex-wrap items-center gap-0 mb-4 border-b border-sand-200">
           <button
             type="button"
             onClick={() => setMainTab("new")}
-            className={`rounded-full px-4 py-1 text-xs uppercase tracking-wide ${
+            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-xs uppercase tracking-wide border-b-2 -mb-px transition-colors ${
               mainTab === "new"
-                ? "bg-sand-900 text-white"
-                : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                ? "border-sand-900 text-sand-900 font-semibold"
+                : "border-transparent text-sand-500 hover:text-sand-700 hover:border-sand-300"
             }`}
           >
-            Angebot
+            <FilePlus size={13} /> Angebot
           </button>
           <button
             type="button"
             onClick={() => setMainTab("status")}
-            className={`rounded-full px-4 py-1 text-xs uppercase tracking-wide ${
+            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-xs uppercase tracking-wide border-b-2 -mb-px transition-colors ${
               mainTab === "status"
-                ? "bg-sand-900 text-white"
-                : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                ? "border-sand-900 text-sand-900 font-semibold"
+                : "border-transparent text-sand-500 hover:text-sand-700 hover:border-sand-300"
             }`}
           >
-            Angebote
+            <Receipt size={13} /> Angebote
           </button>
           <button
             type="button"
             onClick={() => setMainTab("blocks")}
-            className={`rounded-full px-4 py-1 text-xs uppercase tracking-wide ${
+            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-xs uppercase tracking-wide border-b-2 -mb-px transition-colors ${
               mainTab === "blocks"
-                ? "bg-sand-900 text-white"
-                : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                ? "border-sand-900 text-sand-900 font-semibold"
+                : "border-transparent text-sand-500 hover:text-sand-700 hover:border-sand-300"
             }`}
           >
-            Textbausteine
+            <BookmarkPlus size={13} /> Textbausteine
           </button>
           <div className="flex-1" />
           {mainTab === "new" ? (
@@ -6195,50 +6434,33 @@ export default function OffersView() {
                         kicker="Angebotskopf"
                         title="Stammdaten & Konditionen"
                         description="Kunde, Anlass, Status und kaufmännische Eckdaten."
-                        badge={<div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
-                            {activeOffer.status}
-                          </span>
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
-                            {positionCount} Positionen
-                          </span>
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
-                            Gesamt {formatMoney(totals.total)}
-                          </span>
-                          {overallDiscount > 0 ? (
-                            <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] uppercase tracking-wide text-rose-700">
-                              Rabatt -{formatMoney(overallDiscount)}
-                            </span>
-                          ) : null}
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
-                            Einmal {formatMoney(costTotals.once)}
-                          </span>
-                          <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
-                            Laufend {formatMoney(costTotals.monthly)} / {formatMoney(costTotals.yearly)}
-                          </span>
-                          <div className="flex flex-wrap items-center gap-2 rounded-full border border-sand-200 bg-white px-2 py-1">
-                            <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-400">
-                              Interne Kennzahlen
-                            </span>
-                            <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[11px] uppercase tracking-wide text-sand-600">
-                              Summe EK {formatMoney(deviceEkTotal)}
-                            </span>
-                            <span
-                              className={`rounded-full border px-2 py-1 text-[11px] uppercase tracking-wide ${
-                                marginTotal >= 0
-                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                  : "border-rose-200 bg-rose-50 text-rose-700"
-                              }`}
-                              title={`Leistungen VK ${formatMoney(serviceTotal)} · Material VK ${formatMoney(
-                                deviceTotal
-                              )} · Material EK ${formatMoney(deviceEkTotal)}${
-                                overallDiscount > 0
-                                  ? ` · Rabatt -${formatMoney(overallDiscount)}`
-                                  : ""
-                              }`}
-                            >
-                              Marge {formatMoney(marginTotal)}
-                            </span>
+                        badge={<div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                            <p className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Gesamt</p>
+                            <p className="mt-0.5 text-sm font-semibold text-sand-900">{formatMoney(totals.total)}</p>
+                            <p className="text-[10px] text-sand-400">{positionCount} Pos. · {activeOffer.status}</p>
+                          </div>
+                          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                            <p className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Einmalig</p>
+                            <p className="mt-0.5 text-sm font-semibold text-sand-900">{formatMoney(costTotals.once)}</p>
+                            {overallDiscount > 0 ? (
+                              <p className="text-[10px] text-rose-500">Rabatt -{formatMoney(overallDiscount)}</p>
+                            ) : (
+                              <p className="text-[10px] text-sand-400">einmalig</p>
+                            )}
+                          </div>
+                          <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                            <p className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Laufend</p>
+                            <p className="mt-0.5 text-sm font-semibold text-sand-900">{formatMoney(costTotals.monthly)}<span className="text-[10px] font-normal text-sand-400">/Mo</span></p>
+                            <p className="text-[10px] text-sand-400">{formatMoney(costTotals.yearly)}/Jahr</p>
+                          </div>
+                          <div
+                            className={`rounded-xl border px-3 py-2 ${marginTotal >= 0 ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50"}`}
+                            title={`Leistungen VK ${formatMoney(serviceTotal)} · Material VK ${formatMoney(deviceTotal)} · Material EK ${formatMoney(deviceEkTotal)}`}
+                          >
+                            <p className={`text-[10px] uppercase tracking-[0.25em] ${marginTotal >= 0 ? "text-emerald-500" : "text-rose-500"}`}>Marge</p>
+                            <p className={`mt-0.5 text-sm font-semibold ${marginTotal >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{formatMoney(marginTotal)}</p>
+                            <p className={`text-[10px] ${marginTotal >= 0 ? "text-emerald-400" : "text-rose-400"}`}>EK {formatMoney(deviceEkTotal)}</p>
                           </div>
                         </div>}
                       />
@@ -6534,55 +6756,34 @@ export default function OffersView() {
                   />
 
                   <div className="mt-4 space-y-4">
-                    <div className="grid gap-3 md:grid-cols-4">
-                      <div className="bg-white border border-sand-200 rounded-2xl p-3 shadow-sm flex flex-col gap-2">
-                        <div className="flex items-center gap-2 text-sand-700">
-                          <Plus size={16} />
-                          <p className="text-xs uppercase tracking-wide text-sand-600">
-                            Neue Position
-                          </p>
-                        </div>
-                        <p className="text-sm text-sand-600">
-                          Leistung oder Material direkt anlegen.
-                        </p>
-                        <div className="flex flex-col gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPositionType("Dienstleistung");
-                              addLineItem({ type: "Dienstleistung" });
-                            }}
-                            className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-                          >
-                            <Plus size={12} /> Leistung
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPositionType("Gerät");
-                              addDeviceItem();
-                            }}
-                            className="inline-flex items-center justify-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-                          >
-                            <Plus size={12} /> Material
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="bg-white border border-sand-200 rounded-2xl p-3 shadow-sm flex flex-col gap-2">
-                        <div className="flex items-center gap-2 text-sand-700">
-                          <Sparkles size={16} />
-                          <p className="text-xs uppercase tracking-wide text-sand-600">
-                            Service-Baustein
-                          </p>
-                        </div>
-                        <p className="text-sm text-sand-600">
-                          Vorgefertigte Leistung übernehmen.
-                        </p>
+                    <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPositionType("Dienstleistung");
+                          addLineItem({ type: "Dienstleistung" });
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-blue-700 hover:bg-blue-50"
+                      >
+                        <Plus size={12} /> Leistung
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPositionType("Gerät");
+                          addDeviceItem();
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-amber-700 hover:bg-amber-50"
+                      >
+                        <Plus size={12} /> Material
+                      </button>
+                      <div className="h-4 w-px bg-sand-200" />
+                      <div className="flex items-center gap-1.5">
                         <SelectField
                           value={servicePick}
                           onChange={(event) => setServicePick(event.target.value)}
                           disabled={!serviceBlocks.length}
+                          className="text-xs"
                         >
                           {serviceBlocks.map((block) => (
                             <option key={block.id} value={block.id}>
@@ -6594,26 +6795,17 @@ export default function OffersView() {
                           type="button"
                           onClick={addSelectedService}
                           disabled={!serviceBlocks.length || !servicePick}
-                          className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex items-center gap-1.5 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          <Plus size={14} /> Hinzufügen
+                          <Sparkles size={12} /> Service
                         </button>
                       </div>
-
-                      <div className="bg-white border border-sand-200 rounded-2xl p-3 shadow-sm flex flex-col gap-2">
-                        <div className="flex items-center gap-2 text-sand-700">
-                          <Link size={16} />
-                          <p className="text-xs uppercase tracking-wide text-sand-600">
-                            Material-Baustein
-                          </p>
-                        </div>
-                        <p className="text-sm text-sand-600">
-                          Vorgefertigtes Materialprofil übernehmen.
-                        </p>
+                      <div className="flex items-center gap-1.5">
                         <SelectField
                           value={devicePick}
                           onChange={(event) => setDevicePick(event.target.value)}
                           disabled={!deviceBlocks.length}
+                          className="text-xs"
                         >
                           {deviceBlocks.map((block) => (
                             <option key={block.id} value={block.id}>
@@ -6625,36 +6817,25 @@ export default function OffersView() {
                           type="button"
                           onClick={addSelectedDevice}
                           disabled={!deviceBlocks.length || !devicePick}
-                          className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          className="inline-flex items-center gap-1.5 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          <Plus size={14} /> Hinzufügen
+                          <Link size={12} /> Baustein
                         </button>
                       </div>
-
-                      <div className="bg-white border border-sand-200 rounded-2xl p-3 shadow-sm flex flex-col gap-2">
-                        <div className="flex items-center gap-2 text-sand-700">
-                          <Sparkles size={16} />
-                          <p className="text-xs uppercase tracking-wide text-sand-600">
-                            Materialimporter
-                          </p>
-                        </div>
-                        <p className="text-sm text-sand-600">
-                          Import aus Marketplace-APIs übernehmen.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => setImporterOpen(true)}
-                          className="mt-auto inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
-                        >
-                          <Plus size={14} /> Öffnen
-                        </button>
-                      </div>
+                      <div className="h-4 w-px bg-sand-200" />
+                      <button
+                        type="button"
+                        onClick={() => setImporterOpen(true)}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                      >
+                        <Upload size={12} /> Importer
+                      </button>
                     </div>
 
                     <div className="space-y-4">
-                      <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
+                      <div className="rounded-2xl border border-blue-100 bg-white border-l-4 border-l-blue-400 p-3 space-y-3">
                         <div className="flex items-center justify-between">
-                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-blue-400">
                             Leistungspositionen
                           </p>
                           <span className="text-xs text-sand-500">
@@ -6684,9 +6865,9 @@ export default function OffersView() {
                         </div>
                       </div>
 
-                      <div className="rounded-2xl border border-sand-200 bg-sand-100 p-3 space-y-3">
+                      <div className="rounded-2xl border border-amber-100 bg-white border-l-4 border-l-amber-400 p-3 space-y-3">
                         <div className="flex items-center justify-between">
-                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
+                          <p className="text-[10px] uppercase tracking-[0.3em] text-amber-500">
                             Materialpositionen
                           </p>
                           <span className="text-xs text-sand-500">
@@ -7106,801 +7287,62 @@ export default function OffersView() {
           </button>
         </div>
         <div className="mt-3 space-y-3">
-          <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-              Offen
-            </p>
-            <div className="mt-3 space-y-2">
-              {offerBuckets.open.length ? (
-                offerBuckets.open.map((offer) => {
-                  const netTotal = getOfferTotal(offer);
-                  const vatTotal = calcVat(netTotal, offer);
-                  const grossTotal = netTotal + vatTotal;
-                  const keywords = getOfferKeywords(offer);
-                  const overviewText = String(offer.overviewText || "").trim();
-                  const calculationText = String(offer.calculationText || "").trim();
-                  const detailText = stripHtml(offer.detailHtml || "");
-                  const showDetails = Boolean(expandedOfferDetails[offer.id]);
-                  const detailPreview = detailText
-                    ? showDetails
-                      ? detailText
-                      : shorten(detailText, 220)
-                    : "";
-                  const hasMoreDetails =
-                    detailText.length > 220 || overviewText || calculationText;
-                  return (
-                    <div key={offer.id}>
-                      <div className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
-                        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                            {getOfferReferenceLabel(offer)}
-                          </p>
-                          <p className="text-sm font-semibold">
-                            {offer.customer || "Neues Angebot"}
-                          </p>
-                        </button>
-                        <div className="flex items-center gap-2">
-                          {getOfferSentAt(offer) ? (
-                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                              Versendet
-                            </span>
-                          ) : null}
-                          {renderOfferReadBadge(offer)}
-                          <button
-                            type="button"
-                            onClick={() => toggleOfferExpanded(offer.id)}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="Details"
-                          >
-                            {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateOfferStatus(offer.id, "angenommen")
-                            }
-                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-600 hover:bg-emerald-50"
-                            title="Akzeptieren"
-                          >
-                            <Check size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateOfferStatus(offer.id, "abgelehnt")
-                            }
-                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
-                            title="Ablehnen"
-                          >
-                            <X size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteArchivedOffer(offer)}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="Löschen"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => editOfferFromArchive(offer.id)}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="Bearbeiten"
-                          >
-                            <Pencil size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPreviewMode("offer");
-                              setPreviewOfferId(offer.id);
-                            }}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="Vorschau"
-                          >
-                            <Eye size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => exportOfferPdf(offer)}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="PDF exportieren"
-                          >
-                            <FileDown size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openOfferEmailComposerForOffer(offer)}
-                            disabled={!offer.serverId}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                            title={
-                              offer.serverId
-                                ? "Angebot per E-Mail senden"
-                                : "Bitte zuerst speichern"
-                            }
-                          >
-                            <Send size={14} />
-                          </button>
-                        </div>
-                      </div>
-                      {expandedOffers[offer.id] ? (
-                        <div className="mt-2 rounded-xl border border-sand-200 bg-sand-50 p-3 text-xs text-sand-600">
-                          <div className="flex flex-wrap items-center gap-3">
-                            <span>Summe netto: {formatMoney(netTotal)}</span>
-                            <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
-                            <span>Summe brutto: {formatMoney(grossTotal)}</span>
-                            <span>Datum: {formatDate(offer.createdAt)}</span>
-                            {getOfferSentAt(offer) ? (
-                              <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
-                            ) : null}
-                          </div>
-                          {keywords.length ? (
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                              <span className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                                Schlagworte
-                              </span>
-                              {keywords.map((word) => (
-                                <span
-                                  key={word}
-                                  className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-600"
-                                >
-                                  {word}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          {detailPreview || overviewText || calculationText ? (
-                            <div className="mt-2 space-y-2">
-                              {detailPreview ? (
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                                    Angebotsdetail
-                                  </p>
-                                  <p className="text-xs text-sand-600 whitespace-pre-line">
-                                    {detailPreview}
-                                  </p>
-                                </div>
-                              ) : null}
-                              {showDetails && overviewText ? (
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                                    Überblick
-                                  </p>
-                                  <p className="text-xs text-sand-600 whitespace-pre-line">
-                                    {overviewText}
-                                  </p>
-                                </div>
-                              ) : null}
-                              {showDetails && calculationText ? (
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                                    Kalkulation
-                                  </p>
-                                  <p className="text-xs text-sand-600 whitespace-pre-line">
-                                    {calculationText}
-                                  </p>
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                          {hasMoreDetails ? (
-                            <div className="mt-2">
-                              <button
-                                type="button"
-                                onClick={() => toggleOfferDetails(offer.id)}
-                                className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                              >
-                                {showDetails ? "Weniger Details" : "Mehr Details anzeigen"}
-                              </button>
-                            </div>
-                          ) : null}
-                          {!getOfferSentAt(offer) ? (
-                            <div className="mt-2">
-                              <button
-                                type="button"
-                                onClick={() => markOfferSent(offer.id)}
-                                className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-                              >
-                                Als gesendet markieren
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })
-              ) : (
-                <p className="text-xs text-sand-500">Keine offenen Angebote.</p>
-              )}
+          {[
+            { key: "open", label: "Offen", accent: "sand", emptyText: "Keine offenen Angebote.", wrapperClass: "rounded-2xl border border-sand-200 bg-sand-50 p-3" },
+            { key: "accepted", label: "Akzeptiert", accent: "emerald", emptyText: "Keine akzeptierten Angebote.", wrapperClass: "rounded-2xl border border-emerald-200 bg-emerald-50/40 p-3" },
+            { key: "invoiced", label: "Archiv (fakturiert)", accent: "sand", emptyText: "Keine fakturierten Angebote.", wrapperClass: "rounded-2xl border border-sand-200 bg-sand-50/60 p-3" },
+            { key: "declined", label: "Abgelehnt / Abgelaufen", accent: "rose", emptyText: "Keine abgelehnten Angebote.", wrapperClass: "rounded-2xl border border-rose-200 bg-rose-50/40 p-3" },
+          ].map(({ key, label, accent, emptyText, wrapperClass }) => (
+            <div key={key} className={wrapperClass}>
+              <p className={`text-[10px] uppercase tracking-[0.3em] ${accent === "emerald" ? "text-emerald-600" : accent === "rose" ? "text-rose-500" : "text-sand-500"}`}>
+                {label}
+              </p>
+              <div className="mt-3 space-y-2">
+                {offerBuckets[key].length ? (
+                  offerBuckets[key].map((offer) => (
+                    <OfferBucketRow
+                      key={offer.id}
+                      offer={offer}
+                      accentColor={accent}
+                      expandedOffers={expandedOffers}
+                      expandedOfferDetails={expandedOfferDetails}
+                      toggleOfferExpanded={toggleOfferExpanded}
+                      toggleOfferDetails={toggleOfferDetails}
+                      setActiveId={setActiveId}
+                      deleteArchivedOffer={deleteArchivedOffer}
+                      updateOfferStatus={updateOfferStatus}
+                      editOfferFromArchive={editOfferFromArchive}
+                      markOfferSent={markOfferSent}
+                      duplicateOffer={duplicateOffer}
+                      openHandoverModal={openHandoverModal}
+                      openOfferEmailComposerForOffer={openOfferEmailComposerForOffer}
+                      openConfirmationEmailComposerForOffer={openConfirmationEmailComposerForOffer}
+                      setPreviewMode={setPreviewMode}
+                      setPreviewOfferId={setPreviewOfferId}
+                      exportOfferPdf={exportOfferPdf}
+                      renderOfferReadBadge={renderOfferReadBadge}
+                      sevdeskStatus={sevdeskStatus}
+                      sendStatus={sendStatus}
+                      confirmationMenuOfferId={confirmationMenuOfferId}
+                      setConfirmationMenuOfferId={setConfirmationMenuOfferId}
+                      getOfferTotal={getOfferTotal}
+                      calcVat={calcVat}
+                      getOfferKeywords={getOfferKeywords}
+                      getOfferReferenceLabel={getOfferReferenceLabel}
+                      getOfferSentAt={getOfferSentAt}
+                      formatMoney={formatMoney}
+                      formatDate={formatDate}
+                      formatVatLabel={formatVatLabel}
+                      stripHtml={stripHtml}
+                      shorten={shorten}
+                    />
+                  ))
+                ) : (
+                  <p className={`text-xs ${accent === "emerald" ? "text-emerald-600" : accent === "rose" ? "text-rose-500" : "text-sand-500"}`}>{emptyText}</p>
+                )}
+              </div>
             </div>
-          </div>
-
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-3">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-600">
-              Akzeptiert
-            </p>
-            <div className="mt-3 space-y-2">
-              {offerBuckets.accepted.length ? (
-                offerBuckets.accepted.map((offer) => {
-                  const netTotal = getOfferTotal(offer);
-                  const vatTotal = calcVat(netTotal, offer);
-                  const grossTotal = netTotal + vatTotal;
-                  const keywords = getOfferKeywords(offer);
-                  const overviewText = String(offer.overviewText || "").trim();
-                  const calculationText = String(offer.calculationText || "").trim();
-                  const detailText = stripHtml(offer.detailHtml || "");
-                  const showDetails = Boolean(expandedOfferDetails[offer.id]);
-                  const detailPreview = detailText
-                    ? showDetails
-                      ? detailText
-                      : shorten(detailText, 220)
-                    : "";
-                  const hasMoreDetails =
-                    detailText.length > 220 || overviewText || calculationText;
-                  return (
-                    <div key={offer.id}>
-                      <div className="w-full rounded-xl border border-emerald-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
-                        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                          <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
-                            {getOfferReferenceLabel(offer)}
-                          </p>
-                          <p className="text-sm font-semibold">
-                            {offer.customer || "Angebot"}
-                          </p>
-                        </button>
-                        <div className="flex items-center gap-2">
-                          {getOfferSentAt(offer) ? (
-                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                              Versendet
-                            </span>
-                          ) : null}
-                          {renderOfferReadBadge(offer)}
-                          <button
-                            type="button"
-                            onClick={() => toggleOfferExpanded(offer.id)}
-                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                            title="Details"
-                          >
-                            {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openHandoverModal(offer)}
-                            disabled={sevdeskStatus[offer.serverId || offer.id]?.status === "sending"}
-                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50 disabled:opacity-50"
-                            title="Rechnungsentwurf in sevdesk"
-                          >
-                            <FilePlus size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => duplicateOffer(offer)}
-                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                            title="Duplizieren"
-                          >
-                            <Copy size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPreviewMode("offer");
-                              setPreviewOfferId(offer.id);
-                            }}
-                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                            title="Vorschau"
-                          >
-                            <Eye size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => exportOfferPdf(offer)}
-                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                            title="PDF exportieren"
-                          >
-                            <FileDown size={14} />
-                          </button>
-                          <div className="relative">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setConfirmationMenuOfferId((prev) =>
-                                  prev === offer.id ? "" : offer.id
-                                )
-                              }
-                              className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                              title="Auftragsbestätigung"
-                            >
-                              <Receipt size={14} />
-                            </button>
-                            {confirmationMenuOfferId === offer.id ? (
-                              <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-emerald-200 bg-white p-2 shadow-soft text-xs text-sand-700 z-30">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setPreviewMode("confirmation");
-                                    setPreviewOfferId(offer.id);
-                                    setConfirmationMenuOfferId("");
-                                  }}
-                                  className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50"
-                                >
-                                  Vorschau
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    exportOfferPdf(offer, "confirmation");
-                                    setConfirmationMenuOfferId("");
-                                  }}
-                                  className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50"
-                                >
-                                  PDF exportieren
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveId(offer.id);
-                                    openConfirmationEmailComposerForOffer(offer);
-                                    setConfirmationMenuOfferId("");
-                                  }}
-                                  disabled={
-                                    (sendStatus === "sending" || sendStatus === "preparing") ||
-                                    !offer.serverId
-                                  }
-                                  className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50 disabled:opacity-50"
-                                >
-                                  E-Mail senden
-                                </button>
-                              </div>
-                            ) : null}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => deleteArchivedOffer(offer)}
-                            className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-500 hover:bg-emerald-50"
-                            title="Löschen"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                      {expandedOffers[offer.id] ? (
-                        <div className="mt-2 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-xs text-emerald-700">
-                          <div className="flex flex-wrap items-center gap-3">
-                            <span>Summe netto: {formatMoney(netTotal)}</span>
-                            <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
-                            <span>Summe brutto: {formatMoney(grossTotal)}</span>
-                            <span>Datum: {formatDate(offer.createdAt)}</span>
-                            {getOfferSentAt(offer) ? (
-                              <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
-                            ) : null}
-                          </div>
-                          {keywords.length ? (
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                              <span className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
-                                Schlagworte
-                              </span>
-                              {keywords.map((word) => (
-                                <span
-                                  key={word}
-                                  className="rounded-full border border-emerald-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700"
-                                >
-                                  {word}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          {detailPreview || overviewText || calculationText ? (
-                            <div className="mt-2 space-y-2">
-                              {detailPreview ? (
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
-                                    Angebotsdetail
-                                  </p>
-                                  <p className="text-xs text-emerald-700 whitespace-pre-line">
-                                    {detailPreview}
-                                  </p>
-                                </div>
-                              ) : null}
-                              {showDetails && overviewText ? (
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
-                                    Überblick
-                                  </p>
-                                  <p className="text-xs text-emerald-700 whitespace-pre-line">
-                                    {overviewText}
-                                  </p>
-                                </div>
-                              ) : null}
-                              {showDetails && calculationText ? (
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-emerald-400">
-                                    Kalkulation
-                                  </p>
-                                  <p className="text-xs text-emerald-700 whitespace-pre-line">
-                                    {calculationText}
-                                  </p>
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                          {hasMoreDetails ? (
-                            <div className="mt-2">
-                              <button
-                                type="button"
-                                onClick={() => toggleOfferDetails(offer.id)}
-                                className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-600 hover:bg-emerald-50"
-                              >
-                                {showDetails ? "Weniger Details" : "Mehr Details anzeigen"}
-                              </button>
-                            </div>
-                          ) : null}
-                          {sevdeskStatus[offer.serverId || offer.id] ? (
-                            <div className="mt-2 text-xs">
-                              {sevdeskStatus[offer.serverId || offer.id].status === "sending" && (
-                                <span className="text-emerald-700">Erstelle Rechnungsentwurf...</span>
-                              )}
-                              {sevdeskStatus[offer.serverId || offer.id].status === "sent" && (
-                                <span className="text-emerald-700">
-                                  {sevdeskStatus[offer.serverId || offer.id].message}
-                                </span>
-                              )}
-                              {sevdeskStatus[offer.serverId || offer.id].status === "error" && (
-                                <span className="text-rose-600">
-                                  {sevdeskStatus[offer.serverId || offer.id].message}
-                                </span>
-                              )}
-                            </div>
-                          ) : null}
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updateOfferStatus(offer.id, "Entwurf")
-                            }
-                            disabled={offer.handoverLocked}
-                            className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-emerald-600 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            Wieder öffnen
-                          </button>
-                          {offer.handoverLocked ? (
-                            <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                              an Faktura übergeben
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                      ) : null}
-                    </div>
-                  );
-                })
-              ) : (
-                <p className="text-xs text-emerald-600">
-                  Keine akzeptierten Angebote.
-                </p>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-sand-200 bg-sand-50/60 p-3">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">
-              Archiv (fakturiert)
-            </p>
-            <div className="mt-3 space-y-2">
-              {offerBuckets.invoiced.length ? (
-                offerBuckets.invoiced.map((offer) => {
-                  const netTotal = getOfferTotal(offer);
-                  const vatTotal = calcVat(netTotal, offer);
-                  const grossTotal = netTotal + vatTotal;
-                  const keywords = getOfferKeywords(offer);
-                  const overviewText = String(offer.overviewText || "").trim();
-                  const calculationText = String(offer.calculationText || "").trim();
-                  const detailText = stripHtml(offer.detailHtml || "");
-                  const showDetails = Boolean(expandedOfferDetails[offer.id]);
-                  const detailPreview = detailText
-                    ? showDetails
-                      ? detailText
-                      : shorten(detailText, 220)
-                    : "";
-                  const hasMoreDetails =
-                    detailText.length > 220 || overviewText || calculationText;
-                  return (
-                    <div key={offer.id}>
-                      <div className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
-                        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                          <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                            {getOfferReferenceLabel(offer)}
-                          </p>
-                          <p className="text-sm font-semibold">
-                            {offer.customer || "Angebot"}
-                          </p>
-                        </button>
-                        <div className="flex items-center gap-2">
-                          {getOfferSentAt(offer) ? (
-                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                              Versendet
-                            </span>
-                          ) : null}
-                          {renderOfferReadBadge(offer)}
-                          <button
-                            type="button"
-                            onClick={() => toggleOfferExpanded(offer.id)}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="Details"
-                          >
-                            {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => duplicateOffer(offer)}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="Duplizieren"
-                          >
-                            <Copy size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPreviewMode("offer");
-                              setPreviewOfferId(offer.id);
-                            }}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="Vorschau"
-                          >
-                            <Eye size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => exportOfferPdf(offer)}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="PDF exportieren"
-                          >
-                            <FileDown size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteArchivedOffer(offer)}
-                            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-100"
-                            title="Löschen"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                      {expandedOffers[offer.id] &&
-                      (keywords.length || detailPreview || overviewText || calculationText) ? (
-                        <div className="mt-2 rounded-xl border border-sand-200 bg-white/70 px-3 py-2 text-xs text-sand-600">
-                          {keywords.length ? (
-                            <div className="flex flex-wrap gap-2">
-                              {keywords.map((keyword) => (
-                                <span
-                                  key={keyword}
-                                  className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500"
-                                >
-                                  {keyword}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          {overviewText ? (
-                            <p className="mt-2 whitespace-pre-line text-sand-700">
-                              {overviewText}
-                            </p>
-                          ) : null}
-                          {calculationText ? (
-                            <p className="mt-2 whitespace-pre-line text-sand-600">
-                              {calculationText}
-                            </p>
-                          ) : null}
-                          {detailPreview ? (
-                            <p className="mt-2 whitespace-pre-line text-sand-600">
-                              {detailPreview}
-                            </p>
-                          ) : null}
-                          {hasMoreDetails ? (
-                            <button
-                              type="button"
-                              onClick={() => toggleOfferDetails(offer.id)}
-                              className="mt-2 text-[10px] uppercase tracking-[0.3em] text-sand-500 hover:text-sand-700"
-                            >
-                              {showDetails ? "Weniger" : "Mehr"} Details
-                            </button>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] uppercase tracking-[0.3em] text-sand-400">
-                        <span>Status: Fakturiert</span>
-                        <span>{formatMoney(grossTotal)}</span>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <p className="text-xs text-sand-500">Keine fakturierten Angebote.</p>
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-rose-200 bg-rose-50/40 p-3">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-rose-500">
-              Abgelehnt / Abgelaufen
-            </p>
-            <div className="mt-3 space-y-2">
-              {offerBuckets.declined.length ? (
-                offerBuckets.declined.map((offer) => {
-                  const netTotal = getOfferTotal(offer);
-                  const vatTotal = calcVat(netTotal, offer);
-                  const grossTotal = netTotal + vatTotal;
-                  const keywords = getOfferKeywords(offer);
-                  const overviewText = String(offer.overviewText || "").trim();
-                  const calculationText = String(offer.calculationText || "").trim();
-                  const detailText = stripHtml(offer.detailHtml || "");
-                  const showDetails = Boolean(expandedOfferDetails[offer.id]);
-                  const detailPreview = detailText
-                    ? showDetails
-                      ? detailText
-                      : shorten(detailText, 220)
-                    : "";
-                  const hasMoreDetails =
-                    detailText.length > 220 || overviewText || calculationText;
-                  return (
-                    <div key={offer.id}>
-                      <div className="w-full rounded-xl border border-rose-200 bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between">
-                        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-                          <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
-                            {getOfferReferenceLabel(offer)}
-                          </p>
-                          <p className="text-sm font-semibold">
-                            {offer.customer || "Angebot"}
-                          </p>
-                        </button>
-                        <div className="flex items-center gap-2">
-                          {getOfferSentAt(offer) ? (
-                            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-                              Versendet
-                            </span>
-                          ) : null}
-                          {renderOfferReadBadge(offer)}
-                          <button
-                            type="button"
-                            onClick={() => toggleOfferExpanded(offer.id)}
-                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                            title="Details"
-                          >
-                            {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => duplicateOffer(offer)}
-                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                            title="Duplizieren"
-                          >
-                            <Copy size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPreviewMode("offer");
-                              setPreviewOfferId(offer.id);
-                            }}
-                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                            title="Vorschau"
-                          >
-                            <Eye size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => exportOfferPdf(offer)}
-                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                            title="PDF exportieren"
-                          >
-                            <FileDown size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteArchivedOffer(offer)}
-                            className="rounded-full border border-rose-200 bg-white p-1 text-rose-500 hover:bg-rose-50"
-                            title="Löschen"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                      {expandedOffers[offer.id] ? (
-                        <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50/60 p-3 text-xs text-rose-700">
-                          <div className="flex flex-wrap items-center gap-3">
-                            <span>Summe netto: {formatMoney(netTotal)}</span>
-                            <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
-                            <span>Summe brutto: {formatMoney(grossTotal)}</span>
-                            <span>Datum: {formatDate(offer.createdAt)}</span>
-                            {getOfferSentAt(offer) ? (
-                              <span>Versendet: {formatDate(getOfferSentAt(offer))}</span>
-                            ) : null}
-                          </div>
-                          {keywords.length ? (
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                              <span className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
-                                Schlagworte
-                              </span>
-                              {keywords.map((word) => (
-                                <span
-                                  key={word}
-                                  className="rounded-full border border-rose-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700"
-                                >
-                                  {word}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          {detailPreview || overviewText || calculationText ? (
-                            <div className="mt-2 space-y-2">
-                              {detailPreview ? (
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
-                                    Angebotsdetail
-                                  </p>
-                                  <p className="text-xs text-rose-700 whitespace-pre-line">
-                                    {detailPreview}
-                                  </p>
-                                </div>
-                              ) : null}
-                              {showDetails && overviewText ? (
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
-                                    Überblick
-                                  </p>
-                                  <p className="text-xs text-rose-700 whitespace-pre-line">
-                                    {overviewText}
-                                  </p>
-                                </div>
-                              ) : null}
-                              {showDetails && calculationText ? (
-                                <div>
-                                  <p className="text-[10px] uppercase tracking-[0.3em] text-rose-400">
-                                    Kalkulation
-                                  </p>
-                                  <p className="text-xs text-rose-700 whitespace-pre-line">
-                                    {calculationText}
-                                  </p>
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                          {hasMoreDetails ? (
-                            <div className="mt-2">
-                              <button
-                                type="button"
-                                onClick={() => toggleOfferDetails(offer.id)}
-                                className="rounded-full border border-rose-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600 hover:bg-rose-50"
-                              >
-                                {showDetails ? "Weniger Details" : "Mehr Details anzeigen"}
-                              </button>
-                            </div>
-                          ) : null}
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                updateOfferStatus(offer.id, "Entwurf")
-                              }
-                              className="rounded-full border border-rose-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-rose-600 hover:bg-rose-50"
-                            >
-                              Wieder öffnen
-                            </button>
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })
-              ) : (
-                <p className="text-xs text-rose-500">
-                  Keine abgelehnten Angebote.
-                </p>
-              )}
-            </div>
-          </div>
+          ))}
         </div>
       </section>
     ) : (

@@ -1425,6 +1425,7 @@ export default function CustomerDirectoryView() {
   const [calcImportStatus, setCalcImportStatus] = useState("idle");
   const [customerContracts, setCustomerContracts] = useState([]);
   const [contractsStatus, setContractsStatus] = useState("idle");
+  const [contractsExpanded, setContractsExpanded] = useState({});
   const [customerLicenses, setCustomerLicenses] = useState([]);
   const [customerLicensesStatus, setCustomerLicensesStatus] = useState("idle");
   const [customerLicenseDraft, setCustomerLicenseDraft] = useState(buildEmptyCustomerLicenseDraft);
@@ -2511,6 +2512,14 @@ export default function CustomerDirectoryView() {
     periodStats?.[customerStatsPeriod] && typeof periodStats[customerStatsPeriod] === "object"
       ? periodStats[customerStatsPeriod]
       : null;
+  const selectedPeriodWorkRevenue = Number(selectedPeriodStats?.workRevenueEur || 0);
+  const selectedPeriodMaterialRevenue = Number(selectedPeriodStats?.materialRevenueEur || 0);
+  const selectedPeriodTotalRevenue = Number(selectedPeriodStats?.totalRevenueEur || 0);
+  const selectedPeriodOtherRevenue =
+    selectedPeriodStats?.otherRevenueEur === null ||
+    typeof selectedPeriodStats?.otherRevenueEur === "undefined"
+      ? selectedPeriodTotalRevenue - selectedPeriodWorkRevenue - selectedPeriodMaterialRevenue
+      : Number(selectedPeriodStats.otherRevenueEur || 0);
   const sevdeskRecurringTagsSummary =
     selectedCustomerMetrics?.sevdeskRecurringTags && typeof selectedCustomerMetrics.sevdeskRecurringTags === "object"
       ? selectedCustomerMetrics.sevdeskRecurringTags
@@ -3141,74 +3150,80 @@ export default function CustomerDirectoryView() {
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : "border-emerald-200 bg-emerald-50 text-emerald-700";
     const label = isCancelled ? "Gekündigt" : status === "proposal" ? "Vorschlag" : "Aktiv";
+    const accentLeft = isCancelled ? "border-l-rose-400" : status === "proposal" ? "border-l-amber-400" : "border-l-emerald-400";
+    const accentBg = isCancelled ? "bg-rose-50/40" : status === "proposal" ? "bg-amber-50/30" : "bg-white";
+    const hasInventory = Number(counts?.servers || 0) > 0 || Number(counts?.clients || 0) > 0 || Number(counts?.network_devices || 0) > 0 || Number(counts?.iot_devices || 0) > 0;
     return (
-      <div key={item.id} className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs">
-        <div className="flex items-center justify-between gap-2">
-          <p className="font-semibold text-sand-800">{item.title || "Vertrag"}</p>
-          <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${badgeClass}`}>{label}</span>
-        </div>
-        {monthlyHoursIncluded > 0 ? (
-          <p className="mt-1 text-[11px] text-sand-600">Inklusivstunden: {formatHours(monthlyHoursIncluded)}</p>
-        ) : null}
-        {hasPricing ? (
-          <div className="mt-1.5 rounded-lg border border-sand-200 bg-white px-2.5 py-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-[11px] font-semibold text-sand-800">
-                Individualpreis: {formatEurPrecise(monthlyTotal || suggestedMonthlyTotal)}
-                <span className="text-sand-500"> / Monat</span>
-              </p>
-              {Math.abs(pricingDiff) >= 0.01 ? (
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
-                  Vorschlag {formatEurPrecise(suggestedMonthlyTotal)}
-                </span>
-              ) : (
-                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700">
-                  Preis entspricht Vorschlag
-                </span>
-              )}
-            </div>
-            {(Number(counts?.servers || 0) > 0 ||
-              Number(counts?.clients || 0) > 0 ||
-              Number(counts?.network_devices || 0) > 0 ||
-              Number(counts?.iot_devices || 0) > 0) ? (
-              <p className="mt-1 text-[11px] text-sand-600">
-                Bestand: {Number(counts?.servers || 0)} Server · {Number(counts?.clients || 0)} Clients ·{" "}
-                {Number(counts?.network_devices || 0)} Netzwerk · {Number(counts?.iot_devices || 0)} IoT
+      <div key={item.id} className={`rounded-xl border border-sand-200 border-l-4 ${accentLeft} ${accentBg} px-3 py-2.5 text-xs`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="font-semibold text-sand-900 truncate">{item.title || "Vertrag"}</p>
+            {hasPricing ? (
+              <p className="mt-0.5 text-sm font-bold text-sand-900">
+                {formatEurPrecise(monthlyTotal || suggestedMonthlyTotal)}
+                <span className="text-[11px] font-normal text-sand-500"> / Monat</span>
+                {monthlyHoursIncluded > 0 ? (
+                  <span className="ml-1.5 text-[11px] font-normal text-sand-500">· {formatHours(monthlyHoursIncluded)} inkl.</span>
+                ) : null}
               </p>
             ) : null}
           </div>
-        ) : null}
-        {cancellationDeadlineDays !== null && !isCancelled ? (
-          <p className={`mt-1 text-[11px] ${cancellationDeadlineDays <= 14 ? "text-amber-700" : "text-sand-600"}`}>
-            Kündigungsfrist: {formatDate(timeline.cancellationDeadlineAt)}{cancellationDeadlineDays <= 0 ? " (überschritten)" : ""}
-          </p>
-        ) : null}
-        {renewalDays !== null && !isCancelled ? (
-          <p className="mt-1 text-[11px] text-sand-600">
-            Nächste Verlängerung: {formatDate(timeline.nextRenewalAt)} ({renewalDays} Tage)
-          </p>
-        ) : null}
-        {isCancelled ? (
-          <p className="mt-1 text-[11px] text-rose-700">
-            Ende: {timeline.cancelledEffectiveAt ? formatDate(timeline.cancelledEffectiveAt) : "sofort"}
-            {timeline.stopServiceImmediately ? " · Leistungsstopp sofort" : ""}
-            {cancelledEffectiveDays !== null && cancelledEffectiveDays > 0 ? ` · Restlaufzeit ${cancelledEffectiveDays} Tage` : ""}
-          </p>
-        ) : null}
-        {status === "proposal" ? (
-          <p className="mt-1 text-[11px] text-amber-700">Kunde hat noch nicht eingewilligt. Als Vorschlag geführt.</p>
-        ) : null}
-        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${badgeClass}`}>{label}</span>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {hasPricing && Math.abs(pricingDiff) >= 0.01 ? (
+            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700">
+              Vorschlag {formatEurPrecise(suggestedMonthlyTotal)}
+            </span>
+          ) : hasPricing ? (
+            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">
+              ✓ Preis entspricht Vorschlag
+            </span>
+          ) : null}
+          {cancellationDeadlineDays !== null && !isCancelled ? (
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+              cancellationDeadlineDays <= 0
+                ? "border-rose-300 bg-rose-50 text-rose-700"
+                : cancellationDeadlineDays <= 14
+                ? "border-amber-200 bg-amber-50 text-amber-700"
+                : "border-sand-200 bg-sand-50 text-sand-600"
+            }`}>
+              KFrist {formatDate(timeline.cancellationDeadlineAt)}{cancellationDeadlineDays <= 0 ? " !" : ""}
+            </span>
+          ) : null}
+          {renewalDays !== null && !isCancelled ? (
+            <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+              renewalDays <= 30
+                ? "border-amber-200 bg-amber-50 text-amber-700"
+                : "border-sand-200 bg-sand-50 text-sand-600"
+            }`}>
+              Verl. {formatDate(timeline.nextRenewalAt)} ({renewalDays}d)
+            </span>
+          ) : null}
+          {isCancelled ? (
+            <span className="rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[10px] text-rose-700">
+              Ende {timeline.cancelledEffectiveAt ? formatDate(timeline.cancelledEffectiveAt) : "sofort"}
+              {timeline.stopServiceImmediately ? " · Stopp sofort" : ""}
+              {cancelledEffectiveDays !== null && cancelledEffectiveDays > 0 ? ` · ${cancelledEffectiveDays}d` : ""}
+            </span>
+          ) : null}
+          {status === "proposal" ? (
+            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">
+              Einwilligung ausstehend
+            </span>
+          ) : null}
+          {hasInventory ? (
+            <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] text-sand-500">
+              {Number(counts?.servers || 0)}S · {Number(counts?.clients || 0)}C · {Number(counts?.network_devices || 0)}N · {Number(counts?.iot_devices || 0)}IoT
+            </span>
+          ) : null}
+        </div>
+
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
           <button
             type="button"
-            onClick={() =>
-              setPreviewModal({
-                open: true,
-                title: item.title || "Vertrag",
-                html: String(item.html_content || "<p>Keine Vorschau hinterlegt.</p>"),
-                filename: ""
-              })
-            }
+            onClick={() => setPreviewModal({ open: true, title: item.title || "Vertrag", html: String(item.html_content || "<p>Keine Vorschau hinterlegt.</p>"), filename: "" })}
             className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
           >
             <Eye size={11} /> Vorschau
@@ -3218,64 +3233,38 @@ export default function CustomerDirectoryView() {
             onClick={() => downloadContractDocument(item.id, item.file_name || "vertrag.pdf")}
             className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
           >
-            <FileDown size={11} /> {status === "proposal" ? "Vorschlag PDF" : status === "active" ? "Final PDF" : "PDF"}
+            <FileDown size={11} /> {status === "proposal" ? "Vorschlag PDF" : "PDF"}
           </button>
+          <div className="h-3 w-px bg-sand-200" />
           {status === "cancelled" ? (
-            <button
-              type="button"
-              onClick={() => reactivateContractDocument(item.id)}
-              className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-            >
+            <button type="button" onClick={() => reactivateContractDocument(item.id)} className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100">
               Reaktivieren
             </button>
           ) : status === "proposal" ? (
             <>
-              <button
-                type="button"
-                onClick={() => openContractProposalEditor(item)}
-                className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-              >
+              <button type="button" onClick={() => openContractProposalEditor(item)} className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100">
                 <Pencil size={11} /> Bearbeiten
               </button>
-              <button
-                type="button"
-                onClick={() => reactivateContractDocument(item.id)}
-                className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100"
-              >
+              <button type="button" onClick={() => reactivateContractDocument(item.id)} className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-100">
                 Als aktiv markieren
               </button>
-              <button
-                type="button"
-                onClick={() => cancelContractDocument(item.id)}
-                className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-              >
+              <button type="button" onClick={() => cancelContractDocument(item.id)} className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100">
                 Stornieren
               </button>
             </>
           ) : (
             <>
-              <button
-                type="button"
-                onClick={() => markContractDocumentAsProposal(item.id)}
-                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100"
-              >
+              <button type="button" onClick={() => markContractDocumentAsProposal(item.id)} className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-100">
                 Als Vorschlag
               </button>
-              <button
-                type="button"
-                onClick={() => cancelContractDocument(item.id)}
-                className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-              >
-                Stornieren
+              <button type="button" onClick={() => cancelContractDocument(item.id)} className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100">
+                Kündigen
               </button>
             </>
           )}
-          <button
-            type="button"
-            onClick={() => deleteContractDocument(item.id)}
-            className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-          >
-            <Trash2 size={11} /> Löschen
+          <div className="h-3 w-px bg-sand-200" />
+          <button type="button" onClick={() => deleteContractDocument(item.id)} className="inline-flex items-center gap-1 rounded-full border border-rose-100 bg-white px-2 py-1 text-[10px] text-rose-500 hover:bg-rose-50">
+            <Trash2 size={11} />
           </button>
         </div>
       </div>
@@ -3633,9 +3622,9 @@ export default function CustomerDirectoryView() {
     ];
 
     return (
-      <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
+      <div className="mt-4 overflow-hidden rounded-2xl border border-sand-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sand-200 px-4 py-3">
+          <div className="min-w-0">
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">KPI</p>
             <p className="mt-1 text-[11px] text-sand-600">Monat, Kommunikation, Umsatz und Steuerung sauber getrennt.</p>
           </div>
@@ -3647,6 +3636,7 @@ export default function CustomerDirectoryView() {
             Aktualisieren
           </button>
         </div>
+        <div className="p-3">
         {metricsStatus === "loading" ? (
           <p className="mt-3 text-xs text-sand-500">Lade Kennzahlen…</p>
         ) : null}
@@ -3870,7 +3860,7 @@ export default function CustomerDirectoryView() {
                       ))}
                     </div>
                   </div>
-                  <div className="mt-3 grid gap-2 md:grid-cols-3">
+                  <div className="mt-3 grid gap-2 md:grid-cols-4">
                     <div className="rounded-xl border border-sand-200 bg-white p-3">
                       <p className="text-[10px] uppercase tracking-wide text-sand-500">Arbeitszeit</p>
                       <p className="mt-1 text-sm font-semibold text-sand-900">
@@ -3895,6 +3885,15 @@ export default function CustomerDirectoryView() {
                       </p>
                     </div>
                     <div className="rounded-xl border border-sand-200 bg-white p-3">
+                      <p className="text-[10px] uppercase tracking-wide text-sand-500">Sonstiges</p>
+                      <p className="mt-1 text-sm font-semibold text-sand-900">
+                        {selectedPeriodStats?.totalRevenueEur === null ||
+                        typeof selectedPeriodStats?.totalRevenueEur === "undefined"
+                          ? "n/a"
+                          : formatEurPrecise(selectedPeriodOtherRevenue)}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-sand-200 bg-white p-3">
                       <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamtumsatz</p>
                       <p className="mt-1 text-sm font-semibold text-sand-900">
                         {selectedPeriodStats?.totalRevenueEur === null ||
@@ -3906,7 +3905,7 @@ export default function CustomerDirectoryView() {
                   </div>
                   <p className="mt-2 text-[11px] text-sand-600">
                     {selectedPeriodStats?.invoiceCount
-                      ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum.`
+                      ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum. Arbeitszeit + Material + Sonstiges = Gesamtumsatz.`
                       : "Keine bezahlten sevdesk-Rechnungen im Zeitraum."}
                   </p>
                 </div>
@@ -3981,6 +3980,7 @@ export default function CustomerDirectoryView() {
         {metricsStatus === "ready" && !selectedCustomerMetrics ? (
           <p className="mt-3 text-xs text-sand-500">Keine Kennzahlen für diesen Kunden verfügbar.</p>
         ) : null}
+        </div>
       </div>
     );
   };
@@ -4825,65 +4825,46 @@ export default function CustomerDirectoryView() {
         <div className="rounded-2xl border border-sand-200 bg-gradient-to-br from-white via-sand-50 to-sand-100 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Schnellstart</p>
+              <p className="text-xs uppercase tracking-[0.22em] text-sand-500">
+                {editingContractId ? "Vertrag bearbeiten" : "Neuer Vertrag"}
+              </p>
               <h4 className="mt-1 text-lg font-semibold text-sand-900">
-                {editingContractId ? "Vertragsvorschlag aktualisieren" : "Neuen Vertrag einfacher anlegen"}
+                {editingContractId ? "Vertragsvorschlag aktualisieren" : "Vertrag in wenigen Angaben erstellen"}
               </h4>
               <p className="mt-1 text-sm text-sand-600">
-                Template, Preisvorschlag und Startdatum prüfen. Titel, Preis und Standardlaufzeit werden automatisch vorbelegt.
+                Typ, Tarif und Bestand reichen für eine erste Vorschau. Details liegen unter Optionen.
               </p>
             </div>
             <button
               type="button"
               onClick={() => setContractAdvancedOpen((prev) => !prev)}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+              className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-sand-700 hover:bg-sand-100"
             >
-              {contractAdvancedOpen ? "Weniger anzeigen" : "Erweiterte Felder"}
+              {contractAdvancedOpen ? "Optionen schließen" : "Optionen"}
             </button>
           </div>
-          <div className="mt-3 space-y-3">
-            <div>
-              <span className="text-[10px] uppercase tracking-wide text-sand-500">1) Template</span>
-              <div className="mt-1.5 grid gap-2 md:grid-cols-3">
-                {contractTemplateOptions.map((option) => {
-                  const active = activeContractTemplate?.key === option.key;
-                  return (
-                    <button
-                      key={option.key}
-                      type="button"
-                      onClick={() => applyContractTemplateChange(option.key)}
-                      className={`rounded-2xl border px-3 py-3 text-left ${
-                        active
-                          ? "border-sand-900 bg-sand-900 text-white"
-                          : "border-sand-200 bg-white text-sand-700 hover:bg-sand-100"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide">{option.title}</p>
-                        <span
-                          className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                            active ? "border-white/30 text-white" : "border-sand-200 text-sand-500"
-                          }`}
-                        >
-                          {contractTypeLabel(option.docType)}
-                        </span>
-                      </div>
-                      <p className={`mt-1 text-xs ${active ? "text-sand-200" : "text-sand-500"}`}>
-                        {option.description || "Ohne Kurzbeschreibung"}
-                      </p>
-                      {!option.hasBodyTemplate ? (
-                        <p className={`mt-2 text-[10px] ${active ? "text-amber-200" : "text-amber-700"}`}>
-                          Template ohne Inhalt
-                        </p>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="grid gap-2 md:grid-cols-2">
+
+          <div className="mt-4 space-y-3">
+            <div className="grid gap-2 md:grid-cols-[1.1fr_1.1fr_0.8fr]">
               <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">2) Preisvorlage</span>
+                <span className="text-[10px] uppercase tracking-wide text-sand-500 font-medium">Vertragstyp</span>
+                <select
+                  value={activeContractTemplate?.key || contractDraft.templateKey || ""}
+                  onChange={(event) => applyContractTemplateChange(event.target.value)}
+                  className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                >
+                  {contractTemplateOptions.map((option) => (
+                    <option key={option.key} value={option.key}>
+                      {option.title} · {contractTypeLabel(option.docType)}
+                    </option>
+                  ))}
+                </select>
+                {activeContractTemplate?.description ? (
+                  <p className="mt-1 text-[11px] text-sand-500">{activeContractTemplate.description}</p>
+                ) : null}
+              </label>
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wide text-sand-500 font-medium">Preisvorlage</span>
                 <select
                   value={calcInput.tariffId || ""}
                   onChange={(event) =>
@@ -4905,7 +4886,7 @@ export default function CustomerDirectoryView() {
                 </select>
               </label>
               <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">3) Gültig ab</span>
+                <span className="text-[10px] uppercase tracking-wide text-sand-500 font-medium">Gültig ab</span>
                 <input
                   type="date"
                   value={contractDraft.validFrom}
@@ -4914,6 +4895,35 @@ export default function CustomerDirectoryView() {
                 />
               </label>
             </div>
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px]">
+              <div className="rounded-xl border border-sand-200 bg-white px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wide text-sand-500">Aktuelle Auswahl</p>
+                <p className="mt-1 text-sm font-semibold text-sand-900">
+                  {contractTypeLabel(activeContractBaseType)}
+                  {selectedTariff ? ` · ${selectedTariff.name}` : tariffRequired ? " · Preisvorlage fehlt" : " · ohne Tarif"}
+                </p>
+                <p className="mt-1 text-[11px] text-sand-500">
+                  Laufzeit {runtimeMonthsValue} Monate · Kündigungsfrist {terminationNoticeMonthsValue} Monate
+                  {supportsHoursBudget ? ` · ${formatHours(monthlyHoursIncluded)} inkl./Monat` : ""}
+                </p>
+              </div>
+              {supportsHoursBudget ? (
+                <label className="block rounded-xl border border-sand-200 bg-white px-3 py-2">
+                  <span className="text-[10px] uppercase tracking-wide text-sand-500">Inklusivstunden / Monat</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={contractDraft.monthlyHoursIncluded}
+                    onChange={(event) =>
+                      setContractDraft((prev) => ({ ...prev, monthlyHoursIncluded: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-sand-200 bg-white px-3 py-1.5 text-sm"
+                  />
+                </label>
+              ) : null}
+            </div>
+            {contractAdvancedOpen ? (
             <label className="block">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[10px] uppercase tracking-wide text-sand-500">Titel</span>
@@ -4939,77 +4949,25 @@ export default function CustomerDirectoryView() {
                 placeholder={autoContractTitle}
               />
             </label>
-            {editableContractVariables.length ? (
-              <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Vertragsinhalte</p>
-                    <p className="mt-1 text-[11px] text-sand-600">
-                      Vertragsdetails und kundenbezogene Angaben direkt hier anpassen.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
-                      setGeneratedContract(null);
-                    }}
-                    className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    Standardwerte laden
-                  </button>
-                </div>
-                <div className="mt-2 grid gap-2 md:grid-cols-2">
-                  {editableContractVariables.map((item) => (
-                    <label key={item.key} className="block">
-                      <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                        {item.label}
-                        <span className="ml-1 text-sand-400">({item.key})</span>
-                      </span>
-                      <input
-                        value={String(contractVariableValues[item.key] ?? "")}
-                        onChange={(event) => {
-                          setContractVariableValues((prev) => ({
-                            ...prev,
-                            [item.key]: event.target.value
-                          }));
-                          setGeneratedContract(null);
-                        }}
-                        placeholder={item.suggestedValue || "-"}
-                        className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
-                      />
-                    </label>
-                  ))}
-                </div>
-              </div>
             ) : null}
-            {supportsHoursBudget ? (
-              <label className="block md:max-w-xs">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500">Inklusivstunden / Monat</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.25"
-                  value={contractDraft.monthlyHoursIncluded}
-                  onChange={(event) =>
-                    setContractDraft((prev) => ({ ...prev, monthlyHoursIncluded: event.target.value }))
-                  }
-                  className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
-                />
-              </label>
-            ) : null}
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-sand-600">
-              <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1">
-                Laufzeit {runtimeMonthsValue} Mon.
+            <div className="rounded-xl border border-sand-200 bg-white px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-sand-600">
+              <span className="flex items-center gap-1">
+                <span className="text-[10px] uppercase tracking-wide text-sand-400">Laufzeit</span>
+                <span className="font-semibold text-sand-900">{runtimeMonthsValue} Mon.</span>
               </span>
-              <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1">
-                Kündigungsfrist {terminationNoticeMonthsValue} Mon.
+              <span className="h-3 w-px bg-sand-200" />
+              <span className="flex items-center gap-1">
+                <span className="text-[10px] uppercase tracking-wide text-sand-400">KFrist</span>
+                <span className={`font-semibold ${contractRuntimeInvalid ? "text-rose-600" : "text-sand-900"}`}>{terminationNoticeMonthsValue} Mon.</span>
               </span>
-              <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1">
-                Verlängerung {autoExtensionMonthsValue} Mon.
+              <span className="h-3 w-px bg-sand-200" />
+              <span className="flex items-center gap-1">
+                <span className="text-[10px] uppercase tracking-wide text-sand-400">Auto-Verl.</span>
+                <span className="font-semibold text-sand-900">{autoExtensionMonthsValue} Mon.</span>
               </span>
-              <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1">
-                {contractTitleAuto ? "Titel automatisch" : "Titel manuell"}
+              <span className="h-3 w-px bg-sand-200" />
+              <span className={`text-[10px] uppercase tracking-wide ${contractTitleAuto ? "text-emerald-600" : "text-sand-500"}`}>
+                {contractTitleAuto ? "✓ Titel auto" : "Titel manuell"}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -5099,7 +5057,7 @@ export default function CustomerDirectoryView() {
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Erweitert</p>
                 <p className="mt-1 text-sm text-sand-600">
-                  Laufzeit und individuelle Vertragsvariablen nur bei Bedarf anpassen.
+                  Laufzeit, Titel und individuelle Vertragsvariablen nur bei Bedarf anpassen.
                 </p>
               </div>
               <span className="text-[11px] text-sand-500">
@@ -5154,6 +5112,50 @@ export default function CustomerDirectoryView() {
                 />
               </label>
             </div>
+            {editableContractVariables.length ? (
+              <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 p-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wide text-sand-500">Individuelle Vertragsfelder</p>
+                    <p className="mt-1 text-[11px] text-sand-600">
+                      Nur Felder aus dem gewählten Template, die nicht automatisch befüllt werden.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
+                      setGeneratedContract(null);
+                    }}
+                    className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                  >
+                    Zurücksetzen
+                  </button>
+                </div>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  {editableContractVariables.map((item) => (
+                    <label key={item.key} className="block">
+                      <span className="text-[10px] uppercase tracking-wide text-sand-500">
+                        {item.label}
+                        <span className="ml-1 text-sand-400">({item.key})</span>
+                      </span>
+                      <input
+                        value={String(contractVariableValues[item.key] ?? "")}
+                        onChange={(event) => {
+                          setContractVariableValues((prev) => ({
+                            ...prev,
+                            [item.key]: event.target.value
+                          }));
+                          setGeneratedContract(null);
+                        }}
+                        placeholder={item.suggestedValue || "-"}
+                        className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -5361,8 +5363,8 @@ export default function CustomerDirectoryView() {
                 </button>
               </div>
             </div>
-            <div className="max-h-[70vh] overflow-y-auto p-6 bg-sand-50">
-              <div className="bg-white border border-sand-200 rounded-2xl p-4">
+            <div className="max-h-[70vh] overflow-y-auto bg-sand-100 px-4 py-5 md:px-6">
+              <div className="mx-auto max-w-[920px] rounded-xl border border-sand-200 bg-white p-3 shadow-soft [&_.contract-document]:!bg-white [&_.contract-document]:!p-0 [&_.contract-sheet]:!max-w-none [&_.contract-sheet]:!border-0 [&_.contract-sheet]:!shadow-none [&_.contract-sheet]:!p-4 [&_.contract-logo]:!max-h-7 [&_.contract-logo]:!max-w-28">
                 <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(previewModal.html) }} />
               </div>
             </div>
@@ -5425,37 +5427,55 @@ export default function CustomerDirectoryView() {
         </div>
       ) : null}
       {editCustomer ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/40 px-3 py-3 md:px-4 md:py-6">
-          <div className="h-[94vh] w-[96vw] max-w-[1440px] rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
-            <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-sand-100 text-sm font-bold text-sand-700 select-none">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-sand-900/45 px-3 py-3 md:px-4 md:py-6">
+          <div className="h-[94vh] w-[96vw] max-w-[1440px] overflow-hidden rounded-2xl border border-sand-200 bg-white shadow-soft">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-sand-200 bg-white px-5 py-4 md:px-6">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-sand-200 bg-sand-100 text-base font-bold text-sand-800 select-none">
                   {(editCustomer.name || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() || "").join("")}
                 </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-[0.3em] text-sand-400">Kunde bearbeiten</p>
-                  <h3 className="text-base font-display text-sand-900 leading-tight">{editCustomer.name || "Kunde"}</h3>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-sand-500">Kundendetails</p>
+                  <h3 className="mt-0.5 truncate text-xl font-display leading-tight text-sand-900">{editCustomer.name || "Kunde"}</h3>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-sand-600">
+                    <span className="rounded-full border border-sand-200 bg-sand-50 px-2.5 py-0.5">
+                      Nr. {editCustomer.creditorNumber || "ohne"}
+                    </span>
+                    {editCustomer.shortCode ? (
+                      <span className="rounded-full border border-sand-200 bg-white px-2.5 py-0.5">{editCustomer.shortCode}</span>
+                    ) : null}
+                    <span
+                      className={`rounded-full border px-2.5 py-0.5 ${
+                        String(editCustomer.status || "active") === "inactive"
+                          ? "border-slate-300 bg-slate-100 text-slate-700"
+                          : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      }`}
+                    >
+                      {String(editCustomer.status || "active") === "inactive" ? "Inaktiv" : "Aktiv"}
+                    </span>
+                    {editCustomer.email ? <span className="truncate">{editCustomer.email}</span> : null}
+                  </div>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => handleRemove(editCustomer.id)}
-                  className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                  className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-rose-700 hover:bg-rose-100"
                 >
                   <Trash2 size={12} />
                   Löschen
                 </button>
                 <button
                   onClick={() => setEditCustomerId(null)}
-                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-sand-700 hover:bg-sand-100"
                 >
                   <X size={12} />
                   Schließen
                 </button>
               </div>
             </div>
-            <div className="border-b border-sand-200 bg-sand-50/50 px-2 overflow-x-auto">
+            <div className="border-b border-sand-200 bg-sand-50 px-3 overflow-x-auto">
               <div className="flex items-end min-w-max">
                 {[
                   { key: "details", icon: Building2, label: "Stammdaten" },
@@ -5469,7 +5489,7 @@ export default function CustomerDirectoryView() {
                     key={key}
                     type="button"
                     onClick={() => setSettingsTab(key)}
-                    className={`inline-flex items-center gap-1.5 px-4 py-3 text-[11px] uppercase tracking-wide border-b-2 transition-colors whitespace-nowrap ${
+                    className={`inline-flex items-center gap-1.5 px-4 py-3 text-[12px] font-medium uppercase tracking-wide border-b-2 transition-colors whitespace-nowrap ${
                       settingsTab === key
                         ? "border-sand-900 text-sand-900 font-semibold"
                         : "border-transparent text-sand-500 hover:text-sand-700 hover:border-sand-300"
@@ -5481,114 +5501,126 @@ export default function CustomerDirectoryView() {
                 ))}
               </div>
             </div>
-            <div className="h-[calc(94vh-132px)] overflow-y-auto p-4 bg-sand-50">
+            <div className="h-[calc(94vh-146px)] overflow-y-auto bg-sand-50 p-4 md:p-5">
               {settingsTab === "details" ? (
                 <>
-              <div className="mb-2">
-                <p className="text-xs uppercase tracking-[0.25em] text-sand-500">Stammdaten</p>
-              </div>
-              <div className="grid gap-2 md:grid-cols-3">
-                <label className="block">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">Name</span>
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+                <div className="space-y-4">
+                  <section className="rounded-2xl border border-sand-200 bg-white p-4">
+                    <div className="mb-4 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sand-500">Stammdaten</p>
+                        <p className="mt-1 text-sm text-sand-600">Basisdaten, Kundenstatus und primäre Kontaktadresse.</p>
+                      </div>
+                      <Building2 size={17} className="mt-0.5 text-sand-400" />
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                <label className="block md:col-span-3">
+                  <span className="text-sm font-medium text-sand-700">Name</span>
                   <input
                     value={editCustomer.name}
                     onChange={(event) => updateCustomer(editCustomer.id, { name: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                    className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-base font-semibold text-sand-900 focus:outline-none focus:ring-2 focus:ring-sand-300"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">Kundennummer</span>
+                  <span className="text-sm font-medium text-sand-700">Kundennummer</span>
                   <input
                     value={editCustomer.creditorNumber}
                     onChange={(event) => updateCustomer(editCustomer.id, { creditorNumber: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                    className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">sevDesk Kontakt-ID</span>
+                  <span className="text-sm font-medium text-sand-700">sevDesk Kontakt-ID</span>
                   <input
                     value={editCustomer.sevdeskContactId}
                     onChange={(event) => updateCustomer(editCustomer.id, { sevdeskContactId: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                    className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     placeholder="z. B. 12345678"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">Kürzel</span>
+                  <span className="text-sm font-medium text-sand-700">Kürzel</span>
                   <input
                     value={editCustomer.shortCode}
                     onChange={(event) => updateCustomer(editCustomer.id, { shortCode: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                    className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                   />
                 </label>
                 <label className="block md:col-span-3">
-                  <span className="text-xs uppercase tracking-wide text-sand-500">Haupt-E-Mail</span>
+                  <span className="text-sm font-medium text-sand-700">Haupt-E-Mail</span>
                   <input
                     type="email"
                     value={editCustomer.email}
                     onChange={(event) => updateCustomer(editCustomer.id, { email: event.target.value })}
-                    className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                    className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     placeholder="kunde@example.com"
                   />
                 </label>
-                <div className="md:col-span-3 rounded-2xl border border-sand-200 bg-white p-3">
+                    </div>
+                  </section>
+                <section className="rounded-2xl border border-sand-200 bg-white p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-xs uppercase tracking-[0.28em] text-sand-500">Kommunikation & Allgemeine Adresse</p>
-                      <p className="mt-1 text-xs text-sand-500">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sand-500">Kommunikation & allgemeine Adresse</p>
+                      <p className="mt-1 text-sm text-sand-600">
                         Optionale separate E-Mail für Newsletter und ähnliche Aussendungen. Wenn leer, wird die Haupt-E-Mail verwendet. Die Postadresse darunter bleibt die allgemeine Kontaktadresse.
                       </p>
                     </div>
                     <Mail size={16} className="mt-0.5 text-sand-400" />
                   </div>
-                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
                     <label className="block md:col-span-2">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">Newsletter-/Kommunikations-E-Mail</span>
+                      <span className="text-sm font-medium text-sand-700">Newsletter-/Kommunikations-E-Mail</span>
                       <input
                         type="email"
                         value={editCustomer.newsletterEmail}
                         onChange={(event) => updateCustomer(editCustomer.id, { newsletterEmail: event.target.value })}
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                        className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                         placeholder="optional, z. B. marketing@example.com"
                       />
                     </label>
                     <label className="block md:col-span-2">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">Straße</span>
+                      <span className="text-sm font-medium text-sand-700">Straße</span>
                       <input
                         value={editCustomer.generalStreet}
                         onChange={(event) => updateCustomer(editCustomer.id, { generalStreet: event.target.value })}
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                        className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                       />
                     </label>
                     <label className="block">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">PLZ</span>
+                      <span className="text-sm font-medium text-sand-700">PLZ</span>
                       <input
                         value={editCustomer.generalPostalCode}
                         onChange={(event) => updateCustomer(editCustomer.id, { generalPostalCode: event.target.value })}
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                        className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                       />
                     </label>
                     <label className="block">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">Ort</span>
+                      <span className="text-sm font-medium text-sand-700">Ort</span>
                       <input
                         value={editCustomer.generalCity}
                         onChange={(event) => updateCustomer(editCustomer.id, { generalCity: event.target.value })}
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                        className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                       />
                     </label>
                     <label className="block md:col-span-2">
-                      <span className="text-xs uppercase tracking-wide text-sand-500">Land</span>
+                      <span className="text-sm font-medium text-sand-700">Land</span>
                       <input
                         value={editCustomer.generalCountry}
                         onChange={(event) => updateCustomer(editCustomer.id, { generalCountry: event.target.value })}
-                        className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                        className="mt-1.5 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                       />
                     </label>
                   </div>
+                </section>
                 </div>
-              </div>
-              <div className="mt-2 grid gap-2 md:grid-cols-3">
-                <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-1.5 text-sm text-sand-700">
+                <aside className="space-y-4">
+              <section className="rounded-2xl border border-sand-200 bg-white p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sand-500">Status & Ausgaben</p>
+              <div className="mt-3 grid gap-2">
+                <label className="flex items-center gap-3 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800">
                   <input
                     type="checkbox"
                     checked={Boolean(editCustomer.customerReport)}
@@ -5597,7 +5629,7 @@ export default function CustomerDirectoryView() {
                   />
                   Kundenbericht
                 </label>
-                <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-1.5 text-sm text-sand-700">
+                <label className="flex items-center gap-3 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800">
                   <input
                     type="checkbox"
                     checked={Boolean(editCustomer.newsletter)}
@@ -5606,52 +5638,53 @@ export default function CustomerDirectoryView() {
                   />
                   Newsletter
                 </label>
-                <label className="block rounded-xl border border-sand-200 bg-white px-3 py-1.5">
-                  <span className="text-[10px] uppercase tracking-wide text-sand-500">Kundenstatus</span>
+                <label className="block rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                  <span className="text-sm font-medium text-sand-700">Kundenstatus</span>
                   <select
                     value={String(editCustomer.status || "active")}
                     onChange={(event) => updateCustomer(editCustomer.id, { status: event.target.value })}
-                    className="mt-1 w-full rounded-lg border border-sand-200 px-2 py-1 text-sm"
+                    className="mt-1.5 w-full rounded-lg border border-sand-200 bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                   >
                     <option value="active">Aktiv</option>
                     <option value="inactive">Inaktiv</option>
                   </select>
                 </label>
               </div>
-              <div className="mt-2 rounded-2xl border border-sky-100 bg-sky-50/70 p-3">
+              </section>
+              <section className="rounded-2xl border border-sand-200 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-xs uppercase tracking-[0.28em] text-sky-700">Rechnungsadresse (sevDesk)</p>
-                    <p className="mt-1 text-xs text-sky-700/80">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sand-500">Rechnungsadresse aus sevDesk</p>
+                    <p className="mt-1 text-sm text-sand-600">
                       Wird aus sevDesk synchronisiert und als Hauptadresse verwendet, wenn keine allgemeine Adresse gepflegt ist.
                     </p>
                   </div>
-                  <Building2 size={16} className="mt-0.5 text-sky-700" />
+                  <BadgeCheck size={17} className="mt-0.5 text-sand-400" />
                 </div>
-                <div className="mt-3 grid gap-2 md:grid-cols-2">
-                  <div className="rounded-xl border border-sky-100 bg-white/80 px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-sky-700/70">Rechnungs-E-Mail</p>
-                    <p className="mt-1 text-sm text-slate-800">
+                <div className="mt-4 grid gap-2">
+                  <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                    <p className="text-[11px] font-medium text-sand-500">Rechnungs-E-Mail</p>
+                    <p className="mt-1 text-sm text-sand-900">
                       {editCustomer.billingEmail || "Keine Rechnungs-E-Mail aus sevDesk"}
                     </p>
                   </div>
-                  <div className="rounded-xl border border-sky-100 bg-white/80 px-3 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-sky-700/70">Adressquelle</p>
-                    <p className="mt-1 text-sm text-slate-800">
+                  <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                    <p className="text-[11px] font-medium text-sand-500">Adressquelle</p>
+                    <p className="mt-1 text-sm text-sand-900">
                       {editCustomer.primaryAddressSource === "billing"
                         ? "Aktuell ist die Rechnungsadresse zugleich Hauptadresse."
                         : "Allgemeine Adresse überschreibt die Rechnungsadresse."}
                     </p>
                   </div>
-                  <div className="rounded-xl border border-sky-100 bg-white/80 px-3 py-2 md:col-span-2">
-                    <p className="text-[10px] uppercase tracking-wide text-sky-700/70">Rechnungsanschrift</p>
+                  <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-2">
+                    <p className="text-[11px] font-medium text-sand-500">Rechnungsanschrift</p>
                     {hasCustomerAddress({
                       street: editCustomer.billingStreet,
                       postalCode: editCustomer.billingPostalCode,
                       city: editCustomer.billingCity,
                       country: editCustomer.billingCountry
                     }) ? (
-                      <div className="mt-1 space-y-0.5 text-sm text-slate-800">
+                      <div className="mt-1 space-y-0.5 text-sm text-sand-900">
                         {buildCustomerAddressLines({
                           street: editCustomer.billingStreet,
                           postalCode: editCustomer.billingPostalCode,
@@ -5666,42 +5699,47 @@ export default function CustomerDirectoryView() {
                     )}
                   </div>
                 </div>
+              </section>
+                </aside>
               </div>
-              <div className="mt-2 rounded-2xl border border-sand-200 bg-white p-2.5">
+              <section className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Rufnummern</p>
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sand-500">Rufnummern</p>
+                    <p className="mt-1 text-sm text-sand-600">Telefonbuch, Click-to-dial und gespeicherte Kontaktwege.</p>
+                  </div>
                   <button
                     type="button"
                     onClick={addPhone}
-                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                    className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-sand-700 hover:bg-sand-100"
                   >
                     <Plus size={11} /> Neu
                   </button>
                 </div>
-                <div className="space-y-1.5">
+                <div className="mt-3 space-y-2">
                   {editCustomer.phones?.map((phone) => (
                     <div
                       key={phone.id}
-                      className="grid items-center gap-1.5 md:grid-cols-[minmax(0,180px)_minmax(0,240px)_auto_auto_auto]"
+                      className="grid items-center gap-2 rounded-xl border border-sand-200 bg-sand-50 p-2 md:grid-cols-[minmax(0,220px)_minmax(0,1fr)_44px_44px_44px]"
                     >
                       <input
                         value={phone.label}
                         onChange={(event) => updatePhone(phone.id, { label: event.target.value })}
                         placeholder="z. B. Arbeit"
-                        className="rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                        className="rounded-lg border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                       />
                       <input
                         value={phone.number}
                         onChange={(event) => updatePhone(phone.id, { number: event.target.value })}
                         placeholder="+49 40 123456"
-                        className="rounded-xl border border-sand-200 px-3 py-1.5 text-sm"
+                        className="rounded-lg border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                       />
                       {pbxMatches.has(normalizeDigits(phone.number)) ? null : (
                         <button
                           type="button"
                           onClick={() => addPhoneToPbx(phone)}
                           disabled={!pbxApiActive}
-                          className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs text-sand-600 ${
+                          className={`inline-flex h-10 w-10 items-center justify-center rounded-full border text-xs text-sand-600 ${
                             pbxApiActive
                               ? "border-sand-200 bg-white hover:bg-sand-100"
                               : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
@@ -5716,7 +5754,7 @@ export default function CustomerDirectoryView() {
                           type="button"
                           onClick={() => openClickToDial(phone)}
                           disabled={!isC2DReady}
-                          className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs ${
+                          className={`inline-flex h-10 w-10 items-center justify-center rounded-full border text-xs ${
                             isC2DReady
                               ? "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
                               : "border-sand-200 bg-sand-100 text-sand-400 opacity-60 cursor-not-allowed"
@@ -5735,14 +5773,14 @@ export default function CustomerDirectoryView() {
                       <button
                         type="button"
                         onClick={() => removePhone(phone.id)}
-                        className="inline-flex items-center justify-center rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs text-rose-700 hover:bg-rose-100"
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-xs text-rose-700 hover:bg-rose-100"
                       >
                         <Trash2 size={12} />
                       </button>
                     </div>
                   ))}
                 </div>
-              </div>
+              </section>
                 </>
               ) : null}
               {settingsTab === "kpi" ? renderCustomerKpiTab() : null}
@@ -5896,28 +5934,26 @@ export default function CustomerDirectoryView() {
                     </div>
                     <div className="mt-3 rounded-xl border border-emerald-100 bg-white p-2.5">
                       <div className="grid gap-2 md:grid-cols-3">
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Verlängerung</p>
-                        <p className="text-sm font-semibold text-sand-900">{contractControlStats.renewalsDueSoon}</p>
-                        <p className="text-[11px] text-sand-600">{"<= 45 Tage fällig"}</p>
+                        <div className={`rounded-lg border px-2.5 py-1.5 ${contractControlStats.renewalsDueSoon > 0 ? "border-amber-200 bg-amber-50" : "border-sand-200 bg-sand-50"}`}>
+                          <p className={`text-[10px] uppercase tracking-wide ${contractControlStats.renewalsDueSoon > 0 ? "text-amber-600" : "text-sand-500"}`}>Verlängerung fällig</p>
+                          <p className={`text-sm font-semibold ${contractControlStats.renewalsDueSoon > 0 ? "text-amber-800" : "text-sand-900"}`}>{contractControlStats.renewalsDueSoon}</p>
+                          <p className={`text-[11px] ${contractControlStats.renewalsDueSoon > 0 ? "text-amber-600" : "text-sand-500"}`}>{"≤ 45 Tage"}</p>
                         </div>
                         <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Laufzeit</p>
-                        <p className="text-sm font-semibold text-sand-900">{contractControlStats.runtimeDaysAvg} Tage</p>
-                        <p className="text-[11px] text-sand-600">Ø Vertragsalter</p>
+                          <p className="text-[10px] uppercase tracking-wide text-sand-500">Ø Vertragsalter</p>
+                          <p className="text-sm font-semibold text-sand-900">{contractControlStats.runtimeDaysAvg} Tage</p>
+                          <p className="text-[11px] text-sand-500">
+                            {contractControlStats.nextRenewalAt
+                              ? `Nächste Verl. ${contractControlStats.nextRenewalDays}d`
+                              : "Keine Verlängerung"}
+                          </p>
                         </div>
-                        <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Tarifabweichung</p>
-                        <p className="text-sm font-semibold text-sand-900">{contractControlStats.missingIncludedHours}</p>
-                        <p className="text-[11px] text-sand-600">Servicevertrag ohne Inklusivstunden</p>
+                        <div className={`rounded-lg border px-2.5 py-1.5 ${contractControlStats.missingIncludedHours > 0 ? "border-amber-200 bg-amber-50" : "border-sand-200 bg-sand-50"}`}>
+                          <p className={`text-[10px] uppercase tracking-wide ${contractControlStats.missingIncludedHours > 0 ? "text-amber-600" : "text-sand-500"}`}>Fehlende Inkl.-Std.</p>
+                          <p className={`text-sm font-semibold ${contractControlStats.missingIncludedHours > 0 ? "text-amber-800" : "text-sand-900"}`}>{contractControlStats.missingIncludedHours}</p>
+                          <p className={`text-[11px] ${contractControlStats.missingIncludedHours > 0 ? "text-amber-600" : "text-sand-500"}`}>Servicevertrag ohne Std.</p>
                         </div>
                       </div>
-                      <p className="mt-1.5 text-[11px] text-sand-600">
-                        Nächste Verlängerung:{" "}
-                        {contractControlStats.nextRenewalAt
-                          ? `${formatDate(contractControlStats.nextRenewalAt)} (${contractControlStats.nextRenewalDays} Tage)`
-                          : "n/a"}
-                      </p>
                     </div>
                     {editHasHoursBudgetContract ? (
                       <div className="mt-3 rounded-xl border border-emerald-100 bg-white p-3">
@@ -5933,6 +5969,24 @@ export default function CustomerDirectoryView() {
                         ) : null}
                         {metricsStatus === "ready" && contractTimeBudget ? (
                           <>
+                            {contractTimeBudget.includedHours > 0 ? (
+                              <div className="mt-2">
+                                <div className="flex items-center justify-between text-[10px] text-sand-500 mb-1">
+                                  <span>{formatHours(contractTimeBudget.consumedHours)} verbraucht</span>
+                                  <span className={contractTimeBudget.isOverrun ? "text-rose-600 font-semibold" : "text-emerald-600"}>
+                                    {contractTimeBudget.isOverrun
+                                      ? `+${formatHours(contractTimeBudget.overrunHours)} Überzug`
+                                      : `${formatHours(contractTimeBudget.remainingHours)} übrig`}
+                                  </span>
+                                </div>
+                                <div className="h-2 w-full rounded-full bg-sand-100 overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full transition-all ${contractTimeBudget.isOverrun ? "bg-rose-400" : contractTimeBudget.consumedHours / contractTimeBudget.includedHours > 0.8 ? "bg-amber-400" : "bg-emerald-400"}`}
+                                    style={{ width: `${Math.min(100, (contractTimeBudget.consumedHours / contractTimeBudget.includedHours) * 100).toFixed(1)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            ) : null}
                             <div className="mt-2 grid gap-2 md:grid-cols-4">
                               <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                                 <p className="text-[10px] uppercase tracking-wide text-sand-500">Inkludiert</p>
@@ -5941,45 +5995,29 @@ export default function CustomerDirectoryView() {
                               <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                                 <p className="text-[10px] uppercase tracking-wide text-sand-500">Verbraucht</p>
                                 <p className="text-sm font-semibold text-sand-900">{formatHours(contractTimeBudget.consumedHours)}</p>
+                                <p className="text-[11px] text-sand-500">{contractTimeBudget.taskCount || 0} Aufg. · {contractTimeBudget.callCount || 0} Tel.</p>
                               </div>
-                              <div
-                                className={`rounded-lg border px-2.5 py-1.5 ${
-                                  contractTimeBudget.isOverrun
-                                    ? "border-rose-200 bg-rose-50"
-                                    : "border-emerald-200 bg-emerald-50"
-                                }`}
-                              >
+                              <div className={`rounded-lg border px-2.5 py-1.5 ${contractTimeBudget.isOverrun ? "border-rose-200 bg-rose-50" : "border-emerald-200 bg-emerald-50"}`}>
                                 <p className="text-[10px] uppercase tracking-wide text-sand-500">
                                   {contractTimeBudget.isOverrun ? "Überzug" : "Rest"}
                                 </p>
-                                <p
-                                  className={`text-sm font-semibold ${
-                                    contractTimeBudget.isOverrun ? "text-rose-700" : "text-emerald-700"
-                                  }`}
-                                >
-                                  {formatHours(
-                                    contractTimeBudget.isOverrun
-                                      ? contractTimeBudget.overrunHours
-                                      : contractTimeBudget.remainingHours
-                                  )}
+                                <p className={`text-sm font-semibold ${contractTimeBudget.isOverrun ? "text-rose-700" : "text-emerald-700"}`}>
+                                  {formatHours(contractTimeBudget.isOverrun ? contractTimeBudget.overrunHours : contractTimeBudget.remainingHours)}
                                 </p>
                               </div>
                               <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
                                 <p className="text-[10px] uppercase tracking-wide text-sand-500">Aufteilung</p>
                                 <p className="text-sm font-semibold text-sand-900">
-                                  Aufgabe {formatHours(contractTimeBudget.taskHours, 1)}
+                                  Aufg. {formatHours(contractTimeBudget.taskHours, 1)}
                                 </p>
                                 <p className="text-[11px] text-sand-600">
-                                  Telefon {formatHours(contractTimeBudget.telephonyHours, 1)}
+                                  Tel. {formatHours(contractTimeBudget.telephonyHours, 1)}
                                 </p>
                               </div>
                             </div>
-                            <p className="mt-2 text-[11px] text-sand-600">
-                              Verbrauch aus {contractTimeBudget.taskCount || 0} Zeitaufgaben und {contractTimeBudget.callCount || 0} Telefonaten.
-                            </p>
                             {contractTimeBudget.missingIncludedHours ? (
-                              <p className="mt-1 text-[11px] text-amber-700">
-                                Vertrag vorhanden, aber keine Inklusivstunden hinterlegt. Bitte im Vertragsdetail setzen.
+                              <p className="mt-1.5 text-[11px] text-amber-700">
+                                Vertrag vorhanden, aber keine Inklusivstunden hinterlegt.
                               </p>
                             ) : null}
                           </>
@@ -5988,8 +6026,41 @@ export default function CustomerDirectoryView() {
                     ) : null}
                     {contractsStatus === "loading" ? <p className="mt-3 text-xs text-sand-500">Lade Verträge…</p> : null}
                     {contractsStatus === "error" ? <p className="mt-3 text-xs text-rose-600">Verträge konnten nicht geladen werden.</p> : null}
-                    <div className="mt-3 space-y-2 max-h-64 overflow-auto pr-1">
-                      {(customerContracts || []).map((item) => renderContractListItem(item))}
+                    <div className="mt-3 space-y-1.5">
+                      {(customerContracts || []).map((item) => {
+                        const isOpen = !!contractsExpanded[item.id];
+                        const itemStatus = String(item?.status || "active").toLowerCase();
+                        const isCancelledItem = itemStatus === "cancelled";
+                        const accentL = isCancelledItem ? "border-l-rose-400" : itemStatus === "proposal" ? "border-l-amber-400" : "border-l-emerald-400";
+                        const monthlyP = Number(item?.pricing?.monthly_total || item?.pricing?.suggested_monthly_total || 0);
+                        const statusBadgeClass = isCancelledItem ? "border-rose-200 bg-rose-50 text-rose-700" : itemStatus === "proposal" ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700";
+                        const statusLabel = isCancelledItem ? "Gekündigt" : itemStatus === "proposal" ? "Vorschlag" : "Aktiv";
+                        return (
+                          <div key={item.id}>
+                            <button
+                              type="button"
+                              onClick={() => setContractsExpanded((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
+                              className={`w-full rounded-xl border border-sand-200 border-l-4 ${accentL} bg-white px-3 py-2 text-left flex items-center justify-between gap-2 hover:bg-sand-50`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-semibold text-sand-900 truncate">{item.title || "Vertrag"}</p>
+                                {monthlyP > 0 ? (
+                                  <p className="text-[11px] text-sand-500">{formatEurPrecise(monthlyP)} / Monat</p>
+                                ) : null}
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${statusBadgeClass}`}>{statusLabel}</span>
+                                <span className="text-sand-400">{isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}</span>
+                              </div>
+                            </button>
+                            {isOpen ? (
+                              <div className="mt-1 pl-1">
+                                {renderContractListItem(item)}
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
                       {!customerContracts.length && contractsStatus !== "loading" ? (
                         <p className="text-xs text-sand-500">Noch keine Verträge für diesen Kunden.</p>
                       ) : null}
@@ -6003,33 +6074,25 @@ export default function CustomerDirectoryView() {
                         </div>
                         <div>
                           <p className="text-xs uppercase tracking-[0.28em] text-sky-700">Wiederkehrende Rechnungen</p>
-                          <p className="mt-1 text-[11px] text-sand-600">
-                            Rein lesend aus sevdesk: wiederkehrende Rechnungen je Kunde und Tag.
-                          </p>
+                          <p className="mt-0.5 text-[11px] text-sand-500">Lesend aus sevdesk · {formatNumber(sevdeskRecurringTagsSummary?.tagCount || 0)} Tags · {formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)} Vorlagen</p>
                         </div>
                       </div>
-                      <div className="rounded-xl border border-sky-100 bg-white px-3 py-2 text-right">
-                        <p className="text-[10px] uppercase tracking-wide text-sand-500">Aktuell / Monat</p>
-                        <p className="text-base font-semibold text-sand-900">
+                      <div className="text-right">
+                        <p className="text-[10px] uppercase tracking-wide text-sky-500">Aktuell / Monat</p>
+                        <p className="text-xl font-bold text-sky-900">
                           {formatEurPrecise(sevdeskRecurringTagsSummary?.monthlyTotalEur || 0)}
-                        </p>
-                        <p className="text-[11px] text-sand-500">
-                          Tags {formatNumber(sevdeskRecurringTagsSummary?.tagCount || 0)} · Vorlagen{" "}
-                          {formatNumber(sevdeskRecurringTagsSummary?.invoiceCount || 0)}
                         </p>
                       </div>
                     </div>
                     {sevdeskRecurringTagTotals.length ? (
-                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      <div className="mt-3 grid gap-1.5 md:grid-cols-2">
                         {sevdeskRecurringTagTotals.slice(0, 8).map((entry) => (
-                          <div key={entry.tagId || entry.tagName} className="rounded-xl border border-sand-200 bg-white px-3 py-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-sm font-semibold text-sand-900">{entry.tagName || "Ohne Tag"}</p>
-                              <p className="text-sm font-semibold text-sand-900">{formatEurPrecise(entry.monthlyEur || 0)}</p>
+                          <div key={entry.tagId || entry.tagName} className="rounded-xl border border-sky-100 bg-white px-3 py-2 flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-sand-900 truncate">{entry.tagName || "Ohne Tag"}</p>
+                              <p className="text-[10px] text-sand-400">{formatNumber(entry.invoiceCount || 0)} Vorlagen</p>
                             </div>
-                            <p className="mt-0.5 text-[11px] text-sand-500">
-                              {formatNumber(entry.invoiceCount || 0)} Vorlagen
-                            </p>
+                            <p className="text-sm font-bold text-sky-800 shrink-0">{formatEurPrecise(entry.monthlyEur || 0)}</p>
                           </div>
                         ))}
                       </div>
@@ -6123,20 +6186,20 @@ export default function CustomerDirectoryView() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-5 space-y-4">
-        <section className="rounded-3xl border border-sand-200 bg-white shadow-soft p-4">
+        <section className="rounded-2xl border border-sand-200 bg-white shadow-soft p-4">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Übersicht</p>
-              <h2 className="text-base font-display text-sand-900">Kundendatei</h2>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sand-500">Übersicht</p>
+              <h2 className="mt-0.5 text-lg font-display text-sand-900">Kundendatei</h2>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-700">
+              <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs font-medium text-sand-700">
                 Gesamt {totalCustomers}
               </span>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs text-emerald-700">
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
                 Aktiv {activeCustomers}
               </span>
-              <span className="rounded-full border border-slate-300 bg-slate-100 px-3 py-1 text-xs text-slate-700">
+              <span className="rounded-full border border-slate-300 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
                 Inaktiv {inactiveCustomers}
               </span>
             </div>
@@ -6149,7 +6212,7 @@ export default function CustomerDirectoryView() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Suche nach Name, Nummer, Telefon…"
-                className="w-full rounded-2xl border border-sand-200 pl-9 pr-3 py-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-sand-300"
+                className="w-full rounded-xl border border-sand-200 bg-sand-50 pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
               />
             </label>
             <label className="flex items-center gap-2 text-xs text-sand-600">
@@ -6163,14 +6226,14 @@ export default function CustomerDirectoryView() {
             </label>
           </div>
           <div className="overflow-auto rounded-2xl border border-sand-200">
-            <table className="min-w-full text-xs">
-              <thead className="bg-sand-100 text-sand-600 uppercase tracking-wide">
+            <table className="min-w-full text-sm">
+              <thead className="bg-sand-100 text-[11px] uppercase tracking-wide text-sand-600">
                 <tr>
-                  <th className="px-3 py-2 text-left">Kunde</th>
-                  <th className="px-3 py-2 text-left">Kommunikation</th>
-                  <th className="px-3 py-2 text-left">Kundenstatus</th>
-                  <th className="px-3 py-2 text-left">Vertragsstatus</th>
-                  <th className="px-3 py-2 text-right">Aktion</th>
+                  <th className="px-4 py-3 text-left">Kunde</th>
+                  <th className="px-4 py-3 text-left">Kommunikation</th>
+                  <th className="px-4 py-3 text-left">Kundenstatus</th>
+                  <th className="px-4 py-3 text-left">Vertragsstatus</th>
+                  <th className="px-4 py-3 text-right">Aktion</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-sand-200/70">
@@ -6178,30 +6241,30 @@ export default function CustomerDirectoryView() {
                   sortedCustomers.map((customer, index) => (
                     <tr
                       key={customer.id}
-                      className={`${
+                      className={`group ${
                         customer.id === activeId
-                          ? "bg-sand-200/70"
+                          ? "bg-sand-100 shadow-[inset_4px_0_0_var(--nav-accent)]"
                           : index % 2 === 0
                           ? "bg-white"
-                          : "bg-slate-100"
-                      } hover:bg-sand-100 cursor-pointer`}
+                          : "bg-slate-50"
+                      } cursor-pointer transition-colors hover:bg-sand-100/80`}
                       onClick={() => setActiveId(customer.id)}
                     >
-                      <td className="px-3 py-2 align-top">
+                      <td className="px-4 py-3 align-top">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <p className="font-semibold text-sand-900">{customer.name?.trim() || "Unbenannter Kunde"}</p>
-                          <span className="text-[11px] text-sand-500">
+                          <p className="font-semibold leading-snug text-sand-900">{customer.name?.trim() || "Unbenannter Kunde"}</p>
+                          <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[11px] text-sand-600">
                             Nr. {customer.creditorNumber || "ohne"}
                           </span>
                           {customer.shortCode ? (
-                            <span className="text-[11px] text-sand-500">· {customer.shortCode}</span>
+                            <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[11px] text-sand-600">{customer.shortCode}</span>
                           ) : null}
                         </div>
                         {(() => {
                           const context = developmentByCustomerId[customer.id];
                           if (!context) {
                             return (
-                              <p className="mt-1 text-[10px] text-sand-400">
+                              <p className="mt-1.5 text-[11px] text-sand-500">
                                 {developmentListStatus === "loading" ? "Meta-Hub lädt…" : "Keine Meta-Hub Daten"}
                               </p>
                             );
@@ -6215,15 +6278,15 @@ export default function CustomerDirectoryView() {
                             return null;
                           }
                           return (
-                            <p className="mt-1 text-[10px] text-sand-600">
+                            <p className="mt-1.5 text-[11px] text-sand-600">
                               {managedAssets} Agents · Updates {openUpdates} · Fehler {errorCount} · Warnungen {warningCount}
                             </p>
                           );
                         })()}
                       </td>
-                      <td className="px-3 py-2 align-top">
+                      <td className="px-4 py-3 align-top">
                         <div className="flex flex-wrap items-center gap-2">
-                          <label className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <label className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[12px] text-sand-700" onClick={(e) => e.stopPropagation()}>
                             <input
                               type="checkbox"
                               checked={Boolean(customer.customerReport)}
@@ -6234,7 +6297,7 @@ export default function CustomerDirectoryView() {
                             />
                             Bericht
                           </label>
-                          <label className="inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <label className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[12px] text-sand-700" onClick={(e) => e.stopPropagation()}>
                             <input
                               type="checkbox"
                               checked={Boolean(customer.newsletter)}
@@ -6247,17 +6310,21 @@ export default function CustomerDirectoryView() {
                           </label>
                         </div>
                       </td>
-                      <td className="px-3 py-2 align-top" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-4 py-3 align-top" onClick={(e) => e.stopPropagation()}>
                         <select
                           value={String(customer.status || "active")}
                           onChange={(event) => updateCustomer(customer.id, { status: event.target.value })}
-                          className="rounded-lg border border-sand-200 px-2 py-1 text-xs"
+                          className={`rounded-full border px-3 py-1 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-sand-300 ${
+                            String(customer.status || "active") === "inactive"
+                              ? "border-slate-300 bg-slate-100 text-slate-700"
+                              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          }`}
                         >
                           <option value="active">Aktiv</option>
                           <option value="inactive">Inaktiv</option>
                         </select>
                       </td>
-                      <td className="px-3 py-2 align-top">
+                      <td className="px-4 py-3 align-top">
                         {(() => {
                           const contractTypeCounts =
                             customer.id === activeId
@@ -6265,14 +6332,14 @@ export default function CustomerDirectoryView() {
                               : normalizeContractTypeCounts(customer.contractTypeCounts || {});
                           const entries = sortContractTypeCountEntries(contractTypeCounts);
                           if (!entries.length) {
-                            return <span className="text-[11px] text-sand-400">Kein Vertrag</span>;
+                            return <span className="text-[12px] text-sand-500">Kein Vertrag</span>;
                           }
                           return (
                             <div className="flex flex-wrap items-center gap-1.5">
                               {entries.map(([type, count]) => (
                                 <span
                                   key={type}
-                                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${contractTypeBadgeClass(type)}`}
+                                  className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${contractTypeBadgeClass(type)}`}
                                 >
                                   {formatContractTypeLabel(type)} {count}
                                 </span>
@@ -6281,7 +6348,7 @@ export default function CustomerDirectoryView() {
                           );
                         })()}
                       </td>
-                      <td className="px-3 py-2 align-top text-right">
+                      <td className="px-4 py-3 align-top text-right">
                         <button
                           type="button"
                           onClick={(event) => {
@@ -6290,7 +6357,7 @@ export default function CustomerDirectoryView() {
                             setSettingsTab("details");
                             setEditCustomerId(customer.id);
                           }}
-                          className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100"
+                          className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-2.5 text-sand-600 shadow-sm hover:bg-sand-100 group-hover:border-sand-300"
                           title="Bearbeiten"
                           aria-label="Bearbeiten"
                         >

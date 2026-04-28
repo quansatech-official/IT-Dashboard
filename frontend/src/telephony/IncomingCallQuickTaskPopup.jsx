@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FilePlus, Save, X } from "lucide-react";
+import { ArrowRight, FilePlus, Save, X } from "lucide-react";
 import { telephonyService } from "./telephonyService";
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -31,6 +31,7 @@ export default function IncomingCallQuickTaskPopup() {
   });
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
+  const [createdTask, setCreatedTask] = useState(null);
   const [liveMode, setLiveMode] = useState("connecting");
   const [dismissedCallUuid, setDismissedCallUuid] = useState("");
   const [position, setPosition] = useState(getDefaultPosition);
@@ -260,6 +261,7 @@ export default function IncomingCallQuickTaskPopup() {
     setCallUuid("");
     setContext({ customerName: "", customerNumber: "", phone: "", startedAt: 0 });
     setStatus("");
+    setCreatedTask(null);
   };
 
   const createQuickTask = async () => {
@@ -285,14 +287,15 @@ export default function IncomingCallQuickTaskPopup() {
         })
       });
       if (!response.ok) throw new Error("create_failed");
-      const createdTask = await response.json().catch(() => null);
+      const savedTask = await response.json().catch(() => null);
       window.dispatchEvent(
         new CustomEvent("qt:daytask-created", {
-          detail: { task: createdTask || null, source: "incoming-call-popup" }
+          detail: { task: savedTask || null, source: "incoming-call-popup" }
         })
       );
 
       setStatus("Aufgabe erstellt.");
+      setCreatedTask(savedTask || null);
       setTitle("");
       if (!activeIncomingCall) {
         setOpen(false);
@@ -414,6 +417,21 @@ export default function IncomingCallQuickTaskPopup() {
           </button>
         </div>
       </div>
+      {createdTask && (
+        <div className="mt-2 flex items-center justify-end">
+          <button
+            type="button"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent("qt:open-sevdesk-draft", { detail: { task: createdTask } }));
+              setCreatedTask(null);
+              closePopup();
+            }}
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-700/30 bg-emerald-600/90 px-3 py-1.5 text-[10px] uppercase tracking-wide text-white backdrop-blur-sm hover:bg-emerald-700/90"
+          >
+            <ArrowRight size={12} /> In sevDesk übernehmen
+          </button>
+        </div>
+      )}
     </div>
   );
 }

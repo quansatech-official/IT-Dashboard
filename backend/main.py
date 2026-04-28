@@ -478,6 +478,23 @@ class DayTaskGroup(Base):
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
 
 
+class ProjectFolder(Base):
+    __tablename__ = "project_folders"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String, nullable=False)
+    customer = Column(String, default="")
+    owner = Column(String, default="")
+    status = Column(String, default="yellow")
+    priority = Column(String, default="medium")
+    source_mode = Column(String, default="empty")
+    current_state = Column(Text, default="")
+    next_step = Column(Text, default="")
+    content_json = Column(Text, default="{}")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+
+
 class CustomerPhone(Base):
     __tablename__ = "customer_phones"
 
@@ -2207,6 +2224,48 @@ class DayTaskUpdate(BaseModel):
     completed_at: Optional[int] = None
 
 
+class ProjectFolderCreate(BaseModel):
+    title: str
+    customer: Optional[str] = ""
+    owner: Optional[str] = ""
+    status: Optional[str] = "yellow"
+    priority: Optional[str] = "medium"
+    source_mode: Optional[str] = "empty"
+    current_state: Optional[str] = ""
+    next_step: Optional[str] = ""
+    content: Optional[Dict[str, Any]] = None
+
+
+class ProjectFolderUpdate(BaseModel):
+    title: Optional[str] = None
+    customer: Optional[str] = None
+    owner: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    source_mode: Optional[str] = None
+    current_state: Optional[str] = None
+    next_step: Optional[str] = None
+    content: Optional[Dict[str, Any]] = None
+
+
+class ProjectFolderBootstrapRequest(BaseModel):
+    mode: Optional[str] = "empty"
+    title: Optional[str] = ""
+    customer: Optional[str] = ""
+    owner: Optional[str] = ""
+    description: Optional[str] = ""
+    block_keys: Optional[List[str]] = None
+    template_key: Optional[str] = ""
+
+
+class ProjectFolderAiAssistRequest(BaseModel):
+    action: str
+    topic: Optional[str] = ""
+    project_folder: Optional[Dict[str, Any]] = None
+    stream_id: Optional[str] = ""
+    context: Optional[str] = ""
+
+
 class DeliveryNoteCreate(BaseModel):
     customer_id: int
     note: Optional[str] = ""
@@ -3550,6 +3609,499 @@ def serialize_employee(e: Employee) -> Dict[str, Any]:
         "color": e.color,
         "created_at": e.created_at,
     }
+
+
+PROJECT_FOLDER_STATUS_VALUES = {"red", "yellow", "green", "blue"}
+PROJECT_FOLDER_PRIORITY_VALUES = {"low", "medium", "high", "critical"}
+PROJECT_FOLDER_AI_ACTIONS = {
+    "checklist",
+    "risks",
+    "questions",
+    "tasks",
+    "gantt",
+    "summary",
+    "customer_mail",
+    "offer_basis",
+    "handover",
+}
+
+PROJECT_BLOCK_LIBRARY: Dict[str, Dict[str, Any]] = {
+    "internetleitung": {
+        "label": "Internetleitung",
+        "summary": "Anbindung, Provider-Abstimmung und Umschalttermin",
+        "tasks": ["Bestandsleitung prüfen", "Provider-Termin abstimmen", "Fallback definieren"],
+        "checklist": ["Bandbreite bestätigt", "Router-Zugang vorhanden", "SLA dokumentiert"],
+        "risks": ["Liefertermin verschiebt sich", "Fehlende Zugangsdaten", "Fallback fehlt"],
+        "questions": ["Wer ist aktueller Provider?", "Gibt es fixe Umschaltfenster?"],
+        "gantt": ["Analyse", "Bestellung", "Bereitstellung", "Umschaltung"],
+        "positions": ["Provider-Koordination", "Inbetriebnahme Internetzugang"],
+    },
+    "firewall_vpn": {
+        "label": "Firewall/VPN",
+        "summary": "Sicherheitsarchitektur, Regelwerk und Remote-Zugriff",
+        "tasks": ["Regelwerk aufnehmen", "VPN-Benutzer festlegen", "Go-Live planen"],
+        "checklist": ["WAN/LAN dokumentiert", "Regeln freigegeben", "VPN-Test erfolgt"],
+        "risks": ["Regelwerk unvollständig", "Legacy-VPN inkompatibel", "Failover fehlt"],
+        "questions": ["Welche Standorte werden verbunden?", "Wer braucht Admin-Zugriff?"],
+        "gantt": ["Design", "Konfiguration", "Test", "Produktivsetzung"],
+        "positions": ["Firewall-Konfiguration", "VPN-Einrichtung"],
+    },
+    "microsoft_365": {
+        "label": "Microsoft 365",
+        "summary": "Tenant, Lizenzen, Identitäten und Produktivdienste",
+        "tasks": ["Tenant prüfen", "Lizenzbedarf abstimmen", "Migrationswellen planen"],
+        "checklist": ["Domänenzugriff vorhanden", "Lizenzen bestellt", "Benutzerliste freigegeben"],
+        "risks": ["Lizenzmodell passt nicht", "Alt-Tenant unklar", "MFA bremst Rollout"],
+        "questions": ["Gibt es bereits einen Tenant?", "Welche Dienste sollen zuerst live gehen?"],
+        "gantt": ["Bestandsaufnahme", "Lizenzierung", "Migration", "Abnahme"],
+        "positions": ["Microsoft-365-Einrichtung", "Tenant-Migration"],
+    },
+    "email_sicherung": {
+        "label": "E-Mail-Sicherung",
+        "summary": "Backup-Strategie für Postfächer und Wiederherstellung",
+        "tasks": ["Schutzziele klären", "Backup-Ziel festlegen", "Restore-Test planen"],
+        "checklist": ["Retention definiert", "Admin-Zugriff vorhanden", "Restore dokumentiert"],
+        "risks": ["Keine klaren Aufbewahrungsfristen", "Restore nie getestet"],
+        "questions": ["Wie lange sollen Mails aufbewahrt werden?"],
+        "gantt": ["Konzept", "Einrichtung", "Test", "Betriebsfreigabe"],
+        "positions": ["Backup-Lösung E-Mail", "Restore-Test"],
+    },
+    "backup_restore": {
+        "label": "Backup/Restore",
+        "summary": "Sicherungskonzept, Jobs, Aufbewahrung und Restore-Tests",
+        "tasks": ["Sicherungsumfang festlegen", "Backup-Jobs prüfen", "Restore-Fall definieren"],
+        "checklist": ["RPO/RTO dokumentiert", "Offsite-Ziel vorhanden", "Test-Restore erfolgt"],
+        "risks": ["Restore nicht getestet", "Speicherlaufzeit zu knapp", "Offsite fehlt"],
+        "questions": ["Welche Systeme sind geschäftskritisch?"],
+        "gantt": ["Analyse", "Konfiguration", "Restore-Test", "Freigabe"],
+        "positions": ["Backup-Konzept", "Restore-Test"],
+    },
+    "server_vm": {
+        "label": "Server/VM",
+        "summary": "Serverrollen, Virtualisierung und Ressourcenplanung",
+        "tasks": ["Serverrollen erfassen", "Sizing abstimmen", "Cutover vorbereiten"],
+        "checklist": ["Ressourcen dimensioniert", "Snapshots geplant", "Rollback definiert"],
+        "risks": ["Sizing zu knapp", "Downtime zu kurz geplant", "Abhängigkeiten übersehen"],
+        "questions": ["Welche Systeme sind kritisch?", "Gibt es Wartungsfenster?"],
+        "gantt": ["Analyse", "Build", "Migration", "Nachkontrolle"],
+        "positions": ["Serverbereitstellung", "VM-Migration"],
+    },
+    "benutzer_berechtigungen": {
+        "label": "Benutzer/Berechtigungen",
+        "summary": "Benutzerobjekte, Rollen und Zugriffsfreigaben",
+        "tasks": ["Soll-Rollenmodell abstimmen", "Benutzerlisten prüfen", "Freigabeprozess festlegen"],
+        "checklist": ["Admin-Konten getrennt", "Rollen dokumentiert", "Freigaben bestätigt"],
+        "risks": ["Wildwuchs in Gruppen", "Fehlende Verantwortliche für Freigaben"],
+        "questions": ["Wer genehmigt Berechtigungen?"],
+        "gantt": ["Analyse", "Bereinigung", "Umsetzung", "Abnahme"],
+        "positions": ["Rollen- und Rechtekonzept"],
+    },
+    "datenmigration": {
+        "label": "Datenmigration",
+        "summary": "Quellen, Zielsysteme, Qualität und Cutover",
+        "tasks": ["Quelldaten prüfen", "Migrationswellen planen", "Validierung vorbereiten"],
+        "checklist": ["Datenvolumen bekannt", "Testmigration erfolgt", "Abnahmeprozess definiert"],
+        "risks": ["Datenqualität unklar", "Zu wenig Testzeit", "Cutover-Fenster knapp"],
+        "questions": ["Welche Daten sind zwingend mitzunehmen?"],
+        "gantt": ["Analyse", "Testmigration", "Produktivmigration", "Nachlauf"],
+        "positions": ["Datenmigration", "Validierung"],
+    },
+    "drucker_scanner": {
+        "label": "Drucker/Scanner",
+        "summary": "Geräteanbindung, Treiber und Scan-Ziele",
+        "tasks": ["Geräteliste aufnehmen", "Treiberstand prüfen", "Scan-Ziele abstimmen"],
+        "checklist": ["IP-Liste vorhanden", "Treiber verfügbar", "Scan-Test erfolgt"],
+        "risks": ["Altgeräte inkompatibel", "Scan-Ziele fehlen"],
+        "questions": ["Gibt es Spezialgeräte oder Etikettendrucker?"],
+        "gantt": ["Aufnahme", "Einrichtung", "Test"],
+        "positions": ["Drucker-/Scanner-Einbindung"],
+    },
+    "telefonanlage": {
+        "label": "Telefonanlage",
+        "summary": "Rufnummern, Endgeräte, Routing und Go-Live",
+        "tasks": ["Rufnummernplan prüfen", "Geräteliste abstimmen", "Portierung planen"],
+        "checklist": ["Portierungsdaten vollständig", "Ansagen gesichert", "Testnummern definiert"],
+        "risks": ["Portierung verzögert sich", "Rufgruppen unvollständig"],
+        "questions": ["Welche Rufgruppen und Öffnungszeiten gibt es?"],
+        "gantt": ["Analyse", "Konfiguration", "Portierung", "Hypercare"],
+        "positions": ["Telefonanlagen-Konfiguration", "Portierungsbegleitung"],
+    },
+    "website_hosting": {
+        "label": "Website/Hosting",
+        "summary": "Hosting, DNS, Zertifikate und Deployment",
+        "tasks": ["Hosting-Zugänge prüfen", "DNS-Plan festlegen", "Go-Live testen"],
+        "checklist": ["DNS-Zugriff vorhanden", "SSL geklärt", "Rollback vorbereitet"],
+        "risks": ["DNS-Zugriff fehlt", "Downtime beim Umschalten", "Altumgebung unbekannt"],
+        "questions": ["Wer verwaltet die Domain?", "Gibt es Wartungsfenster?"],
+        "gantt": ["Vorbereitung", "Migration", "Go-Live", "Monitoring"],
+        "positions": ["Hosting-Migration", "DNS-/SSL-Anpassung"],
+    },
+    "security_audit": {
+        "label": "Security Audit",
+        "summary": "Prüfumfang, Findings, Priorisierung und Maßnahmen",
+        "tasks": ["Scope abstimmen", "Prüfplan erstellen", "Findings priorisieren"],
+        "checklist": ["Scope freigegeben", "Zugänge vorhanden", "Abschlussgespräch geplant"],
+        "risks": ["Scope zu breit", "Keine Ansprechpartner verfügbar"],
+        "questions": ["Welche Systeme sind im Scope?", "Gibt es Compliance-Vorgaben?"],
+        "gantt": ["Scope", "Durchführung", "Auswertung", "Maßnahmenplan"],
+        "positions": ["Security Audit", "Abschlussbericht"],
+    },
+    "dokumentation": {
+        "label": "Dokumentation",
+        "summary": "Betriebsdokumentation, Übergabe und Pflege",
+        "tasks": ["Soll-Dokumente definieren", "Stand erfassen", "Ablage festlegen"],
+        "checklist": ["Passwörter ausgeschlossen", "Ablageort festgelegt", "Freigabe erfolgt"],
+        "risks": ["Wissenslücken im Team", "Uneinheitliche Vorlagen"],
+        "questions": ["Welche Dokumente braucht der Kunde verbindlich?"],
+        "gantt": ["Struktur", "Erstellung", "Review", "Freigabe"],
+        "positions": ["Technische Dokumentation"],
+    },
+    "schulung_uebergabe": {
+        "label": "Schulung/Übergabe",
+        "summary": "Abnahme, Einweisung und Betriebsübergabe",
+        "tasks": ["Teilnehmer abstimmen", "Agenda erstellen", "Unterlagen vorbereiten"],
+        "checklist": ["Termin fixiert", "Unterlagen versendet", "Abnahme protokolliert"],
+        "risks": ["Entscheider fehlen", "Keine klare Übergabeverantwortung"],
+        "questions": ["Wer nimmt intern ab?", "Gibt es Schulungsbedarf pro Rolle?"],
+        "gantt": ["Vorbereitung", "Schulung", "Übergabe"],
+        "positions": ["Schulung", "Technische Übergabe"],
+    },
+}
+
+PROJECT_TEMPLATE_LIBRARY: Dict[str, Dict[str, Any]] = {
+    "servermigration_kmu": {
+        "label": "Servermigration KMU",
+        "blocks": ["server_vm", "backup_restore", "benutzer_berechtigungen", "dokumentation", "schulung_uebergabe"],
+    },
+    "m365_migration": {
+        "label": "Microsoft-365-Migration",
+        "blocks": ["microsoft_365", "datenmigration", "email_sicherung", "benutzer_berechtigungen", "schulung_uebergabe"],
+    },
+    "firewall_erneuerung": {
+        "label": "Firewall-Erneuerung",
+        "blocks": ["firewall_vpn", "internetleitung", "dokumentation", "schulung_uebergabe"],
+    },
+    "backup_notfallkonzept": {
+        "label": "Backup-/Notfallkonzept",
+        "blocks": ["backup_restore", "server_vm", "dokumentation", "schulung_uebergabe"],
+    },
+    "datenmigration": {
+        "label": "Datenmigration",
+        "blocks": ["datenmigration", "server_vm", "benutzer_berechtigungen", "dokumentation"],
+    },
+}
+
+PROJECT_EXPORT_PROFILES: List[Dict[str, Any]] = [
+    {"key": "internal_status", "label": "Interner Projektstand", "defaults": {"include_internal_notes": True, "include_risks": True, "include_tasks": True, "include_checklists": True, "include_gantt": True, "include_offer_positions": False, "customer_view": False}},
+    {"key": "customer_report", "label": "Kundenbericht", "defaults": {"include_internal_notes": False, "include_risks": False, "include_tasks": True, "include_checklists": False, "include_gantt": True, "include_offer_positions": False, "customer_view": True}},
+    {"key": "open_points", "label": "Offene-Punkte-Liste", "defaults": {"include_internal_notes": False, "include_risks": True, "include_tasks": True, "include_checklists": True, "include_gantt": False, "include_offer_positions": False, "customer_view": True}},
+    {"key": "offer_basis", "label": "Angebotsgrundlage", "defaults": {"include_internal_notes": True, "include_risks": True, "include_tasks": True, "include_checklists": False, "include_gantt": True, "include_offer_positions": True, "customer_view": False}},
+    {"key": "technical_handover", "label": "Technische Übergabe", "defaults": {"include_internal_notes": True, "include_risks": True, "include_tasks": True, "include_checklists": True, "include_gantt": True, "include_offer_positions": False, "customer_view": False}},
+    {"key": "closure_docs", "label": "Abschlussdokumentation", "defaults": {"include_internal_notes": False, "include_risks": True, "include_tasks": True, "include_checklists": True, "include_gantt": True, "include_offer_positions": True, "customer_view": True}},
+    {"key": "management_summary", "label": "Management-Zusammenfassung", "defaults": {"include_internal_notes": False, "include_risks": True, "include_tasks": False, "include_checklists": False, "include_gantt": True, "include_offer_positions": True, "customer_view": True}},
+]
+
+
+def _project_uuid() -> str:
+    return str(uuid.uuid4())
+
+
+def _parse_project_content(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(str(raw or "{}"))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _normalize_project_status(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw in PROJECT_FOLDER_STATUS_VALUES else "yellow"
+
+
+def _normalize_project_priority(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    return raw if raw in PROJECT_FOLDER_PRIORITY_VALUES else "medium"
+
+
+def _new_project_item(title: Any = "", **extra: Any) -> Dict[str, Any]:
+    payload = {"id": _project_uuid(), "title": str(title or "").strip()}
+    payload.update(extra)
+    return payload
+
+
+def _build_project_stream(block_key: str, owner: str = "") -> Dict[str, Any]:
+    block = PROJECT_BLOCK_LIBRARY.get(block_key) or {"label": str(block_key or "Arbeitsstrang").strip() or "Arbeitsstrang"}
+    return {
+        "id": _project_uuid(),
+        "block_key": block_key,
+        "title": block.get("label") or "Arbeitsstrang",
+        "status": "yellow",
+        "priority": "medium",
+        "owner": owner or "",
+        "progress": 5,
+        "short_status": block.get("summary") or "",
+        "facts": [],
+        "open_points": block.get("questions") or [],
+        "recommendation": "",
+        "customer_decision": "",
+        "next_step": "",
+        "tasks": [_new_project_item(item, status="open", owner=owner or "", due_date="") for item in (block.get("tasks") or [])],
+        "checklists": [
+            {
+                "id": _project_uuid(),
+                "title": f"{block.get('label') or 'Arbeitsstrang'} Checkliste",
+                "items": [_new_project_item(item, done=False) for item in (block.get("checklist") or [])],
+            }
+        ],
+        "risks": [_new_project_item(item, level="mittel", mitigation="") for item in (block.get("risks") or [])],
+        "blockers": [],
+        "decisions": [],
+        "notes": [],
+        "files": [],
+        "gantt_phases": [_new_project_item(item, start_date="", end_date="", owner=owner or "", status="geplant", dependency="") for item in (block.get("gantt") or [])],
+        "offer_positions": [_new_project_item(item, quantity="1", unit="pauschal", price="", billing_cycle="einmalig") for item in (block.get("positions") or [])],
+        "comments": [],
+        "activities": [],
+    }
+
+
+def _empty_project_content(owner: str = "") -> Dict[str, Any]:
+    return {
+        "overview": {
+            "current_status": "",
+            "next_step": "",
+            "team_note": "",
+        },
+        "streams": [],
+        "open_customer_questions": [],
+        "global_gantt": [],
+        "last_ai_outputs": [],
+        "activities": [],
+        "meta": {"owner": owner or ""},
+    }
+
+
+def _guess_project_block_keys(description: str) -> List[str]:
+    text_value = unicodedata.normalize("NFKD", str(description or "").lower())
+    text_value = "".join(ch for ch in text_value if not unicodedata.combining(ch))
+    matches = []
+    keyword_map = {
+        "internetleitung": ["internet", "provider", "leitung", "fiber", "glasfaser"],
+        "firewall_vpn": ["firewall", "vpn", "site-to-site", "fortigate", "utm"],
+        "microsoft_365": ["microsoft 365", "office 365", "exchange online", "teams", "sharepoint", "tenant"],
+        "email_sicherung": ["mail backup", "e-mail-sicherung", "emailsicherung", "mailarchiv", "mail backup"],
+        "backup_restore": ["backup", "restore", "sicherung", "notfall"],
+        "server_vm": ["server", "vm", "hyper-v", "vmware", "virtualisierung"],
+        "benutzer_berechtigungen": ["benutzer", "berechtigung", "rechte", "rollen", "gruppen"],
+        "datenmigration": ["datenmigration", "migration", "dateiserver", "daten"],
+        "drucker_scanner": ["drucker", "scanner", "etikett"],
+        "telefonanlage": ["telefon", "pbx", "rufnummer", "portierung"],
+        "website_hosting": ["website", "hosting", "dns", "ssl", "domain"],
+        "security_audit": ["audit", "security", "sicherheit", "pentest", "compliance"],
+        "dokumentation": ["dokumentation", "doku"],
+        "schulung_uebergabe": ["schulung", "uebergabe", "übergabe", "abnahme"],
+    }
+    for block_key, keywords in keyword_map.items():
+        if any(keyword in text_value for keyword in keywords):
+            matches.append(block_key)
+    if not matches:
+        matches = ["server_vm", "backup_restore", "dokumentation"]
+    if "schulung_uebergabe" not in matches:
+        matches.append("schulung_uebergabe")
+    return matches[:6]
+
+
+def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, Any]:
+    mode = str(data.mode or "empty").strip().lower() or "empty"
+    title = str(data.title or "").strip() or "Neue Projektmappe"
+    customer = str(data.customer or "").strip()
+    owner = str(data.owner or "").strip()
+    description = str(data.description or "").strip()
+    content = _empty_project_content(owner=owner)
+    selected_blocks: List[str] = []
+    ai_notes: List[str] = []
+    if mode == "template":
+        template = PROJECT_TEMPLATE_LIBRARY.get(str(data.template_key or "").strip())
+        selected_blocks = list(template.get("blocks") or []) if template else []
+    elif mode == "blocks":
+        selected_blocks = [item for item in (data.block_keys or []) if item in PROJECT_BLOCK_LIBRARY]
+    elif mode == "ai":
+        selected_blocks = _guess_project_block_keys(description)
+        ai_notes = [
+            "Kundenfreigaben früh absichern",
+            "Abhängigkeiten zu Alt-Systemen vor dem Go-Live klären",
+        ]
+    content["streams"] = [_build_project_stream(block_key, owner=owner) for block_key in selected_blocks]
+    if mode == "ai":
+        content["overview"]["current_status"] = "KI-Vorschlag erstellt, fachliche Prüfung ausstehend."
+        content["overview"]["next_step"] = "Vorschau prüfen, irrelevante Punkte abwählen und Projektmappe anlegen."
+        content["open_customer_questions"] = [
+            _new_project_item(question, kind="customer_question")
+            for stream in content["streams"]
+            for question in (stream.get("open_points") or [])[:2]
+        ][:8]
+        content["last_ai_outputs"] = [{"id": _project_uuid(), "title": "KI-Notizen", "text": "\n".join(ai_notes)}]
+    return {
+        "title": title,
+        "customer": customer,
+        "owner": owner,
+        "status": "yellow",
+        "priority": "medium",
+        "source_mode": mode,
+        "current_state": content["overview"].get("current_status") or "",
+        "next_step": content["overview"].get("next_step") or "",
+        "content": content,
+    }
+
+
+def _project_folder_summary_from_content(content: Dict[str, Any]) -> Dict[str, Any]:
+    streams = content.get("streams") if isinstance(content.get("streams"), list) else []
+    task_count = 0
+    open_task_count = 0
+    checklist_count = 0
+    risk_count = 0
+    blocker_count = 0
+    decision_count = 0
+    progress_total = 0.0
+    owners: Set[str] = set()
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        owners.add(str(stream.get("owner") or "").strip())
+        progress_total += float(stream.get("progress") or 0.0)
+        tasks = stream.get("tasks") if isinstance(stream.get("tasks"), list) else []
+        task_count += len(tasks)
+        open_task_count += len([item for item in tasks if str(item.get("status") or "open").strip().lower() != "done"])
+        checklist_count += len(stream.get("checklists") or [])
+        risk_count += len(stream.get("risks") or [])
+        blocker_count += len(stream.get("blockers") or [])
+        decision_count += len(stream.get("decisions") or [])
+    stream_count = len(streams)
+    progress = int(round(progress_total / stream_count)) if stream_count else 0
+    return {
+        "stream_count": stream_count,
+        "task_count": task_count,
+        "open_task_count": open_task_count,
+        "checklist_count": checklist_count,
+        "risk_count": risk_count,
+        "blocker_count": blocker_count,
+        "decision_count": decision_count,
+        "progress": max(0, min(100, progress)),
+        "owners": [item for item in sorted(owners) if item],
+    }
+
+
+def serialize_project_folder(folder: ProjectFolder, include_content: bool = True) -> Dict[str, Any]:
+    content = _parse_project_content(folder.content_json)
+    payload = {
+        "id": folder.id,
+        "title": folder.title,
+        "customer": folder.customer or "",
+        "owner": folder.owner or "",
+        "status": _normalize_project_status(folder.status),
+        "priority": _normalize_project_priority(folder.priority),
+        "source_mode": folder.source_mode or "empty",
+        "current_state": folder.current_state or "",
+        "next_step": folder.next_step or "",
+        "created_at": int(folder.created_at or 0),
+        "updated_at": int(folder.updated_at or 0),
+        "summary": _project_folder_summary_from_content(content),
+    }
+    if include_content:
+        payload["content"] = content
+    return payload
+
+
+def _compact_project_folder_context(folder: Dict[str, Any], stream_id: str = "") -> str:
+    content = folder.get("content") if isinstance(folder.get("content"), dict) else {}
+    streams = content.get("streams") if isinstance(content.get("streams"), list) else []
+    selected_stream = next((stream for stream in streams if str(stream.get("id") or "") == str(stream_id or "")), None)
+    parts = [
+        f"Projektmappe: {str(folder.get('title') or '').strip()}",
+        f"Kunde: {str(folder.get('customer') or '').strip()}",
+        f"Aktueller Stand: {str(folder.get('current_state') or '').strip()}",
+        f"Nächster Schritt: {str(folder.get('next_step') or '').strip()}",
+    ]
+    if selected_stream:
+        parts.extend(
+            [
+                f"Arbeitsstrang: {str(selected_stream.get('title') or '').strip()}",
+                f"Kurzlage: {str(selected_stream.get('short_status') or '').strip()}",
+                f"Offene Punkte: {'; '.join(str(item).strip() for item in (selected_stream.get('open_points') or [])[:6])}",
+            ]
+        )
+    return "\n".join(item for item in parts if item and not item.endswith(": "))
+
+
+def _fallback_project_ai_assist(action: str, topic: str, folder: Dict[str, Any], stream_id: str = "", context: str = "") -> Dict[str, Any]:
+    topic_value = _normalize_space(topic) or "aktuelles Thema"
+    base_context = _compact_project_folder_context(folder, stream_id=stream_id)
+    if action == "checklist":
+        return {"mode": "items", "items": [f"Zielbild für {topic_value} bestätigt", f"Abhängigkeiten für {topic_value} dokumentiert", f"Abnahme für {topic_value} vorbereitet"], "title": f"Checkliste zu {topic_value}"}
+    if action == "risks":
+        return {"mode": "risks", "items": [{"title": f"Freigaben für {topic_value} verzögern sich", "level": "hoch", "mitigation": "Entscheider und Eskalationsweg früh festlegen"}, {"title": f"Abhängigkeiten bei {topic_value} sind unvollständig", "level": "mittel", "mitigation": "Technische Vorprüfung und Gegencheck einplanen"}], "title": "Erkannte Risiken"}
+    if action == "questions":
+        return {"mode": "items", "items": [f"Welche fachliche Priorität hat {topic_value}?", f"Wer gibt {topic_value} final frei?", f"Bis wann wird die Kundenentscheidung zu {topic_value} benötigt?"], "title": "Offene Kundenfragen"}
+    if action == "tasks":
+        return {"mode": "tasks", "items": [{"title": f"Bestandsaufnahme zu {topic_value} abschließen", "status": "open"}, {"title": f"Abstimmungstermin zu {topic_value} vorbereiten", "status": "open"}, {"title": f"Nächsten Umsetzungsschritt für {topic_value} terminieren", "status": "open"}], "title": "Vorgeschlagene Aufgaben"}
+    if action == "gantt":
+        return {"mode": "gantt", "items": [{"title": "Analyse", "status": "geplant"}, {"title": "Umsetzung", "status": "geplant", "dependency": "Analyse"}, {"title": "Abnahme", "status": "geplant", "dependency": "Umsetzung"}], "title": "Vorgeschlagener Gantt-Plan"}
+    if action == "summary":
+        return {"mode": "text", "text": f"{base_context}\n\nKurzfazit: Die Projektmappe ist strukturiert, offene Entscheidungen und klare Verantwortlichkeiten sollten als nächstes verdichtet werden.", "title": "Projektstand Zusammenfassung"}
+    if action == "customer_mail":
+        return {"mode": "text", "text": f"Betreff: Abstimmung zu {topic_value}\n\nGuten Tag,\n\nwir haben den aktuellen Stand zu {topic_value} geprüft. Für den nächsten Schritt benötigen wir Ihre Rückmeldung zu den offenen Punkten und eine Freigabe für die weitere Umsetzung.\n\nViele Grüße", "title": "Kundenmail"}
+    if action == "offer_basis":
+        return {"mode": "text", "text": f"Leistungsgrundlage zu {topic_value}:\n- Analyse und Abstimmung\n- Umsetzung des beschlossenen Zielbilds\n- Test, Dokumentation und Übergabe", "title": "Angebotsgrundlage"}
+    return {"mode": "text", "text": f"Interne Übergabe zu {topic_value}:\n{base_context}\n\nWesentlich sind der aktuelle Status, die nächsten Entscheidungen und offene technische Risiken.", "title": "Interne Übergabe"}
+
+
+def _try_project_ai_assist(action: str, topic: str, folder: Dict[str, Any], stream_id: str = "", context: str = "") -> Dict[str, Any]:
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in PROJECT_FOLDER_AI_ACTIONS:
+        raise HTTPException(400, "Unsupported project AI action")
+    compact_context = _compact_project_folder_context(folder, stream_id=stream_id)
+    instruction_map = {
+        "checklist": "Erzeuge eine kompakte Projekt-Checkliste als JSON mit mode=items, title und items[] (Strings).",
+        "risks": "Erzeuge Projekt-Risiken als JSON mit mode=risks, title und items[] mit title, level, mitigation.",
+        "questions": "Formuliere offene Kundenfragen als JSON mit mode=items, title und items[] (Strings).",
+        "tasks": "Schlage Aufgaben vor als JSON mit mode=tasks, title und items[] mit title und status.",
+        "gantt": "Schlage Gantt-Phasen vor als JSON mit mode=gantt, title und items[] mit title, status, dependency.",
+        "summary": "Fasse den Projektstand zusammen als JSON mit mode=text, title und text.",
+        "customer_mail": "Erstelle eine Kundenmail als JSON mit mode=text, title und text.",
+        "offer_basis": "Erstelle eine Angebotsgrundlage als JSON mit mode=text, title und text.",
+        "handover": "Erstelle eine interne Übergabe als JSON mit mode=text, title und text.",
+    }
+    prompt_text = (
+        f"{instruction_map[normalized_action]}\n"
+        "Antworte nur als JSON-Objekt.\n"
+        f"Thema: {topic or 'n/a'}\n"
+        f"Zusatzkontext: {context or 'n/a'}\n\n"
+        f"Projektkontext:\n{compact_context}"
+    )
+    try:
+        model_candidates = _resolve_internal_ai_tool_models(None)
+        payload, model, provider = _ai_generate(
+            prompt_text,
+            model_candidates=model_candidates,
+            response_format="json",
+            temperature=0.25,
+            max_tokens=min(900, INTERNAL_AI_TOOL_MAX_TOKENS),
+            timeout=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
+        )
+        parsed = jsonlib.loads(str((payload or {}).get("response") or "{}"))
+        if isinstance(parsed, dict) and parsed.get("mode"):
+            parsed["provider"] = provider
+            parsed["model"] = model
+            parsed["usedFallback"] = False
+            return parsed
+    except Exception as exc:
+        logger.warning("Project folder AI assist fallback for action=%s: %s", normalized_action, exc)
+    fallback = _fallback_project_ai_assist(normalized_action, topic, folder, stream_id=stream_id, context=context)
+    fallback.update({"provider": "fallback", "model": "", "usedFallback": True})
+    return fallback
 
 
 def _parse_float(value: Optional[str], default: float = 0.0) -> float:
@@ -7982,11 +8534,35 @@ def _build_newsletter_rss_prompt(mode: str, tone: str, article_count: int) -> st
         )
     if mode_key == "newsletter":
         return (
-            "Erstelle auf Deutsch einen sofort nutzbaren Newsletter-Entwurf aus den gelieferten RSS-Artikeln. "
-            "Gib reinen Text ohne Markdown aus. "
-            "Struktur: erste Zeile = Betreff, zweite Zeile = kurzer Preheader, danach Leerzeile und dann der komplette Newsletter-Text in gut lesbaren Absätzen. "
-            "Verdichte die Inhalte, vermeide Copy-Paste aus den Artikeln und formuliere kundenorientiert mit klarer Einordnung. "
-            "Falls mehrere Artikel vorliegen, fasse sie in einem konsistenten Newsletter zusammen. "
+            "Erstelle auf Deutsch einen sofort versandfertigen Newsletter-Entwurf aus den gelieferten RSS-Artikeln.\n\n"
+            "AUSGABE-FORMAT – exakt in dieser Reihenfolge:\n"
+            "Zeile 1: BETREFF: <Betreff-Text>\n"
+            "Zeile 2: PREHEADER: <kurzer Vorschautext, max. 120 Zeichen>\n"
+            "Zeile 3: leer\n"
+            "Ab Zeile 4: vollständiger Newsletter-Body als HTML.\n\n"
+            "ERLAUBTE HTML-ELEMENTE:\n"
+            "  <h2>           – Abschnittsüberschrift (mit passendem Emoji vorangestellt, z. B. ⚠️ 🔒 💡 ✅)\n"
+            "  <p>            – Fließtext-Absatz\n"
+            "  <b>, <u>       – Betonung im Fließtext\n"
+            "  <ul>, <li>     – Aufzählungen\n"
+            "  <br>           – Zeilenumbruch innerhalb eines Absatzes\n"
+            "  <div class=\"box-red\">    – Dringende Warnung oder kritischer Handlungsbedarf (roter Rahmen links)\n"
+            "  <div class=\"box-yellow\"> – Vorsichtshinweis oder mittlere Dringlichkeit (oranger Rahmen links)\n"
+            "  <div class=\"box-green\">  – Positive Statusmeldung, Erfolg oder beruhigende Info (grüner Rahmen links)\n"
+            "  <div class=\"box-info\">   – Hintergrundinformation, Erklärung oder Randnotiz (grauer Kasten)\n"
+            "Keine anderen Tags. Kein Markdown. Kein DOCTYPE, kein <html>/<body>/<head>.\n\n"
+            "DESIGN-REGELN:\n"
+            "  - Jede Box-Klasse enthält <b>...</b> für den Einstiegssatz, dann normalen Text.\n"
+            "  - Maximal 2 farbige Boxen pro Newsletter – sparsam und gezielt einsetzen.\n"
+            "  - Emoji nur in <h2>-Überschriften, nicht im Fließtext.\n\n"
+            "INHALT & STIL:\n"
+            "  - Kurze Einleitung als <p>, dann pro Thema ein <h2> mit Fließtext.\n"
+            "  - Wenn ein Thema Handlungsbedarf erzeugt: box-red oder box-yellow verwenden.\n"
+            "  - Wenn ein Thema beruhigt oder eine gute Nachricht enthält: box-green.\n"
+            "  - Erklärungen für Laien (was ist BitLocker, was bedeutet das Update?): box-info.\n"
+            "  - Abschluss: <p> mit konkreter Handlungsaufforderung (Kontakt aufnehmen, Termin vereinbaren etc.).\n"
+            "  - Kundenorientiert, aktiv formuliert, keine Fachbegriffe ohne Erklärung, keine Copy-Paste-Sätze.\n"
+            "  - Falls mehrere Artikel: zu einem stimmigen Gesamttext verbinden, nicht aneinanderreihen.\n\n"
             f"Ton: {tone_value}. Verarbeite {article_count} Artikel."
         )
     return (
@@ -9880,30 +10456,30 @@ def _render_contract_html(
     customer_address_display = escape(customer_address) if customer_address else "Keine Adresse hinterlegt"
     return (
         "<style>"
-        "@page { size: A4 portrait; margin: 12mm; }"
+        "@page { size: A4 portrait; margin: 16mm 15mm 16mm 15mm; }"
         "* { box-sizing: border-box; }"
-        ".contract-document { font-family:\"DejaVu Sans\", \"Noto Sans\", Arial, sans-serif; color:#0f172a; line-height:1.56; font-size:11pt; background:#f1f5f9; padding:14px; }"
-        ".contract-sheet { max-width:190mm; margin:0 auto; background:#ffffff; border:1px solid #dbe4ef; border-radius:14px; padding:12mm; box-shadow:0 10px 22px rgba(15, 23, 42, 0.06); }"
-        ".contract-header { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; border-bottom:1px solid #e2e8f0; padding-bottom:10px; margin-bottom:12px; }"
-        ".contract-logo { height:44px; width:auto; object-fit:contain; display:block; }"
-        ".contract-chip { display:inline-block; border:1px solid #dbe4ef; background:#f8fafc; color:#1e3a5f; padding:4px 9px; border-radius:999px; font-size:10px; letter-spacing:0.16em; text-transform:uppercase; }"
-        ".contract-created-at { margin-top:8px; font-size:11px; color:#64748b; text-align:right; }"
-        ".contract-title { margin:0 0 6px; font-size:26px; line-height:1.16; color:#0b1324; }"
-        ".contract-subline { font-size:12px; color:#475569; margin:0 0 14px; }"
-        ".contract-meta-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px; margin:0 0 14px; }"
-        ".contract-card { border:1px solid #e2e8f0; border-radius:10px; padding:10px 12px; background:#f8fafc; }"
-        ".contract-card-label { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#94a3b8; margin-bottom:5px; }"
-        ".contract-card-main { font-size:12px; color:#0f172a; font-weight:600; }"
-        ".contract-card-sub { font-size:11px; color:#64748b; margin-top:4px; }"
-        ".contract-body { border:1px solid #e2e8f0; border-radius:12px; padding:14px; background:#ffffff; }"
-        ".contract-body p { margin:0 0 10px; color:#1f2937; }"
-        ".contract-body h3 { margin:14px 0 6px; font-size:13.5px; line-height:1.3; color:#0f172a; page-break-after:avoid; break-after:avoid; }"
+        ".contract-document { font-family:\"DejaVu Sans\", \"Noto Sans\", Arial, sans-serif; color:#172033; line-height:1.48; font-size:10.3pt; background:#eef3f8; padding:18px; }"
+        ".contract-sheet { max-width:186mm; margin:0 auto; background:#ffffff; border:1px solid #d8e2ee; border-radius:8px; padding:13mm; box-shadow:0 10px 24px rgba(15, 23, 42, 0.07); }"
+        ".contract-header { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; border-bottom:1px solid #dbe4ef; padding-bottom:9px; margin-bottom:14px; }"
+        ".contract-logo { max-height:28px; max-width:112px; width:auto; height:auto; object-fit:contain; display:block; }"
+        ".contract-chip { display:inline-block; border:1px solid #d8e2ee; background:#f6f9fc; color:#31506f; padding:3px 8px; border-radius:999px; font-size:8.5px; letter-spacing:0.12em; text-transform:uppercase; }"
+        ".contract-created-at { margin-top:7px; font-size:9.5px; color:#64748b; text-align:right; }"
+        ".contract-title { margin:0 0 5px; font-size:21px; line-height:1.18; color:#0f172a; letter-spacing:0; }"
+        ".contract-subline { font-size:11px; color:#475569; margin:0 0 12px; }"
+        ".contract-meta-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; margin:0 0 13px; }"
+        ".contract-card { border:1px solid #e2e8f0; border-radius:7px; padding:8px 9px; background:#f8fafc; }"
+        ".contract-card-label { font-size:8.5px; letter-spacing:0.1em; text-transform:uppercase; color:#64748b; margin-bottom:4px; font-weight:700; }"
+        ".contract-card-main { font-size:10.5px; color:#0f172a; font-weight:700; }"
+        ".contract-card-sub { font-size:9.5px; color:#64748b; margin-top:3px; }"
+        ".contract-body { border:1px solid #e2e8f0; border-radius:8px; padding:12px 13px; background:#ffffff; }"
+        ".contract-body p { margin:0 0 8px; color:#243145; }"
+        ".contract-body h3 { margin:13px 0 5px; font-size:12.4px; line-height:1.3; color:#0f172a; page-break-after:avoid; break-after:avoid; }"
         ".contract-body h3 + p, .contract-body h3 + ul, .contract-body h3 + ol { page-break-before:avoid; break-before:avoid; }"
-        ".contract-body ul, .contract-body ol { margin:0 0 10px; padding-left:20px; }"
-        ".contract-body li { margin:0 0 5px; page-break-inside:avoid; break-inside:avoid; }"
-        ".contract-footer { margin-top:12px; }"
-        ".contract-signatures { margin-top:20px; display:grid; grid-template-columns:1fr 1fr; gap:16px; }"
-        ".contract-signature { border-top:1px solid #cbd5e1; padding-top:9px; font-size:11px; color:#64748b; }"
+        ".contract-body ul, .contract-body ol { margin:0 0 8px; padding-left:18px; }"
+        ".contract-body li { margin:0 0 4px; page-break-inside:avoid; break-inside:avoid; }"
+        ".contract-footer { margin-top:10px; font-size:9.8px; color:#475569; }"
+        ".contract-signatures { margin-top:18px; display:grid; grid-template-columns:1fr 1fr; gap:16px; }"
+        ".contract-signature { border-top:1px solid #cbd5e1; padding-top:8px; font-size:9.8px; color:#64748b; }"
         ".contract-no-break { page-break-inside:avoid; break-inside:avoid; }"
         ".contract-page-break { page-break-before:always; break-before:page; }"
         "@media (max-width: 900px) {"
@@ -19367,6 +19943,9 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
             "workRevenueEur": None,
             "materialRevenueEur": None,
             "serviceRevenueEur": None,
+            "serviceOtherRevenueEur": None,
+            "otherRevenueEur": None,
+            "classifiedRevenueEur": None,
             "totalRevenueEur": None,
             "invoiceCount": 0,
         },
@@ -19377,6 +19956,9 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
             "workRevenueEur": None,
             "materialRevenueEur": None,
             "serviceRevenueEur": None,
+            "serviceOtherRevenueEur": None,
+            "otherRevenueEur": None,
+            "classifiedRevenueEur": None,
             "totalRevenueEur": None,
             "invoiceCount": 0,
         },
@@ -19493,9 +20075,16 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
                         period_stats[period_key]["workRevenueEur"] = round(work_revenue, 2)
                         period_stats[period_key]["materialRevenueEur"] = round(material_revenue, 2)
                         period_stats[period_key]["serviceRevenueEur"] = round(service_revenue, 2)
+                        service_other_revenue = max(0.0, service_revenue - work_revenue)
+                        period_stats[period_key]["serviceOtherRevenueEur"] = round(service_other_revenue, 2)
                         total_value = period_stats[period_key].get("totalRevenueEur")
                         if total_value is None:
-                            period_stats[period_key]["totalRevenueEur"] = 0.0
+                            total_value = 0.0
+                            period_stats[period_key]["totalRevenueEur"] = total_value
+                        other_revenue = round(float(total_value or 0.0) - work_revenue - material_revenue, 2)
+                        classified_revenue = round(work_revenue + material_revenue + other_revenue, 2)
+                        period_stats[period_key]["classifiedRevenueEur"] = classified_revenue
+                        period_stats[period_key]["otherRevenueEur"] = other_revenue
                 except SevdeskError:
                     revenue_current_year = None
                     revenue_last_year = None
@@ -19517,6 +20106,9 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
                             "workRevenueEur": None,
                             "materialRevenueEur": None,
                             "serviceRevenueEur": None,
+                            "serviceOtherRevenueEur": None,
+                            "otherRevenueEur": None,
+                            "classifiedRevenueEur": None,
                             "totalRevenueEur": None,
                             "invoiceCount": 0,
                         },
@@ -19527,6 +20119,9 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
                             "workRevenueEur": None,
                             "materialRevenueEur": None,
                             "serviceRevenueEur": None,
+                            "serviceOtherRevenueEur": None,
+                            "otherRevenueEur": None,
+                            "classifiedRevenueEur": None,
                             "totalRevenueEur": None,
                             "invoiceCount": 0,
                         },
@@ -19916,6 +20511,117 @@ def delete_customer_inventory_device_state(customer_id: int, state_id: int):
         db.delete(row)
         db.commit()
     return {"status": "ok"}
+
+
+@app.get("/api/project_folder_catalog")
+def get_project_folder_catalog():
+    return {
+        "blocks": [{"key": key, **value} for key, value in PROJECT_BLOCK_LIBRARY.items()],
+        "templates": [{"key": key, **value} for key, value in PROJECT_TEMPLATE_LIBRARY.items()],
+        "export_profiles": PROJECT_EXPORT_PROFILES,
+        "statuses": sorted(PROJECT_FOLDER_STATUS_VALUES),
+        "priorities": sorted(PROJECT_FOLDER_PRIORITY_VALUES),
+        "ai_actions": sorted(PROJECT_FOLDER_AI_ACTIONS),
+    }
+
+
+@app.post("/api/project_folders/bootstrap")
+def bootstrap_project_folder(data: ProjectFolderBootstrapRequest):
+    return _bootstrap_project_folder(data)
+
+
+@app.post("/api/project_folders/ai_assist")
+def project_folder_ai_assist(data: ProjectFolderAiAssistRequest):
+    folder = data.project_folder if isinstance(data.project_folder, dict) else {}
+    return _try_project_ai_assist(
+        data.action,
+        str(data.topic or "").strip(),
+        folder,
+        stream_id=str(data.stream_id or "").strip(),
+        context=str(data.context or "").strip(),
+    )
+
+
+@app.get("/api/project_folders")
+def get_project_folders():
+    with SessionLocal() as db:
+        rows = db.query(ProjectFolder).order_by(ProjectFolder.updated_at.desc(), ProjectFolder.id.desc()).all()
+        return [serialize_project_folder(row, include_content=False) for row in rows]
+
+
+@app.get("/api/project_folders/{folder_id}")
+def get_project_folder(folder_id: int):
+    with SessionLocal() as db:
+        row = db.query(ProjectFolder).get(folder_id)
+        if not row:
+            raise HTTPException(404, "Project folder not found")
+        return serialize_project_folder(row)
+
+
+@app.post("/api/project_folders")
+def create_project_folder(data: ProjectFolderCreate):
+    with SessionLocal() as db:
+        now_ms = int(time.time() * 1000)
+        content = data.content if isinstance(data.content, dict) else _empty_project_content(owner=str(data.owner or "").strip())
+        row = ProjectFolder(
+            title=str(data.title or "").strip() or "Neue Projektmappe",
+            customer=str(data.customer or "").strip(),
+            owner=str(data.owner or "").strip(),
+            status=_normalize_project_status(data.status),
+            priority=_normalize_project_priority(data.priority),
+            source_mode=str(data.source_mode or "empty").strip() or "empty",
+            current_state=str(data.current_state or "").strip(),
+            next_step=str(data.next_step or "").strip(),
+            content_json=json.dumps(content, ensure_ascii=False),
+            created_at=now_ms,
+            updated_at=now_ms,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_project_folder(row)
+
+
+@app.patch("/api/project_folders/{folder_id}")
+def update_project_folder(folder_id: int, data: ProjectFolderUpdate):
+    with SessionLocal() as db:
+        row = db.query(ProjectFolder).get(folder_id)
+        if not row:
+            raise HTTPException(404, "Project folder not found")
+        if data.title is not None:
+            row.title = str(data.title or "").strip() or row.title
+        if data.customer is not None:
+            row.customer = str(data.customer or "").strip()
+        if data.owner is not None:
+            row.owner = str(data.owner or "").strip()
+        if data.status is not None:
+            row.status = _normalize_project_status(data.status)
+        if data.priority is not None:
+            row.priority = _normalize_project_priority(data.priority)
+        if data.source_mode is not None:
+            row.source_mode = str(data.source_mode or "empty").strip() or "empty"
+        if data.current_state is not None:
+            row.current_state = str(data.current_state or "").strip()
+        if data.next_step is not None:
+            row.next_step = str(data.next_step or "").strip()
+        if data.content is not None and isinstance(data.content, dict):
+            row.content_json = json.dumps(data.content, ensure_ascii=False)
+        row.updated_at = int(time.time() * 1000)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return serialize_project_folder(row)
+
+
+@app.delete("/api/project_folders/{folder_id}")
+def delete_project_folder(folder_id: int):
+    with SessionLocal() as db:
+        row = db.query(ProjectFolder).get(folder_id)
+        if not row:
+            raise HTTPException(404, "Project folder not found")
+        db.delete(row)
+        db.commit()
+    return {"status": "deleted"}
 
 
 @app.get("/api/day_task_groups")
@@ -22763,7 +23469,7 @@ def generate_newsletter_from_rss(data: NewsletterRssGenerateRequest):
         _build_internal_ai_prompt(prompt_text, source_text),
         model_candidates=model_candidates,
         temperature=0.25 if mode == "newsletter" else 0.2,
-        max_tokens=min(900 if mode == "newsletter" else 500, int(INTERNAL_AI_MAX_TOKENS)),
+        max_tokens=min(1600 if mode == "newsletter" else 500, int(INTERNAL_AI_MAX_TOKENS)),
         timeout=min(int(INTERNAL_AI_TOOL_TIMEOUT_SECONDS), max(10, int(OLLAMA_TIMEOUT_SECONDS))),
         use_cache=False,
         raw=True,

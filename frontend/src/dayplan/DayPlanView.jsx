@@ -241,6 +241,7 @@ export default function DayPlanView() {
   const emailDropBadgeRef = useRef(null);
   const sevdeskDraftMetricsRequestRef = useRef(0);
   const sevdeskDraftEstimateRequestRef = useRef(0);
+  const openSevdeskDraftRef = useRef(null);
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
   const taskHighlightTimeoutsRef = useRef({});
   const [highlightedTaskIds, setHighlightedTaskIds] = useState({});
@@ -297,8 +298,16 @@ export default function DayPlanView() {
       }
       refreshTasks();
     };
+    const handleOpenSevdeskDraft = (event) => {
+      const task = event?.detail?.task;
+      if (task && openSevdeskDraftRef.current) openSevdeskDraftRef.current(task);
+    };
     window.addEventListener("qt:daytask-created", handleTaskCreated);
-    return () => window.removeEventListener("qt:daytask-created", handleTaskCreated);
+    window.addEventListener("qt:open-sevdesk-draft", handleOpenSevdeskDraft);
+    return () => {
+      window.removeEventListener("qt:daytask-created", handleTaskCreated);
+      window.removeEventListener("qt:open-sevdesk-draft", handleOpenSevdeskDraft);
+    };
   }, []);
 
   const refreshCustomers = () =>
@@ -735,7 +744,7 @@ export default function DayPlanView() {
     await updateTask(task, { urgency_flag: next });
   };
 
-  const openSevdeskDraft = async (task) => {
+  const openSevdeskDraft = (openSevdeskDraftRef.current = async (task) => {
     const latestDefaults = (await refreshSevdeskDefaults()) || sevdeskDefaults;
     const nextDraftForm = buildSevdeskDraftDefaults(task, latestDefaults);
     setSevdeskDraftTask(task);
@@ -768,7 +777,7 @@ export default function DayPlanView() {
         setSevdeskDraftMetrics(null);
         setSevdeskDraftMetricsStatus("error");
       });
-  };
+  });
 
   const updateSevdeskDraftForm = (field, value) => {
     setSevdeskDraftForm((prev) => {

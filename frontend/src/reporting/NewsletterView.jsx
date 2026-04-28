@@ -128,21 +128,98 @@ const buildArticleBlock = (article = {}) => {
   `.trim();
 };
 
+const ALLOWED_HTML_TAGS = /^(h2|p|ul|ol|li|strong|em|b|u|br)$/i;
+
+// Inline styles matching the established newsletter design (see BitLocker muster)
+const KPI_BOX_STYLES = {
+  "box-red":    "background:#fff3f3;border-left:4px solid #d60000;padding:12px;margin:15px 0;font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#222;line-height:1.5;",
+  "box-yellow": "background:#fffbf0;border-left:4px solid #d97706;padding:12px;margin:15px 0;font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#222;line-height:1.5;",
+  "box-green":  "background:#f0fff4;border-left:4px solid #16a34a;padding:12px;margin:15px 0;font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#222;line-height:1.5;",
+  "box-info":   "background:#f5f7fa;padding:10px;margin-top:20px;font-size:12px;color:#555;font-family:Segoe UI,Arial,sans-serif;line-height:1.5;",
+};
+
+const LABEL_STYLES = {
+  "box-red":    "color:#d60000;",
+  "box-yellow": "color:#b45309;",
+  "box-green":  "color:#15803d;",
+  "box-info":   "color:#444;",
+};
+
+// Replace <div class="box-*">…</div> with inline-styled divs matching the newsletter muster
+const applyKpiBoxStyles = (html = "") => {
+  return String(html).replace(
+    /<div\s+class="(box-red|box-yellow|box-green|box-info)">([\s\S]*?)<\/div>/gi,
+    (_, cls, inner) => {
+      const style = KPI_BOX_STYLES[cls] || "";
+      // Bold the first sentence if it starts with <b> — add label color
+      const styledInner = inner.replace(
+        /^(\s*)<b>/,
+        `$1<b style="${LABEL_STYLES[cls] || ""}">`
+      );
+      return `<div style="${style}">${styledInner}</div>`;
+    }
+  );
+};
+
+const sanitizeAiHtml = (html = "") => {
+  let result = String(html);
+
+  // First: convert class-based KPI boxes to inline-styled divs (before tag stripping)
+  result = applyKpiBoxStyles(result);
+
+  // Then: strip all tags except the allowed set and already-inlined divs
+  result = result.replace(/<(\/?)([\w]+)([^>]*)>/g, (match, slash, tag, attrs) => {
+    if (ALLOWED_HTML_TAGS.test(tag)) return match;
+    // Preserve already-processed <div style="..."> from applyKpiBoxStyles
+    if (tag.toLowerCase() === "div" && attrs.trim().startsWith('style=')) return match;
+    if (/^(section|article|blockquote|header|footer)$/i.test(tag)) return "";
+    return "";
+  });
+
+  return result.replace(/\n{3,}/g, "\n\n").trim();
+};
+
 const extractNewsletterDraftFromAi = (value = "") => {
-  const lines = String(value)
-    .split("\n")
-    .map((line) => line.trimEnd());
-  const nonEmpty = lines.filter((line) => line.trim());
-  if (!nonEmpty.length) {
-    return { subject: "", content: "" };
+  const raw = String(value).trim();
+  if (!raw) return { subject: "", preheader: "", content: "" };
+
+  const lines = raw.split("\n");
+  let subject = "";
+  let preheader = "";
+  let bodyStartIndex = 0;
+
+  // Parse structured header: BETREFF: … / PREHEADER: …
+  for (let i = 0; i < Math.min(lines.length, 6); i++) {
+    const line = lines[i].trim();
+    if (!subject && /^BETREFF:\s*/i.test(line)) {
+      subject = line.replace(/^BETREFF:\s*/i, "").trim();
+      bodyStartIndex = i + 1;
+    } else if (!preheader && /^PREHEADER:\s*/i.test(line)) {
+      preheader = line.replace(/^PREHEADER:\s*/i, "").trim();
+      bodyStartIndex = i + 1;
+    }
   }
-  const subject = String(nonEmpty[0] || "").trim();
-  let contentLines = lines.slice(lines.findIndex((line) => line.trim() === subject) + 1);
-  const content = paragraphsToHtml(contentLines.join("\n").trim());
-  return {
-    subject,
-    content
-  };
+
+  // Skip blank lines after the header block
+  while (bodyStartIndex < lines.length && !lines[bodyStartIndex].trim()) {
+    bodyStartIndex++;
+  }
+
+  const bodyText = lines.slice(bodyStartIndex).join("\n").trim();
+
+  // Decide if body is HTML or plain text
+  const looksLikeHtml = /<(h2|p|ul|li|strong|em|b|div)\b/i.test(bodyText);
+  const content = looksLikeHtml ? sanitizeAiHtml(bodyText) : paragraphsToHtml(bodyText);
+
+  // Fallback: if no structured header found, treat first line as subject
+  if (!subject) {
+    const nonEmpty = lines.filter((l) => l.trim());
+    subject = nonEmpty[0]?.trim() || "";
+    const rest = raw.slice(raw.indexOf("\n")).trim();
+    return { subject, preheader: "", content: looksLikeHtml ? sanitizeAiHtml(rest) : paragraphsToHtml(rest) };
+  }
+
+  return { subject, preheader, content };
 };
 
 const mapNewsletterToDraft = (item = {}) => ({
@@ -193,6 +270,9 @@ export default function NewsletterView() {
   const [isRssSaving, setIsRssSaving] = useState(false);
   const [isRssGenerating, setIsRssGenerating] = useState(false);
   const [aiTone, setAiTone] = useState("sachlich");
+  const [newsletterTab, setNewsletterTab] = useState("draft");
+  const [previewVisible, setPreviewVisible] = useState(true);
+  const [manualRecipientsOpen, setManualRecipientsOpen] = useState(false);
   const [previewModal, setPreviewModal] = useState({ open: false, title: "", html: "" });
   const [sendComposer, setSendComposer] = useState({
     open: false,
@@ -810,10 +890,16 @@ export default function NewsletterView() {
       const generatedText = String(data.text || "").trim();
       if (mode === "newsletter") {
         const parsed = extractNewsletterDraftFromAi(generatedText);
+        const preheaderBlock = parsed.preheader
+          ? `<p><em>${escapeHtml(parsed.preheader)}</em></p>`
+          : "";
+        const fullContent = preheaderBlock
+          ? preheaderBlock + (parsed.content || "")
+          : parsed.content || generatedText;
         setDraft((prev) => ({
           ...prev,
           subject: parsed.subject || prev.subject || selectedRssArticles[0]?.title || "",
-          content: parsed.content || generatedText
+          content: fullContent
         }));
         setToast("KI-Newsletter aus RSS-Artikeln übernommen.");
       }
@@ -1150,8 +1236,8 @@ export default function NewsletterView() {
         </div>
       ) : null}
 
-      <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-col gap-3 px-6 py-4 md:flex-row md:items-center md:justify-between">
+      <header className="border-b border-sand-200 bg-white/80 backdrop-blur sticky top-0 z-30">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-3">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
               <Mail size={18} />
@@ -1161,537 +1247,472 @@ export default function NewsletterView() {
               <h1 className="text-xl font-display text-sand-900">Newsletter</h1>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+
+          {/* KPI strip */}
+          <div className="hidden md:flex items-center gap-1.5">
+            <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5 text-center">
+              <p className="text-[10px] uppercase tracking-wide text-sand-400">Abonnenten</p>
+              <p className="text-sm font-bold text-sand-900">{newsletterCustomers.length}</p>
+            </div>
+            <div className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-1.5 text-center">
+              <p className="text-[10px] uppercase tracking-wide text-violet-400">Gruppen</p>
+              <p className="text-sm font-bold text-violet-900">{groups.length}</p>
+            </div>
+            <div className={`rounded-xl border px-3 py-1.5 text-center ${resolvedRecipients.length > 0 ? "border-amber-200 bg-amber-50" : "border-sand-200 bg-sand-50"}`}>
+              <p className={`text-[10px] uppercase tracking-wide ${resolvedRecipients.length > 0 ? "text-amber-500" : "text-sand-400"}`}>Auswahl</p>
+              <p className={`text-sm font-bold ${resolvedRecipients.length > 0 ? "text-amber-900" : "text-sand-900"}`}>{resolvedRecipients.length}</p>
+            </div>
+            <div className="rounded-xl border border-sand-200 bg-sand-50 px-3 py-1.5 text-center">
+              <p className="text-[10px] uppercase tracking-wide text-sand-400">Archiv</p>
+              <p className="text-sm font-bold text-sand-900">{newsletters.length}</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={loadData}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+              title="Aktualisieren"
+              className="rounded-full border border-sand-200 bg-white p-2 text-sand-500 hover:bg-sand-100"
             >
-              <RefreshCw size={14} /> Aktualisieren
+              <RefreshCw size={14} />
             </button>
             <button
               type="button"
-              onClick={() => {
-                setDraft(defaultDraft);
-                setSelectedRssArticleIds([]);
-              }}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+              onClick={() => { setDraft(defaultDraft); setSelectedRssArticleIds([]); setNewsletterTab("draft"); }}
+              title="Neuer Entwurf"
+              className="rounded-full border border-sand-200 bg-white p-2 text-sand-500 hover:bg-sand-100"
             >
-              <Plus size={14} /> Neu
+              <Plus size={14} />
             </button>
             <button
               type="button"
               onClick={saveNewsletter}
               disabled={isSaving}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <Save size={14} /> {isSaving ? "Speichert..." : "Speichern"}
+              <Save size={13} /> {isSaving ? "Speichert…" : "Speichern"}
             </button>
             <button
               type="button"
               onClick={handleSendPreparation}
               disabled={isSaving}
-              className="inline-flex items-center gap-2 rounded-full bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 rounded-full bg-sand-900 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <Send size={14} /> Versenden
+              <Send size={13} /> Versenden
             </button>
           </div>
         </div>
+
+        {/* Tab bar */}
+        <div className="mx-auto max-w-7xl flex items-center gap-0 px-6 border-t border-sand-100">
+          {[
+            { key: "draft", icon: Pencil, label: "Entwurf" },
+            { key: "recipients", icon: Users2, label: "Empfänger" },
+            { key: "rss", icon: Rss, label: "RSS" },
+            { key: "archive", icon: Archive, label: "Archiv" },
+          ].map(({ key, icon: Icon, label }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setNewsletterTab(key)}
+              className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-xs uppercase tracking-wide border-b-2 -mb-px transition-colors ${
+                newsletterTab === key
+                  ? "border-sand-900 text-sand-900 font-semibold"
+                  : "border-transparent text-sand-500 hover:text-sand-700 hover:border-sand-300"
+              }`}
+            >
+              <Icon size={13} /> {label}
+            </button>
+          ))}
+        </div>
       </header>
 
-      <main className="mx-auto max-w-7xl space-y-6 px-6 py-7">
-        <section className="grid gap-3 md:grid-cols-4">
-          <div className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Abonnenten</p>
-            <p className="mt-2 text-2xl font-display text-sand-900">{newsletterCustomers.length}</p>
-            <p className="mt-1 text-xs text-sand-500">Kunden mit aktivem Newsletter-Flag.</p>
-          </div>
-          <div className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Gruppen</p>
-            <p className="mt-2 text-2xl font-display text-sand-900">{groups.length}</p>
-            <p className="mt-1 text-xs text-sand-500">Empfängersegmente für Wiederverwendung.</p>
-          </div>
-          <div className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Aktuelle Auswahl</p>
-            <p className="mt-2 text-2xl font-display text-sand-900">{resolvedRecipients.length}</p>
-            <p className="mt-1 text-xs text-sand-500">Aufgelöste E-Mail-Empfänger im Entwurf.</p>
-          </div>
-          <div className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-            <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Archiv</p>
-            <p className="mt-2 text-2xl font-display text-sand-900">{newsletters.length}</p>
-            <p className="mt-1 text-xs text-sand-500">Gespeicherte Newsletter-Stände.</p>
-          </div>
-        </section>
+      <main className="mx-auto max-w-7xl px-6 py-6">
 
-        <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.08fr_0.92fr]">
-          <div className="space-y-6">
+        {/* ── ENTWURF TAB ─────────────────────────────────────────── */}
+        {newsletterTab === "draft" ? (
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_420px]">
             <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-              <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="text-lg font-display text-sand-900">Empfänger</h2>
-                  <p className="text-sm text-sand-600">
-                    Gruppen wählen oder einzelne Kunden direkt ergänzen.
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-[0.24em] text-sand-500">Betreff</span>
+                <input
+                  value={draft.subject}
+                  onChange={(event) => setDraft((prev) => ({ ...prev, subject: event.target.value }))}
+                  className="mt-1.5 w-full rounded-xl border border-sand-200 px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  placeholder="Betreff für den E-Mail-Versand"
+                />
+              </label>
+              <div className="mt-4">
+                <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-sand-500">Inhalt</p>
+                <NotesRichTextEditor
+                  value={draft.content}
+                  onChange={(value) => setDraft((prev) => ({ ...prev, content: value }))}
+                  minHeight="480px"
+                  placeholder="Newsletter hier formatieren oder direkt als HTML einfügen."
+                  allowHtmlSource
+                />
+                <p className="mt-2 text-[11px] text-sand-400">
+                  HTML wird direkt gespeichert. Im HTML-Modus kannst du Inhalte aus ChatGPT direkt einfügen.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-sand-100">
+                  <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sand-700">Vorschau</p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewModal({ open: true, title: draft.subject || "Vorschau", html: previewHtml })}
+                      className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+                    >
+                      <Eye size={11} /> Vollbild
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewVisible((v) => !v)}
+                      className="rounded-full border border-sand-200 bg-white p-1 text-sand-400 hover:bg-sand-100"
+                    >
+                      {previewVisible ? <Eye size={13} /> : <Eye size={13} />}
+                    </button>
+                  </div>
+                </div>
+                {previewVisible ? (
+                  <div className="overflow-hidden bg-white">
+                    <div className="max-h-[640px] overflow-auto" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+                  </div>
+                ) : (
+                  <div className="px-4 py-6 text-center text-xs text-sand-400">Vorschau ausgeblendet</div>
+                )}
+              </div>
+
+              {resolvedRecipients.length > 0 ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                  <p className="text-[10px] uppercase tracking-[0.2em] text-amber-600 font-medium">{resolvedRecipients.length} Empfänger aufgelöst</p>
+                  <p className="mt-1 text-[11px] text-amber-700 break-all leading-relaxed">
+                    {resolvedRecipients.slice(0, 6).join(", ")}{resolvedRecipients.length > 6 ? ` +${resolvedRecipients.length - 6} weitere` : ""}
                   </p>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3">
+                  <p className="text-xs text-sand-500">Noch keine Empfänger — im Tab <button type="button" onClick={() => setNewsletterTab("recipients")} className="underline hover:text-sand-700">Empfänger</button> auswählen.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+
+        {/* ── EMPFÄNGER TAB ───────────────────────────────────────── */}
+        {newsletterTab === "recipients" ? (
+          <div className="space-y-4">
+            <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>
+                  <h2 className="text-base font-semibold text-sand-900">Gruppen</h2>
+                  <p className="text-xs text-sand-500 mt-0.5">Empfängersegmente — aktivieren um in den Versand einzuschließen.</p>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setGroupModalOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-2 text-xs uppercase tracking-wide hover:bg-sand-100"
+                    className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
                   >
                     <Layers3 size={13} /> Gruppen pflegen
                   </button>
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-right">
-                    <p className="text-[10px] uppercase tracking-[0.24em] text-amber-700">Aufgelöst</p>
-                    <p className="text-lg font-semibold text-amber-900">{resolvedRecipients.length}</p>
-                  </div>
                 </div>
               </div>
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2 text-sand-700">
-                    <Layers3 size={15} />
-                    <p className="text-xs uppercase tracking-[0.24em] text-sand-500">Gruppen</p>
-                  </div>
-                  <div className="space-y-2">
-                    {groups.length ? (
-                      groups.map((group) => {
-                        const checked = draft.selected_group_ids.includes(group.id);
-                        return (
-                          <label
-                            key={group.id}
-                            className={`flex cursor-pointer items-start justify-between gap-3 rounded-2xl border px-3 py-3 ${
-                              checked
-                                ? "border-amber-300 bg-amber-50"
-                                : "border-sand-200 bg-sand-50 hover:bg-white"
-                            }`}
-                          >
-                            <div className="flex items-start gap-3">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => toggleDraftGroup(group.id)}
-                                className="mt-1 h-4 w-4"
-                              />
-                              <div>
-                                <p className="text-sm font-semibold text-sand-900">{group.name}</p>
-                                {group.description ? (
-                                  <p className="mt-1 text-xs text-sand-600">{group.description}</p>
-                                ) : null}
-                              </div>
-                            </div>
-                            <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500">
-                              {group.recipient_count}
-                            </span>
-                          </label>
-                        );
-                      })
-                    ) : (
-                      <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-5 text-sm text-sand-500">
-                        Noch keine Gruppen angelegt.
-                      </p>
-                    )}
-                  </div>
+              {groups.length ? (
+                <div className="flex flex-wrap gap-2">
+                  {groups.map((group) => {
+                    const checked = draft.selected_group_ids.includes(group.id);
+                    return (
+                      <button
+                        key={group.id}
+                        type="button"
+                        onClick={() => toggleDraftGroup(group.id)}
+                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors ${
+                          checked
+                            ? "border-amber-400 bg-amber-100 text-amber-900 font-semibold"
+                            : "border-sand-200 bg-white text-sand-700 hover:bg-sand-50"
+                        }`}
+                      >
+                        <span>{group.name}</span>
+                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${checked ? "bg-amber-200 text-amber-800" : "bg-sand-100 text-sand-500"}`}>
+                          {group.recipient_count}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-sand-700">
-                    <Users2 size={15} />
-                    <p className="text-xs uppercase tracking-[0.24em] text-sand-500">Einzelkunden</p>
-                  </div>
-                  <input
-                    value={recipientSearch}
-                    onChange={(event) => setRecipientSearch(event.target.value)}
-                    placeholder="Kunde oder E-Mail suchen"
-                    className="w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                  />
-                  <div className="max-h-72 overflow-auto rounded-2xl border border-sand-200 bg-sand-50">
-                    {filteredRecipientCustomers.map((customer) => {
-                      const checked = draft.selected_customer_ids.includes(customer.id);
-                      return (
-                        <label
-                          key={customer.id}
-                          className={`flex cursor-pointer items-center gap-3 border-b border-sand-200 px-3 py-2 last:border-b-0 ${
-                            checked
-                              ? "bg-amber-50"
-                              : "bg-transparent hover:bg-white"
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleDraftCustomer(customer.id)}
-                            className="h-4 w-4"
-                          />
-                          <div className="min-w-0 flex-1 truncate text-sm">
-                            <span className="font-semibold text-sand-900">{customer.name}</span>
-                            <span className="mx-2 text-sand-300">•</span>
-                            <span className={customerNewsletterEmail(customer) ? "text-sand-500" : "text-rose-600"}>
-                              {customerNewsletterEmail(customer) || "Keine E-Mail hinterlegt"}
-                            </span>
-                          </div>
-                          <span
-                            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                              customerNewsletterEmail(customer) ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
-                            }`}
-                          >
-                            {customerNewsletterEmail(customer) ? "Mail" : "Fehlt"}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_auto] lg:items-start">
-                <label className="block">
-                  <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Zusätzliche Empfänger</span>
-                  <textarea
-                    value={draft.manual_recipients}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, manual_recipients: event.target.value }))}
-                    rows={3}
-                    placeholder="Optional: externe Empfänger per Komma, Semikolon oder Zeilenumbruch"
-                    className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                  />
-                </label>
-                <div className="rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3">
-                  <p className="text-[10px] uppercase tracking-[0.24em] text-sand-500">Empfängerliste</p>
-                  <p className="mt-2 max-w-xs text-sm text-sand-700">
-                    {resolvedRecipients.length
-                      ? resolvedRecipients.join(", ")
-                      : "Noch keine E-Mail-Adresse aufgelöst."}
-                  </p>
-                </div>
-              </div>
-
-              {missingEmailCustomers.length ? (
-                <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                  Ohne E-Mail-Adresse in der Auswahl:{" "}
-                  {missingEmailCustomers.map((customer) => customer.name).join(", ")}
-                </div>
-              ) : null}
-
-              {optedOutCustomers.length ? (
-                <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  Vom Versand ausgeschlossen, da Newsletter im Kundenstamm deaktiviert ist:{" "}
-                  {optedOutCustomers.map((customer) => customer.name).join(", ")}
-                </div>
-              ) : null}
+              ) : (
+                <p className="rounded-xl border border-dashed border-sand-200 px-4 py-4 text-sm text-sand-400">
+                  Noch keine Gruppen — über "Gruppen pflegen" anlegen.
+                </p>
+              )}
             </div>
 
             <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-              <div className="mb-4 flex items-start justify-between gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
                 <div>
-                  <h2 className="text-lg font-display text-sand-900">Inhalt</h2>
-                  <p className="text-sm text-sand-600">
-                    Newsletter direkt formatieren oder HTML einfügen.
-                  </p>
+                  <h2 className="text-base font-semibold text-sand-900">Einzelkunden</h2>
+                  <p className="text-xs text-sand-500 mt-0.5">Direkt ergänzen — unabhängig von Gruppen.</p>
                 </div>
+                {draft.selected_customer_ids.length > 0 ? (
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                    {draft.selected_customer_ids.length} gewählt
+                  </span>
+                ) : null}
               </div>
-
-              <div className="grid gap-4">
-                <label className="block">
-                  <span className="text-xs uppercase tracking-[0.24em] text-sand-500">Betreff</span>
-                  <input
-                    value={draft.subject}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, subject: event.target.value }))}
-                    className="mt-2 w-full rounded-2xl border border-sand-200 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
-                    placeholder="Betreff für den E-Mail-Versand"
-                  />
-                </label>
-              </div>
-
-              <div className="mt-4 space-y-4">
-                <div>
-                  <p className="mb-2 text-xs uppercase tracking-[0.24em] text-sand-500">Newsletter-Inhalt</p>
-                  <NotesRichTextEditor
-                    value={draft.content}
-                    onChange={(value) => setDraft((prev) => ({ ...prev, content: value }))}
-                    minHeight="420px"
-                    placeholder="Newsletter hier formatieren oder direkt als HTML einfügen."
-                    allowHtmlSource
-                  />
-                  <p className="mt-2 text-xs text-sand-500">
-                    Der Inhalt wird direkt als HTML gespeichert. Im HTML-Modus kannst du Inhalte aus ChatGPT oder externen Vorlagen direkt einfügen.
-                  </p>
-                </div>
+              <input
+                value={recipientSearch}
+                onChange={(event) => setRecipientSearch(event.target.value)}
+                placeholder="Name oder E-Mail suchen…"
+                className="mb-2 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+              />
+              <div className="max-h-72 overflow-auto rounded-xl border border-sand-200 bg-sand-50">
+                {filteredRecipientCustomers.map((customer) => {
+                  const checked = draft.selected_customer_ids.includes(customer.id);
+                  const email = customerNewsletterEmail(customer);
+                  return (
+                    <label
+                      key={customer.id}
+                      className={`flex cursor-pointer items-center gap-3 border-b border-sand-100 px-3 py-2 last:border-b-0 ${checked ? "bg-amber-50" : "hover:bg-white"}`}
+                    >
+                      <input type="checkbox" checked={checked} onChange={() => toggleDraftCustomer(customer.id)} className="h-4 w-4 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-sand-900">{customer.name}</p>
+                        <p className={`truncate text-[11px] ${email ? "text-sand-500" : "text-rose-500"}`}>{email || "Keine E-Mail"}</p>
+                      </div>
+                      {!email ? <span className="shrink-0 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] text-rose-600">Fehlt</span> : null}
+                    </label>
+                  );
+                })}
               </div>
             </div>
-          </div>
 
-          <aside className="space-y-6">
-            <div className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div className="rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setManualRecipientsOpen((v) => !v)}
+                className="flex w-full items-center justify-between px-5 py-3.5 text-left hover:bg-sand-50"
+              >
                 <div>
-                  <h2 className="text-lg font-display text-sand-900">RSS-Import</h2>
-                  <p className="text-sm text-sand-600">Feeds laden, Artikel auswählen und direkt in den Newsletter übernehmen.</p>
+                  <p className="text-sm font-semibold text-sand-900">Manuelle Empfänger</p>
+                  <p className="text-xs text-sand-500">Externe Adressen per Komma oder Zeilenumbruch</p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setRssModalOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    <Rss size={13} /> Feeds pflegen
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => loadRssArticles(selectedRssFeedId)}
-                    className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
-                  >
-                    <RefreshCw size={13} /> Laden
-                  </button>
+                <span className="text-sand-400">{manualRecipientsOpen ? "▲" : "▼"}</span>
+              </button>
+              {manualRecipientsOpen ? (
+                <div className="border-t border-sand-100 px-5 pb-4 pt-3">
+                  <textarea
+                    value={draft.manual_recipients}
+                    onChange={(event) => setDraft((prev) => ({ ...prev, manual_recipients: event.target.value }))}
+                    rows={4}
+                    placeholder="name@domain.de, name2@domain.de"
+                    className="w-full rounded-xl border border-sand-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  />
                 </div>
-              </div>
+              ) : null}
+            </div>
 
-              <div className="mb-4 flex flex-wrap items-center gap-2">
+            {missingEmailCustomers.length ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                Ohne E-Mail: {missingEmailCustomers.map((c) => c.name).join(", ")}
+              </div>
+            ) : null}
+            {optedOutCustomers.length ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                Newsletter deaktiviert: {optedOutCustomers.map((c) => c.name).join(", ")}
+              </div>
+            ) : null}
+            {resolvedRecipients.length > 0 ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wide">{resolvedRecipients.length} E-Mail-Adressen aufgelöst</p>
+                <p className="mt-1 text-[11px] text-emerald-600 break-all leading-relaxed">
+                  {resolvedRecipients.slice(0, 8).join(", ")}{resolvedRecipients.length > 8 ? ` +${resolvedRecipients.length - 8} weitere` : ""}
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* ── RSS TAB ─────────────────────────────────────────────── */}
+        {newsletterTab === "rss" ? (
+          <div className="space-y-4">
+            {/* Toolbar */}
+            <div className="rounded-2xl border border-sand-200 bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setSelectedRssFeedId("all")}
-                  className={`rounded-full px-3 py-1.5 text-[11px] uppercase tracking-wide ${
-                    selectedRssFeedId === "all"
-                      ? "bg-amber-600 text-white"
-                      : "border border-sand-300 bg-white text-sand-600 hover:bg-sand-100"
-                  }`}
+                  onClick={() => { setSelectedRssFeedId("all"); loadRssArticles("all"); }}
+                  className={`rounded-full px-3 py-1.5 text-xs uppercase tracking-wide transition-colors ${selectedRssFeedId === "all" ? "bg-amber-600 text-white" : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"}`}
                 >
-                  Alle Feeds
+                  Alle
                 </button>
                 {rssFeeds.map((feed) => (
                   <button
                     key={feed.id}
                     type="button"
-                    onClick={() => setSelectedRssFeedId(feed.id)}
-                    className={`rounded-full px-3 py-1.5 text-[11px] uppercase tracking-wide ${
-                      Number(selectedRssFeedId) === feed.id
-                        ? "bg-amber-600 text-white"
-                        : "border border-sand-300 bg-white text-sand-600 hover:bg-sand-100"
-                    }`}
+                    onClick={() => { setSelectedRssFeedId(feed.id); loadRssArticles(feed.id); }}
+                    className={`rounded-full px-3 py-1.5 text-xs uppercase tracking-wide transition-colors ${Number(selectedRssFeedId) === feed.id ? "bg-amber-600 text-white" : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"}`}
                   >
                     {feed.name}
                   </button>
                 ))}
+                <button type="button" onClick={() => loadRssArticles(selectedRssFeedId)} className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-500 hover:bg-sand-100" title="Neu laden">
+                  <RefreshCw size={13} />
+                </button>
+                <button type="button" onClick={() => setRssModalOpen(true)} className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-600 hover:bg-sand-100">
+                  <Rss size={12} /> Feeds pflegen
+                </button>
               </div>
-
-              <div className="mb-4 flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-600">
-                  {selectedRssArticles.length} gewählt
-                </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedRssArticles.length > 0 ? (
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                    {selectedRssArticles.length} gewählt
+                  </span>
+                ) : null}
                 <select
                   value={aiTone}
                   onChange={(event) => setAiTone(event.target.value)}
-                  className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-sand-600"
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs text-sand-600"
                 >
                   <option value="sachlich">Sachlich</option>
                   <option value="freundlich">Freundlich</option>
                   <option value="direkt">Direkt</option>
                 </select>
+                <div className="h-4 w-px bg-sand-200" />
                 <button
                   type="button"
                   onClick={importSelectedRssArticles}
-                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
                 >
-                  <FilePlus2 size={13} /> Als Baustein
+                  <FilePlus2 size={12} /> Als Baustein
                 </button>
                 <button
                   type="button"
                   onClick={() => generateFromRssArticles("newsletter")}
                   disabled={isRssGenerating}
-                  className="inline-flex items-center gap-2 rounded-full bg-amber-600 px-3 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-amber-600 px-3 py-1.5 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:opacity-60"
                 >
-                  <Sparkles size={13} /> KI-Newsletter
+                  <Sparkles size={12} /> {isRssGenerating ? "Generiert…" : "KI-Newsletter"}
                 </button>
               </div>
+            </div>
 
-              {rssFeedResults.some((item) => item.status === "error") ? (
-                <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  Nicht alle Feeds konnten geladen werden. Fehlerhafte Quellen bleiben in der Feed-Pflege sichtbar.
+            {rssFeedResults.some((item) => item.status === "error") ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+                Nicht alle Feeds konnten geladen werden.
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
+              {isRssLoading ? (
+                <div className="rounded-2xl border border-dashed border-sand-200 bg-sand-50 px-4 py-8 text-center text-sm text-sand-400">
+                  RSS-Artikel werden geladen…
                 </div>
-              ) : null}
-
-              <div className="max-h-[540px] space-y-3 overflow-auto pr-1">
-                {isRssLoading ? (
-                  <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-6 text-sm text-sand-500">
-                    RSS-Artikel werden geladen…
-                  </p>
-                ) : rssArticles.length ? (
-                  rssArticles.map((article) => {
-                    const checked = selectedRssArticleIds.includes(article.id);
-                    return (
-                      <label
-                        key={article.id}
-                        className={`block cursor-pointer rounded-2xl border px-4 py-4 ${
-                          checked
-                            ? "border-amber-300 bg-amber-50"
-                            : "border-sand-200 bg-sand-50 hover:bg-white"
-                        }`}
-                      >
-                        <div className="flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleRssArticle(article.id)}
-                            className="mt-1 h-4 w-4"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500">
-                                {article.feed_name || "Feed"}
-                              </span>
-                              {article.published_at ? (
-                                <span className="text-[11px] uppercase tracking-wide text-sand-500">
-                                  {formatArticleDate(article.published_at)}
-                                </span>
-                              ) : null}
-                            </div>
-                            <p className="mt-2 text-sm font-semibold text-sand-900">{article.title}</p>
-                            {article.summary ? <p className="mt-2 text-sm leading-6 text-sand-700">{article.summary}</p> : null}
-                            <div className="mt-3 flex flex-wrap items-center gap-2">
-                              {article.link ? (
-                                <a
-                                  href={article.link}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  onClick={(event) => event.stopPropagation()}
-                                  className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                                >
-                                  <ExternalLink size={12} /> Artikel
-                                </a>
-                              ) : null}
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  setSelectedRssArticleIds([article.id]);
-                                  setDraft((prev) => ({
-                                    ...prev,
-                                    subject: prev.subject || article.title || "",
-                                    content: `${prev.content || ""}${prev.content ? "\n" : ""}${buildArticleBlock(article)}`.trim()
-                                  }));
-                                  setToast("RSS-Artikel in Entwurf übernommen.");
-                                }}
-                                className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-                              >
-                                <FilePlus2 size={12} /> Direkt übernehmen
-                              </button>
-                            </div>
-                          </div>
+              ) : rssArticles.length ? (
+                rssArticles.map((article) => {
+                  const checked = selectedRssArticleIds.includes(article.id);
+                  return (
+                    <label
+                      key={article.id}
+                      className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-3 py-2.5 transition-colors ${checked ? "border-amber-300 bg-amber-50" : "border-sand-200 bg-white hover:bg-sand-50"}`}
+                    >
+                      <input type="checkbox" checked={checked} onChange={() => toggleRssArticle(article.id)} className="mt-1 h-4 w-4 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2 mb-0.5">
+                          <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500">{article.feed_name || "Feed"}</span>
+                          {article.published_at ? <span className="text-[10px] text-sand-400 shrink-0">{formatArticleDate(article.published_at)}</span> : null}
                         </div>
-                      </label>
-                    );
-                  })
-                ) : (
-                  <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-6 text-sm text-sand-500">
-                    Keine Artikel gefunden. Feed prüfen oder neu laden.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-display text-sand-900">Live Preview</h2>
-                  <p className="text-sm text-sand-600">Eigenständige Newsletter-Vorschau.</p>
+                        <p className="text-sm font-semibold text-sand-900 leading-snug">{article.title}</p>
+                        {article.summary ? (
+                          <p className="mt-1 text-xs text-sand-600 leading-relaxed line-clamp-2">{article.summary}</p>
+                        ) : null}
+                      </div>
+                      <div className="flex shrink-0 flex-col gap-1.5 pt-0.5">
+                        {article.link ? (
+                          <a href={article.link} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-500 hover:bg-sand-100" title="Artikel öffnen">
+                            <ExternalLink size={12} />
+                          </a>
+                        ) : null}
+                        <button
+                          type="button"
+                          title="Direkt in Entwurf übernehmen"
+                          onClick={(e) => {
+                            e.preventDefault(); e.stopPropagation();
+                            setDraft((prev) => ({
+                              ...prev,
+                              subject: prev.subject || article.title || "",
+                              content: `${prev.content || ""}${prev.content ? "\n" : ""}${buildArticleBlock(article)}`.trim()
+                            }));
+                            setToast("Artikel übernommen.");
+                          }}
+                          className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-500 hover:bg-sand-100"
+                        >
+                          <FilePlus2 size={12} />
+                        </button>
+                      </div>
+                    </label>
+                  );
+                })
+              ) : (
+                <div className="rounded-2xl border border-dashed border-sand-200 bg-sand-50 px-4 py-8 text-center text-sm text-sand-400">
+                  Keine Artikel — Feed wählen und laden.
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPreviewModal({
-                      open: true,
-                      title: draft.subject || "Newsletter Vorschau",
-                      html: previewHtml
-                    })
-                  }
-                  className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-3 py-1.5 text-xs uppercase tracking-wide hover:bg-sand-100"
-                >
-                  <Eye size={13} /> Groß
-                </button>
-              </div>
-              <div className="overflow-hidden rounded-2xl border border-sand-200 bg-white">
-                <div className="max-h-[820px] overflow-auto" dangerouslySetInnerHTML={{ __html: previewHtml }} />
-              </div>
+              )}
             </div>
-          </aside>
-        </section>
+          </div>
+        ) : null}
 
-        <section>
-          <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-display text-sand-900">Archiv</h2>
-                <p className="text-sm text-sand-600">Gespeicherte Newsletter separat verwalten.</p>
-              </div>
-              <div className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-600">
-                <Archive size={12} className="mr-1 inline" />
-                {newsletters.length}
-              </div>
-            </div>
-
+        {/* ── ARCHIV TAB ──────────────────────────────────────────── */}
+        {newsletterTab === "archive" ? (
+          <div className="space-y-2">
             {isLoading ? (
-              <p className="text-sm text-sand-500">Lade Newsletter…</p>
+              <p className="text-sm text-sand-500 py-4">Lade Newsletter…</p>
             ) : newsletters.length ? (
-              <div className="space-y-3">
-                {newsletters.map((item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-sand-900">
-                          {item.subject || item.title || "Newsletter"}
-                        </p>
-                        <p className="mt-1 text-xs text-sand-500">
-                          Betreff: {item.subject || "ohne Betreff"}
-                        </p>
-                        <p className="mt-1 text-xs text-sand-500">
-                          Empfänger {Number(item.recipient_count || 0)} · Versand {formatDateTime(item.sent_at)}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handlePreviewNewsletter(item)}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                        >
-                          <Eye size={12} /> Vorschau
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleEditNewsletter(item)}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                        >
-                          <Pencil size={12} /> Laden
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openSendComposer(item)}
-                          className="inline-flex items-center gap-1 rounded-full border border-sand-300 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                        >
-                          <Send size={12} /> Senden
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteNewsletter(item.id)}
-                          className="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs uppercase tracking-wide text-rose-700 hover:bg-rose-100"
-                        >
-                          <Trash2 size={12} /> Löschen
-                        </button>
-                      </div>
+              newsletters.map((item) => (
+                <div key={item.id} className="flex items-center gap-3 rounded-2xl border border-sand-200 bg-white px-4 py-3 hover:bg-sand-50">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-sand-900 truncate">{item.subject || item.title || "Newsletter"}</p>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                      {item.sent_at ? (
+                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700">Gesendet</span>
+                      ) : (
+                        <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sand-500">Entwurf</span>
+                      )}
+                      <span className="text-[11px] text-sand-500">{formatDateTime(item.sent_at)}</span>
+                      {Number(item.recipient_count || 0) > 0 ? (
+                        <span className="text-[11px] text-sand-400">{Number(item.recipient_count)} Empfänger</span>
+                      ) : null}
                     </div>
                   </div>
-                ))}
-              </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button type="button" onClick={() => handlePreviewNewsletter(item)} title="Vorschau" className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-500 hover:bg-sand-100">
+                      <Eye size={13} />
+                    </button>
+                    <button type="button" onClick={() => { handleEditNewsletter(item); setNewsletterTab("draft"); }} title="In Entwurf laden" className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-500 hover:bg-sand-100">
+                      <Pencil size={13} />
+                    </button>
+                    <button type="button" onClick={() => openSendComposer(item)} title="Senden" className="rounded-full border border-sand-200 bg-white p-1.5 text-sand-500 hover:bg-sand-100">
+                      <Send size={13} />
+                    </button>
+                    <button type="button" onClick={() => handleDeleteNewsletter(item.id)} title="Löschen" className="rounded-full border border-rose-100 bg-white p-1.5 text-rose-400 hover:bg-rose-50">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))
             ) : (
-              <p className="rounded-2xl border border-dashed border-sand-300 bg-sand-50 px-4 py-6 text-sm text-sand-500">
+              <div className="rounded-2xl border border-dashed border-sand-200 bg-sand-50 px-4 py-10 text-center text-sm text-sand-400">
                 Noch keine Newsletter gespeichert.
-              </p>
+              </div>
             )}
           </div>
-        </section>
+        ) : null}
+
       </main>
 
       <EmailComposerModal

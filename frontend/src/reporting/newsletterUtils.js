@@ -76,7 +76,7 @@ export const buildNewsletterHtml = (draft = {}) => {
     ? `<div style="font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:30px;font-weight:700;color:#000000;mso-line-height-rule:exactly;">${intro}</div>`
     : "";
   const bodyBlock = body
-    ? `<div style="margin-top:18px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:26px;color:#000000;mso-line-height-rule:exactly;">${body}</div>`
+    ? `<div style="margin-top:18px;font-family:'Segoe UI',Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#222222;mso-line-height-rule:exactly;">${body}</div>`
     : "";
   const closingBlock = closing
     ? `<div style="margin-top:24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:26px;color:#000000;mso-line-height-rule:exactly;">${closing}</div>`
