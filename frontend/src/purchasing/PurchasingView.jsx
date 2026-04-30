@@ -51,6 +51,12 @@ const normalizeStatus = (item) => {
   return item?.done ? "received" : "open";
 };
 
+const normalizeProjectMaterialStatus = (value) => {
+  const status = String(value || "").trim().toLowerCase();
+  if (status === "ordered" || status === "received") return status;
+  return "open";
+};
+
 const sanitizeTrackingNumber = (value) => String(value || "").replace(/\s+/g, "").toUpperCase();
 
 const resolveTrackingInfo = (value) => {
@@ -190,6 +196,8 @@ const fetchJson = async (url, options) => {
 
 const api = {
   list: () => fetchJson(`${API}/purchasing_items`),
+  listProjectFolders: () => fetchJson(`${API}/project_folders`),
+  getProjectFolder: (id) => fetchJson(`${API}/project_folders/${id}`),
   lookupTrackingStatus: (trackingNumbers, options = {}) =>
     fetchJson(`${API}/purchasing_tracking_status`, {
       method: "POST",
@@ -216,6 +224,7 @@ const api = {
 
 export default function PurchasingView() {
   const [items, setItems] = useState([]);
+  const [projectFolders, setProjectFolders] = useState([]);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
   const [customerOptions, setCustomerOptions] = useState([]);
   const [editingCell, setEditingCell] = useState(null);
@@ -229,7 +238,7 @@ export default function PurchasingView() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.allSettled([api.list(), fetchJson(`${API}/customers`)]).then(([itemsRes, customersRes]) => {
+    Promise.allSettled([api.list(), fetchJson(`${API}/customers`), api.listProjectFolders()]).then(async ([itemsRes, customersRes, foldersRes]) => {
       if (cancelled) return;
       if (itemsRes.status === "fulfilled" && Array.isArray(itemsRes.value)) {
         setItems(itemsRes.value);
@@ -246,6 +255,20 @@ export default function PurchasingView() {
           })
           .filter(Boolean);
         setCustomerOptions(Array.from(new Set(options)).sort((a, b) => a.localeCompare(b, "de")));
+      }
+      if (foldersRes.status === "fulfilled" && Array.isArray(foldersRes.value)) {
+        const detailed = await Promise.all(
+          foldersRes.value.map(async (folder) => {
+            try {
+              return await api.getProjectFolder(folder.id);
+            } catch (error) {
+              return null;
+            }
+          })
+        );
+        if (!cancelled) {
+          setProjectFolders(detailed.filter(Boolean));
+        }
       }
     });
     return () => {
@@ -327,33 +350,57 @@ export default function PurchasingView() {
     );
   }, [items]);
 
+  const matchesFilters = (item, customerNeedle, queryNeedle) => {
+    if (customerNeedle) {
+      const customer = String(item.customer || "").toLowerCase();
+      if (!customer.includes(customerNeedle)) return false;
+    }
+    if (queryNeedle) {
+      const haystack = [
+        item.title,
+        item.customer,
+        item.sourceUrl,
+        item.quantity,
+        item.remark,
+        item.trackingNumber
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      if (!haystack.includes(queryNeedle)) return false;
+    }
+    return true;
+  };
+
   const filteredItems = useMemo(() => {
     const customerNeedle = customerFilter.trim().toLowerCase();
     const queryNeedle = queryFilter.trim().toLowerCase();
 
-    return items.filter((item) => {
-      if (customerNeedle) {
-        const customer = String(item.customer || "").toLowerCase();
-        if (!customer.includes(customerNeedle)) return false;
-      }
-
-      if (queryNeedle) {
-        const haystack = [
-          item.title,
-          item.customer,
-          item.sourceUrl,
-          item.quantity,
-          item.remark,
-          item.trackingNumber
-        ]
-          .map((value) => String(value || "").toLowerCase())
-          .join(" ");
-        if (!haystack.includes(queryNeedle)) return false;
-      }
-
-      return true;
-    });
+    return items.filter((item) => matchesFilters(item, customerNeedle, queryNeedle));
   }, [items, customerFilter, queryFilter]);
+
+  const orderedProjectMaterials = useMemo(() => {
+    const customerNeedle = customerFilter.trim().toLowerCase();
+    const queryNeedle = queryFilter.trim().toLowerCase();
+    return projectFolders.flatMap((folder) => {
+      const materials = Array.isArray(folder?.content?.materials) ? folder.content.materials : [];
+      return materials
+        .filter((item) => normalizeProjectMaterialStatus(item?.status) === "ordered")
+        .map((item) => ({
+          id: `project_material_${folder.id}_${item.id}`,
+          sourceType: "project_material",
+          customer: folder.customer || "",
+          title: item.title || "",
+          sourceUrl: item.link || "",
+          quantity: [item.quantity || "1", item.unit || "Stk."].filter(Boolean).join(" "),
+          remark: `Projektmappe: ${folder.title || "Projekt"}`,
+          trackingNumber: "",
+          purchasePrice: item.price || "",
+          salePrice: "",
+          status: "ordered"
+        }))
+        .filter((item) => matchesFilters(item, customerNeedle, queryNeedle));
+    });
+  }, [projectFolders, customerFilter, queryFilter]);
 
   const openItems = useMemo(
     () => filteredItems.filter((item) => normalizeStatus(item) === "open"),
@@ -474,6 +521,7 @@ export default function PurchasingView() {
 
   const renderRows = (rows, status) =>
     rows.map((item) => {
+      const isProjectMaterial = item.sourceType === "project_material";
       const purchase = parsePrice(item.purchasePrice);
       const sale = parsePrice(item.salePrice);
       const margin = sale - purchase;
@@ -490,7 +538,11 @@ export default function PurchasingView() {
         <tr key={item.id} className="border-b border-sand-200 align-top">
           <td className="px-3 py-1.5">
             <div className="flex items-center gap-1.5">
-              {status === "open" ? (
+              {isProjectMaterial ? (
+                <span className="inline-flex items-center gap-1 rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-[10px] uppercase tracking-wide text-sky-700">
+                  <PackageCheck size={11} /> Projekt
+                </span>
+              ) : status === "open" ? (
                 <button
                   type="button"
                   onClick={() => updateItem(item.id, "status", "ordered")}
@@ -536,8 +588,8 @@ export default function PurchasingView() {
             <textarea
               value={item.title || ""}
               onChange={(event) => updateItem(item.id, "title", event.target.value)}
-              readOnly={!isEditing(item.id, "title")}
-              onDoubleClick={(event) => handleCellDoubleClick(item.id, "title", event)}
+              readOnly={isProjectMaterial || !isEditing(item.id, "title")}
+              onDoubleClick={(event) => !isProjectMaterial && handleCellDoubleClick(item.id, "title", event)}
               onBlur={() => handleCellBlur(item.id, "title")}
               rows={2}
               className={`w-full resize-none rounded-md border-0 bg-transparent px-1 py-1 text-sm leading-tight focus:outline-none ${
@@ -551,8 +603,8 @@ export default function PurchasingView() {
               <input
                 value={item.sourceUrl || ""}
                 onChange={(event) => updateItem(item.id, "sourceUrl", event.target.value)}
-                readOnly={!isEditing(item.id, "sourceUrl")}
-                onDoubleClick={(event) => handleCellDoubleClick(item.id, "sourceUrl", event)}
+                readOnly={isProjectMaterial || !isEditing(item.id, "sourceUrl")}
+                onDoubleClick={(event) => !isProjectMaterial && handleCellDoubleClick(item.id, "sourceUrl", event)}
                 onBlur={() => handleCellBlur(item.id, "sourceUrl")}
                 className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
                 placeholder="https://..."
@@ -573,39 +625,39 @@ export default function PurchasingView() {
             </div>
           </td>
           <td className="px-3 py-1.5">
-            <input
-              value={item.customer || ""}
-              onChange={(event) => updateItem(item.id, "customer", event.target.value)}
-              readOnly={!isEditing(item.id, "customer")}
-              onDoubleClick={(event) => handleCellDoubleClick(item.id, "customer", event)}
-              onBlur={() => handleCellBlur(item.id, "customer")}
-              list={CUSTOMER_DATALIST_ID}
-              placeholder="Kunde"
+              <input
+                value={item.customer || ""}
+                onChange={(event) => updateItem(item.id, "customer", event.target.value)}
+                readOnly={isProjectMaterial || !isEditing(item.id, "customer")}
+                onDoubleClick={(event) => !isProjectMaterial && handleCellDoubleClick(item.id, "customer", event)}
+                onBlur={() => handleCellBlur(item.id, "customer")}
+                list={CUSTOMER_DATALIST_ID}
+                placeholder="Kunde"
               className="w-full rounded-md border-0 bg-transparent px-1 py-1 text-sm focus:outline-none"
               title="Doppelklick zum Bearbeiten"
             />
           </td>
           <td className="px-2 py-1.5">
-            <input
-              value={item.quantity || ""}
-              onChange={(event) => updateItem(item.id, "quantity", event.target.value)}
-              readOnly={!isEditing(item.id, "quantity")}
-              onDoubleClick={(event) => handleCellDoubleClick(item.id, "quantity", event)}
-              onBlur={() => handleCellBlur(item.id, "quantity")}
-              className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
-              placeholder="1"
+              <input
+                value={item.quantity || ""}
+                onChange={(event) => updateItem(item.id, "quantity", event.target.value)}
+                readOnly={isProjectMaterial || !isEditing(item.id, "quantity")}
+                onDoubleClick={(event) => !isProjectMaterial && handleCellDoubleClick(item.id, "quantity", event)}
+                onBlur={() => handleCellBlur(item.id, "quantity")}
+                className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
+                placeholder="1"
               title="Doppelklick zum Bearbeiten"
             />
           </td>
           <td className="px-2 py-1.5">
-            <input
-              value={item.remark || ""}
-              onChange={(event) => updateItem(item.id, "remark", event.target.value)}
-              readOnly={!isEditing(item.id, "remark")}
-              onDoubleClick={(event) => handleCellDoubleClick(item.id, "remark", event)}
-              onBlur={() => handleCellBlur(item.id, "remark")}
-              className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
-              placeholder="Bemerkung"
+              <input
+                value={item.remark || ""}
+                onChange={(event) => updateItem(item.id, "remark", event.target.value)}
+                readOnly={isProjectMaterial || !isEditing(item.id, "remark")}
+                onDoubleClick={(event) => !isProjectMaterial && handleCellDoubleClick(item.id, "remark", event)}
+                onBlur={() => handleCellBlur(item.id, "remark")}
+                className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
+                placeholder="Bemerkung"
               title="Doppelklick zum Bearbeiten"
             />
           </td>
@@ -616,8 +668,8 @@ export default function PurchasingView() {
                 onChange={(event) =>
                   updateItem(item.id, "trackingNumber", sanitizeTrackingNumber(event.target.value))
                 }
-                readOnly={!isEditing(item.id, "trackingNumber")}
-                onDoubleClick={(event) => handleCellDoubleClick(item.id, "trackingNumber", event)}
+                readOnly={isProjectMaterial || !isEditing(item.id, "trackingNumber")}
+                onDoubleClick={(event) => !isProjectMaterial && handleCellDoubleClick(item.id, "trackingNumber", event)}
                 onBlur={() => handleCellBlur(item.id, "trackingNumber")}
                 className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 text-sm focus:outline-none"
                 placeholder={status === "ordered" ? "Tracking #" : "Optional"}
@@ -700,8 +752,8 @@ export default function PurchasingView() {
               <input
                 value={item.purchasePrice || ""}
                 onChange={(event) => updateItem(item.id, "purchasePrice", event.target.value)}
-                readOnly={!isEditing(item.id, "purchasePrice")}
-                onDoubleClick={(event) => handleCellDoubleClick(item.id, "purchasePrice", event)}
+                readOnly={isProjectMaterial || !isEditing(item.id, "purchasePrice")}
+                onDoubleClick={(event) => !isProjectMaterial && handleCellDoubleClick(item.id, "purchasePrice", event)}
                 onBlur={() => handleCellBlur(item.id, "purchasePrice")}
                 className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 pr-5 text-sm focus:outline-none"
                 placeholder="0,00"
@@ -717,8 +769,8 @@ export default function PurchasingView() {
               <input
                 value={item.salePrice || ""}
                 onChange={(event) => updateItem(item.id, "salePrice", event.target.value)}
-                readOnly={!isEditing(item.id, "salePrice")}
-                onDoubleClick={(event) => handleCellDoubleClick(item.id, "salePrice", event)}
+                readOnly={isProjectMaterial || !isEditing(item.id, "salePrice")}
+                onDoubleClick={(event) => !isProjectMaterial && handleCellDoubleClick(item.id, "salePrice", event)}
                 onBlur={() => handleCellBlur(item.id, "salePrice")}
                 className="w-full rounded-md border-0 bg-transparent px-0.5 py-1 pr-5 text-sm focus:outline-none"
                 placeholder="0,00"
@@ -737,15 +789,17 @@ export default function PurchasingView() {
             {toCurrency(margin)}
           </td>
           <td className="px-3 py-1.5">
-            <button
-              type="button"
-              onClick={() => removeItem(item.id)}
-              className="inline-flex items-center justify-center rounded-lg border border-sand-200 p-2 text-sand-500 hover:bg-sand-100"
-              title="Eintrag löschen"
-              aria-label="Eintrag löschen"
-            >
-              <Trash2 size={14} />
-            </button>
+            {isProjectMaterial ? null : (
+              <button
+                type="button"
+                onClick={() => removeItem(item.id)}
+                className="inline-flex items-center justify-center rounded-lg border border-sand-200 p-2 text-sand-500 hover:bg-sand-100"
+                title="Eintrag löschen"
+                aria-label="Eintrag löschen"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
           </td>
         </tr>
       );
@@ -1072,7 +1126,7 @@ export default function PurchasingView() {
         {renderSectionTable(
           "Bestellt",
           "Container",
-          orderedItems,
+          [...orderedItems, ...orderedProjectMaterials],
           "ordered",
           <Truck size={16} />
         )}

@@ -16,6 +16,7 @@ import math
 import time
 import uuid
 import threading
+import asyncio
 import ast
 import json
 import json as jsonlib
@@ -29,6 +30,7 @@ import secrets
 import gzip
 import imaplib
 import ssl
+from queue import Queue, Empty
 from html import escape
 from html import unescape
 from email import policy
@@ -664,6 +666,14 @@ class VisionBoardNote(Base):
     rotation = Column(Float, default=0.0)
     locked = Column(Boolean, default=False)
     created_at = Column(BigInteger, default=lambda: int(time.time() * 1000))
+    updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000), index=True)
+
+
+class VisionBoardDocument(Base):
+    __tablename__ = "vision_board_documents"
+
+    key = Column(String, primary_key=True)
+    content = Column(Text, default="{}")
     updated_at = Column(BigInteger, default=lambda: int(time.time() * 1000), index=True)
 
 
@@ -2231,6 +2241,7 @@ class ProjectFolderCreate(BaseModel):
     status: Optional[str] = "yellow"
     priority: Optional[str] = "medium"
     source_mode: Optional[str] = "empty"
+    project_tag: Optional[str] = "kundenprojekt"
     current_state: Optional[str] = ""
     next_step: Optional[str] = ""
     content: Optional[Dict[str, Any]] = None
@@ -2243,6 +2254,7 @@ class ProjectFolderUpdate(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None
     source_mode: Optional[str] = None
+    project_tag: Optional[str] = None
     current_state: Optional[str] = None
     next_step: Optional[str] = None
     content: Optional[Dict[str, Any]] = None
@@ -2254,6 +2266,7 @@ class ProjectFolderBootstrapRequest(BaseModel):
     customer: Optional[str] = ""
     owner: Optional[str] = ""
     description: Optional[str] = ""
+    project_tag: Optional[str] = "kundenprojekt"
     block_keys: Optional[List[str]] = None
     template_key: Optional[str] = ""
 
@@ -2264,6 +2277,29 @@ class ProjectFolderAiAssistRequest(BaseModel):
     project_folder: Optional[Dict[str, Any]] = None
     stream_id: Optional[str] = ""
     context: Optional[str] = ""
+
+
+class ProjectCatalogBlockItem(BaseModel):
+    key: str
+    label: Optional[str] = ""
+    summary: Optional[str] = ""
+    tasks: Optional[List[str]] = None
+    checklist: Optional[List[str]] = None
+    risks: Optional[List[str]] = None
+    questions: Optional[List[str]] = None
+    gantt: Optional[List[str]] = None
+    positions: Optional[List[str]] = None
+
+
+class ProjectCatalogTemplateItem(BaseModel):
+    key: str
+    label: Optional[str] = ""
+    blocks: Optional[List[str]] = None
+
+
+class ProjectFolderCatalogUpdateRequest(BaseModel):
+    blocks: Optional[List[ProjectCatalogBlockItem]] = None
+    templates: Optional[List[ProjectCatalogTemplateItem]] = None
 
 
 class DeliveryNoteCreate(BaseModel):
@@ -2388,6 +2424,17 @@ class VisionBoardNoteUpdate(BaseModel):
     height: Optional[float] = None
     rotation: Optional[float] = None
     locked: Optional[bool] = None
+
+
+class VisionBoardDocumentUpdate(BaseModel):
+    content: Optional[Dict[str, Any]] = None
+
+
+class VisionBoardEventPush(BaseModel):
+    board: str
+    event: Optional[str] = "update"
+    payload: Optional[Dict[str, Any]] = None
+    client_id: Optional[str] = ""
 
 
 class PurchasingItemCreate(BaseModel):
@@ -3623,6 +3670,7 @@ PROJECT_FOLDER_AI_ACTIONS = {
     "customer_mail",
     "offer_basis",
     "handover",
+    "invoice_positions",
 }
 
 PROJECT_BLOCK_LIBRARY: Dict[str, Dict[str, Any]] = {
@@ -3801,6 +3849,61 @@ PROJECT_EXPORT_PROFILES: List[Dict[str, Any]] = [
     {"key": "management_summary", "label": "Management-Zusammenfassung", "defaults": {"include_internal_notes": False, "include_risks": True, "include_tasks": False, "include_checklists": False, "include_gantt": True, "include_offer_positions": True, "customer_view": True}},
 ]
 
+PROJECT_FOLDER_CATALOG_PATH = os.path.join(os.path.dirname(__file__), "project_folder_catalog.json")
+
+
+def _project_catalog_defaults() -> Dict[str, Any]:
+    return {
+        "blocks": {key: dict(value or {}) for key, value in PROJECT_BLOCK_LIBRARY.items()},
+        "templates": {key: dict(value or {}) for key, value in PROJECT_TEMPLATE_LIBRARY.items()},
+    }
+
+
+def _normalize_project_catalog_key(value: Any, fallback: str = "vorlage") -> str:
+    text_value = unicodedata.normalize("NFKD", str(value or "").strip().lower())
+    text_value = "".join(ch for ch in text_value if not unicodedata.combining(ch))
+    text_value = re.sub(r"[^a-z0-9]+", "_", text_value).strip("_")
+    return text_value or fallback
+
+
+def _load_project_catalog() -> Dict[str, Any]:
+    defaults = _project_catalog_defaults()
+    if not os.path.exists(PROJECT_FOLDER_CATALOG_PATH):
+        return defaults
+    try:
+        with open(PROJECT_FOLDER_CATALOG_PATH, "r", encoding="utf-8") as handle:
+            raw_data = json.load(handle)
+        if not isinstance(raw_data, dict):
+            return defaults
+        raw_blocks = raw_data.get("blocks") if isinstance(raw_data.get("blocks"), dict) else {}
+        raw_templates = raw_data.get("templates") if isinstance(raw_data.get("templates"), dict) else {}
+        return {
+            "blocks": {key: dict(value or {}) for key, value in raw_blocks.items()},
+            "templates": {key: dict(value or {}) for key, value in raw_templates.items()},
+        }
+    except Exception:
+        return defaults
+
+
+def _save_project_catalog(payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = {
+        "blocks": payload.get("blocks") if isinstance(payload.get("blocks"), dict) else {},
+        "templates": payload.get("templates") if isinstance(payload.get("templates"), dict) else {},
+    }
+    with open(PROJECT_FOLDER_CATALOG_PATH, "w", encoding="utf-8") as handle:
+        json.dump(normalized, handle, ensure_ascii=False, indent=2)
+    return normalized
+
+
+def _get_project_block_library() -> Dict[str, Dict[str, Any]]:
+    catalog = _load_project_catalog()
+    return catalog.get("blocks") if isinstance(catalog.get("blocks"), dict) else {}
+
+
+def _get_project_template_library() -> Dict[str, Dict[str, Any]]:
+    catalog = _load_project_catalog()
+    return catalog.get("templates") if isinstance(catalog.get("templates"), dict) else {}
+
 
 def _project_uuid() -> str:
     return str(uuid.uuid4())
@@ -3826,6 +3929,32 @@ def _normalize_project_priority(value: Any) -> str:
     return raw if raw in PROJECT_FOLDER_PRIORITY_VALUES else "medium"
 
 
+PROJECT_FOLDER_TAGS = {
+    "intern": {"label": "Intern", "color": "slate"},
+    "kundenprojekt": {"label": "Kundenprojekt", "color": "sky"},
+    "wartung": {"label": "Wartung", "color": "emerald"},
+    "vorverkauf": {"label": "Vorverkauf", "color": "amber"},
+    "sonstiges": {"label": "Sonstiges", "color": "violet"},
+}
+
+
+def _normalize_project_folder_tag(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace(" ", "_")
+    return raw if raw in PROJECT_FOLDER_TAGS else ""
+
+
+def _project_folder_tag_meta(value: Any) -> Dict[str, str]:
+    tag = _normalize_project_folder_tag(value)
+    if not tag:
+        return {"key": "", "label": "", "color": ""}
+    meta = PROJECT_FOLDER_TAGS.get(tag) or {}
+    return {
+        "key": tag,
+        "label": str(meta.get("label") or tag.replace("_", " ").title()).strip(),
+        "color": str(meta.get("color") or "sand").strip(),
+    }
+
+
 def _new_project_item(title: Any = "", **extra: Any) -> Dict[str, Any]:
     payload = {"id": _project_uuid(), "title": str(title or "").strip()}
     payload.update(extra)
@@ -3833,7 +3962,7 @@ def _new_project_item(title: Any = "", **extra: Any) -> Dict[str, Any]:
 
 
 def _build_project_stream(block_key: str, owner: str = "") -> Dict[str, Any]:
-    block = PROJECT_BLOCK_LIBRARY.get(block_key) or {"label": str(block_key or "Arbeitsstrang").strip() or "Arbeitsstrang"}
+    block = _get_project_block_library().get(block_key) or {"label": str(block_key or "Arbeitsstrang").strip() or "Arbeitsstrang"}
     return {
         "id": _project_uuid(),
         "block_key": block_key,
@@ -3884,6 +4013,18 @@ def _empty_project_content(owner: str = "") -> Dict[str, Any]:
     }
 
 
+def _ensure_project_content_meta(content: Dict[str, Any], owner: str = "", project_tag: str = "") -> Dict[str, Any]:
+    payload = content if isinstance(content, dict) else _empty_project_content(owner=owner)
+    payload["meta"] = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    payload["meta"]["owner"] = str(payload["meta"].get("owner") or owner or "").strip()
+    normalized_tag = _normalize_project_folder_tag(project_tag or payload["meta"].get("project_tag"))
+    if normalized_tag:
+        payload["meta"]["project_tag"] = normalized_tag
+    elif "project_tag" in payload["meta"]:
+        payload["meta"].pop("project_tag", None)
+    return payload
+
+
 def _guess_project_block_keys(description: str) -> List[str]:
     text_value = unicodedata.normalize("NFKD", str(description or "").lower())
     text_value = "".join(ch for ch in text_value if not unicodedata.combining(ch))
@@ -3921,13 +4062,17 @@ def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, 
     owner = str(data.owner or "").strip()
     description = str(data.description or "").strip()
     content = _empty_project_content(owner=owner)
+    project_tag = _normalize_project_folder_tag(data.project_tag or "kundenprojekt") or "kundenprojekt"
+    content = _ensure_project_content_meta(content, owner=owner, project_tag=project_tag)
     selected_blocks: List[str] = []
     ai_notes: List[str] = []
+    block_library = _get_project_block_library()
+    template_library = _get_project_template_library()
     if mode == "template":
-        template = PROJECT_TEMPLATE_LIBRARY.get(str(data.template_key or "").strip())
+        template = template_library.get(str(data.template_key or "").strip())
         selected_blocks = list(template.get("blocks") or []) if template else []
     elif mode == "blocks":
-        selected_blocks = [item for item in (data.block_keys or []) if item in PROJECT_BLOCK_LIBRARY]
+        selected_blocks = [item for item in (data.block_keys or []) if item in block_library]
     elif mode == "ai":
         selected_blocks = _guess_project_block_keys(description)
         ai_notes = [
@@ -3951,6 +4096,7 @@ def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, 
         "status": "yellow",
         "priority": "medium",
         "source_mode": mode,
+        "project_tag": project_tag,
         "current_state": content["overview"].get("current_status") or "",
         "next_step": content["overview"].get("next_step") or "",
         "content": content,
@@ -3960,6 +4106,7 @@ def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, 
 def _project_folder_summary_from_content(content: Dict[str, Any]) -> Dict[str, Any]:
     streams = content.get("streams") if isinstance(content.get("streams"), list) else []
     task_count = 0
+    done_task_count = 0
     open_task_count = 0
     checklist_count = 0
     risk_count = 0
@@ -3971,16 +4118,18 @@ def _project_folder_summary_from_content(content: Dict[str, Any]) -> Dict[str, A
         if not isinstance(stream, dict):
             continue
         owners.add(str(stream.get("owner") or "").strip())
-        progress_total += float(stream.get("progress") or 0.0)
         tasks = stream.get("tasks") if isinstance(stream.get("tasks"), list) else []
         task_count += len(tasks)
+        done_task_count += len([item for item in tasks if str(item.get("status") or "open").strip().lower() == "done"])
         open_task_count += len([item for item in tasks if str(item.get("status") or "open").strip().lower() != "done"])
+        if not tasks:
+            progress_total += float(stream.get("progress") or 0.0)
         checklist_count += len(stream.get("checklists") or [])
         risk_count += len(stream.get("risks") or [])
         blocker_count += len(stream.get("blockers") or [])
         decision_count += len(stream.get("decisions") or [])
     stream_count = len(streams)
-    progress = int(round(progress_total / stream_count)) if stream_count else 0
+    progress = int(round((done_task_count / task_count) * 100)) if task_count else (int(round(progress_total / stream_count)) if stream_count else 0)
     return {
         "stream_count": stream_count,
         "task_count": task_count,
@@ -3996,6 +4145,10 @@ def _project_folder_summary_from_content(content: Dict[str, Any]) -> Dict[str, A
 
 def serialize_project_folder(folder: ProjectFolder, include_content: bool = True) -> Dict[str, Any]:
     content = _parse_project_content(folder.content_json)
+    content_meta = content.get("meta") if isinstance(content.get("meta"), dict) else {}
+    archive_meta = content.get("archive") if isinstance(content.get("archive"), dict) else {}
+    invoices = content.get("invoices") if isinstance(content.get("invoices"), list) else []
+    tag_meta = _project_folder_tag_meta(content_meta.get("project_tag"))
     payload = {
         "id": folder.id,
         "title": folder.title,
@@ -4004,10 +4157,16 @@ def serialize_project_folder(folder: ProjectFolder, include_content: bool = True
         "status": _normalize_project_status(folder.status),
         "priority": _normalize_project_priority(folder.priority),
         "source_mode": folder.source_mode or "empty",
+        "project_tag": tag_meta["key"],
+        "project_tag_label": tag_meta["label"],
+        "project_tag_color": tag_meta["color"],
         "current_state": folder.current_state or "",
         "next_step": folder.next_step or "",
         "created_at": int(folder.created_at or 0),
         "updated_at": int(folder.updated_at or 0),
+        "archived": bool(archive_meta.get("is_archived")),
+        "archived_at": int(archive_meta.get("archived_at") or 0),
+        "invoice_draft_count": len(invoices),
         "summary": _project_folder_summary_from_content(content),
     }
     if include_content:
@@ -4055,6 +4214,16 @@ def _fallback_project_ai_assist(action: str, topic: str, folder: Dict[str, Any],
         return {"mode": "text", "text": f"Betreff: Abstimmung zu {topic_value}\n\nGuten Tag,\n\nwir haben den aktuellen Stand zu {topic_value} geprüft. Für den nächsten Schritt benötigen wir Ihre Rückmeldung zu den offenen Punkten und eine Freigabe für die weitere Umsetzung.\n\nViele Grüße", "title": "Kundenmail"}
     if action == "offer_basis":
         return {"mode": "text", "text": f"Leistungsgrundlage zu {topic_value}:\n- Analyse und Abstimmung\n- Umsetzung des beschlossenen Zielbilds\n- Test, Dokumentation und Übergabe", "title": "Angebotsgrundlage"}
+    if action == "invoice_positions":
+        return {
+            "mode": "items",
+            "items": [
+                f"Analyse und Umsetzung für {topic_value}",
+                f"Abstimmung, Dokumentation und Übergabe zu {topic_value}",
+                f"Projektleistung {topic_value} inklusive Qualitätssicherung"
+            ],
+            "title": "Rechnungspositionen"
+        }
     return {"mode": "text", "text": f"Interne Übergabe zu {topic_value}:\n{base_context}\n\nWesentlich sind der aktuelle Status, die nächsten Entscheidungen und offene technische Risiken.", "title": "Interne Übergabe"}
 
 
@@ -4073,6 +4242,7 @@ def _try_project_ai_assist(action: str, topic: str, folder: Dict[str, Any], stre
         "customer_mail": "Erstelle eine Kundenmail als JSON mit mode=text, title und text.",
         "offer_basis": "Erstelle eine Angebotsgrundlage als JSON mit mode=text, title und text.",
         "handover": "Erstelle eine interne Übergabe als JSON mit mode=text, title und text.",
+        "invoice_positions": "Erstelle Rechnungspositionen als JSON mit mode=items, title und items[] (Strings). Formuliere kurz, fakturierbar und kundentauglich.",
     }
     prompt_text = (
         f"{instruction_map[normalized_action]}\n"
@@ -20515,14 +20685,44 @@ def delete_customer_inventory_device_state(customer_id: int, state_id: int):
 
 @app.get("/api/project_folder_catalog")
 def get_project_folder_catalog():
+    block_library = _get_project_block_library()
+    template_library = _get_project_template_library()
     return {
-        "blocks": [{"key": key, **value} for key, value in PROJECT_BLOCK_LIBRARY.items()],
-        "templates": [{"key": key, **value} for key, value in PROJECT_TEMPLATE_LIBRARY.items()],
+        "blocks": [{"key": key, **value} for key, value in block_library.items()],
+        "templates": [{"key": key, **value} for key, value in template_library.items()],
         "export_profiles": PROJECT_EXPORT_PROFILES,
         "statuses": sorted(PROJECT_FOLDER_STATUS_VALUES),
         "priorities": sorted(PROJECT_FOLDER_PRIORITY_VALUES),
         "ai_actions": sorted(PROJECT_FOLDER_AI_ACTIONS),
     }
+
+
+@app.put("/api/project_folder_catalog")
+def update_project_folder_catalog(data: ProjectFolderCatalogUpdateRequest):
+    blocks_payload: Dict[str, Dict[str, Any]] = {}
+    for item in data.blocks or []:
+        key = _normalize_project_catalog_key(item.key, fallback="baustein")
+        label = str(item.label or "").strip() or key.replace("_", " ").title()
+        blocks_payload[key] = {
+            "label": label,
+            "summary": str(item.summary or "").strip(),
+            "tasks": [str(entry or "").strip() for entry in (item.tasks or []) if str(entry or "").strip()],
+            "checklist": [str(entry or "").strip() for entry in (item.checklist or []) if str(entry or "").strip()],
+            "risks": [str(entry or "").strip() for entry in (item.risks or []) if str(entry or "").strip()],
+            "questions": [str(entry or "").strip() for entry in (item.questions or []) if str(entry or "").strip()],
+            "gantt": [str(entry or "").strip() for entry in (item.gantt or []) if str(entry or "").strip()],
+            "positions": [str(entry or "").strip() for entry in (item.positions or []) if str(entry or "").strip()],
+        }
+    templates_payload: Dict[str, Dict[str, Any]] = {}
+    for item in data.templates or []:
+        key = _normalize_project_catalog_key(item.key, fallback="projektvorlage")
+        label = str(item.label or "").strip() or key.replace("_", " ").title()
+        templates_payload[key] = {
+            "label": label,
+            "blocks": [str(entry or "").strip() for entry in (item.blocks or []) if str(entry or "").strip() and str(entry or "").strip() in blocks_payload],
+        }
+    _save_project_catalog({"blocks": blocks_payload, "templates": templates_payload})
+    return get_project_folder_catalog()
 
 
 @app.post("/api/project_folders/bootstrap")
@@ -20563,6 +20763,11 @@ def create_project_folder(data: ProjectFolderCreate):
     with SessionLocal() as db:
         now_ms = int(time.time() * 1000)
         content = data.content if isinstance(data.content, dict) else _empty_project_content(owner=str(data.owner or "").strip())
+        content = _ensure_project_content_meta(
+            content,
+            owner=str(data.owner or "").strip(),
+            project_tag=str(data.project_tag or "").strip(),
+        )
         row = ProjectFolder(
             title=str(data.title or "").strip() or "Neue Projektmappe",
             customer=str(data.customer or "").strip(),
@@ -20605,7 +20810,19 @@ def update_project_folder(folder_id: int, data: ProjectFolderUpdate):
         if data.next_step is not None:
             row.next_step = str(data.next_step or "").strip()
         if data.content is not None and isinstance(data.content, dict):
-            row.content_json = json.dumps(data.content, ensure_ascii=False)
+            content = _ensure_project_content_meta(
+                data.content,
+                owner=str(data.owner if data.owner is not None else row.owner or "").strip(),
+                project_tag=str(data.project_tag or "").strip(),
+            )
+            row.content_json = json.dumps(content, ensure_ascii=False)
+        elif data.project_tag is not None:
+            content = _ensure_project_content_meta(
+                _parse_project_content(row.content_json),
+                owner=str(data.owner if data.owner is not None else row.owner or "").strip(),
+                project_tag=str(data.project_tag or "").strip(),
+            )
+            row.content_json = json.dumps(content, ensure_ascii=False)
         row.updated_at = int(time.time() * 1000)
         db.add(row)
         db.commit()
@@ -20924,6 +21141,41 @@ def update_pinboard(note_id: int, data: PinNoteUpdate):
 
 
 # ================= VISION BOARD =================
+_vision_board_event_subscribers: Set[Queue] = set()
+_vision_board_event_lock = threading.Lock()
+
+
+def _safe_parse_vision_board_document(content: Any) -> Dict[str, Any]:
+    if isinstance(content, dict):
+        return content
+    raw = str(content or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _serialize_vision_board_document(document: VisionBoardDocument) -> Dict[str, Any]:
+    return {
+        "key": document.key,
+        "content": _safe_parse_vision_board_document(document.content),
+        "updated_at": int(document.updated_at or 0),
+    }
+
+
+def _broadcast_vision_board_event(payload: Dict[str, Any]) -> None:
+    with _vision_board_event_lock:
+        subscribers = list(_vision_board_event_subscribers)
+    for subscriber in subscribers:
+        try:
+            subscriber.put_nowait(payload)
+        except Exception:
+            continue
+
+
 def _serialize_vision_board_note(note: VisionBoardNote) -> Dict[str, Any]:
     return {
         "id": note.id,
@@ -20948,6 +21200,109 @@ def get_vision_board_notes():
             "notes": [_serialize_vision_board_note(note) for note in notes],
             "serverTime": int(time.time() * 1000),
         }
+
+
+@app.get("/api/vision_board/documents/{board_key}")
+def get_vision_board_document(board_key: str):
+    key = str(board_key or "").strip().lower()
+    if not key:
+        raise HTTPException(400, "Board key required")
+    with SessionLocal() as db:
+        document = db.query(VisionBoardDocument).get(key)
+        if not document:
+            return {
+                "key": key,
+                "content": {},
+                "updated_at": 0,
+                "serverTime": int(time.time() * 1000),
+            }
+        payload = _serialize_vision_board_document(document)
+        payload["serverTime"] = int(time.time() * 1000)
+        return payload
+
+
+@app.put("/api/vision_board/documents/{board_key}")
+@app.patch("/api/vision_board/documents/{board_key}")
+def update_vision_board_document(board_key: str, data: VisionBoardDocumentUpdate):
+    key = str(board_key or "").strip().lower()
+    if not key:
+        raise HTTPException(400, "Board key required")
+    now_ms = int(time.time() * 1000)
+    content = data.content if isinstance(data.content, dict) else {}
+    with SessionLocal() as db:
+        document = db.query(VisionBoardDocument).get(key)
+        if not document:
+            document = VisionBoardDocument(key=key, content=json.dumps(content, ensure_ascii=False), updated_at=now_ms)
+            db.add(document)
+        else:
+            document.content = json.dumps(content, ensure_ascii=False)
+            document.updated_at = now_ms
+        db.commit()
+        db.refresh(document)
+        payload = {
+            "board": key,
+            "event": "state",
+            "updated_at": int(document.updated_at or now_ms),
+            "content": _safe_parse_vision_board_document(document.content),
+        }
+        _broadcast_vision_board_event(payload)
+        response = _serialize_vision_board_document(document)
+        response["serverTime"] = int(time.time() * 1000)
+        return response
+
+
+@app.post("/api/vision_board/events")
+def push_vision_board_event(data: VisionBoardEventPush):
+    board = str(data.board or "").strip().lower()
+    if not board:
+        raise HTTPException(400, "Board key required")
+    payload = {
+        "board": board,
+        "event": str(data.event or "update").strip() or "update",
+        "payload": data.payload if isinstance(data.payload, dict) else {},
+        "client_id": str(data.client_id or "").strip(),
+        "serverTime": int(time.time() * 1000),
+    }
+    _broadcast_vision_board_event(payload)
+    return {"ok": True, "serverTime": payload["serverTime"]}
+
+
+@app.get("/api/vision_board/events")
+async def stream_vision_board_events(request: Request):
+    subscriber: Queue = Queue(maxsize=500)
+    with _vision_board_event_lock:
+        _vision_board_event_subscribers.add(subscriber)
+
+    async def event_stream():
+        last_ping = time.time()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                drained = False
+                try:
+                    while True:
+                        payload = subscriber.get_nowait()
+                        data = json.dumps(payload, ensure_ascii=False)
+                        yield f"event: board\ndata: {data}\n\n"
+                        drained = True
+                except Empty:
+                    pass
+                now = time.time()
+                if not drained and now - last_ping >= 15:
+                    last_ping = now
+                    yield "event: ping\ndata: {}\n\n"
+                await asyncio.sleep(0.2)
+        finally:
+            with _vision_board_event_lock:
+                _vision_board_event_subscribers.discard(subscriber)
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
 @app.post("/api/vision_board/notes")
