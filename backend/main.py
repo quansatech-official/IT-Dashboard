@@ -343,6 +343,21 @@ AI_MODEL_SETTINGS_FIELDS = {
     "customer_development": "ai_customer_development_model",
     "offer_text": "ai_offer_model",
     "invoice_summary": "ai_invoice_model",
+    "newsletter": "ai_newsletter_model",
+    "meta_hub": "ai_meta_hub_model",
+    "project_folder": "ai_project_folder_model",
+}
+AI_PURPOSE_LABELS = {
+    "internal_ai": "Interne Tools",
+    "action": "Kundenbericht / Action",
+    "task_draft": "Aufgabenentwurf",
+    "customer_ranking": "Kundenzuordnung",
+    "customer_development": "Kundenentwicklung",
+    "offer_text": "Angebote",
+    "newsletter": "Newsletter",
+    "invoice_summary": "Rechnungszusammenfassung",
+    "meta_hub": "Meta-Hub",
+    "project_folder": "Projektmappe",
 }
 AI_MODEL_ENV_DEFAULTS = {
     "internal_ai": MODEL_PREF_INTERNAL_AI,
@@ -352,6 +367,9 @@ AI_MODEL_ENV_DEFAULTS = {
     "customer_development": MODEL_PREF_CUSTOMER_DEVELOPMENT,
     "offer_text": MODEL_PREF_OFFER_TEXT,
     "invoice_summary": MODEL_PREF_INVOICE_SUMMARY,
+    "newsletter": MODEL_PREF_OFFER_TEXT,
+    "meta_hub": MODEL_PREF_CUSTOMER_DEVELOPMENT,
+    "project_folder": MODEL_PREF_INTERNAL_AI,
 }
 FREE_EMAIL_DOMAINS = {
     "gmail.com",
@@ -448,6 +466,7 @@ class DayTask(Base):
     arrival_time = Column(String, default="")
     departure_time = Column(String, default="")
     deadline = Column(String, default="")
+    internal_date = Column(String, default="")
     urgency_flag = Column(String, default="")
     billing_note = Column(String, default="")
     billing_min_hours = Column(Float, default=0.0)
@@ -772,6 +791,27 @@ class Offer(Base):
     customer_email = Column(String, default="")
     customer_note = Column(String, default="")
 
+
+class TelemetryEvent(Base):
+    __tablename__ = "telemetry_events"
+
+    id = Column(Integer, primary_key=True)
+    event_type = Column(String, default="", index=True)
+    module = Column(String, default="", index=True)
+    component = Column(String, default="", index=True)
+    action = Column(String, default="", index=True)
+    route = Column(String, default="", index=True)
+    method = Column(String, default="")
+    status_code = Column(Integer, default=0)
+    duration_ms = Column(Integer, default=0)
+    success = Column(Boolean, default=True)
+    session_id = Column(String, default="", index=True)
+    device_class = Column(String, default="")
+    build_tag = Column(String, default="")
+    meta_json = Column(Text, default="{}")
+    created_at = Column(BigInteger, default=lambda: int(time.time() * 1000), index=True)
+
+
 class IntegrationSettings(Base):
     __tablename__ = "integration_settings"
 
@@ -819,6 +859,7 @@ class IntegrationSettings(Base):
     meta_hub_rmm_enabled = Column(Boolean, default=True)
     meta_hub_rmm_customer_field_name = Column(String, default="Kundennummer")
     meta_hub_email_enabled = Column(Boolean, default=False)
+    meta_hub_sevdesk_enabled = Column(Boolean, default=False)
     meta_hub_refresh_seconds = Column(Integer, default=300)
     meta_hub_mailboxes_json = Column(Text, default="[]")
     remote_deploy_public_base_url = Column(String, default="")
@@ -838,6 +879,11 @@ class IntegrationSettings(Base):
     ai_customer_development_model = Column(String, default="")
     ai_offer_model = Column(String, default="")
     ai_invoice_model = Column(String, default="")
+    ai_newsletter_model = Column(String, default="")
+    ai_meta_hub_model = Column(String, default="")
+    ai_project_folder_model = Column(String, default="")
+    ai_endpoints_json = Column(Text, default="[]")
+    ai_purpose_routes_json = Column(Text, default="{}")
 
 
 class AuditRecord(Base):
@@ -1353,6 +1399,8 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_rmm_customer_field_name VARCHAR DEFAULT 'Kundennummer'")
     if "meta_hub_email_enabled" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_email_enabled BOOLEAN DEFAULT FALSE")
+    if "meta_hub_sevdesk_enabled" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_sevdesk_enabled BOOLEAN DEFAULT FALSE")
     if "meta_hub_refresh_seconds" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN meta_hub_refresh_seconds INTEGER DEFAULT 300")
     if "meta_hub_mailboxes_json" not in columns:
@@ -1391,6 +1439,16 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN ai_offer_model VARCHAR DEFAULT ''")
     if "ai_invoice_model" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN ai_invoice_model VARCHAR DEFAULT ''")
+    if "ai_newsletter_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_newsletter_model VARCHAR DEFAULT ''")
+    if "ai_meta_hub_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_meta_hub_model VARCHAR DEFAULT ''")
+    if "ai_project_folder_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_project_folder_model VARCHAR DEFAULT ''")
+    if "ai_endpoints_json" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_endpoints_json TEXT DEFAULT '[]'")
+    if "ai_purpose_routes_json" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_purpose_routes_json TEXT DEFAULT '{}'")
     if statements:
         with engine.begin() as connection:
             for statement in statements:
@@ -1681,7 +1739,7 @@ def _ensure_mail_accounts_seed() -> None:
                     imap_use_tls=bool(mailbox.get("use_tls", not use_ssl)),
                     imap_use_ssl=use_ssl,
                     meta_hub_enabled=bool(mailbox.get("enabled", True)),
-                    created_at=now_ms,
+                created_at=now_ms,
                     updated_at=now_ms,
                 )
             )
@@ -1949,6 +2007,8 @@ def _ensure_day_tasks_columns() -> None:
         statements.append("ALTER TABLE day_tasks ADD COLUMN departure_time VARCHAR DEFAULT ''")
     if "deadline" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN deadline VARCHAR DEFAULT ''")
+    if "internal_date" not in columns:
+        statements.append("ALTER TABLE day_tasks ADD COLUMN internal_date VARCHAR DEFAULT ''")
     if "urgency_flag" not in columns:
         statements.append("ALTER TABLE day_tasks ADD COLUMN urgency_flag VARCHAR DEFAULT ''")
     if "billing_note" not in columns:
@@ -2195,6 +2255,7 @@ class DayTaskCreate(BaseModel):
     arrival_time: Optional[str] = ""
     departure_time: Optional[str] = ""
     deadline: Optional[str] = ""
+    internal_date: Optional[str] = ""
     urgency_flag: Optional[str] = ""
     billing_note: Optional[str] = ""
     billing_min_hours: Optional[float] = 0
@@ -2224,6 +2285,7 @@ class DayTaskUpdate(BaseModel):
     arrival_time: Optional[str] = None
     departure_time: Optional[str] = None
     deadline: Optional[str] = None
+    internal_date: Optional[str] = None
     urgency_flag: Optional[str] = None
     billing_note: Optional[str] = None
     billing_min_hours: Optional[float] = None
@@ -2647,6 +2709,11 @@ class NewsletterRssGenerateRequest(BaseModel):
     articles: List[NewsletterRssGenerateArticle]
 
 
+class NewsletterRawGenerateRequest(BaseModel):
+    raw_text: str
+    generate_subject: Optional[bool] = True
+
+
 class IntegrationSettingsUpdate(BaseModel):
     rmm_host: Optional[str] = None
     rmm_user: Optional[str] = None
@@ -2691,6 +2758,7 @@ class IntegrationSettingsUpdate(BaseModel):
     meta_hub_rmm_enabled: Optional[bool] = None
     meta_hub_rmm_customer_field_name: Optional[str] = None
     meta_hub_email_enabled: Optional[bool] = None
+    meta_hub_sevdesk_enabled: Optional[bool] = None
     meta_hub_refresh_seconds: Optional[int] = None
     meta_hub_mailboxes: Optional[List[Dict[str, Any]]] = None
     remote_deploy_public_base_url: Optional[str] = None
@@ -2710,6 +2778,11 @@ class IntegrationSettingsUpdate(BaseModel):
     ai_customer_development_model: Optional[str] = None
     ai_offer_model: Optional[str] = None
     ai_invoice_model: Optional[str] = None
+    ai_newsletter_model: Optional[str] = None
+    ai_meta_hub_model: Optional[str] = None
+    ai_project_folder_model: Optional[str] = None
+    ai_endpoints: Optional[List[Dict[str, Any]]] = None
+    ai_purpose_routes: Optional[Dict[str, str]] = None
 
 
 class AiConnectionProbeRequest(BaseModel):
@@ -2724,6 +2797,12 @@ class AiConnectionProbeRequest(BaseModel):
     ai_customer_development_model: Optional[str] = None
     ai_offer_model: Optional[str] = None
     ai_invoice_model: Optional[str] = None
+    ai_newsletter_model: Optional[str] = None
+    ai_meta_hub_model: Optional[str] = None
+    ai_project_folder_model: Optional[str] = None
+    ai_endpoint_id: Optional[str] = None
+    ai_endpoints: Optional[List[Dict[str, Any]]] = None
+    ai_purpose_routes: Optional[Dict[str, str]] = None
 
 
 class AiModelManageRequest(AiConnectionProbeRequest):
@@ -3463,6 +3542,30 @@ class SevdeskTaskDraftRequest(BaseModel):
     mark_billed: Optional[bool] = True
 
 
+class SevdeskProjectFolderDraftPosition(BaseModel):
+    task_id: Optional[str] = None
+    stream_id: Optional[str] = None
+    name: Optional[str] = None
+    text: Optional[str] = None
+    quantity: Optional[float] = None
+    price: Optional[float] = None
+    tax_rate: Optional[float] = None
+    unity_id: Optional[int] = None
+
+
+class SevdeskProjectFolderDraftRequest(BaseModel):
+    customer_number: Optional[str] = None
+    invoice_title: Optional[str] = None
+    note: Optional[str] = None
+    positions: List[SevdeskProjectFolderDraftPosition] = []
+    use_existing_draft: Optional[bool] = True
+    mark_invoiced: Optional[bool] = True
+    add_mileage: Optional[bool] = False
+    mileage_name: Optional[str] = None
+    mileage_text: Optional[str] = None
+    mileage_price: Optional[float] = None
+
+
 class SevdeskOfferDraftRequest(BaseModel):
     line_item_ids: Optional[List[str]] = None
     device_item_ids: Optional[List[str]] = None
@@ -3482,6 +3585,33 @@ class PbxPhonebookUpdate(BaseModel):
     company: Optional[str] = None
     email: Optional[str] = None
     note: Optional[str] = None
+
+class NfonControlMutationRequest(BaseModel):
+    method: Optional[str] = "PUT"
+    path: str
+    body: Optional[Dict[str, Any]] = None
+
+
+class TelemetryEventIn(BaseModel):
+    event_type: Optional[str] = ""
+    module: Optional[str] = ""
+    component: Optional[str] = ""
+    action: Optional[str] = ""
+    route: Optional[str] = ""
+    method: Optional[str] = ""
+    status_code: Optional[int] = 0
+    duration_ms: Optional[int] = 0
+    success: Optional[bool] = True
+    session_id: Optional[str] = ""
+    device_class: Optional[str] = ""
+    build_tag: Optional[str] = ""
+    created_at: Optional[int] = None
+    meta: Optional[Dict[str, Any]] = None
+
+
+class TelemetryBatchIn(BaseModel):
+    events: List[TelemetryEventIn]
+
 
 class ActionAiRequest(BaseModel):
     text: str
@@ -3503,6 +3633,20 @@ class OfferAiRequest(BaseModel):
     mode: str
     current_text: Optional[str] = ""
     context: Optional[str] = ""
+
+
+class TextAssistRequest(BaseModel):
+    action: str
+    text: str
+    module: Optional[str] = ""
+    format: Optional[str] = "text"
+    context: Optional[Dict[str, Any]] = None
+
+
+class OfferAiPrefillRequest(BaseModel):
+    description: str
+    current_offer: Optional[Dict[str, Any]] = None
+    customers: Optional[List[Dict[str, Any]]] = None
 
 
 class WorkbenchAiUseCaseRequest(BaseModel):
@@ -3636,6 +3780,7 @@ def serialize_day_task(t: DayTask) -> Dict[str, Any]:
         "arrival_time": t.arrival_time,
         "departure_time": t.departure_time,
         "deadline": t.deadline,
+        "internal_date": t.internal_date,
         "urgency_flag": _normalize_urgency_flag(t.urgency_flag),
         "billing_note": t.billing_note,
         "billing_min_hours": round(float(t.billing_min_hours or 0.0), 2),
@@ -3671,6 +3816,7 @@ PROJECT_FOLDER_AI_ACTIONS = {
     "offer_basis",
     "handover",
     "invoice_positions",
+    "estimate_effort",
 }
 
 PROJECT_BLOCK_LIBRARY: Dict[str, Dict[str, Any]] = {
@@ -3841,6 +3987,7 @@ PROJECT_TEMPLATE_LIBRARY: Dict[str, Dict[str, Any]] = {
 
 PROJECT_EXPORT_PROFILES: List[Dict[str, Any]] = [
     {"key": "internal_status", "label": "Interner Projektstand", "defaults": {"include_internal_notes": True, "include_risks": True, "include_tasks": True, "include_checklists": True, "include_gantt": True, "include_offer_positions": False, "customer_view": False}},
+    {"key": "deployment_plan", "label": "Einsatzplan", "defaults": {"include_internal_notes": False, "include_risks": True, "include_tasks": True, "include_checklists": True, "include_gantt": True, "include_offer_positions": False, "operations_layout": True, "customer_view": False}},
     {"key": "customer_report", "label": "Kundenbericht", "defaults": {"include_internal_notes": False, "include_risks": False, "include_tasks": True, "include_checklists": False, "include_gantt": True, "include_offer_positions": False, "customer_view": True}},
     {"key": "open_points", "label": "Offene-Punkte-Liste", "defaults": {"include_internal_notes": False, "include_risks": True, "include_tasks": True, "include_checklists": True, "include_gantt": False, "include_offer_positions": False, "customer_view": True}},
     {"key": "offer_basis", "label": "Angebotsgrundlage", "defaults": {"include_internal_notes": True, "include_risks": True, "include_tasks": True, "include_checklists": False, "include_gantt": True, "include_offer_positions": True, "customer_view": False}},
@@ -4055,6 +4202,191 @@ def _guess_project_block_keys(description: str) -> List[str]:
     return matches[:6]
 
 
+def _project_text_items(value: Any, limit: int = 12) -> List[str]:
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        items = re.split(r"[\n;]+", value)
+    else:
+        items = []
+    result: List[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            text_value = str(item.get("title") or item.get("text") or item.get("name") or "").strip()
+        else:
+            text_value = str(item or "").strip()
+        if text_value and text_value not in result:
+            result.append(text_value[:240])
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _project_date_after_days(offset_days: Any) -> str:
+    try:
+        days = int(float(offset_days or 0))
+    except (TypeError, ValueError):
+        return ""
+    if days <= 0:
+        return ""
+    return (datetime.now().date() + timedelta(days=min(days, 365))).isoformat()
+
+
+def _normalize_project_ai_task(item: Any, owner: str = "") -> Dict[str, Any]:
+    if isinstance(item, dict):
+        title = str(item.get("title") or item.get("name") or item.get("text") or "").strip()
+        status = str(item.get("status") or "open").strip().lower()
+        if status not in {"open", "doing", "waiting_customer", "blocked", "done"}:
+            status = "open"
+        return _new_project_item(
+            title or "Aufgabe",
+            status=status,
+            owner=str(item.get("owner") or owner or "").strip(),
+            due_date=str(item.get("due_date") or "").strip() or _project_date_after_days(item.get("due_offset_days")),
+            notes=str(item.get("notes") or item.get("description") or "").strip(),
+            depth=max(0, min(2, int(float(item.get("depth") or 0)))) if str(item.get("depth") or "").strip() else 0,
+        )
+    return _new_project_item(str(item or "").strip() or "Aufgabe", status="open", owner=owner or "", due_date="")
+
+
+def _normalize_project_ai_stream(item: Any, owner: str = "", index: int = 0) -> Dict[str, Any]:
+    payload = item if isinstance(item, dict) else {"title": str(item or "").strip()}
+    title = str(payload.get("title") or payload.get("label") or f"Baustein {index + 1}").strip()
+    block_key = _normalize_project_catalog_key(payload.get("block_key") or title, fallback=f"ki_baustein_{index + 1}")
+    status = _normalize_project_status(payload.get("status") or "yellow")
+    priority = _normalize_project_priority(payload.get("priority") or "medium")
+    checklist_items = _project_text_items(payload.get("checklist") or payload.get("checklists"), limit=14)
+    risk_items = payload.get("risks") if isinstance(payload.get("risks"), list) else []
+    question_items = _project_text_items(payload.get("questions") or payload.get("open_points"), limit=10)
+    gantt_items = payload.get("gantt") or payload.get("gantt_phases") or payload.get("phases")
+    offer_items = _project_text_items(payload.get("offer_positions") or payload.get("positions"), limit=10)
+    stream_owner = str(payload.get("owner") or owner or "").strip()
+    normalized_tasks = [_normalize_project_ai_task(task, owner=stream_owner) for task in (payload.get("tasks") if isinstance(payload.get("tasks"), list) else [])]
+    normalized_risks = []
+    for risk in risk_items:
+      if isinstance(risk, dict):
+          normalized_risks.append(
+              _new_project_item(
+                  str(risk.get("title") or risk.get("risk") or "").strip() or "Risiko",
+                  level=str(risk.get("level") or "mittel").strip().lower() or "mittel",
+                  mitigation=str(risk.get("mitigation") or risk.get("measure") or "").strip(),
+              )
+          )
+      else:
+          normalized_risks.append(_new_project_item(str(risk or "").strip() or "Risiko", level="mittel", mitigation=""))
+    normalized_gantt = []
+    running_day = 1
+    for phase in gantt_items if isinstance(gantt_items, list) else []:
+        if isinstance(phase, dict):
+            duration = max(1, min(90, int(float(phase.get("duration_days") or 5))))
+            normalized_gantt.append(
+                _new_project_item(
+                    str(phase.get("title") or phase.get("name") or "").strip() or "Phase",
+                    start_date=str(phase.get("start_date") or "").strip() or _project_date_after_days(running_day),
+                    end_date=str(phase.get("end_date") or "").strip() or _project_date_after_days(running_day + duration),
+                    owner=str(phase.get("owner") or stream_owner).strip(),
+                    status=str(phase.get("status") or "geplant").strip() or "geplant",
+                    dependency=str(phase.get("dependency") or "").strip(),
+                )
+            )
+            running_day += duration
+        else:
+            normalized_gantt.append(_new_project_item(str(phase or "").strip() or "Phase", start_date="", end_date="", owner=stream_owner, status="geplant", dependency=""))
+    return {
+        "id": _project_uuid(),
+        "block_key": block_key,
+        "title": title or "Baustein",
+        "status": status,
+        "priority": priority,
+        "owner": stream_owner,
+        "progress": max(0, min(100, int(float(payload.get("progress") or 5)))) if str(payload.get("progress") or "").strip() else 5,
+        "short_status": str(payload.get("short_status") or payload.get("summary") or "").strip(),
+        "facts": _project_text_items(payload.get("facts"), limit=8),
+        "open_points": question_items,
+        "recommendation": str(payload.get("recommendation") or "").strip(),
+        "customer_decision": str(payload.get("customer_decision") or "").strip(),
+        "next_step": str(payload.get("next_step") or "").strip(),
+        "tasks": normalized_tasks,
+        "task_links": [],
+        "checklists": [
+            {
+                "id": _project_uuid(),
+                "title": f"{title or 'Baustein'} Checkliste",
+                "items": [_new_project_item(check, done=False) for check in checklist_items],
+            }
+        ] if checklist_items else [],
+        "risks": normalized_risks,
+        "blockers": [],
+        "decisions": [],
+        "notes": [],
+        "files": [],
+        "gantt_phases": normalized_gantt,
+        "offer_positions": [_new_project_item(item, quantity="1", unit="pauschal", price="", billing_cycle="einmalig") for item in offer_items],
+        "comments": [],
+        "activities": [],
+    }
+
+
+def _try_project_folder_ai_bootstrap(data: ProjectFolderBootstrapRequest) -> Optional[Dict[str, Any]]:
+    description = str(data.description or "").strip()
+    if not description:
+        return None
+    block_catalog = _get_project_block_library()
+    catalog_summary = "\n".join(
+        f"- {key}: {value.get('label') or key} | {value.get('summary') or ''}"
+        for key, value in list(block_catalog.items())[:30]
+    )
+    prompt_text = (
+        "Du bist Senior IT-Projektleiter. Erzeuge aus der Beschreibung eine konkrete Projektmappe.\n"
+        "Erkenne sinnvolle Bausteine auch dann, wenn sie nicht exakt im Katalog stehen. Nutze vorhandene block_key, wenn passend.\n"
+        "Aufgaben muessen umsetzbar, fachlich sortiert und nicht generisch sein.\n"
+        "Antworte nur als JSON-Objekt mit: title, current_state, next_step, priority, streams[].\n"
+        "Jeder stream: title, block_key, short_status, priority, status, tasks[], checklist[], risks[], questions[], gantt[], offer_positions[].\n"
+        "Task: title, status(open|doing|waiting_customer|blocked|done), due_offset_days optional, notes optional.\n"
+        "Risk: title, level(niedrig|mittel|hoch|kritisch), mitigation.\n"
+        "Gantt: title, duration_days, dependency optional.\n"
+        "Erzeuge 3-8 Bausteine, pro Baustein 3-8 Aufgaben, 3-8 Checklistenpunkte, 1-4 Risiken.\n\n"
+        f"Kunde: {data.customer or 'n/a'}\n"
+        f"Verantwortlich: {data.owner or 'n/a'}\n"
+        f"Gewuenschter Titel: {data.title or 'n/a'}\n"
+        f"Beschreibung:\n{description}\n\n"
+        f"Baustein-Katalog:\n{catalog_summary}"
+    )
+    try:
+        model_candidates = _resolve_ai_models(purpose="project_folder")
+        payload, model, provider = _ai_generate(
+            prompt_text,
+            model_candidates=model_candidates,
+            purpose="project_folder",
+            response_format="json",
+            temperature=0.22,
+            max_tokens=min(2200, INTERNAL_AI_TOOL_MAX_TOKENS),
+            timeout=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
+        )
+        parsed = jsonlib.loads(str((payload or {}).get("response") or "{}"))
+        if not isinstance(parsed, dict):
+            return None
+        streams_raw = parsed.get("streams")
+        if not isinstance(streams_raw, list) or not streams_raw:
+            return None
+        owner = str(data.owner or "").strip()
+        streams = [_normalize_project_ai_stream(stream, owner=owner, index=index) for index, stream in enumerate(streams_raw[:10])]
+        streams = [stream for stream in streams if stream.get("title") and (stream.get("tasks") or stream.get("checklists") or stream.get("risks"))]
+        if not streams:
+            return None
+        return {
+            "title": str(parsed.get("title") or data.title or "").strip(),
+            "current_state": str(parsed.get("current_state") or "KI-Struktur aus Projektbeschreibung erzeugt.").strip(),
+            "next_step": str(parsed.get("next_step") or "Vorschau prüfen, Bausteine abwählen und Projektmappe anlegen.").strip(),
+            "priority": _normalize_project_priority(parsed.get("priority") or "medium"),
+            "streams": streams,
+            "ai_meta": {"provider": provider, "model": model, "usedFallback": False},
+        }
+    except Exception as exc:
+        logger.warning("Project folder AI bootstrap fallback: %s", exc)
+        return None
+
+
 def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, Any]:
     mode = str(data.mode or "empty").strip().lower() or "empty"
     title = str(data.title or "").strip() or "Neue Projektmappe"
@@ -4068,7 +4400,29 @@ def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, 
     ai_notes: List[str] = []
     block_library = _get_project_block_library()
     template_library = _get_project_template_library()
-    if mode == "template":
+    ai_bootstrap = _try_project_folder_ai_bootstrap(data) if mode == "ai" else None
+    if ai_bootstrap:
+        content["streams"] = ai_bootstrap["streams"]
+        content["overview"]["current_status"] = ai_bootstrap["current_state"]
+        content["overview"]["next_step"] = ai_bootstrap["next_step"]
+        content["open_customer_questions"] = [
+            _new_project_item(question, kind="customer_question")
+            for stream in content["streams"]
+            for question in (stream.get("open_points") or [])[:3]
+        ][:10]
+        content["global_gantt"] = [
+            {**phase, "stream_id": stream.get("id"), "stream_title": stream.get("title")}
+            for stream in content["streams"]
+            for phase in (stream.get("gantt_phases") or [])
+        ][:30]
+        content["last_ai_outputs"] = [{
+            "id": _project_uuid(),
+            "title": "KI-Projektstruktur",
+            "text": f"{len(content['streams'])} Bausteine aus Beschreibung erzeugt.",
+            **ai_bootstrap.get("ai_meta", {}),
+        }]
+        title = ai_bootstrap.get("title") or title
+    elif mode == "template":
         template = template_library.get(str(data.template_key or "").strip())
         selected_blocks = list(template.get("blocks") or []) if template else []
     elif mode == "blocks":
@@ -4079,8 +4433,9 @@ def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, 
             "Kundenfreigaben früh absichern",
             "Abhängigkeiten zu Alt-Systemen vor dem Go-Live klären",
         ]
-    content["streams"] = [_build_project_stream(block_key, owner=owner) for block_key in selected_blocks]
-    if mode == "ai":
+    if not ai_bootstrap:
+        content["streams"] = [_build_project_stream(block_key, owner=owner) for block_key in selected_blocks]
+    if mode == "ai" and not ai_bootstrap:
         content["overview"]["current_status"] = "KI-Vorschlag erstellt, fachliche Prüfung ausstehend."
         content["overview"]["next_step"] = "Vorschau prüfen, irrelevante Punkte abwählen und Projektmappe anlegen."
         content["open_customer_questions"] = [
@@ -4143,12 +4498,194 @@ def _project_folder_summary_from_content(content: Dict[str, Any]) -> Dict[str, A
     }
 
 
+def _project_folder_task_signature(content: Dict[str, Any]) -> str:
+    streams = content.get("streams") if isinstance(content.get("streams"), list) else []
+    payload: List[Dict[str, Any]] = []
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        tasks_payload: List[Dict[str, str]] = []
+        for task in stream.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            tasks_payload.append(
+                {
+                    "id": str(task.get("id") or ""),
+                    "title": str(task.get("title") or "").strip(),
+                    "status": str(task.get("status") or "").strip(),
+                    "owner": str(task.get("owner") or "").strip(),
+                    "due_date": str(task.get("due_date") or "").strip(),
+                    "note": str(task.get("note") or "").strip(),
+                    "depth": str(task.get("depth") or ""),
+                    "rule_value": str(task.get("rule_value") or "").strip(),
+                    "custom_value": str(task.get("custom_value") or "").strip(),
+                    "cost_value": str(task.get("cost_value") or "").strip(),
+                }
+            )
+        payload.append(
+            {
+                "stream_id": str(stream.get("id") or ""),
+                "stream_title": str(stream.get("title") or "").strip(),
+                "tasks": tasks_payload,
+            }
+        )
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _parse_project_money_value(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value) if math.isfinite(float(value)) else 0.0
+    text_value = re.sub(r"[^\d,.\-]", "", str(value or "").strip())
+    if not text_value:
+        return 0.0
+    if "," in text_value and "." in text_value:
+        if text_value.rfind(",") > text_value.rfind("."):
+            text_value = text_value.replace(".", "").replace(",", ".")
+        else:
+            text_value = text_value.replace(",", "")
+    elif "," in text_value:
+        text_value = text_value.replace(".", "").replace(",", ".")
+    try:
+        return max(0.0, float(text_value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _project_item_quantity(item: Dict[str, Any]) -> float:
+    quantity = _parse_project_money_value(item.get("quantity"))
+    return quantity if quantity > 0 else 1.0
+
+
+def _project_item_price(item: Dict[str, Any]) -> float:
+    custom_value = _parse_project_money_value(item.get("custom_value"))
+    if custom_value > 0:
+        return custom_value
+    return _parse_project_money_value(item.get("rule_value") or item.get("price"))
+
+
+def _project_item_cost(item: Dict[str, Any]) -> float:
+    return _parse_project_money_value(item.get("cost_value") or item.get("purchase_price") or item.get("cost_price"))
+
+
+def _build_project_value_stats(db: Session) -> Dict[str, Any]:
+    rows = db.query(ProjectFolder).order_by(ProjectFolder.updated_at.desc(), ProjectFolder.id.desc()).all()
+    project_rows: List[Dict[str, Any]] = []
+    totals = {
+        "activeProjects": 0,
+        "archivedProjects": 0,
+        "projectRevenueEur": 0.0,
+        "projectCostEur": 0.0,
+        "projectProfitEur": 0.0,
+        "taskRevenueEur": 0.0,
+        "openTaskRevenueEur": 0.0,
+        "materialRevenueEur": 0.0,
+        "openTaskCount": 0,
+        "doneTaskCount": 0,
+    }
+    for folder in rows:
+        content = _parse_project_content(folder.content_json)
+        archive_meta = content.get("archive") if isinstance(content.get("archive"), dict) else {}
+        archived = bool(archive_meta.get("is_archived"))
+        if archived:
+            totals["archivedProjects"] += 1
+            continue
+        totals["activeProjects"] += 1
+        streams = content.get("streams") if isinstance(content.get("streams"), list) else []
+        materials = content.get("materials") if isinstance(content.get("materials"), list) else []
+        task_revenue = 0.0
+        task_cost = 0.0
+        open_task_revenue = 0.0
+        open_task_count = 0
+        done_task_count = 0
+        material_revenue = 0.0
+        material_cost = 0.0
+
+        for stream in streams:
+            if not isinstance(stream, dict):
+                continue
+            for task in stream.get("tasks") or []:
+                if not isinstance(task, dict):
+                    continue
+                price = _project_item_price(task)
+                cost = _project_item_cost(task)
+                task_revenue += price
+                task_cost += cost
+                status_key = str(task.get("status") or "open").strip().lower()
+                if status_key == "done":
+                    done_task_count += 1
+                else:
+                    open_task_count += 1
+                    open_task_revenue += price
+            if not materials:
+                for item in stream.get("offer_positions") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    quantity = _project_item_quantity(item)
+                    material_revenue += _project_item_price(item) * quantity
+                    material_cost += _project_item_cost(item) * quantity
+
+        for item in materials:
+            if not isinstance(item, dict):
+                continue
+            quantity = _project_item_quantity(item)
+            material_revenue += _parse_project_money_value(item.get("price")) * quantity
+            material_cost += _parse_project_money_value(item.get("purchase_price")) * quantity
+
+        project_revenue = round(task_revenue + material_revenue, 2)
+        project_cost = round(task_cost + material_cost, 2)
+        project_profit = round(project_revenue - project_cost, 2)
+        totals["projectRevenueEur"] += project_revenue
+        totals["projectCostEur"] += project_cost
+        totals["projectProfitEur"] += project_profit
+        totals["taskRevenueEur"] += task_revenue
+        totals["openTaskRevenueEur"] += open_task_revenue
+        totals["materialRevenueEur"] += material_revenue
+        totals["openTaskCount"] += open_task_count
+        totals["doneTaskCount"] += done_task_count
+        project_rows.append(
+            {
+                "id": int(folder.id),
+                "title": str(folder.title or "").strip(),
+                "customer": str(folder.customer or "").strip(),
+                "status": _normalize_project_status(folder.status),
+                "priority": _normalize_project_priority(folder.priority),
+                "projectRevenueEur": project_revenue,
+                "projectCostEur": project_cost,
+                "projectProfitEur": project_profit,
+                "taskRevenueEur": round(task_revenue, 2),
+                "openTaskRevenueEur": round(open_task_revenue, 2),
+                "materialRevenueEur": round(material_revenue, 2),
+                "openTaskCount": int(open_task_count),
+                "doneTaskCount": int(done_task_count),
+                "updatedAt": int(folder.updated_at or 0),
+            }
+        )
+
+    project_rows.sort(key=lambda item: (-float(item.get("projectRevenueEur") or 0.0), str(item.get("title") or "").lower()))
+    return {
+        "activeProjects": int(totals["activeProjects"]),
+        "archivedProjects": int(totals["archivedProjects"]),
+        "projectRevenueEur": round(float(totals["projectRevenueEur"]), 2),
+        "projectCostEur": round(float(totals["projectCostEur"]), 2),
+        "projectProfitEur": round(float(totals["projectProfitEur"]), 2),
+        "taskRevenueEur": round(float(totals["taskRevenueEur"]), 2),
+        "openTaskRevenueEur": round(float(totals["openTaskRevenueEur"]), 2),
+        "materialRevenueEur": round(float(totals["materialRevenueEur"]), 2),
+        "openTaskCount": int(totals["openTaskCount"]),
+        "doneTaskCount": int(totals["doneTaskCount"]),
+        "rows": project_rows[:12],
+    }
+
+
 def serialize_project_folder(folder: ProjectFolder, include_content: bool = True) -> Dict[str, Any]:
     content = _parse_project_content(folder.content_json)
     content_meta = content.get("meta") if isinstance(content.get("meta"), dict) else {}
     archive_meta = content.get("archive") if isinstance(content.get("archive"), dict) else {}
     invoices = content.get("invoices") if isinstance(content.get("invoices"), list) else []
     tag_meta = _project_folder_tag_meta(content_meta.get("project_tag"))
+    summary = _project_folder_summary_from_content(content)
+    summary["task_signature"] = _project_folder_task_signature(content)
     payload = {
         "id": folder.id,
         "title": folder.title,
@@ -4167,7 +4704,7 @@ def serialize_project_folder(folder: ProjectFolder, include_content: bool = True
         "archived": bool(archive_meta.get("is_archived")),
         "archived_at": int(archive_meta.get("archived_at") or 0),
         "invoice_draft_count": len(invoices),
-        "summary": _project_folder_summary_from_content(content),
+        "summary": summary,
     }
     if include_content:
         payload["content"] = content
@@ -4193,6 +4730,133 @@ def _compact_project_folder_context(folder: Dict[str, Any], stream_id: str = "")
             ]
         )
     return "\n".join(item for item in parts if item and not item.endswith(": "))
+
+
+def _estimate_project_task_range(task: Dict[str, Any], stream: Dict[str, Any]) -> Tuple[float, float]:
+    text_value = " ".join(
+        [
+            str(stream.get("title") or ""),
+            str(stream.get("short_status") or ""),
+            str(task.get("title") or ""),
+            str(task.get("note") or ""),
+        ]
+    ).lower()
+    rules: List[Tuple[str, Tuple[float, float]]] = [
+        (r"\b(drupal|wordpress|cms|website|webseite|php|theme|ckeditor|modul|plugin|twig|schema)\b", (2.0, 5.5)),
+        (r"\b(upgrade|major update|versionswechsel|migration|migrat|umzug|cutover|datenmigration)\b", (3.0, 8.0)),
+        (r"\b(domain|active directory|ad\b|entra|tenant|exchange|m365|office 365|sharepoint)\b", (3.0, 9.0)),
+        (r"\b(firewall|vpn|routing|vlan|netzwerk|switch|wlan|nfon|telefonanlage)\b", (1.5, 5.0)),
+        (r"\b(server|hyper-?v|vmware|host|cluster|storage|backup|restore|replikation)\b", (2.5, 8.0)),
+        (r"\b(schnittstelle|api|integration|automatisierung|sync)\b", (2.0, 6.0)),
+        (r"\b(test|validierung|abnahme|rollback|wartungsfenster|go-?live|deployment)\b", (1.0, 3.5)),
+        (r"\b(dokumentation|übergabe|einschulung|protokoll)\b", (0.75, 2.0)),
+        (r"\b(prüf|analyse|aufnahme|bestandsaufnahme|abstimmung|termin|freigabe)\b", (0.75, 2.0)),
+    ]
+    matches = [hours for pattern, hours in rules if re.search(pattern, text_value, re.I)]
+    if matches:
+        min_hours = max(item[0] for item in matches)
+        max_hours = max(item[1] for item in matches)
+    else:
+        min_hours, max_hours = (0.75, 1.75)
+    if len(_normalize_space(text_value)) > 180:
+        min_hours += 0.5
+        max_hours += 1.0
+    if str(task.get("due_date") or "").strip():
+        min_hours += 0.15
+        max_hours += 0.35
+    return min_hours, max_hours
+
+
+def _fallback_project_effort_estimate(folder: Dict[str, Any]) -> Dict[str, Any]:
+    streams = folder.get("content", {}).get("streams", []) if isinstance(folder, dict) else []
+    breakdown: List[Dict[str, Any]] = []
+    total_min = 0.0
+    total_max = 0.0
+    task_count = 0
+    risk_count = 0
+    checklist_count = 0
+    stream_count = 0
+    detailed_tasks = 0
+    for stream in streams or []:
+        if not isinstance(stream, dict):
+            continue
+        stream_count += 1
+        tasks = stream.get("tasks") if isinstance(stream.get("tasks"), list) else []
+        checklists = stream.get("checklists") if isinstance(stream.get("checklists"), list) else stream.get("checklist") or []
+        risks = stream.get("risks") if isinstance(stream.get("risks"), list) else []
+        checklist_count += len(checklists)
+        risk_count += len(risks)
+        task_count += len(tasks)
+        stream_min = 0.75
+        stream_max = 1.5
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            low, high = _estimate_project_task_range(task, stream)
+            stream_min += low
+            stream_max += high
+            if len(_normalize_space(str(task.get("title") or "") + " " + str(task.get("note") or ""))) >= 45:
+                detailed_tasks += 1
+        if not tasks:
+            stream_min += 2.0
+            stream_max += 6.0
+        stream_min += len(risks) * 0.75 + len(checklists) * 0.2
+        stream_max += len(risks) * 2.0 + len(checklists) * 0.5
+        breakdown.append(
+            {
+                "stream": str(stream.get("title") or "Baustein").strip() or "Baustein",
+                "hours_min": round(stream_min, 1),
+                "hours_max": round(stream_max, 1),
+            }
+        )
+        total_min += stream_min
+        total_max += stream_max
+    coordination_factor_min = 1.12 if task_count else 1.2
+    coordination_factor_max = 1.25 if task_count else 1.45
+    total_min = max(2.0, total_min * coordination_factor_min)
+    total_max = max(total_min * 1.3, total_max * coordination_factor_max)
+    if risk_count:
+        total_max *= min(1.5, 1 + (risk_count * 0.04))
+    confidence = "high" if task_count >= 8 and detailed_tasks >= max(2, task_count // 3) else "medium" if task_count >= 4 else "low"
+    return {
+        "mode": "estimate",
+        "title": "Aufwandsschätzung",
+        "hours_min": round(total_min, 1),
+        "hours_max": round(total_max, 1),
+        "confidence": confidence,
+        "reasoning": (
+            f"Heuristik mit {task_count} Aufgaben, {stream_count} Bausteinen, "
+            f"{checklist_count} Checks und {risk_count} Risiken inkl. Koordination."
+        )[:200],
+        "breakdown": breakdown[:20],
+    }
+
+
+def _normalize_project_effort_estimate(parsed: Dict[str, Any], folder: Dict[str, Any]) -> Dict[str, Any]:
+    fallback = _fallback_project_effort_estimate(folder)
+    try:
+        hours_min = float(parsed.get("hours_min") or 0)
+    except (TypeError, ValueError):
+        hours_min = 0.0
+    try:
+        hours_max = float(parsed.get("hours_max") or 0)
+    except (TypeError, ValueError):
+        hours_max = 0.0
+    fallback_min = float(fallback.get("hours_min") or 0)
+    fallback_max = float(fallback.get("hours_max") or 0)
+    if hours_min <= 0 or hours_max <= 0:
+        hours_min, hours_max = fallback_min, fallback_max
+    else:
+        hours_min = max(hours_min, fallback_min * 0.65)
+        hours_max = max(hours_max, hours_min * 1.25, fallback_max * 0.65)
+    parsed["hours_min"] = round(hours_min, 1)
+    parsed["hours_max"] = round(max(hours_min, hours_max), 1)
+    confidence = str(parsed.get("confidence") or fallback.get("confidence") or "low").strip().lower()
+    parsed["confidence"] = confidence if confidence in {"low", "medium", "high"} else "low"
+    if not isinstance(parsed.get("breakdown"), list) or not parsed.get("breakdown"):
+        parsed["breakdown"] = fallback.get("breakdown") or []
+    parsed["reasoning"] = str(parsed.get("reasoning") or fallback.get("reasoning") or "")[:220]
+    return parsed
 
 
 def _fallback_project_ai_assist(action: str, topic: str, folder: Dict[str, Any], stream_id: str = "", context: str = "") -> Dict[str, Any]:
@@ -4224,14 +4888,59 @@ def _fallback_project_ai_assist(action: str, topic: str, folder: Dict[str, Any],
             ],
             "title": "Rechnungspositionen"
         }
+    if action == "estimate_effort":
+        return _fallback_project_effort_estimate(folder)
     return {"mode": "text", "text": f"Interne Übergabe zu {topic_value}:\n{base_context}\n\nWesentlich sind der aktuelle Status, die nächsten Entscheidungen und offene technische Risiken.", "title": "Interne Übergabe"}
+
+
+def _build_estimate_context(folder: Dict[str, Any]) -> str:
+    if not isinstance(folder, dict):
+        return ""
+    content = folder.get("content") if isinstance(folder.get("content"), dict) else {}
+    streams = content.get("streams") if isinstance(content.get("streams"), list) else []
+    overview = content.get("overview") if isinstance(content.get("overview"), dict) else {}
+    lines = [
+        f"Projekt: {str(folder.get('title') or '').strip()}",
+        f"Kunde: {str(folder.get('customer') or '').strip()}",
+        f"Tag: {str(folder.get('project_tag_label') or folder.get('project_tag') or '').strip()}",
+        f"Priorität: {str(folder.get('priority') or '').strip()}",
+        f"Status: {str(folder.get('status') or '').strip()}",
+        f"Deadline: {str(overview.get('project_deadline') or '').strip()}",
+        f"Aktuell: {str(folder.get('current_state') or '').strip()[:200]}",
+        f"Nächster Schritt: {str(folder.get('next_step') or '').strip()[:200]}",
+    ]
+    lines.append(f"\nBausteine ({len(streams)}):")
+    for stream in streams[:20]:
+        if not isinstance(stream, dict):
+            continue
+        tasks = stream.get("tasks") or []
+        checks = stream.get("checklists") if isinstance(stream.get("checklists"), list) else stream.get("checklist") or []
+        risks = stream.get("risks") or []
+        title = str(stream.get("title") or "Baustein").strip()
+        short = str(stream.get("short_status") or "").strip()
+        lines.append(f"- {title} | {len(tasks)} Aufgaben, {len(checks)} Checks, {len(risks)} Risiken{' — ' + short if short else ''}")
+        for task in tasks[:8]:
+            if isinstance(task, dict):
+                t_title = str(task.get("title") or "").strip()[:90]
+                t_status = str(task.get("status") or "").strip()
+                t_owner = str(task.get("owner") or "").strip()
+                t_due = str(task.get("due_date") or "").strip()
+                t_note = str(task.get("note") or "").strip()[:120]
+                if t_title:
+                    meta = ", ".join(item for item in [t_status or "open", f"Owner {t_owner}" if t_owner else "", f"Termin {t_due}" if t_due else ""] if item)
+                    lines.append(f"   • [{meta}] {t_title}{' — ' + t_note if t_note else ''}")
+    return "\n".join(line for line in lines if line and not line.endswith(": "))
 
 
 def _try_project_ai_assist(action: str, topic: str, folder: Dict[str, Any], stream_id: str = "", context: str = "") -> Dict[str, Any]:
     normalized_action = str(action or "").strip().lower()
     if normalized_action not in PROJECT_FOLDER_AI_ACTIONS:
         raise HTTPException(400, "Unsupported project AI action")
-    compact_context = _compact_project_folder_context(folder, stream_id=stream_id)
+    compact_context = (
+        _build_estimate_context(folder)
+        if normalized_action == "estimate_effort"
+        else _compact_project_folder_context(folder, stream_id=stream_id)
+    )
     instruction_map = {
         "checklist": "Erzeuge eine kompakte Projekt-Checkliste als JSON mit mode=items, title und items[] (Strings).",
         "risks": "Erzeuge Projekt-Risiken als JSON mit mode=risks, title und items[] mit title, level, mitigation.",
@@ -4243,6 +4952,39 @@ def _try_project_ai_assist(action: str, topic: str, folder: Dict[str, Any], stre
         "offer_basis": "Erstelle eine Angebotsgrundlage als JSON mit mode=text, title und text.",
         "handover": "Erstelle eine interne Übergabe als JSON mit mode=text, title und text.",
         "invoice_positions": "Erstelle Rechnungspositionen als JSON mit mode=items, title und items[] (Strings). Formuliere kurz, fakturierbar und kundentauglich.",
+        "estimate_effort": (
+            "Du bist Senior IT-Consultant in einem deutschen IT-Systemhaus. Schätze den realistischen "
+            "Gesamtaufwand der Projektmappe in Personenstunden — inklusive Vorbereitung, Umsetzung, "
+            "Tests, Doku/Übergabe, Abstimmung, Warte-/Koordinationsanteilen und Nachkontrolle. "
+            "Schätze wie für eine echte interne Kapazitätsplanung, nicht wie eine knappe Kundenzusammenfassung.\n\n"
+            "Referenzwerte (Spannweiten, an Komplexität anpassen):\n"
+            "- Kleine Abstimmungs-/Prüfaufgabe: 0,75–2 h\n"
+            "- Konfiguration eines überschaubaren Dienstes: 2–6 h\n"
+            "- Backup-Konzept neu aufsetzen: 6–14 h\n"
+            "- Datei-/Datenmigration (Server→Server, M365): 8–24 h\n"
+            "- Hyper-V/VMware Hostmigration: 12–32 h pro Host\n"
+            "- Domain/Active-Directory-Umstellung: 16–40 h\n"
+            "- Firewall-Regeln einrichten/dokumentieren: 4–10 h\n"
+            "- M365-Tenant-Setup inkl. Identity: 8–20 h\n"
+            "- Website/CMS-Major-Upgrade mit Themes/Plugins/Tests: 16–60 h je nach Umfang\n"
+            "- Custom-Code-/Schnittstellen-Anpassung: 4–16 h pro abgegrenztem Teil\n"
+            "- Standard-Arbeitsplatz einrichten: 1,5–3 h\n"
+            "- Software-Rollout (paketiert): 0,5 h pro Gerät + 4 h Setup\n"
+            "- Doku/Übergabe: 10–15 % der Umsetzungszeit\n"
+            "- Koordination/Termin/Rückfragen: 10–20 % zusätzlich\n\n"
+            "Vorgehen:\n"
+            "1) Geh die Bausteine einzeln durch und schätze pro Baustein eine min/max-Zeit.\n"
+            "2) Zähle Analyse, Vorbereitung, Durchführung, Tests, Rollback-Plan, Dokumentation und Übergabe explizit mit.\n"
+            "3) Berücksichtige Risiken (Risiko = +20–50 %), unklare Anforderungen (+30 %), "
+            "Schnittstellen (+15 %), produktive Systeme (+25 %).\n"
+            "4) Wenn keine Aufgaben vorhanden sind, schätze konservativ höher (großes max).\n"
+            "5) Konfidenz: high=detaillierte Aufgaben + klare Kurzlage, "
+            "medium=grobe Aufgaben, low=fast keine Strukturinfo.\n\n"
+            "Antworte ausschließlich als JSON-Objekt mit:\n"
+            "  mode='estimate', title (string), hours_min (number), hours_max (number), "
+            "confidence ('low'|'medium'|'high'), reasoning (deutsch, max 200 Zeichen, knapp warum), "
+            "breakdown (Array von Objekten {stream, hours_min, hours_max} pro Baustein, optional)."
+        ),
     }
     prompt_text = (
         f"{instruction_map[normalized_action]}\n"
@@ -4252,10 +4994,11 @@ def _try_project_ai_assist(action: str, topic: str, folder: Dict[str, Any], stre
         f"Projektkontext:\n{compact_context}"
     )
     try:
-        model_candidates = _resolve_internal_ai_tool_models(None)
+        model_candidates = _resolve_ai_models(purpose="project_folder")
         payload, model, provider = _ai_generate(
             prompt_text,
             model_candidates=model_candidates,
+            purpose="project_folder",
             response_format="json",
             temperature=0.25,
             max_tokens=min(900, INTERNAL_AI_TOOL_MAX_TOKENS),
@@ -4263,6 +5006,8 @@ def _try_project_ai_assist(action: str, topic: str, folder: Dict[str, Any], stre
         )
         parsed = jsonlib.loads(str((payload or {}).get("response") or "{}"))
         if isinstance(parsed, dict) and parsed.get("mode"):
+            if normalized_action == "estimate_effort":
+                parsed = _normalize_project_effort_estimate(parsed, folder)
             parsed["provider"] = provider
             parsed["model"] = model
             parsed["usedFallback"] = False
@@ -4401,7 +5146,22 @@ def _normalize_model_setting_value(raw_value: Any) -> str:
 
 def _normalize_ai_provider(raw_value: Any) -> str:
     provider = str(raw_value or "").strip().lower()
-    if provider in {"vllm", "openai", "openai_api", "openai-api", "openai-compatible", "openai_compatible"}:
+    if provider in {
+        "vllm",
+        "openai",
+        "openai_api",
+        "openai-api",
+        "openai-compatible",
+        "openai_compatible",
+        "azure",
+        "azure_ai",
+        "azure-openai",
+        "azure_openai",
+        "llama.cpp",
+        "llamacpp",
+        "llama-cpp",
+        "local_llm",
+    }:
         return AI_PROVIDER_OPENAI_COMPATIBLE
     if provider == AI_PROVIDER_OLLAMA:
         return AI_PROVIDER_OLLAMA
@@ -4442,20 +5202,136 @@ def _merge_model_candidates(*values: Any) -> List[str]:
     return ordered
 
 
-def _build_ai_config_snapshot(settings: Optional[IntegrationSettings] = None) -> Dict[str, Any]:
+def _ai_endpoint_id(value: Any) -> str:
+    clean = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(value or "").strip().lower()).strip("_")
+    return clean[:60]
+
+
+def _normalize_ai_endpoint(raw: Any, *, fallback_id: str = "", existing: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    provider = _normalize_ai_provider(raw.get("provider") or raw.get("ai_provider"))
+    endpoint_id = _ai_endpoint_id(raw.get("id") or raw.get("key") or fallback_id or raw.get("name"))
+    if not endpoint_id:
+        endpoint_id = f"endpoint_{uuid.uuid4().hex[:8]}"
+    base_url = _normalize_ai_base_url(raw.get("base_url") or raw.get("baseUrl") or raw.get("ai_base_url"), provider)
+    api_key = str(raw.get("api_key") or raw.get("apiKey") or raw.get("ai_api_key") or "").strip()
+    if not api_key and existing and str(existing.get("api_key") or "").strip():
+        api_key = str(existing.get("api_key") or "").strip()
+    return {
+        "id": endpoint_id,
+        "name": _telemetry_text(raw.get("name") or raw.get("label") or endpoint_id, 80),
+        "provider": provider,
+        "base_url": base_url,
+        "api_key": api_key,
+        "default_model": _normalize_model_setting_value(raw.get("default_model") or raw.get("defaultModel") or raw.get("ai_default_model")),
+        "enabled": raw.get("enabled") is not False,
+        "notes": _telemetry_text(raw.get("notes") or "", 240),
+    }
+
+
+def _default_ai_endpoint_from_settings(settings: Optional[IntegrationSettings]) -> Dict[str, Any]:
     provider = _normalize_ai_provider(
         (getattr(settings, "ai_provider", "") if settings is not None else "") or AI_PROVIDER_ENV
     )
-    base_url = _normalize_ai_base_url(
-        (getattr(settings, "ai_base_url", "") if settings is not None else "") or AI_BASE_URL_ENV,
-        provider,
-    )
-    api_key = str(
-        (getattr(settings, "ai_api_key", "") if settings is not None else "") or AI_API_KEY_ENV
-    ).strip()
-    configured_default_model = _normalize_model_setting_value(
-        getattr(settings, "ai_default_model", "") if settings is not None else ""
-    )
+    return {
+        "id": "default",
+        "name": "Standard",
+        "provider": provider,
+        "base_url": _normalize_ai_base_url(
+            (getattr(settings, "ai_base_url", "") if settings is not None else "") or AI_BASE_URL_ENV,
+            provider,
+        ),
+        "api_key": str((getattr(settings, "ai_api_key", "") if settings is not None else "") or AI_API_KEY_ENV).strip(),
+        "default_model": _normalize_model_setting_value(
+            getattr(settings, "ai_default_model", "") if settings is not None else ""
+        ),
+        "enabled": True,
+        "notes": "Kompatibilitaets-Endpoint aus den bisherigen KI-Feldern.",
+    }
+
+
+def _parse_ai_endpoints(settings: Optional[IntegrationSettings]) -> List[Dict[str, Any]]:
+    default_endpoint = _default_ai_endpoint_from_settings(settings)
+    rows: List[Dict[str, Any]] = [default_endpoint]
+    existing_by_id = {"default": default_endpoint}
+    raw_json = getattr(settings, "ai_endpoints_json", "") if settings is not None else ""
+    try:
+        parsed = json.loads(raw_json or "[]")
+    except Exception:
+        parsed = []
+    if isinstance(parsed, list):
+        for index, item in enumerate(parsed):
+            normalized = _normalize_ai_endpoint(item, fallback_id=f"endpoint_{index + 1}", existing=existing_by_id.get(_ai_endpoint_id((item or {}).get("id")) if isinstance(item, dict) else ""))
+            if not normalized or normalized["id"] == "default":
+                continue
+            existing_by_id[normalized["id"]] = normalized
+            rows.append(normalized)
+    return rows
+
+
+def _serialize_ai_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": endpoint.get("id") or "",
+        "name": endpoint.get("name") or endpoint.get("id") or "",
+        "provider": endpoint.get("provider") or AI_PROVIDER_OLLAMA,
+        "base_url": endpoint.get("base_url") or "",
+        "default_model": endpoint.get("default_model") or "",
+        "enabled": endpoint.get("enabled") is not False,
+        "notes": endpoint.get("notes") or "",
+        "has_api_key": bool(str(endpoint.get("api_key") or "").strip()),
+    }
+
+
+def _parse_ai_purpose_routes(settings: Optional[IntegrationSettings]) -> Dict[str, str]:
+    raw_json = getattr(settings, "ai_purpose_routes_json", "") if settings is not None else ""
+    try:
+        parsed = json.loads(raw_json or "{}")
+    except Exception:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    endpoints = {endpoint["id"] for endpoint in _parse_ai_endpoints(settings)}
+    routes: Dict[str, str] = {}
+    for purpose in AI_PURPOSE_LABELS:
+        endpoint_id = _ai_endpoint_id(parsed.get(purpose))
+        routes[purpose] = endpoint_id if endpoint_id in endpoints else "default"
+    return routes
+
+
+def _merge_ai_endpoints(settings: Optional[IntegrationSettings], incoming: Any) -> List[Dict[str, Any]]:
+    previous = {endpoint["id"]: endpoint for endpoint in _parse_ai_endpoints(settings)}
+    rows: List[Dict[str, Any]] = []
+    if not isinstance(incoming, list):
+        incoming = []
+    for index, item in enumerate(incoming):
+        normalized = _normalize_ai_endpoint(
+            item,
+            fallback_id=f"endpoint_{index + 1}",
+            existing=previous.get(_ai_endpoint_id((item or {}).get("id")) if isinstance(item, dict) else ""),
+        )
+        if not normalized:
+            continue
+        if normalized["id"] == "default":
+            continue
+        rows.append(normalized)
+    return rows[:20]
+
+
+def _build_ai_config_snapshot(settings: Optional[IntegrationSettings] = None, *, purpose: str = "", endpoint_id: str = "") -> Dict[str, Any]:
+    endpoints = _parse_ai_endpoints(settings)
+    routes = _parse_ai_purpose_routes(settings)
+    endpoint_lookup = {endpoint["id"]: endpoint for endpoint in endpoints}
+    normalized_purpose = str(purpose or "").strip().lower()
+    selected_endpoint_id = _ai_endpoint_id(endpoint_id) or routes.get(normalized_purpose) or "default"
+    endpoint = endpoint_lookup.get(selected_endpoint_id) or endpoint_lookup.get("default") or _default_ai_endpoint_from_settings(settings)
+    provider = _normalize_ai_provider(endpoint.get("provider"))
+    base_url = _normalize_ai_base_url(endpoint.get("base_url"), provider)
+    api_key = str(endpoint.get("api_key") or "").strip()
+    endpoint_default_model = endpoint.get("default_model")
+    if endpoint.get("id") == "default" and not endpoint_default_model:
+        endpoint_default_model = getattr(settings, "ai_default_model", "") if settings is not None else ""
+    configured_default_model = _normalize_model_setting_value(endpoint_default_model)
     default_model = configured_default_model or AI_DEFAULT_MODEL_ENV
     configured_models: Dict[str, str] = {}
     models: Dict[str, str] = {}
@@ -4468,33 +5344,77 @@ def _build_ai_config_snapshot(settings: Optional[IntegrationSettings] = None) ->
         "provider": provider,
         "base_url": base_url,
         "api_key": api_key,
+        "endpoint_id": endpoint.get("id") or "default",
+        "endpoint_name": endpoint.get("name") or endpoint.get("id") or "Standard",
         "default_model": default_model,
         "configured_default_model": configured_default_model,
         "models": models,
         "configured_models": configured_models,
+        "endpoints": endpoints,
+        "purpose_routes": routes,
     }
 
 
-def _get_ai_config_snapshot(settings: Optional[IntegrationSettings] = None) -> Dict[str, Any]:
+def _get_ai_config_snapshot(settings: Optional[IntegrationSettings] = None, *, purpose: str = "", endpoint_id: str = "") -> Dict[str, Any]:
     if settings is not None:
-        return _build_ai_config_snapshot(settings)
+        return _build_ai_config_snapshot(settings, purpose=purpose, endpoint_id=endpoint_id)
     with SessionLocal() as db:
-        return _build_ai_config_snapshot(db.query(IntegrationSettings).first())
+        return _build_ai_config_snapshot(db.query(IntegrationSettings).first(), purpose=purpose, endpoint_id=endpoint_id)
 
 
 def _build_ai_config_from_request(
     data: Optional[AiConnectionProbeRequest],
     persisted_settings: Optional[IntegrationSettings] = None,
 ) -> Dict[str, Any]:
-    base_config = _build_ai_config_snapshot(persisted_settings)
+    requested_endpoint_id = _ai_endpoint_id(getattr(data, "ai_endpoint_id", "") if data is not None else "")
+    base_config = _build_ai_config_snapshot(
+        persisted_settings,
+        endpoint_id=requested_endpoint_id,
+    )
     if data is None:
         return base_config
     payload = data.dict(exclude_unset=True)
-    provider = _normalize_ai_provider(payload.get("ai_provider", base_config.get("provider")))
-    base_url = _normalize_ai_base_url(payload.get("ai_base_url", base_config.get("base_url")), provider)
-    api_key = str(payload.get("ai_api_key", base_config.get("api_key")) or "").strip()
+    if payload.get("ai_endpoints"):
+        temp_settings = IntegrationSettings()
+        if persisted_settings is not None:
+            for field_name in (
+                "ai_provider",
+                "ai_base_url",
+                "ai_api_key",
+                "ai_default_model",
+                "ai_internal_model",
+                "ai_action_model",
+                "ai_task_model",
+                "ai_customer_ranking_model",
+                "ai_customer_development_model",
+                "ai_offer_model",
+                "ai_invoice_model",
+                "ai_newsletter_model",
+                "ai_meta_hub_model",
+                "ai_project_folder_model",
+                "ai_purpose_routes_json",
+            ):
+                setattr(temp_settings, field_name, getattr(persisted_settings, field_name, ""))
+        temp_settings.ai_endpoints_json = json.dumps(_merge_ai_endpoints(persisted_settings, payload.get("ai_endpoints")))
+        if payload.get("ai_purpose_routes") is not None:
+            temp_settings.ai_purpose_routes_json = json.dumps(payload.get("ai_purpose_routes") or {})
+        base_config = _build_ai_config_snapshot(temp_settings, endpoint_id=requested_endpoint_id)
+    endpoint_selected = bool(requested_endpoint_id and requested_endpoint_id != "default")
+    provider = _normalize_ai_provider(
+        base_config.get("provider") if endpoint_selected else payload.get("ai_provider", base_config.get("provider"))
+    )
+    base_url = _normalize_ai_base_url(
+        base_config.get("base_url") if endpoint_selected else payload.get("ai_base_url", base_config.get("base_url")),
+        provider,
+    )
+    incoming_api_key = payload.get("ai_api_key")
+    api_key = str(
+        base_config.get("api_key") if endpoint_selected else incoming_api_key if incoming_api_key not in (None, "") else base_config.get("api_key")
+    ).strip()
     configured_default_model = _normalize_model_setting_value(
-        payload.get("ai_default_model", base_config.get("configured_default_model"))
+        base_config.get("configured_default_model")
+        if endpoint_selected
+        else payload.get("ai_default_model", base_config.get("configured_default_model"))
     )
     default_model = configured_default_model or str(base_config.get("default_model") or "").strip()
     models = dict(base_config.get("models") or {})
@@ -4509,6 +5429,8 @@ def _build_ai_config_from_request(
         "provider": provider,
         "base_url": base_url,
         "api_key": api_key,
+        "endpoint_id": base_config.get("endpoint_id") or requested_endpoint_id,
+        "endpoint_name": base_config.get("endpoint_name") or "",
         "default_model": default_model,
         "configured_default_model": configured_default_model,
         "models": models,
@@ -4522,7 +5444,7 @@ def _resolve_ai_models(
     settings: Optional[IntegrationSettings] = None,
     config: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
-    resolved_config = config or _get_ai_config_snapshot(settings)
+    resolved_config = config or _get_ai_config_snapshot(settings, purpose=purpose)
     ordered = _merge_model_candidates(*specific_values)
     if ordered:
         return ordered
@@ -5521,7 +6443,7 @@ def _openai_compatible_generate(
                             wait_seconds,
                         )
                         time.sleep(wait_seconds)
-                        continue
+                    continue
                 if exc.response is not None and exc.response.status_code == 400:
                     context_limit, _, _ = _parse_openai_context_limit_error_detail(detail)
                     if context_limit > 0:
@@ -5543,7 +6465,7 @@ def _openai_compatible_generate(
                         )
                         attempt_prompt_text = next_prompt_text
                         attempt_max_tokens = next_max_tokens
-                        continue
+                    continue
                 logger.warning(
                     "OpenAI-compatible request failed model=%s status=%s detail=%s",
                     model,
@@ -5646,35 +6568,80 @@ def _ai_generate(
     settings: Optional[IntegrationSettings] = None,
     config: Optional[Dict[str, Any]] = None,
     system_prompt: Optional[str] = None,
+    purpose: str = "",
 ) -> Tuple[Dict[str, Any], str, str]:
-    resolved_config = config or _get_ai_config_snapshot(settings)
+    resolved_config = config or _get_ai_config_snapshot(settings, purpose=purpose)
     provider = str(resolved_config.get("provider") or AI_PROVIDER_OLLAMA)
-    if provider == AI_PROVIDER_OPENAI_COMPATIBLE:
-        payload, model = _openai_compatible_generate(
+    started_at = time.time()
+    payload: Dict[str, Any] = {}
+    model = ""
+    used_provider = provider
+    try:
+        if provider == AI_PROVIDER_OPENAI_COMPATIBLE:
+            payload, model = _openai_compatible_generate(
+                prompt,
+                model_candidates=model_candidates,
+                config=resolved_config,
+                timeout=timeout,
+                response_format=response_format,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                use_cache=use_cache,
+                system_prompt=system_prompt,
+            )
+            used_provider = provider
+            return payload, model, used_provider
+        payload, model = _ollama_generate(
             prompt,
             model_candidates=model_candidates,
-            config=resolved_config,
+            base_url=str(resolved_config.get("base_url") or OLLAMA_BASE_URL),
             timeout=timeout,
             response_format=response_format,
             temperature=temperature,
             max_tokens=max_tokens,
             use_cache=use_cache,
+            raw=raw,
             system_prompt=system_prompt,
         )
-        return payload, model, provider
-    payload, model = _ollama_generate(
-        prompt,
-        model_candidates=model_candidates,
-        base_url=str(resolved_config.get("base_url") or OLLAMA_BASE_URL),
-        timeout=timeout,
-        response_format=response_format,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        use_cache=use_cache,
-        raw=raw,
-        system_prompt=system_prompt,
-    )
-    return payload, model, AI_PROVIDER_OLLAMA
+        used_provider = AI_PROVIDER_OLLAMA
+        return payload, model, used_provider
+    finally:
+        try:
+            response_value = payload.get("response") if isinstance(payload, dict) else None
+            response_chars = len(response_value) if isinstance(response_value, str) else 0
+            success = bool(payload) and (
+                bool(response_chars)
+                or isinstance(response_value, dict)
+                or bool((payload or {}).get("usage") if isinstance(payload, dict) else None)
+            )
+            usage = payload.get("usage") if isinstance(payload, dict) and isinstance(payload.get("usage"), dict) else {}
+            _record_server_telemetry_event(
+                event_type="ai",
+                module="ai",
+                component="ai_generate",
+                action=str(purpose or "unspecified"),
+                duration_ms=int((time.time() - started_at) * 1000),
+                success=success,
+                meta={
+                    "provider": used_provider,
+                    "endpoint_id": resolved_config.get("endpoint_id") or "",
+                    "endpoint_name": resolved_config.get("endpoint_name") or "",
+                    "base_url": resolved_config.get("base_url") or "",
+                    "model": model or "",
+                    "model_candidates": _merge_model_candidates(model_candidates)[:5],
+                    "purpose": str(purpose or "unspecified"),
+                    "prompt_chars": len(str(prompt or "")),
+                    "system_prompt_chars": len(str(system_prompt or "")),
+                    "response_chars": response_chars,
+                    "response_format": response_format or "",
+                    "max_tokens": int(max_tokens or 0),
+                    "temperature": temperature,
+                    "cached_allowed": bool(use_cache),
+                    "usage": usage,
+                },
+            )
+        except Exception as exc:
+            logger.debug("AI telemetry failed: %s", exc)
 
 
 def _ai_generate_text(
@@ -5687,10 +6654,11 @@ def _ai_generate_text(
     use_cache: bool = True,
     settings: Optional[IntegrationSettings] = None,
     config: Optional[Dict[str, Any]] = None,
+    purpose: str = "invoice_summary",
 ) -> Tuple[str, str, str]:
-    resolved_config = config or _get_ai_config_snapshot(settings)
+    resolved_config = config or _get_ai_config_snapshot(settings, purpose=purpose)
     candidates = model_candidates or _resolve_ai_models(
-        purpose="invoice_summary",
+        purpose=purpose,
         config=resolved_config,
     )
     data, model, provider = _ai_generate(
@@ -5701,6 +6669,7 @@ def _ai_generate_text(
         max_tokens=max_tokens,
         use_cache=use_cache,
         config=resolved_config,
+        purpose=purpose,
     )
     return str(data.get("response") or "").strip(), model, provider
 
@@ -5984,6 +6953,7 @@ def _estimate_task_scope(task: DayTask, analysis_text: str, actual_hours: float)
         payload, model, provider_name = _ai_generate(
             prompt,
             model_candidates=model_candidates,
+            purpose="task_draft",
             timeout=TASK_SCOPE_AI_TIMEOUT_SECONDS,
             response_format="json",
             temperature=0.15,
@@ -6678,6 +7648,13 @@ def _build_customer_payment_stats(
             entry["revenueCurrentYear"] += amount
         elif invoice_date >= start_last_year and invoice_date <= end_last_year:
             entry["revenueLastYear"] += amount
+        invoice_year = int(invoice_date.year)
+        yearly_entry = entry.setdefault("yearlyRevenue", {}).setdefault(
+            invoice_year,
+            {"amountEur": 0.0, "invoiceCount": 0},
+        )
+        yearly_entry["amountEur"] += amount
+        yearly_entry["invoiceCount"] += 1
         paid_date = _invoice_date_for_paid(invoice)
         if _invoice_is_paid(invoice) and paid_date:
             paid_days = max(0, (paid_date.date() - invoice_date.date()).days)
@@ -6809,6 +7786,11 @@ def _build_customer_payment_stats(
                 if item.get("latestInvoiceDate")
                 else "",
                 "businessWeight": round(business_weight, 2),
+                "budgetEstimate": _build_customer_budget_estimate(
+                    item.get("yearlyRevenue") or {},
+                    current_year=now_dt.year,
+                    current_year_revenue=revenue_current_year,
+                ),
             }
         )
     grade_order = {"A": 0, "B": 1, "C": 2}
@@ -7039,7 +8021,7 @@ def _build_sevdesk_recurring_tag_overview(
                 "invoiceCount": int(row["invoiceCount"] or 0),
                 "tags": sorted(
                     row["tags"].values(),
-                    key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("tagName") or "").lower()),
+                key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("tagName") or "").lower()),
                 ),
                 "invoices": row["invoices"],
             }
@@ -7104,6 +8086,9 @@ def _build_sevdesk_stats(
     start_current_year = datetime(now_dt.year, 1, 1)
     start_last_year = datetime(now_dt.year - 1, 1, 1)
     end_last_year = datetime(now_dt.year - 1, 12, 31, 23, 59, 59)
+    paid_weekly_trend: List[Dict[str, Any]] = []
+    paid_monthly_trend: List[Dict[str, Any]] = []
+    forecast_avg_weekly = 0.0
     if include_financial_overview:
         paid_invoices = [item for item in all_invoices if _invoice_is_paid(item)]
         paid_sum_total = round(sum(_invoice_paid_amount(item) for item in paid_invoices), 2)
@@ -7117,6 +8102,37 @@ def _build_sevdesk_stats(
                 paid_current_month.append(item)
         paid_year_sum = round(sum(_invoice_paid_amount(item) for item in paid_current_year), 2)
         paid_month_sum = round(sum(_invoice_paid_amount(item) for item in paid_current_month), 2)
+
+        # Rolling 12-week trend for forecast & sparkline
+        week_buckets: Dict[str, float] = {}
+        for item in paid_invoices:
+            paid_date = _invoice_date_for_paid(item)
+            if not paid_date:
+                continue
+            iso_year, iso_week, _ = paid_date.isocalendar()
+            key = f"{iso_year}-W{iso_week:02d}"
+            week_buckets[key] = week_buckets.get(key, 0.0) + float(_invoice_paid_amount(item) or 0)
+        sorted_weeks = sorted(week_buckets.keys())[-12:]
+        paid_weekly_trend = [
+            {"week": key, "sumEur": round(week_buckets.get(key, 0.0), 2)} for key in sorted_weeks
+        ]
+        if paid_weekly_trend:
+            forecast_avg_weekly = round(
+                sum(row["sumEur"] for row in paid_weekly_trend) / len(paid_weekly_trend), 2
+            )
+
+        # 12-month trend for sparkline
+        month_buckets: Dict[str, float] = {}
+        for item in paid_invoices:
+            paid_date = _invoice_date_for_paid(item)
+            if not paid_date:
+                continue
+            key = f"{paid_date.year}-{paid_date.month:02d}"
+            month_buckets[key] = month_buckets.get(key, 0.0) + float(_invoice_paid_amount(item) or 0)
+        sorted_months = sorted(month_buckets.keys())[-12:]
+        paid_monthly_trend = [
+            {"month": key, "sumEur": round(month_buckets.get(key, 0.0), 2)} for key in sorted_months
+        ]
         for item in all_invoices:
             if _invoice_is_paid(item):
                 continue
@@ -7189,6 +8205,10 @@ def _build_sevdesk_stats(
         "paidCurrentYear": {"count": len(paid_current_year), "sumEur": paid_year_sum},
         "paidCurrentMonth": {"count": len(paid_current_month), "sumEur": paid_month_sum},
         "paidAverage": {"sumEur": paid_avg},
+        "paidWeeklyTrend": paid_weekly_trend,
+        "paidMonthlyTrend": paid_monthly_trend,
+        "forecastAverageWeeklyEur": forecast_avg_weekly,
+        "forecastMonthlyEur": round(forecast_avg_weekly * 4.345, 2),
         "overdue": {"count": len(overdue_invoices), "sumEur": overdue_sum},
         "topCustomers": top_customers,
         "customerPaymentStats": customer_payment_stats,
@@ -8764,6 +9784,101 @@ def _build_newsletter_rss_fallback(mode: str, articles: List[NewsletterRssGenera
     return "\n".join(lines).strip()
 
 
+def _newsletter_body_subject_from_html(html: str) -> str:
+    match = re.search(r"<h[1-3][^>]*>([\s\S]*?)</h[1-3]>", str(html or ""), flags=re.I)
+    if not match:
+        return "Aktuelle Information zu Ihrer IT"
+    text_value = _html_to_plain_text(match.group(1))
+    text_value = re.sub(r"\s+", " ", text_value).strip(" .:-")
+    if not text_value:
+        return "Aktuelle Information zu Ihrer IT"
+    if len(text_value) <= 60:
+        return text_value
+    return text_value[:57].rstrip(" ,;:-") + "..."
+
+
+def _clean_newsletter_generated_body(html: str) -> str:
+    result = str(html or "").strip()
+    result = re.sub(r"```(?:html)?", "", result, flags=re.I).replace("```", "").strip()
+    result = re.sub(r"<!doctype[\s\S]*?>", "", result, flags=re.I)
+    result = re.sub(r"<\/?(?:html|head|body)[^>]*>", "", result, flags=re.I)
+    result = re.sub(r"<script[\s\S]*?</script>", "", result, flags=re.I)
+    result = re.sub(r"<style[\s\S]*?</style>", "", result, flags=re.I)
+    result = re.sub(r"\son[a-z]+\s*=\s*(['\"]).*?\1", "", result, flags=re.I)
+    result = re.sub(r"\son[a-z]+\s*=\s*[^\s>]+", "", result, flags=re.I)
+    return result.strip()
+
+
+def _fallback_newsletter_body_from_raw(raw_text: str) -> str:
+    source = _html_to_plain_text(raw_text)
+    source = re.sub(r"\s+", " ", source).strip()
+    title = source[:70].rstrip(" ,;:-") or "Aktuelle Information zu Ihrer IT"
+    summary = source[:220].rstrip(" ,;:-") or "Wir möchten Sie kurz über ein aktuelles IT-Thema informieren."
+    return f"""
+<section style="font-family: Arial, sans-serif; color:#1f2933; line-height:1.6; font-size:15px;">
+  <div style="background:#f4f7fb; border-left:5px solid #1f5f99; padding:20px 24px; border-radius:10px; margin-bottom:24px;">
+    <h2 style="margin:0 0 10px 0; color:#1f5f99; font-size:22px;">{escape(title)}</h2>
+    <p style="margin:0;">{escape(summary)}</p>
+  </div>
+  <p>Wir möchten Sie kurz informieren: Das beschriebene Thema kann je nach eingesetzten Systemen relevant sein. Eine pauschale Bewertung ist ohne Prüfung der konkreten Umgebung nicht sinnvoll.</p>
+  <div style="background:#fff7ed; border-left:5px solid #f97316; padding:16px 20px; border-radius:8px; margin:22px 0;">
+    <strong>Wichtig:</strong><br>
+    Wir empfehlen, die betroffenen Systeme vorab prüfen zu lassen, bevor Änderungen oder Updates im laufenden Betrieb durchgeführt werden.
+  </div>
+  <p>Quansatech kann die Prüfung bequem per Fernwartung übernehmen, die Situation einordnen und bei Bedarf die nächsten Schritte mit Ihnen abstimmen.</p>
+  <div style="background:#f9fafb; border:1px solid #e5e7eb; padding:14px 18px; border-radius:8px; margin-top:24px; font-size:14px; color:#4b5563;">
+    <strong>Hinweis:</strong><br>
+    Diese Information ist eine allgemeine Kundeninformation im Rahmen des Quansatech Newsletters. Ob Ihre Systeme konkret betroffen sind, kann im Einzelfall geprüft werden.
+  </div>
+</section>
+""".strip()
+
+
+def _build_newsletter_raw_prompt() -> str:
+    return (
+        "Du bist der Newsletter-Assistent von Quansatech GmbH.\n\n"
+        "Erstelle aus dem eingegebenen Rohtext einen kurzen, professionellen Kundennewsletter im Quansatech-Stil.\n\n"
+        "Gib ausschließlich den HTML-Body zurück. Kein Markdown, kein vollständiges HTML-Dokument, kein <html>, kein <head>, kein <body>.\n"
+        "Der Newsletter richtet sich an Ärzte, Steuerberater, Geschäftsführer und KMU-Kunden ohne tiefes IT-Wissen.\n\n"
+        "Schreibe ruhig, klar, sachlich, kundenverständlich und lösungsorientiert. Vermeide Panikmache, Werbesprache und unnötige technische Tiefe.\n\n"
+        "Verwende Inline-CSS und ein Outlook-kompatibles Layout mit:\n"
+        "- Arial\n"
+        "- dunklem Fließtext #1f2933\n"
+        "- Quansatech-Blau #1f5f99\n"
+        "- hellblauer Einleitungsbox\n"
+        "- optionaler orangefarbener Wichtig-Box\n"
+        "- optionaler grauer Hinweisbox\n"
+        "- keine externen CSS-Klassen\n"
+        "- keine Skripte\n"
+        "- keine Flexbox, kein Grid, keine komplexen Layouts\n\n"
+        "Baue den Newsletter nach Möglichkeit so auf:\n"
+        "1. Titel und Kernaussage in blauer Box\n"
+        "2. kurze Erklärung\n"
+        "3. betroffene Systeme oder Zielgruppe\n"
+        "4. empfohlene Handlung\n"
+        "5. was Quansatech übernimmt\n"
+        "6. optionaler Hinweis für Laien\n\n"
+        "Halte den Text kurz. Ideal sind 250 bis 400 Wörter.\n"
+        "Erfinde keine konkreten Fakten, Versionsnummern, Termine oder Preise, wenn sie nicht im Rohtext enthalten sind. Formuliere in solchen Fällen allgemein.\n\n"
+        "Der Newsletter soll vermitteln: Wir haben das Thema im Blick, informieren rechtzeitig und helfen, bevor ein Problem entsteht.\n\n"
+        "Nutze dieses Grundlayout als Orientierung und passe den Inhalt sinnvoll an:\n"
+        "<section style=\"font-family: Arial, sans-serif; color:#1f2933; line-height:1.6; font-size:15px;\">\n"
+        "  <div style=\"background:#f4f7fb; border-left:5px solid #1f5f99; padding:20px 24px; border-radius:10px; margin-bottom:24px;\">\n"
+        "    <h2 style=\"margin:0 0 10px 0; color:#1f5f99; font-size:22px;\">[Kurzer, klarer Titel]</h2>\n"
+        "    <p style=\"margin:0;\">[Kurze Zusammenfassung des wichtigsten Punktes.]</p>\n"
+        "  </div>\n"
+        "  <p>[Hauptinformation in einfacher Sprache.]</p>\n"
+        "  <div style=\"background:#fff7ed; border-left:5px solid #f97316; padding:16px 20px; border-radius:8px; margin:22px 0;\">\n"
+        "    <strong>Wichtig:</strong><br>[Konkrete Handlungsempfehlung für den Kunden.]\n"
+        "  </div>\n"
+        "  <p>[Was Quansatech empfiehlt oder übernimmt.]</p>\n"
+        "  <div style=\"background:#f9fafb; border:1px solid #e5e7eb; padding:14px 18px; border-radius:8px; margin-top:24px; font-size:14px; color:#4b5563;\">\n"
+        "    <strong>Hinweis:</strong><br>Diese Information ist eine allgemeine Kundeninformation im Rahmen des Quansatech Newsletters. Ob Ihre Systeme konkret betroffen sind, kann im Einzelfall geprüft werden.\n"
+        "  </div>\n"
+        "</section>"
+    )
+
+
 def _replace_newsletter_group_members(
     db: Session,
     group: NewsletterGroup,
@@ -9179,6 +10294,7 @@ def serialize_integration_settings(settings: IntegrationSettings, db=None) -> Di
         "meta_hub_rmm_enabled": bool(settings.meta_hub_rmm_enabled),
         "meta_hub_rmm_customer_field_name": settings.meta_hub_rmm_customer_field_name or "Kundennummer",
         "meta_hub_email_enabled": bool(settings.meta_hub_email_enabled),
+        "meta_hub_sevdesk_enabled": bool(settings.meta_hub_sevdesk_enabled),
         "meta_hub_email_access_mode": "read_only",
         "meta_hub_refresh_seconds": int(settings.meta_hub_refresh_seconds or 300),
         "meta_hub_mailboxes": meta_hub_mailboxes,
@@ -9199,6 +10315,12 @@ def serialize_integration_settings(settings: IntegrationSettings, db=None) -> Di
         "ai_customer_development_model": _normalize_model_setting_value(settings.ai_customer_development_model),
         "ai_offer_model": _normalize_model_setting_value(settings.ai_offer_model),
         "ai_invoice_model": _normalize_model_setting_value(settings.ai_invoice_model),
+        "ai_newsletter_model": _normalize_model_setting_value(settings.ai_newsletter_model),
+        "ai_meta_hub_model": _normalize_model_setting_value(settings.ai_meta_hub_model),
+        "ai_project_folder_model": _normalize_model_setting_value(settings.ai_project_folder_model),
+        "ai_endpoints": [_serialize_ai_endpoint(endpoint) for endpoint in _parse_ai_endpoints(settings)],
+        "ai_purpose_routes": _parse_ai_purpose_routes(settings),
+        "ai_purpose_labels": AI_PURPOSE_LABELS,
         "has_ai_api_key": bool(settings.ai_api_key or ai_config["api_key"]),
     }
 
@@ -10836,6 +11958,103 @@ def serialize_offer(offer: Offer) -> Dict[str, Any]:
         data["createdAt"] = _offer_iso_timestamp(offer.created_at)
     return data
 
+
+TELEMETRY_KNOWN_MODULES = {
+    "ai": "KI",
+    "dayplan": "Aufgaben",
+    "notes": "Notizen",
+    "projectfolders": "Projektmappe",
+    "offers": "Angebote",
+    "purchasing": "Einkauf",
+    "report": "Kundenbericht",
+    "telephony": "Telefonie",
+    "customers": "Kundenstamm",
+    "visionboard": "VisionBoard",
+    "stats": "Statistik",
+    "tools": "Tools",
+    "knowledge": "Wissens-DB",
+    "settings": "Einstellungen",
+}
+
+
+def _telemetry_text(value: Any, max_length: int = 160) -> str:
+    return str(value or "").strip()[:max_length]
+
+
+def _telemetry_int(value: Any, default: int = 0, minimum: int = 0, maximum: int = 24 * 60 * 60 * 1000) -> int:
+    try:
+        number = int(float(value))
+    except Exception:
+        return default
+    return max(minimum, min(maximum, number))
+
+
+def _serialize_telemetry_event(row: TelemetryEvent) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {}
+    if row.meta_json:
+        try:
+            parsed = json.loads(row.meta_json)
+            if isinstance(parsed, dict):
+                meta = parsed
+        except Exception:
+            meta = {}
+    return {
+        "id": row.id,
+        "event_type": row.event_type,
+        "module": row.module,
+        "component": row.component,
+        "action": row.action,
+        "route": row.route,
+        "method": row.method,
+        "status_code": row.status_code,
+        "duration_ms": row.duration_ms,
+        "success": row.success,
+        "session_id": row.session_id,
+        "device_class": row.device_class,
+        "build_tag": row.build_tag,
+        "meta": meta,
+        "created_at": row.created_at,
+    }
+
+
+def _record_server_telemetry_event(
+    *,
+    event_type: str,
+    module: str = "",
+    component: str = "",
+    action: str = "",
+    route: str = "",
+    method: str = "",
+    status_code: int = 0,
+    duration_ms: int = 0,
+    success: bool = True,
+    meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        with SessionLocal() as db:
+            db.add(
+                TelemetryEvent(
+                    event_type=_telemetry_text(event_type, 40),
+                    module=_telemetry_text(module, 80),
+                    component=_telemetry_text(component, 120),
+                    action=_telemetry_text(action, 120),
+                    route=_telemetry_text(route, 220),
+                    method=_telemetry_text(method, 12).upper(),
+                    status_code=_telemetry_int(status_code, 0, 0, 599),
+                    duration_ms=_telemetry_int(duration_ms, 0),
+                    success=bool(success),
+                    session_id="server",
+                    device_class="server",
+                    build_tag="backend",
+                    meta_json=json.dumps(meta or {}, ensure_ascii=False)[:2000],
+                    created_at=int(time.time() * 1000),
+                )
+            )
+            db.commit()
+    except Exception as exc:
+        logger.debug("Server telemetry write failed: %s", exc)
+
+
 def serialize_pbx_phonebook_entry(entry: PbxPhonebookEntry) -> Dict[str, Any]:
     return {
         "id": entry.id,
@@ -10966,6 +12185,154 @@ def _nfon_phonebook_body(
     if is_global is not None:
         body["isGlobal"] = bool(is_global)
     return body
+
+NFON_CONTROL_RESOURCES: Dict[str, Dict[str, Any]] = {
+    "time_rules": {
+        "label": "Zeitsteuerung",
+        "paths": [
+            "/api/customers/{customer}/targets/time-control-services",
+            "/api/customers/{customer}/targets/time-controls",
+            "/api/customers/{customer}/time-controls",
+            "/api/customers/{customer}/targets/schedules",
+            "/api/customers/{customer}/schedules",
+            "/api/customers/{customer}/targets/holiday-rules",
+        ],
+    },
+    "quick_modes": {
+        "label": "Schnellmodi",
+        "paths": [
+            "/api/customers/{customer}/targets/call-routing",
+            "/api/customers/{customer}/call-routing",
+            "/api/customers/{customer}/targets/services",
+            "/api/customers/{customer}/targets/time-controls",
+        ],
+    },
+    "forwards": {
+        "label": "Rufweiterleitungen",
+        "paths": [
+            "/api/customers/{customer}/targets/phone-extensions",
+            "/api/customers/{customer}/phone-extensions",
+            "/api/customers/{customer}/targets/call-forwards",
+            "/api/customers/{customer}/call-forwards",
+        ],
+    },
+    "groups": {
+        "label": "Rufgruppen",
+        "paths": [
+            "/api/customers/{customer}/targets/groups",
+            "/api/customers/{customer}/groups",
+            "/api/customers/{customer}/targets/ring-groups",
+            "/api/customers/{customer}/ring-groups",
+        ],
+    },
+    "queues": {
+        "label": "Warteschlangen",
+        "paths": [
+            "/api/customers/{customer}/targets/queues",
+            "/api/customers/{customer}/queues",
+            "/api/customers/{customer}/targets/acd-groups",
+            "/api/customers/{customer}/acd-groups",
+        ],
+    },
+    "announcements": {
+        "label": "Ansagen",
+        "paths": [
+            "/api/customers/{customer}/targets/announcements",
+            "/api/customers/{customer}/announcements",
+            "/api/customers/{customer}/targets/voice-prompts",
+            "/api/customers/{customer}/voice-prompts",
+        ],
+    },
+    "oncall": {
+        "label": "Bereitschaft",
+        "paths": [
+            "/api/customers/{customer}/targets/call-routing",
+            "/api/customers/{customer}/targets/services",
+            "/api/customers/{customer}/targets/time-controls",
+            "/api/customers/{customer}/targets/phone-extensions",
+        ],
+    },
+}
+
+def _nfon_control_path_candidates(control_key: str, customer_account: str) -> List[str]:
+    config = NFON_CONTROL_RESOURCES.get(str(control_key or "").strip())
+    if not config:
+        raise HTTPException(404, "Unknown NFON control resource")
+    customer = quote(str(customer_account or "").strip(), safe="")
+    return [str(path).format(customer=customer) for path in config.get("paths") or []]
+
+def _nfon_item_data_fields(item: Dict[str, Any]) -> Dict[str, Any]:
+    data = item.get("data")
+    if not isinstance(data, list):
+        return {}
+    fields: Dict[str, Any] = {}
+    for field in data:
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name") or "").strip()
+        if name:
+            fields[name] = field.get("value")
+    return fields
+
+def _nfon_extract_items(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in ("items", "data", "results", "content", "targets", "entries", "values"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    embedded = payload.get("_embedded")
+    if isinstance(embedded, dict):
+        for value in embedded.values():
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    return [payload]
+
+def _nfon_item_id(item: Dict[str, Any]) -> str:
+    for key in ("id", "uuid", "identifier", "extension", "number", "name"):
+        value = item.get(key)
+        if value not in (None, ""):
+            return str(value)
+    fields = _nfon_item_data_fields(item)
+    for key in ("serviceNumber", "extensionNumber", "displayName", "name"):
+        value = fields.get(key)
+        if value not in (None, ""):
+            return str(value)
+    href = str(item.get("href") or "").strip()
+    if href:
+        return href.rstrip("/").split("/")[-1]
+    links = item.get("_links") if isinstance(item.get("_links"), dict) else {}
+    self_link = links.get("self") if isinstance(links.get("self"), dict) else {}
+    self_href = str(self_link.get("href") or "").strip()
+    if self_href:
+        return self_href.rstrip("/").split("/")[-1]
+    return ""
+
+def _nfon_item_label(item: Dict[str, Any]) -> str:
+    for key in ("displayName", "name", "label", "description", "extension", "number", "target", "id"):
+        value = item.get(key)
+        if value not in (None, ""):
+            return str(value)
+    fields = _nfon_item_data_fields(item)
+    for key in ("displayName", "name", "serviceCode", "extensionNumber", "serviceNumber"):
+        value = fields.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return "NFON Eintrag"
+
+def _nfon_sanitize_control_path(path: str, customer_account: str) -> str:
+    path_value = str(path or "").strip()
+    if not path_value.startswith("/"):
+        raise HTTPException(400, "Invalid NFON path")
+    if "://" in path_value or ".." in path_value:
+        raise HTTPException(400, "Invalid NFON path")
+    customer = quote(str(customer_account or "").strip(), safe="")
+    allowed_prefix = f"/api/customers/{customer}/"
+    if not path_value.startswith(allowed_prefix):
+        raise HTTPException(400, "NFON path outside configured customer account")
+    return path_value
 
 def _build_nfon_string_to_sign(
     method: str,
@@ -11601,7 +12968,7 @@ def _build_recurring_costs_overview(
                 "itemCount": int(entry["itemCount"] or 0),
                 "categoryTotals": sorted(
                     list(entry["categoryTotals"].values()),
-                    key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("label") or "").lower()),
+                key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("label") or "").lower()),
                 ),
                 "items": entry["items"],
             }
@@ -12445,6 +13812,7 @@ def _ai_rank_customer_candidates(
         payload, used_model, _ = _ai_generate(
             prompt,
             model_candidates=model_candidates,
+            purpose="customer_ranking",
             response_format="json",
             temperature=0.05,
             max_tokens=160,
@@ -12639,6 +14007,7 @@ def _generate_task_draft_from_email(
         payload, used_model, _ = _ai_generate(
             prompt,
             model_candidates=model_candidates,
+            purpose="task_draft",
             response_format="json",
             temperature=0.15,
             max_tokens=260,
@@ -14367,7 +15736,7 @@ class RmmAuditCleanupService:
                         summary,
                         f"Note {note_pk or '?'} konnte fuer Cleanup-Filter nicht geparst werden: {exc}",
                     )
-                    continue
+                continue
 
                 resolved_customer_name = str(parsed.customer_name or "").strip()
                 resolved_customer = _resolve_audit_customer(self.db, fallback_agent, parsed)
@@ -14696,14 +16065,14 @@ def _extract_software_entries(payload: Any) -> List[Dict[str, str]]:
             if dedupe_key not in seen:
                 seen.add(dedupe_key)
                 out.append(parsed)
-        for key, value in node.items():
-            key_text = str(key or "").strip().lower()
-            if isinstance(value, list):
-                if any(token in key_text for token in ("software", "app", "program", "package", "result", "item", "data", "installed")):
-                    queue.extend(value)
-            elif isinstance(value, dict):
-                if any(token in key_text for token in ("software", "app", "program", "package", "product", "payload", "result", "data", "item")):
-                    queue.append(value)
+            for key, value in node.items():
+                key_text = str(key or "").strip().lower()
+                if isinstance(value, list):
+                    if any(token in key_text for token in ("software", "app", "program", "package", "result", "item", "data", "installed")):
+                        queue.extend(value)
+                elif isinstance(value, dict):
+                    if any(token in key_text for token in ("software", "app", "program", "package", "product", "payload", "result", "data", "item")):
+                        queue.append(value)
     return out
 
 
@@ -14976,12 +16345,78 @@ def _lookup_cve_for_software(name: str, version: str) -> Tuple[List[Dict[str, An
     return cves[:5], fixed_versions
 
 
+def _extract_customer_number_text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("value", "number", "customerNumber", "customer_number", "id", "text", "name", "label"):
+            nested = _extract_customer_number_text(value.get(key))
+            if nested:
+                return nested
+        return ""
+    if isinstance(value, list):
+        for item in value:
+            nested = _extract_customer_number_text(item)
+            if nested:
+                return nested
+        return ""
+    return str(value or "").strip()
+
+
+def _extract_customer_number_from_labeled_values(value: Any) -> str:
+    if isinstance(value, dict):
+        label = _dev_normalize_text(
+            value.get("label")
+            or value.get("name")
+            or value.get("field")
+            or value.get("key")
+            or value.get("title")
+            or ""
+        )
+        if label and any(token in label for token in ("kundennummer", "customer number", "customernumber", "debitor")):
+            extracted = _extract_customer_number_text(
+                value.get("value")
+                or value.get("text")
+                or value.get("number")
+                or value.get("content")
+            )
+            if extracted:
+                return extracted
+        for nested in value.values():
+            extracted = _extract_customer_number_from_labeled_values(nested)
+            if extracted:
+                return extracted
+    elif isinstance(value, list):
+        for item in value:
+            extracted = _extract_customer_number_from_labeled_values(item)
+            if extracted:
+                return extracted
+    return ""
+
+
 def _extract_customer_number_from_contact(contact: Dict[str, Any]) -> str:
-    for key in ("customerNumber", "customer_number", "customernumber", "contactCustomerNumber", "number"):
-        value = str(contact.get(key) or "").strip()
+    customer_number_keys = (
+        "customerNumber",
+        "customer_number",
+        "customernumber",
+        "contactCustomerNumber",
+        "customerNo",
+        "customer_no",
+        "clientNumber",
+        "client_number",
+        "debitorNumber",
+        "debtorNumber",
+        "debitor_number",
+        "debtor_number",
+    )
+    for candidate in _sevdesk_contact_candidate_objects(contact):
+        for key in customer_number_keys:
+            value = _extract_customer_number_text(candidate.get(key))
+            if value:
+                return value
+    for key in ("number", "no"):
+        value = _extract_customer_number_text(contact.get(key))
         if value:
             return value
-    return ""
+    return _extract_customer_number_from_labeled_values(contact)
 
 
 def _clean_customer_contact_value(value: Any) -> str:
@@ -15281,9 +16716,31 @@ def _find_sevdesk_contact_by_customer_number(
         seen.add(marker)
         contact = client.get_contact_by_customer_number(value)
         if contact:
-            return contact, value
+            contact_number = _extract_customer_number_from_contact(contact)
+            normalized_contact_number = _normalize_customer_number(contact_number)
+            if not normalized_contact_number or normalized_contact_number == normalized_value:
+                return contact, contact_number or value
     if not normalized_value:
         return None, raw_value
+    for params in (
+        {"customerNumber": raw_value},
+        {"customerNumber": normalized_value},
+        {"search": raw_value},
+        {"search": normalized_value},
+        {"term": raw_value},
+        {"term": normalized_value},
+    ):
+        try:
+            contacts = client.list_contacts(params=params, limit=100, max_pages=3)
+        except SevdeskError:
+            contacts = []
+        for contact in contacts:
+            if not isinstance(contact, dict):
+                continue
+            contact_number = _extract_customer_number_from_contact(contact)
+            normalized_contact_number = _normalize_customer_number(contact_number)
+            if normalized_contact_number == normalized_value:
+                return contact, contact_number or raw_value
     try:
         contacts = client.list_contacts(limit=200, max_pages=25)
     except SevdeskError:
@@ -15607,6 +17064,7 @@ def _build_recent_work_summary_ai_text(customer_name: str, invoice_items: List[D
         data, _, _ = _ai_generate(
             prompt,
             model_candidates=model_candidates,
+            purpose="invoice_summary",
             timeout=10,
             max_tokens=180,
         )
@@ -18317,6 +19775,7 @@ def _generate_customer_development_ai_text(
     text_result, _, _ = _ai_generate_text(
         prompt,
         model_candidates=_resolve_ai_models(purpose="customer_development"),
+        purpose="customer_development",
         timeout=resolved_timeout,
         max_tokens=_customer_development_ai_max_tokens(mode_key),
     )
@@ -18430,6 +19889,302 @@ def _build_report_item_from_recommendation(
             "customer_name": customer_name,
         },
         "preview_text": preview_text,
+    }
+
+
+# ================= TELEMETRY =================
+@app.post("/api/telemetry/events")
+def ingest_telemetry_events(payload: TelemetryBatchIn):
+    events = list(payload.events or [])[:100]
+    if not events:
+        return {"stored": 0}
+    now_ms = int(time.time() * 1000)
+    rows: List[TelemetryEvent] = []
+    for item in events:
+        event_type = _telemetry_text(item.event_type, 40)
+        if not event_type:
+            continue
+        meta = item.meta if isinstance(item.meta, dict) else {}
+        try:
+            meta_json = json.dumps(meta, ensure_ascii=False)[:2000]
+        except Exception:
+            meta_json = "{}"
+        created_at = _telemetry_int(item.created_at, now_ms, now_ms - 7 * 24 * 60 * 60 * 1000, now_ms + 60 * 1000)
+        rows.append(
+            TelemetryEvent(
+                event_type=event_type,
+                module=_telemetry_text(item.module, 80),
+                component=_telemetry_text(item.component, 120),
+                action=_telemetry_text(item.action, 120),
+                route=_telemetry_text(item.route, 220),
+                method=_telemetry_text(item.method, 12).upper(),
+                status_code=_telemetry_int(item.status_code, 0, 0, 599),
+                duration_ms=_telemetry_int(item.duration_ms, 0),
+                success=bool(item.success),
+                session_id=_telemetry_text(item.session_id, 120),
+                device_class=_telemetry_text(item.device_class, 40),
+                build_tag=_telemetry_text(item.build_tag, 80),
+                meta_json=meta_json,
+                created_at=created_at,
+            )
+        )
+    if not rows:
+        return {"stored": 0}
+    with SessionLocal() as db:
+        db.add_all(rows)
+        db.commit()
+    return {"stored": len(rows)}
+
+
+@app.get("/api/telemetry/summary")
+def get_telemetry_summary(days: int = 14):
+    days = max(1, min(int(days or 14), 180))
+    since_ms = int(time.time() * 1000) - days * 24 * 60 * 60 * 1000
+    with SessionLocal() as db:
+        rows = (
+            db.query(TelemetryEvent)
+            .filter(TelemetryEvent.created_at >= since_ms)
+            .order_by(TelemetryEvent.created_at.desc())
+            .limit(50000)
+            .all()
+        )
+    modules: Dict[str, Dict[str, Any]] = {}
+    routes: Dict[str, Dict[str, Any]] = {}
+    ai_endpoints: Dict[str, Dict[str, Any]] = {}
+    ai_models: Dict[str, Dict[str, Any]] = {}
+    ai_recent: List[Dict[str, Any]] = []
+    sessions: Set[str] = set()
+    slow_count = 0
+    error_count = 0
+    ai_count = 0
+    ai_error_count = 0
+    ai_duration_total = 0
+    for row in rows:
+        if row.session_id:
+            sessions.add(row.session_id)
+        row_meta: Dict[str, Any] = {}
+        if row.meta_json:
+            try:
+                parsed_meta = json.loads(row.meta_json)
+                if isinstance(parsed_meta, dict):
+                    row_meta = parsed_meta
+            except Exception:
+                row_meta = {}
+        module_key = row.module or "unknown"
+        module = modules.setdefault(
+            module_key,
+            {
+                "module": module_key,
+                "label": TELEMETRY_KNOWN_MODULES.get(module_key, module_key),
+                "events": 0,
+                "views": 0,
+                "actions": 0,
+                "api_calls": 0,
+                "errors": 0,
+                "duration_total_ms": 0,
+                "duration_count": 0,
+                "max_duration_ms": 0,
+                "last_seen_at": 0,
+            },
+        )
+        module["events"] += 1
+        module["last_seen_at"] = max(module["last_seen_at"], row.created_at or 0)
+        if row.event_type == "view":
+            module["views"] += 1
+        elif row.event_type == "api":
+            module["api_calls"] += 1
+            module["duration_total_ms"] += int(row.duration_ms or 0)
+            module["duration_count"] += 1
+            module["max_duration_ms"] = max(module["max_duration_ms"], int(row.duration_ms or 0))
+        else:
+            module["actions"] += 1
+        if not row.success or int(row.status_code or 0) >= 400:
+            module["errors"] += 1
+            error_count += 1
+        if int(row.duration_ms or 0) >= 800:
+            slow_count += 1
+        if row.event_type == "api" and row.route:
+            route_key = f"{row.method or 'GET'} {row.route}"
+            route = routes.setdefault(
+                route_key,
+                {
+                    "route": row.route,
+                    "method": row.method or "GET",
+                    "count": 0,
+                    "errors": 0,
+                    "duration_total_ms": 0,
+                    "max_duration_ms": 0,
+                    "last_seen_at": 0,
+                },
+            )
+            route["count"] += 1
+            route["duration_total_ms"] += int(row.duration_ms or 0)
+            route["max_duration_ms"] = max(route["max_duration_ms"], int(row.duration_ms or 0))
+            route["last_seen_at"] = max(route["last_seen_at"], row.created_at or 0)
+            if not row.success or int(row.status_code or 0) >= 400:
+                route["errors"] += 1
+        if row.event_type == "ai":
+            ai_count += 1
+            row_duration = int(row.duration_ms or 0)
+            ai_duration_total += row_duration
+            if not row.success:
+                ai_error_count += 1
+            endpoint_id = _telemetry_text(row_meta.get("endpoint_id") or "default", 80) or "default"
+            endpoint_name = _telemetry_text(row_meta.get("endpoint_name") or endpoint_id, 120) or endpoint_id
+            provider = _telemetry_text(row_meta.get("provider") or "", 80)
+            base_url = _telemetry_text(row_meta.get("base_url") or "", 220)
+            purpose = _telemetry_text(row_meta.get("purpose") or row.action or "unspecified", 120)
+            model_name = _telemetry_text(row_meta.get("model") or "unbekannt", 160) or "unbekannt"
+            endpoint_row = ai_endpoints.setdefault(
+                endpoint_id,
+                {
+                    "endpoint_id": endpoint_id,
+                    "endpoint_name": endpoint_name,
+                    "provider": provider,
+                    "base_url": base_url,
+                    "count": 0,
+                    "errors": 0,
+                    "duration_total_ms": 0,
+                    "max_duration_ms": 0,
+                    "last_seen_at": 0,
+                    "models": {},
+                    "purposes": {},
+                },
+            )
+            endpoint_row["endpoint_name"] = endpoint_name or endpoint_row["endpoint_name"]
+            endpoint_row["provider"] = provider or endpoint_row["provider"]
+            endpoint_row["base_url"] = base_url or endpoint_row["base_url"]
+            endpoint_row["count"] += 1
+            endpoint_row["duration_total_ms"] += row_duration
+            endpoint_row["max_duration_ms"] = max(endpoint_row["max_duration_ms"], row_duration)
+            endpoint_row["last_seen_at"] = max(endpoint_row["last_seen_at"], row.created_at or 0)
+            if not row.success:
+                endpoint_row["errors"] += 1
+            endpoint_row["models"][model_name] = int(endpoint_row["models"].get(model_name) or 0) + 1
+            endpoint_row["purposes"][purpose] = int(endpoint_row["purposes"].get(purpose) or 0) + 1
+
+            model_row = ai_models.setdefault(
+                model_name,
+                {
+                    "model": model_name,
+                    "provider": provider,
+                    "count": 0,
+                    "errors": 0,
+                    "duration_total_ms": 0,
+                    "max_duration_ms": 0,
+                    "last_seen_at": 0,
+                    "endpoints": {},
+                    "purposes": {},
+                },
+            )
+            model_row["provider"] = provider or model_row["provider"]
+            model_row["count"] += 1
+            model_row["duration_total_ms"] += row_duration
+            model_row["max_duration_ms"] = max(model_row["max_duration_ms"], row_duration)
+            model_row["last_seen_at"] = max(model_row["last_seen_at"], row.created_at or 0)
+            if not row.success:
+                model_row["errors"] += 1
+            model_row["endpoints"][endpoint_name] = int(model_row["endpoints"].get(endpoint_name) or 0) + 1
+            model_row["purposes"][purpose] = int(model_row["purposes"].get(purpose) or 0) + 1
+            if len(ai_recent) < 30:
+                ai_recent.append(
+                    {
+                        "created_at": row.created_at,
+                        "endpoint_id": endpoint_id,
+                        "endpoint_name": endpoint_name,
+                        "provider": provider,
+                        "base_url": base_url,
+                        "model": model_name,
+                        "purpose": purpose,
+                        "duration_ms": row_duration,
+                        "success": bool(row.success),
+                        "prompt_chars": _telemetry_int(row_meta.get("prompt_chars"), 0),
+                        "response_chars": _telemetry_int(row_meta.get("response_chars"), 0),
+                        "response_format": _telemetry_text(row_meta.get("response_format") or "", 40),
+                    }
+                )
+    module_rows = []
+    for module in modules.values():
+        duration_count = max(1, int(module.pop("duration_count") or 0))
+        duration_total = int(module.pop("duration_total_ms") or 0)
+        module["avg_duration_ms"] = round(duration_total / duration_count)
+        module_rows.append(module)
+    route_rows = []
+    for route in routes.values():
+        count = max(1, int(route["count"] or 0))
+        route["avg_duration_ms"] = round(int(route.pop("duration_total_ms") or 0) / count)
+        route_rows.append(route)
+    ai_endpoint_rows = []
+    for endpoint in ai_endpoints.values():
+        count = max(1, int(endpoint["count"] or 0))
+        endpoint["avg_duration_ms"] = round(int(endpoint.pop("duration_total_ms") or 0) / count)
+        endpoint["models"] = sorted(
+            [{"model": key, "count": value} for key, value in endpoint["models"].items()],
+            key=lambda item: item["count"],
+            reverse=True,
+        )[:8]
+        endpoint["purposes"] = sorted(
+            [{"purpose": key, "count": value} for key, value in endpoint["purposes"].items()],
+            key=lambda item: item["count"],
+            reverse=True,
+        )[:8]
+        ai_endpoint_rows.append(endpoint)
+    ai_model_rows = []
+    for model in ai_models.values():
+        count = max(1, int(model["count"] or 0))
+        model["avg_duration_ms"] = round(int(model.pop("duration_total_ms") or 0) / count)
+        model["endpoints"] = sorted(
+            [{"endpoint": key, "count": value} for key, value in model["endpoints"].items()],
+            key=lambda item: item["count"],
+            reverse=True,
+        )[:8]
+        model["purposes"] = sorted(
+            [{"purpose": key, "count": value} for key, value in model["purposes"].items()],
+            key=lambda item: item["count"],
+            reverse=True,
+        )[:8]
+        ai_model_rows.append(model)
+    used_modules = {key for key, value in modules.items() if int(value.get("views") or 0) > 0}
+    unused_hints = [
+        {"module": key, "label": label}
+        for key, label in TELEMETRY_KNOWN_MODULES.items()
+        if key not in used_modules
+    ]
+    return {
+        "days": days,
+        "since": since_ms,
+        "totals": {
+            "events": len(rows),
+            "views": sum(1 for row in rows if row.event_type == "view"),
+            "api_calls": sum(1 for row in rows if row.event_type == "api"),
+            "ai_calls": ai_count,
+            "slow_events": slow_count,
+            "errors": error_count,
+            "sessions": len(sessions),
+        },
+        "modules": sorted(module_rows, key=lambda item: (item["events"], item["last_seen_at"]), reverse=True),
+        "slow_routes": sorted(
+            route_rows,
+            key=lambda item: (item["max_duration_ms"], item["avg_duration_ms"], item["count"]),
+            reverse=True,
+        )[:25],
+        "ai_requests": {
+            "count": ai_count,
+            "errors": ai_error_count,
+            "avg_duration_ms": round(ai_duration_total / max(1, ai_count)),
+            "endpoints": sorted(
+                ai_endpoint_rows,
+                key=lambda item: (item["count"], item["last_seen_at"]),
+                reverse=True,
+            )[:20],
+            "models": sorted(
+                ai_model_rows,
+                key=lambda item: (item["count"], item["last_seen_at"]),
+                reverse=True,
+            )[:20],
+            "recent": ai_recent,
+        },
+        "unused_hints": unused_hints,
     }
 
 
@@ -18977,7 +20732,7 @@ def get_customer_development_cve_scan(customer_id: int, request: Request, refres
                     except Exception:
                         cves, fixed_versions = [], []
                     lookup_results[lookup_key] = (cves[:5], fixed_versions)
-                    continue
+                continue
                 future.cancel()
                 lookup_skipped += 1
         finally:
@@ -19251,11 +21006,11 @@ def run_customer_development_discovery(customer_id: int, request: Request):
                 if not run_res:
                     run_error = req_error or f"request_failed on {path}"
                     attempted_paths.append(f"{path}[{mode}] -> ERR")
-                    continue
+                continue
                 attempted_paths.append(f"{path}[{mode}] -> {run_res.status_code}")
                 if not run_res.ok:
                     run_error = f"HTTP {run_res.status_code} on {path}"
-                    continue
+                continue
                 logger.info(
                     "Discovery run triggered for customer %s via %s (output=%s)",
                     customer.id,
@@ -19952,6 +21707,115 @@ def delete_customer(customer_id: int):
         return {"status": "deleted"}
 
 
+def _median_float(values: List[float]) -> float:
+    clean_values = sorted(float(value) for value in values if value is not None and math.isfinite(float(value)))
+    if not clean_values:
+        return 0.0
+    midpoint = len(clean_values) // 2
+    if len(clean_values) % 2:
+        return clean_values[midpoint]
+    return (clean_values[midpoint - 1] + clean_values[midpoint]) / 2.0
+
+
+def _build_customer_budget_estimate(
+    yearly_revenue: Dict[int, Dict[str, Any]],
+    *,
+    current_year: int,
+    current_year_revenue: Optional[float],
+) -> Optional[Dict[str, Any]]:
+    history_entries = []
+    for year, entry in sorted(yearly_revenue.items()):
+        amount = round(float(entry.get("amountEur") or 0.0), 2)
+        if year >= current_year or amount <= 0:
+            continue
+        history_entries.append(
+            {
+                "year": int(year),
+                "amountEur": amount,
+                "invoiceCount": int(entry.get("invoiceCount") or 0),
+            }
+        )
+    if not history_entries:
+        return None
+
+    amounts = [entry["amountEur"] for entry in history_entries]
+    global_median = _median_float(amounts)
+    adjusted_values = []
+    outlier_years = []
+    for index, entry in enumerate(history_entries):
+        amount = float(entry["amountEur"])
+        peer_values = [value for peer_index, value in enumerate(amounts) if peer_index != index]
+        peer_median = _median_float(peer_values) if peer_values else global_median
+        is_high_outlier = (
+            peer_median > 0
+            and len(amounts) >= 2
+            and amount > max(peer_median * 2.75, peer_median + 8000.0)
+        )
+        is_low_outlier = (
+            peer_median > 0
+            and len(amounts) >= 3
+            and amount < peer_median * 0.35
+            and peer_median - amount > 3000.0
+        )
+        adjusted_amount = peer_median if (is_high_outlier or is_low_outlier) and peer_median > 0 else amount
+        outlier_type = "high" if is_high_outlier else "low" if is_low_outlier else None
+        if outlier_type:
+            outlier_years.append(
+                {
+                    "year": int(entry["year"]),
+                    "amountEur": round(amount, 2),
+                    "adjustedAmountEur": round(adjusted_amount, 2),
+                    "type": outlier_type,
+                    "reason": "Einmaliger hoher Umsatz" if outlier_type == "high" else "Ungewöhnlich niedriger Umsatz",
+                }
+            )
+        adjusted_values.append(
+            {
+                **entry,
+                "adjustedAmountEur": round(adjusted_amount, 2),
+                "isOutlier": bool(outlier_type),
+                "outlierType": outlier_type,
+            }
+        )
+
+    recent_adjusted = list(reversed(adjusted_values[-5:]))
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for offset, entry in enumerate(recent_adjusted):
+        weight = max(1.0, 5.0 - offset)
+        weighted_sum += float(entry["adjustedAmountEur"]) * weight
+        weight_total += weight
+    baseline = weighted_sum / weight_total if weight_total else _median_float([entry["adjustedAmountEur"] for entry in adjusted_values])
+    adjusted_amounts = [float(entry["adjustedAmountEur"]) for entry in adjusted_values]
+    adjusted_median = _median_float(adjusted_amounts)
+    suggested_budget = round((baseline * 0.7) + (adjusted_median * 0.3), 2) if adjusted_median else round(baseline, 2)
+    variance_source = adjusted_amounts if len(adjusted_amounts) >= 2 else [suggested_budget]
+    mean_value = sum(variance_source) / len(variance_source)
+    stdev = math.sqrt(sum((value - mean_value) ** 2 for value in variance_source) / len(variance_source)) if variance_source else 0.0
+    range_padding = max(suggested_budget * 0.18, stdev * 0.8, 500.0)
+    current_amount = round(float(current_year_revenue or 0.0), 2)
+    confidence = "mittel"
+    if len(history_entries) >= 4 and len(outlier_years) <= 1:
+        confidence = "hoch"
+    elif len(history_entries) < 3 or len(outlier_years) >= 2:
+        confidence = "niedrig"
+
+    return {
+        "estimated": True,
+        "year": int(current_year),
+        "suggestedBudgetEur": round(suggested_budget, 2),
+        "baselineEur": round(baseline, 2),
+        "lowEur": round(max(0.0, suggested_budget - range_padding), 2),
+        "highEur": round(suggested_budget + range_padding, 2),
+        "currentYearRevenueEur": current_amount,
+        "remainingBudgetEur": round(suggested_budget - current_amount, 2),
+        "confidence": confidence,
+        "history": adjusted_values,
+        "outlierYears": outlier_years,
+        "method": "Gewichteter Durchschnitt vergangener Jahre, Ausreißer werden auf das typische Niveau geglättet.",
+    }
+
+
 @app.get("/api/customers/{customer_id}/metrics")
 def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
     contract_time_budget: Dict[str, Any] = {}
@@ -20105,6 +21969,8 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
     revenue_total = None
     revenue_delta = None
     revenue_delta_pct = None
+    budget_estimate = None
+    yearly_revenue: Dict[int, Dict[str, Any]] = {}
     period_stats = {
         "currentYear": {
             "key": "currentYear",
@@ -20181,6 +22047,12 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
                         paid_date = _invoice_date_for_paid(invoice)
                         if not paid_date:
                             continue
+                        year_entry = yearly_revenue.setdefault(
+                            int(paid_date.year),
+                            {"year": int(paid_date.year), "amountEur": 0.0, "invoiceCount": 0},
+                        )
+                        year_entry["amountEur"] = round(float(year_entry.get("amountEur") or 0.0) + amount, 2)
+                        year_entry["invoiceCount"] = int(year_entry.get("invoiceCount") or 0) + 1
                         invoice_id = _parse_int(invoice.get("id"))
                         if start_current_year <= paid_date <= now_dt:
                             sum_current += amount
@@ -20200,6 +22072,11 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
                     revenue_delta = round(revenue_current_year - revenue_last_year, 2)
                     if revenue_last_year and revenue_last_year > 0:
                         revenue_delta_pct = round((revenue_delta / revenue_last_year) * 100, 1)
+                    budget_estimate = _build_customer_budget_estimate(
+                        yearly_revenue,
+                        current_year=now_dt.year,
+                        current_year_revenue=revenue_current_year,
+                    )
                     sevdesk_recurring_tags = _build_customer_sevdesk_recurring_tags(client, contact_id)
 
                     for period_key, invoice_ids in period_invoice_refs.items():
@@ -20261,6 +22138,8 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
                     revenue_total = None
                     revenue_delta = None
                     revenue_delta_pct = None
+                    budget_estimate = None
+                    yearly_revenue = {}
                     sevdesk_recurring_tags = {
                         "monthlyTotalEur": 0.0,
                         "invoiceCount": 0,
@@ -20315,6 +22194,7 @@ def get_customer_metrics(customer_id: int, kpi_month_offset: int = 0):
         "revenueLastYearEur": revenue_last_year,
         "revenueDeltaEur": revenue_delta,
         "revenueDeltaPct": revenue_delta_pct,
+        "budgetEstimate": budget_estimate,
         "monthlyActivity": {
             "monthOffset": int(selected_month_offset),
             "monthLabel": selected_month_label,
@@ -20987,6 +22867,7 @@ def create_day_task(data: DayTaskCreate):
             arrival_time=data.arrival_time or "",
             departure_time=data.departure_time or "",
             deadline=data.deadline or "",
+            internal_date=data.internal_date or "",
             urgency_flag=urgency_flag,
             billing_note=data.billing_note or "",
             billing_min_hours=max(0.0, float(data.billing_min_hours or 0.0)),
@@ -21025,6 +22906,7 @@ def update_day_task(task_id: int, data: DayTaskUpdate):
             "arrival_time",
             "departure_time",
             "deadline",
+            "internal_date",
             "urgency_flag",
             "billing_note",
         }
@@ -21166,6 +23048,14 @@ def _serialize_vision_board_document(document: VisionBoardDocument) -> Dict[str,
     }
 
 
+def _vision_board_document_label(key: str) -> str:
+    raw = str(key or "").strip()
+    if ":" in raw:
+        raw = raw.split(":", 1)[1]
+    label = raw.replace("-", " ").replace("_", " ").strip()
+    return label.title() if label else "Standard"
+
+
 def _broadcast_vision_board_event(payload: Dict[str, Any]) -> None:
     with _vision_board_event_lock:
         subscribers = list(_vision_board_event_subscribers)
@@ -21198,6 +23088,32 @@ def get_vision_board_notes():
         notes = db.query(VisionBoardNote).order_by(VisionBoardNote.created_at.asc()).all()
         return {
             "notes": [_serialize_vision_board_note(note) for note in notes],
+            "serverTime": int(time.time() * 1000),
+        }
+
+
+@app.get("/api/vision_board/documents")
+def list_vision_board_documents(kind: Optional[str] = None):
+    prefix = str(kind or "").strip().lower()
+    with SessionLocal() as db:
+        query = db.query(VisionBoardDocument)
+        if prefix in {"mindmap", "whiteboard"}:
+            query = query.filter(
+                or_(
+                    VisionBoardDocument.key == prefix,
+                    VisionBoardDocument.key.like(f"{prefix}:%"),
+                )
+            )
+        documents = query.order_by(VisionBoardDocument.updated_at.desc()).all()
+        return {
+            "documents": [
+                {
+                    "key": document.key,
+                    "label": _vision_board_document_label(document.key),
+                    "updated_at": int(document.updated_at or 0),
+                }
+                for document in documents
+            ],
             "serverTime": int(time.time() * 1000),
         }
 
@@ -21915,6 +23831,7 @@ def update_integrations(data: IntegrationSettingsUpdate):
                 "meta_hub_rmm_enabled",
                 "meta_hub_rmm_customer_field_name",
                 "meta_hub_email_enabled",
+                "meta_hub_sevdesk_enabled",
                 "meta_hub_refresh_seconds",
                 "meta_hub_mailboxes",
             )
@@ -21932,6 +23849,8 @@ def update_integrations(data: IntegrationSettingsUpdate):
             "ai_api_key",
         }
         incoming_mailboxes = incoming.pop("meta_hub_mailboxes", None)
+        incoming_ai_endpoints = incoming.pop("ai_endpoints", None)
+        incoming_ai_routes = incoming.pop("ai_purpose_routes", None)
         for field, value in incoming.items():
             if field in sensitive_fields and value in (None, ""):
                 continue
@@ -21956,6 +23875,9 @@ def update_integrations(data: IntegrationSettingsUpdate):
                 "ai_customer_development_model",
                 "ai_offer_model",
                 "ai_invoice_model",
+                "ai_newsletter_model",
+                "ai_meta_hub_model",
+                "ai_project_folder_model",
             }:
                 setattr(settings, field, _normalize_model_setting_value(value))
                 continue
@@ -21963,6 +23885,17 @@ def update_integrations(data: IntegrationSettingsUpdate):
         if incoming_mailboxes is not None:
             merged_mailboxes = _merge_meta_hub_mailboxes(settings.meta_hub_mailboxes_json, incoming_mailboxes)
             settings.meta_hub_mailboxes_json = json.dumps(merged_mailboxes)
+        if incoming_ai_endpoints is not None:
+            normalized_endpoints = _merge_ai_endpoints(settings, incoming_ai_endpoints)
+            settings.ai_endpoints_json = json.dumps(normalized_endpoints, ensure_ascii=False)
+        if incoming_ai_routes is not None:
+            endpoint_ids = {endpoint["id"] for endpoint in _parse_ai_endpoints(settings)}
+            safe_routes = {}
+            if isinstance(incoming_ai_routes, dict):
+                for purpose in AI_PURPOSE_LABELS:
+                    endpoint_id = _ai_endpoint_id(incoming_ai_routes.get(purpose))
+                    safe_routes[purpose] = endpoint_id if endpoint_id in endpoint_ids else "default"
+            settings.ai_purpose_routes_json = json.dumps(safe_routes, ensure_ascii=False)
         # Tactical RMM is API-key based; legacy basic-auth fields are ignored.
         if "rmm_api_key" in incoming:
             settings.rmm_user = ""
@@ -22000,10 +23933,68 @@ def probe_ai_connection_models(data: AiConnectionProbeRequest):
     return {
         "provider": provider,
         "base_url": base_url,
+        "endpoint_id": config.get("endpoint_id") or "",
+        "endpoint_name": config.get("endpoint_name") or "",
         "models": models,
         "default_model": resolved_default_model,
         "configured_models": configured_models,
         "detected_count": len(models),
+    }
+
+
+@app.post("/api/integrations/ai_test")
+def test_ai_connection(data: AiConnectionProbeRequest):
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        config = _build_ai_config_from_request(data, settings)
+    provider = str(config.get("provider") or AI_PROVIDER_OLLAMA)
+    base_url = str(config.get("base_url") or "").strip()
+    if not base_url:
+        raise HTTPException(400, "Base URL fehlt")
+    if provider == AI_PROVIDER_OPENAI_COMPATIBLE:
+        provider_models = _list_openai_compatible_models(config, timeout_seconds=8)
+    else:
+        provider_models = _list_ollama_models(timeout_seconds=8, base_url=base_url)
+    models = provider_models or _configured_ai_models_for_picker(config)
+    configured_default_model = str(config.get("configured_default_model") or "").strip()
+    if configured_default_model:
+        model_candidates = [configured_default_model]
+    elif provider_models:
+        model_candidates = provider_models
+    elif str(config.get("endpoint_id") or "").strip() not in ("", "default"):
+        model_candidates = []
+    else:
+        model_candidates = _configured_ai_models_for_picker(config)
+    if not model_candidates:
+        raise HTTPException(502, "Keine Modelle vom Provider abrufbar. Bitte Base URL und Modell prüfen.")
+    started = time.time()
+    payload, used_model, used_provider = _ai_generate(
+        "Antworte exakt mit OK.",
+        model_candidates=model_candidates,
+        config=config,
+        timeout=30,
+        temperature=0,
+        max_tokens=20,
+        use_cache=False,
+    )
+    response_text = str((payload or {}).get("response") or "").strip()
+    if not response_text:
+        model_hint = used_model or (model_candidates[0] if model_candidates else "")
+        raise HTTPException(
+            502,
+            f"KI Endpoint hat keine Textantwort geliefert. Bitte Base URL, API Key und Modell prüfen"
+            f"{f' ({model_hint})' if model_hint else ''}.",
+        )
+    return {
+        "ok": True,
+        "provider": used_provider or provider,
+        "base_url": base_url,
+        "endpoint_id": config.get("endpoint_id") or "",
+        "endpoint_name": config.get("endpoint_name") or "",
+        "model": used_model or (model_candidates[0] if model_candidates else ""),
+        "models": models,
+        "response_preview": response_text[:300],
+        "duration_ms": int((time.time() - started) * 1000),
     }
 
 
@@ -22244,6 +24235,7 @@ def get_internal_customer_development_rmm_snapshot(request: Request):
             "rmm_customer_field_name": str(settings.meta_hub_rmm_customer_field_name or "Kundennummer").strip()
             or "Kundennummer",
             "email_enabled": bool(settings.meta_hub_email_enabled),
+            "sevdesk_enabled": bool(settings.meta_hub_sevdesk_enabled),
             "email_access_mode": "read_only",
             "refresh_seconds": meta_hub_refresh_seconds,
             "mailbox_count": len(mailbox_summaries),
@@ -22339,6 +24331,132 @@ def get_internal_customer_development_rmm_snapshot(request: Request):
         "discoveryPayloadByAgent": discovery_payload_by_agent,
         "error": probe.get("error") or "",
         "metaHubConfig": meta_hub_config,
+    }
+
+
+@app.get("/api/internal/customer_development/sevdesk_snapshot")
+def get_internal_customer_development_sevdesk_snapshot(request: Request):
+    if not _meta_hub_internal_authorized(request):
+        raise HTTPException(403, "Meta-Hub internal access denied")
+
+    generated_at = int(time.time() * 1000)
+    with SessionLocal() as db:
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        if not bool(settings.meta_hub_sevdesk_enabled):
+            return {"enabled": False, "connected": False, "customers": {}, "generatedAt": generated_at, "error": ""}
+        config = _build_sevdesk_config(settings)
+        if not config.api_token:
+            return {"enabled": True, "connected": False, "customers": {}, "generatedAt": generated_at, "error": "Missing sevdesk_api_token"}
+        contact_to_customer: Dict[str, int] = {}
+        for cid, contact_id in db.query(Customer.id, Customer.sevdesk_contact_id).all():
+            cleaned = str(contact_id or "").strip()
+            if cleaned:
+                contact_to_customer[cleaned] = int(cid)
+
+    if not contact_to_customer:
+        return {"enabled": True, "connected": True, "customers": {}, "generatedAt": generated_at, "error": ""}
+
+    client = SevdeskClient(config)
+    try:
+        invoices = client.list_invoices({}, limit=200, max_pages=20)
+    except SevdeskError as exc:
+        return {"enabled": True, "connected": False, "customers": {}, "generatedAt": generated_at, "error": str(exc)}
+    except Exception as exc:  # pragma: no cover
+        return {"enabled": True, "connected": False, "customers": {}, "generatedAt": generated_at, "error": f"sevdesk_request_failed: {exc}"}
+
+    def _parse_amount(value: Any) -> float:
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _parse_date(value: Any) -> Optional[datetime]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(raw[: len(fmt)] if fmt == "%Y-%m-%d" else raw, fmt)
+            except ValueError:
+                continue
+        return None
+
+    today = datetime.now().date()
+    aggregated: Dict[int, Dict[str, Any]] = {}
+    for invoice in invoices:
+        if not isinstance(invoice, dict):
+            continue
+        contact = invoice.get("contact") or {}
+        contact_id = str(contact.get("id") or "").strip() if isinstance(contact, dict) else ""
+        if not contact_id or contact_id not in contact_to_customer:
+            continue
+        customer_id = contact_to_customer[contact_id]
+        status_raw = str(invoice.get("status") or "").strip()
+        try:
+            status_code = int(float(status_raw)) if status_raw else 0
+        except (TypeError, ValueError):
+            status_code = 0
+        is_draft = status_code in (50, 100)
+        is_paid = status_code >= 1000
+        sum_gross = _parse_amount(invoice.get("sumGross") or invoice.get("sumGrossAccounting"))
+        paid_amount = _parse_amount(invoice.get("paidAmount") or invoice.get("paidAmountAccounting"))
+        open_amount = max(0.0, sum_gross - paid_amount)
+        invoice_date = _parse_date(invoice.get("invoiceDate"))
+        pay_date = _parse_date(invoice.get("payDate") or invoice.get("payDay"))
+        delivery_date = _parse_date(invoice.get("deliveryDate"))
+
+        bucket = aggregated.setdefault(customer_id, {
+            "openCount": 0, "openAmount": 0.0,
+            "overdueCount": 0, "overdueAmount": 0.0,
+            "draftCount": 0, "draftAmount": 0.0,
+            "paidCount": 0, "paidAmount": 0.0,
+            "totalCount": 0, "totalAmount": 0.0,
+            "lastInvoiceAt": 0, "lastInvoiceNumber": "",
+            "lastInvoiceAmount": 0.0, "lastInvoiceStatus": 0,
+        })
+        bucket["totalCount"] += 1
+        bucket["totalAmount"] += sum_gross
+        if is_draft:
+            bucket["draftCount"] += 1
+            bucket["draftAmount"] += sum_gross
+        elif is_paid:
+            bucket["paidCount"] += 1
+            bucket["paidAmount"] += sum_gross
+        else:
+            bucket["openCount"] += 1
+            bucket["openAmount"] += open_amount
+            if pay_date and pay_date.date() < today:
+                bucket["overdueCount"] += 1
+                bucket["overdueAmount"] += open_amount
+
+        latest_ts = 0
+        for candidate in (invoice_date, delivery_date):
+            if candidate is None:
+                continue
+            ts = int(candidate.timestamp() * 1000)
+            if ts > latest_ts:
+                latest_ts = ts
+        if latest_ts > int(bucket["lastInvoiceAt"] or 0):
+            bucket["lastInvoiceAt"] = latest_ts
+            bucket["lastInvoiceNumber"] = str(invoice.get("invoiceNumber") or "")
+            bucket["lastInvoiceAmount"] = sum_gross
+            bucket["lastInvoiceStatus"] = status_code
+
+    return {
+        "enabled": True,
+        "connected": True,
+        "customers": aggregated,
+        "generatedAt": generated_at,
+        "error": "",
+        "invoiceCount": len(invoices),
     }
 
 
@@ -22710,6 +24828,162 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
         return {"ok": True, "task": serialize_day_task(task), "invoice": response}
 
 
+@app.post("/api/sevdesk/project_folders/{folder_id}/draft")
+def sevdesk_project_folder_to_invoice(folder_id: int, payload: SevdeskProjectFolderDraftRequest):
+    with SessionLocal() as db:
+        folder = db.query(ProjectFolder).get(folder_id)
+        if not folder:
+            raise HTTPException(404, "Project folder not found")
+        if not payload.positions:
+            raise HTTPException(400, "No positions selected")
+
+        settings = db.query(IntegrationSettings).first()
+        if not settings:
+            settings = IntegrationSettings()
+            db.add(settings)
+            db.commit()
+        metrics = db.query(CustomerMetricsSettings).first()
+        config = _require_sevdesk_config(settings, metrics)
+        _require_sevdesk_invoice_fields(config)
+
+        customer_number = (payload.customer_number or "").strip()
+        if not customer_number:
+            customer_number = _resolve_local_customer_number_by_name(db, folder.customer)
+        if not customer_number:
+            raise HTTPException(400, "Missing customer_number")
+
+        default_unity_id = config.service_unity_id or config.unity_id
+        if not default_unity_id:
+            raise HTTPException(400, "Missing unity_id")
+        default_price = config.hourly_rate_eur or 0.0
+        default_tax = config.default_tax_rate
+
+        positions = []
+        for entry in payload.positions:
+            quantity = _round_up_to_quarter_hours(float(entry.quantity or 0))
+            if quantity <= 0:
+                quantity = 1.0
+            price = entry.price if entry.price is not None else default_price
+            tax_rate = entry.tax_rate if entry.tax_rate is not None else default_tax
+            unity_id = entry.unity_id or default_unity_id
+            text = (entry.text or "").strip() or (entry.name or "Arbeitszeit")
+            name = (entry.name or "Arbeitszeit").strip() or "Arbeitszeit"
+            positions.append({
+                "quantity": quantity,
+                "price": float(price or 0.0),
+                "name": name,
+                "text": text,
+                "tax_rate": float(tax_rate or 0.0),
+                "unity_id": unity_id,
+            })
+
+        client = SevdeskClient(config)
+        try:
+            contact, resolved_customer_number = _find_sevdesk_contact_for_customer(
+                db, client, customer_number, folder.customer or ""
+            )
+            if not contact and folder.customer:
+                fallback_number = _resolve_local_customer_number_by_name(db, folder.customer)
+                if fallback_number and fallback_number != customer_number:
+                    customer_number = fallback_number
+                    contact, resolved_customer_number = _find_sevdesk_contact_for_customer(
+                        db, client, customer_number, folder.customer or ""
+                    )
+            if not contact:
+                raise HTTPException(404, f"Sevdesk contact not found for {customer_number}")
+            contact_id = int(contact.get("id"))
+
+            if payload.add_mileage:
+                mileage_price = _parse_float(payload.mileage_price, default=0.0)
+                mileage_name = (payload.mileage_name or "Anfahrt").strip() or "Anfahrt"
+                mileage_text = (payload.mileage_text or "").strip()
+                base_unity_id = config.unity_id or default_unity_id
+                if mileage_price > 0 and base_unity_id:
+                    positions.append({
+                        "quantity": 1,
+                        "price": mileage_price,
+                        "name": mileage_name,
+                        "text": mileage_text,
+                        "tax_rate": default_tax,
+                        "unity_id": base_unity_id,
+                    })
+
+            draft = None
+            if payload.use_existing_draft is not False:
+                draft = client.find_draft_invoice(contact_id)
+            existing_invoice_id = None
+            if draft:
+                existing_invoice_id = int(draft.get("id"))
+                invoice_snapshot = client.get_invoice(existing_invoice_id) or draft
+                header = _build_sevdesk_draft_header(client, config, invoice_snapshot, draft)
+                invoice_payload = client.build_invoice_payload(
+                    contact_id, invoice_id=existing_invoice_id, invoice_snapshot=invoice_snapshot, header=header
+                )
+            else:
+                header = _build_sevdesk_draft_header(client, config)
+                invoice_payload = client.build_invoice_payload(contact_id, header=header)
+            response = client.save_invoice(
+                invoice_payload, client.build_positions(positions, invoice_id=existing_invoice_id)
+            )
+        except SevdeskError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+        sevdesk_invoice_id = None
+        try:
+            sevdesk_invoice_id = int(((response or {}).get("invoice") or {}).get("id") or existing_invoice_id or 0) or None
+        except (TypeError, ValueError):
+            sevdesk_invoice_id = existing_invoice_id
+
+        if payload.mark_invoiced is not False:
+            content = _parse_project_content(folder.content_json)
+            now_ms = int(time.time() * 1000)
+            position_by_task = {str(entry.task_id): entry for entry in payload.positions if entry.task_id}
+            invoices = content.get("invoices") if isinstance(content.get("invoices"), list) else []
+            invoices.insert(0, {
+                "id": uuid.uuid4().hex,
+                "title": (payload.invoice_title or f"sevDesk-Entwurf {folder.title}").strip(),
+                "note": (payload.note or "").strip(),
+                "created_at": now_ms,
+                "sevdesk_invoice_id": sevdesk_invoice_id,
+                "sevdesk_customer_number": resolved_customer_number or customer_number,
+                "positions": [
+                    {
+                        "task_id": entry.task_id,
+                        "stream_id": entry.stream_id,
+                        "task_title": entry.name or "",
+                        "text": entry.text or "",
+                        "quantity": entry.quantity,
+                        "price": entry.price,
+                    }
+                    for entry in payload.positions
+                ],
+            })
+            content["invoices"] = invoices
+            streams = content.get("streams") if isinstance(content.get("streams"), list) else []
+            for stream in streams:
+                tasks = stream.get("tasks") if isinstance(stream.get("tasks"), list) else []
+                for task in tasks:
+                    pos = position_by_task.get(str(task.get("id") or ""))
+                    if pos:
+                        task["invoice_text"] = (pos.text or task.get("title") or "").strip()
+                        task["invoiced_at"] = now_ms
+                        if sevdesk_invoice_id:
+                            task["sevdesk_invoice_id"] = sevdesk_invoice_id
+            content["streams"] = streams
+            folder.content_json = json.dumps(content, ensure_ascii=False)
+            folder.updated_at = now_ms
+            db.commit()
+            db.refresh(folder)
+
+        return {
+            "ok": True,
+            "folder": serialize_project_folder(folder),
+            "invoice": response,
+            "sevdesk_invoice_id": sevdesk_invoice_id,
+            "resolved_customer_number": resolved_customer_number or customer_number,
+        }
+
+
 @app.get("/api/sevdesk/drafts/check")
 def sevdesk_check_draft(customer_number: str, customer_name: str = ""):
     with SessionLocal() as db:
@@ -22803,7 +25077,7 @@ def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
                     candidate_name = str(task.customer or "").strip()
                     if candidate_name:
                         customer_name = candidate_name
-                        break
+                    break
                 contact, resolved_customer_number = _find_sevdesk_contact_for_customer(
                     db,
                     client,
@@ -22814,7 +25088,7 @@ def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
                     results.append(
                         {"customer_number": customer_number, "ok": False, "error": "Contact not found"}
                     )
-                    continue
+                continue
                 contact_id = int(contact.get("id"))
                 if resolved_customer_number and resolved_customer_number != customer_number:
                     customer_number = resolved_customer_number
@@ -22828,7 +25102,7 @@ def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
                     results.append(
                         {"customer_number": customer_number, "ok": False, "error": "Missing unity id"}
                     )
-                    continue
+                continue
 
                 text = _summarize_tasks_for_invoice(customer_tasks)
                 positions = [
@@ -23143,6 +25417,92 @@ def delete_remote_pbx_phonebook(entry_id: str):
     return {"status": "deleted"}
 
 
+@app.get("/api/nfon_controls")
+@app.get("/api/telephony/nfon_controls")
+def list_nfon_control_resources():
+    return [
+        {"key": key, "label": str(config.get("label") or key), "paths": list(config.get("paths") or [])}
+        for key, config in NFON_CONTROL_RESOURCES.items()
+    ]
+
+
+@app.get("/api/nfon_controls/{control_key}")
+@app.get("/api/telephony/nfon_controls/{control_key}")
+def get_nfon_control_resource(control_key: str):
+    with SessionLocal() as db:
+        base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
+    paths = _nfon_control_path_candidates(control_key, customer_account)
+    errors: List[Dict[str, Any]] = []
+    for path in paths:
+        try:
+            payload = _nfon_request("GET", base_url, api_key_id, api_key_secret, path)
+            items = _nfon_extract_items(payload)
+            return {
+                "key": control_key,
+                "label": NFON_CONTROL_RESOURCES.get(control_key, {}).get("label") or control_key,
+                "customerAccount": customer_account,
+                "path": path,
+                "items": [
+                    {
+                        "id": _nfon_item_id(item),
+                        "label": _nfon_item_label(item),
+                        "raw": item,
+                    }
+                    for item in items
+                ],
+                "raw": payload,
+                "errors": errors,
+            }
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+            errors.append({"path": path, "status_code": exc.status_code, **detail})
+    if errors and all(int(error.get("status_code") or 0) == 404 for error in errors):
+        return {
+            "key": control_key,
+            "label": NFON_CONTROL_RESOURCES.get(control_key, {}).get("label") or control_key,
+            "customerAccount": customer_account,
+            "path": "",
+            "items": [],
+            "raw": None,
+            "available": False,
+            "message": "Diese NFON Steuerungsressource ist fuer den konfigurierten Account nicht verfuegbar.",
+            "errors": errors,
+        }
+    raise HTTPException(
+        502,
+        {
+            "error": "No NFON resource path succeeded",
+            "control": control_key,
+            "paths": paths,
+            "errors": errors,
+        },
+    )
+
+
+@app.post("/api/nfon_controls/{control_key}/mutate")
+@app.post("/api/telephony/nfon_controls/{control_key}/mutate")
+def mutate_nfon_control_resource(control_key: str, data: NfonControlMutationRequest):
+    method = str(data.method or "PUT").strip().upper()
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        raise HTTPException(400, "Unsupported NFON mutation method")
+    with SessionLocal() as db:
+        base_url, api_key_id, api_key_secret, customer_account = _get_pbx_credentials(db)
+    path = _nfon_sanitize_control_path(data.path, customer_account)
+    allowed_paths = _nfon_control_path_candidates(control_key, customer_account)
+    allowed_prefixes = [candidate.rstrip("/") for candidate in allowed_paths]
+    if not any(path == prefix or path.startswith(f"{prefix}/") for prefix in allowed_prefixes):
+        raise HTTPException(400, "NFON path does not belong to selected control resource")
+    payload = _nfon_request(
+        method,
+        base_url,
+        api_key_id,
+        api_key_secret,
+        path,
+        body_obj=data.body if method != "DELETE" else None,
+    )
+    return {"status": "ok", "method": method, "path": path, "payload": payload}
+
+
 @app.get("/api/pbx_phonebook/health")
 def pbx_phonebook_health():
     with SessionLocal() as db:
@@ -23421,6 +25781,1034 @@ def generate_offer_text(data: OfferAiRequest):
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+TEXT_ASSIST_ACTIONS: Dict[str, Dict[str, str]] = {
+    "improve": {
+        "label": "Verbessern",
+        "instruction": "Verbessere Stil, Klarheit und Lesbarkeit. Erhalte Inhalt, Fakten, konkrete Zahlen und Aussageabsicht.",
+    },
+    "shorten": {
+        "label": "Kuerzen",
+        "instruction": "Kuerze den Text deutlich, ohne wesentliche Fakten oder naechste Schritte zu verlieren.",
+    },
+    "professional": {
+        "label": "Professioneller",
+        "instruction": "Formuliere professioneller, praezise und ruhig. Vermeide Floskeln und uebertriebenes Marketing.",
+    },
+    "customer_friendly": {
+        "label": "Kundenfreundlich",
+        "instruction": "Formuliere kundenfreundlich und gut verstaendlich fuer Geschaeftskunden. Erklaere Nutzen und naechste Schritte klar.",
+    },
+    "technical": {
+        "label": "Technischer",
+        "instruction": "Formuliere technischer und genauer fuer IT-Fachpublikum. Erhalte Fachbegriffe und technische Details.",
+    },
+    "summary": {
+        "label": "Zusammenfassung",
+        "instruction": "Erstelle eine kompakte Zusammenfassung mit den wichtigsten Aussagen, Entscheidungen und offenen Punkten.",
+    },
+    "todos": {
+        "label": "To-dos extrahieren",
+        "instruction": "Extrahiere konkrete To-dos. Formuliere als kurze Liste mit Verantwortlichem oder Bereich, falls erkennbar.",
+    },
+}
+
+
+TEXT_ASSIST_MODULE_PURPOSES = {
+    "offers": "offer_text",
+    "offer": "offer_text",
+    "reports": "action",
+    "reporting": "action",
+    "newsletter": "newsletter",
+    "newsletters": "newsletter",
+    "project_folders": "project_folder",
+    "project-folder": "project_folder",
+    "customer_development": "customer_development",
+    "customer-development": "customer_development",
+    "notes": "internal_ai",
+    "knowledge": "internal_ai",
+}
+
+
+def _text_assist_context_text(context: Any, limit: int = 5000) -> str:
+    if not isinstance(context, dict):
+        return ""
+    useful: Dict[str, Any] = {}
+    for key in (
+        "customer",
+        "customerName",
+        "project",
+        "offer",
+        "openTasks",
+        "lastReports",
+        "rmm",
+        "sevdesk",
+        "module",
+        "topic",
+        "notes",
+    ):
+        value = context.get(key)
+        if value not in (None, "", [], {}):
+            useful[key] = value
+    if not useful:
+        return ""
+    try:
+        raw = json.dumps(useful, ensure_ascii=False, indent=2, default=str)
+    except TypeError:
+        raw = str(useful)
+    return _truncate_middle_text(raw, limit)
+
+
+def _text_assist_prompt(action: str, text: str, module: str, output_format: str, context: Any) -> str:
+    config = TEXT_ASSIST_ACTIONS.get(action)
+    if not config:
+        raise HTTPException(400, "Unbekannte Textaktion")
+    context_text = _text_assist_context_text(context)
+    format_instruction = (
+        "Gib einen HTML-Fragment-Text zurueck. Nutze nur einfache Tags wie p, ul, ol, li, strong, em und br. Kein komplettes HTML-Dokument."
+        if output_format == "html"
+        else "Gib reinen Text zurueck. Kein Markdown, ausser die Aktion verlangt eine Liste; dann einfache Bindestrich-Liste."
+    )
+    return (
+        "Du bist Textassistent in einer IT-Workbench fuer ein deutsches IT-Dienstleistungsunternehmen.\n"
+        f"Modul: {module or 'allgemein'}\n"
+        f"Aktion: {config['label']}\n"
+        f"Arbeitsauftrag: {config['instruction']}\n"
+        f"Ausgabeformat: {format_instruction}\n\n"
+        "Regeln:\n"
+        "- Sprache: Deutsch.\n"
+        "- Keine erfundenen Fakten, keine neuen Preise, keine nicht belegten Zusagen.\n"
+        "- Kundennamen, technische Bezeichnungen, Termine, Zahlen und Produktnamen erhalten.\n"
+        "- Wenn Kontext vorhanden ist, nutze ihn nur zur Praezisierung, nicht zum Ausschmuecken.\n"
+        "- Antworte ausschliesslich mit dem fertigen Ergebnistext.\n\n"
+        f"Kontext:\n{context_text or 'n/a'}\n\n"
+        f"Ausgangstext:\n<<<BEGINN>>>\n{text}\n<<<ENDE>>>"
+    )
+
+
+@app.post("/api/ai/text_assist")
+def run_text_assist(data: TextAssistRequest):
+    text = str(data.text or "").strip()
+    if len(_html_to_plain_text(text) if "<" in text and ">" in text else text) < 3:
+        raise HTTPException(400, "Text fehlt")
+    action = str(data.action or "").strip().lower().replace("-", "_")
+    if action not in TEXT_ASSIST_ACTIONS:
+        raise HTTPException(400, "Unbekannte Textaktion")
+    module = str(data.module or "").strip().lower()
+    output_format = str(data.format or "text").strip().lower()
+    if output_format not in {"text", "html"}:
+        output_format = "text"
+    purpose = TEXT_ASSIST_MODULE_PURPOSES.get(module, "internal_ai")
+    prompt = _text_assist_prompt(action, _truncate_middle_text(text, 12000), module, output_format, data.context or {})
+    payload, used_model, provider = _ai_generate(
+        prompt,
+        model_candidates=_resolve_ai_models(purpose=purpose),
+        purpose=purpose,
+        temperature=0.2,
+        max_tokens=min(1800, int(INTERNAL_AI_MAX_TOKENS)),
+        timeout=min(int(INTERNAL_AI_TOOL_TIMEOUT_SECONDS), max(10, int(OLLAMA_TIMEOUT_SECONDS))),
+        use_cache=False,
+        system_prompt=_WORKBENCH_SYSTEM_PROMPT,
+    )
+    result_text = str((payload or {}).get("response") or "").strip()
+    if not result_text:
+        result_text = text
+        provider = "fallback"
+    if output_format == "html":
+        result_text = _clean_newsletter_generated_body(result_text)
+    return {
+        "action": action,
+        "text": result_text,
+        "provider": provider,
+        "model": used_model or "",
+        "module": module,
+        "purpose": purpose,
+        "generated_at": int(time.time() * 1000),
+    }
+
+
+def _extract_offer_prefill_json(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    text_value = str(raw or "").strip()
+    if not text_value:
+        return {}
+    text_value = re.sub(r"^```(?:json)?\s*", "", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"\s*```$", "", text_value)
+    try:
+        parsed = json.loads(text_value)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        start = text_value.find("{")
+        end = text_value.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        try:
+            parsed = json.loads(text_value[start : end + 1])
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+
+def _offer_prefill_text(value: Any, limit: int = 1200) -> str:
+    clean = " ".join(str(value or "").replace("\r", " ").split()).strip()
+    if len(clean) <= limit:
+        return clean
+    return clean[:limit].rstrip(" ,;:-")
+
+
+def _offer_prefill_relevant_description(description: str) -> str:
+    text_value = str(description or "").replace("\r", "\n").strip()
+    if not text_value:
+        return ""
+    start_markers = ["Projektkontext:", "Projektdaten:", "Ausgangssituation:", "Projekt:"]
+    starts = [text_value.lower().find(marker.lower()) for marker in start_markers]
+    starts = [index for index in starts if index >= 0]
+    if starts:
+        text_value = text_value[min(starts) :]
+    stop_markers = [
+        "\nBitte fülle",
+        "\nBitte fuelle",
+        "\nZusätzliche Anforderungen",
+        "\nZusaetzliche Anforderungen",
+        "\nErwartete JSON-Struktur",
+        "\nJSON-Struktur",
+    ]
+    stops = [text_value.lower().find(marker.lower()) for marker in stop_markers]
+    stops = [index for index in stops if index >= 0]
+    if stops:
+        text_value = text_value[: min(stops)]
+    return text_value.strip() or str(description or "").strip()
+
+
+def _offer_prefill_number(value: Any, default: float = 0) -> float:
+    if value in (None, ""):
+        return default
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        return float(value)
+    text_value = str(value or "").strip().replace("€", "").replace(" ", "")
+    if "," in text_value and "." in text_value:
+        text_value = text_value.replace(".", "").replace(",", ".")
+    else:
+        text_value = text_value.replace(",", ".")
+    try:
+        parsed = float(text_value)
+        return parsed if math.isfinite(parsed) else default
+    except Exception:
+        return default
+
+
+def _normalize_offer_prefill_item(item: Any, *, kind: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(item, dict):
+        return None
+    title = _offer_prefill_text(
+        item.get("title")
+        or item.get("name")
+        or item.get("product")
+        or item.get("position")
+        or ("Material" if kind == "device" else "Leistung"),
+        160,
+    )
+    if not title:
+        return None
+    quantity = _offer_prefill_number(item.get("quantity"), 1)
+    if quantity <= 0:
+        quantity = 1
+    unit = _offer_prefill_text(item.get("unit") or ("piece" if kind == "device" else "hours"), 24)
+    allowed_units = {
+        "hours", "days", "weeks", "month", "year", "piece", "flat", "user",
+        "device", "license", "km", "m", "gb", "tb",
+    }
+    if unit not in allowed_units:
+        lower = unit.lower()
+        if lower in {"h", "std", "stunde", "stunden"}:
+            unit = "hours"
+        elif lower in {"stk", "stück", "stueck", "pcs"}:
+            unit = "piece"
+        elif lower in {"pauschal", "fix"}:
+            unit = "flat"
+        else:
+            unit = "piece" if kind == "device" else "hours"
+    billing_cycle = _offer_prefill_text(item.get("billingCycle") or item.get("billing_cycle") or "once", 24)
+    if billing_cycle not in {"once", "monthly", "yearly"}:
+        billing_cycle = "once"
+    keywords = item.get("keywords") or []
+    if isinstance(keywords, str):
+        keywords = [part.strip() for part in keywords.split(",")]
+    if not isinstance(keywords, list):
+        keywords = []
+    normalized = {
+        "title": title,
+        "price": _offer_prefill_number(item.get("price"), 0),
+        "quantity": quantity,
+        "unit": unit,
+        "billingCycle": billing_cycle,
+        "optional": bool(item.get("optional") or False),
+        "keywords": [_offer_prefill_text(word, 40) for word in keywords if _offer_prefill_text(word, 40)][:8],
+    }
+    if kind == "device":
+        normalized.update(
+            {
+                "product": _offer_prefill_text(item.get("product") or title, 180),
+                "manufacturer": _offer_prefill_text(item.get("manufacturer"), 100),
+                "model": _offer_prefill_text(item.get("model"), 100),
+                "description": _offer_prefill_text(item.get("description") or item.get("text") or item.get("aiDraft"), 1200),
+                "calcBase": item.get("calcBase") if item.get("calcBase") is not None else None,
+            }
+        )
+        normalized.pop("unit", None)
+    else:
+        normalized.update(
+            {
+                "type": "Dienstleistung",
+                "complexity": _offer_prefill_text(item.get("complexity") or "mittel", 24),
+                "securityRelevant": bool(item.get("securityRelevant") or item.get("security_relevant") or False),
+                "researchHours": _offer_prefill_number(item.get("researchHours"), 0),
+                "aiDraft": _offer_prefill_text(item.get("description") or item.get("text") or item.get("aiDraft"), 1400),
+            }
+        )
+    return normalized
+
+
+def _normalize_offer_prefill_payload(payload: Dict[str, Any], description: str) -> Dict[str, Any]:
+    line_items = payload.get("lineItems") or payload.get("line_items") or []
+    device_items = payload.get("deviceItems") or payload.get("device_items") or []
+    if not isinstance(line_items, list):
+        line_items = []
+    if not isinstance(device_items, list):
+        device_items = []
+    normalized_line_items = [
+        item for item in (_normalize_offer_prefill_item(entry, kind="line") for entry in line_items) if item
+    ][:12]
+    normalized_device_items = [
+        item for item in (_normalize_offer_prefill_item(entry, kind="device") for entry in device_items) if item
+    ][:12]
+    if not normalized_line_items and not normalized_device_items:
+        normalized_line_items = [
+            {
+                "title": _offer_prefill_text(description, 90) or "Projektleistung",
+                "type": "Dienstleistung",
+                "complexity": "mittel",
+                "securityRelevant": any(
+                    term in description.lower()
+                    for term in ("sicherheit", "firewall", "backup", "mfa", "virenschutz", "xdr")
+                ),
+                "price": 0,
+                "quantity": 1,
+                "unit": "hours",
+                "researchHours": 0,
+                "keywords": [],
+                "billingCycle": "once",
+                "optional": False,
+                "aiDraft": _offer_prefill_text(description, 900),
+            }
+        ]
+    return {
+        "customer": _offer_prefill_text(payload.get("customer"), 180),
+        "recipientName": _offer_prefill_text(payload.get("recipientName") or payload.get("recipient_name"), 180),
+        "recipientCompany": _offer_prefill_text(payload.get("recipientCompany") or payload.get("recipient_company"), 180),
+        "salutation": _offer_prefill_text(payload.get("salutation") or "Sehr geehrte Damen und Herren,", 240),
+        "introText": _offer_prefill_text(payload.get("introText") or payload.get("intro_text"), 700),
+        "coverEnabled": bool(payload.get("coverEnabled") or payload.get("cover_enabled") or False),
+        "coverHeadline": _offer_prefill_text(payload.get("coverHeadline") or payload.get("cover_headline"), 180),
+        "coverIntro": _offer_prefill_text(payload.get("coverIntro") or payload.get("cover_intro"), 1200),
+        "overviewText": _offer_prefill_text(payload.get("overviewText") or payload.get("overview_text"), 2400),
+        "calculationText": _offer_prefill_text(payload.get("calculationText") or payload.get("calculation_text"), 1200),
+        "detailHtml": _offer_prefill_text(payload.get("detailHtml") or payload.get("detail_html"), 5200),
+        "lineItems": normalized_line_items,
+        "deviceItems": normalized_device_items,
+        "hints": payload.get("hints") if isinstance(payload.get("hints"), list) else [],
+        "missingFields": payload.get("missingFields") or payload.get("missing_fields") if isinstance(payload.get("missingFields") or payload.get("missing_fields"), list) else [],
+    }
+
+
+def _offer_prefill_segments(description: str) -> List[str]:
+    raw = _offer_prefill_relevant_description(description).replace("\r", "\n")
+    raw = re.sub(r"\s+-\s+", "\n- ", raw)
+    parts = re.split(r"(?:\n+|[•●▪]+|;\s+)", raw)
+    segments: List[str] = []
+    for part in parts:
+        clean = _offer_prefill_text(re.sub(r"^\s*[-*]\s*", "", part), 320)
+        if len(clean) < 4:
+            continue
+        lower_clean = clean.lower()
+        if lower_clean.startswith(("kunde:", "kundin:", "kontakt:", "ansprechpartner:", "betreff:")):
+            continue
+        if re.match(r"^\d+\.\s*[a-z_]+$", lower_clean):
+            continue
+        if lower_clean in {"aufgabe:", "wichtig:", "projektkontext:", "ziel des angebots:", "bitte fülle die folgenden felder vor:"}:
+            continue
+        if lower_clean.startswith(("du arbeitest", "erzeuge aus", "gib die antwort", "verwende genau", "keine markdown", "{", "}", "\"")):
+            continue
+        if clean not in segments:
+            segments.append(clean)
+    if len(segments) <= 1:
+        sentence_parts = re.split(r"(?<=[.!?])\s+", str(description or ""))
+        for part in sentence_parts:
+            clean = _offer_prefill_text(part, 320)
+            if len(clean) >= 12 and clean not in segments:
+                segments.append(clean)
+    return segments[:18]
+
+
+def _offer_prefill_detect_customer(description: str, customers: List[Dict[str, Any]]) -> str:
+    clean = str(description or "")
+    lower = clean.lower()
+    explicit = re.search(r"\b(?:kunde|kundin|firma|unternehmen)\s*:\s*([^\n;,]+)", clean, flags=re.IGNORECASE)
+    if explicit:
+        candidate = _offer_prefill_text(explicit.group(1), 180)
+        for customer in customers or []:
+            name = _offer_prefill_text(customer.get("name"), 180) if isinstance(customer, dict) else ""
+            if name and (candidate.lower() in name.lower() or name.lower() in candidate.lower()):
+                return name
+        return candidate
+    for customer in customers or []:
+        if not isinstance(customer, dict):
+            continue
+        name = _offer_prefill_text(customer.get("name"), 180)
+        if name and name.lower() in lower:
+            return name
+    return ""
+
+
+def _offer_prefill_price_from_text(text_value: str) -> float:
+    price_matches = re.findall(r"(\d{1,6}(?:[.,]\d{1,2})?)\s*(?:€|eur)\b", str(text_value or ""), flags=re.IGNORECASE)
+    if not price_matches:
+        return 0
+    return _offer_prefill_number(price_matches[-1], 0)
+
+
+def _offer_prefill_quantity_unit(text_value: str, *, default_unit: str = "hours") -> Tuple[float, str]:
+    lower = str(text_value or "").lower()
+    patterns = [
+        (r"(\d+(?:[,.]\d+)?)\s*(?:h|std\.?|stunden?)\b", "hours"),
+        (r"(\d+(?:[,.]\d+)?)\s*(?:tage?|pt|personentage?)\b", "days"),
+        (r"(\d+(?:[,.]\d+)?)\s*(?:wochen?)\b", "weeks"),
+        (r"(\d+(?:[,.]\d+)?)\s*(?:user|benutzer|anwender)\b", "user"),
+        (r"(\d+(?:[,.]\d+)?)\s*(?:clients?|pcs?|notebooks?|geräte?|geraete?)\b", "device"),
+        (r"(\d+(?:[,.]\d+)?)\s*(?:lizenzen?|licenses?)\b", "license"),
+        (r"(\d+(?:[,.]\d+)?)\s*(?:stk\.?|stück|stueck|pcs?)\b", "piece"),
+    ]
+    for pattern, unit in patterns:
+        match = re.search(pattern, lower)
+        if match:
+            quantity = _offer_prefill_number(match.group(1), 1)
+            return (quantity if quantity > 0 else 1, unit)
+    if any(term in lower for term in ("pauschal", "fixpreis", "festpreis")):
+        return 1, "flat"
+    return 1, default_unit
+
+
+def _offer_prefill_service_title(segment: str) -> str:
+    lower = segment.lower()
+    mappings = [
+        (("drupal", "cms"), "Drupal-Upgrade und CMS-Leistung"),
+        (("php 8", "php/gd", "php"), "PHP-Runtime-Anpassung"),
+        (("ckeditor", "claro", "seven", "theme"), "Theme- und Editor-Anpassung"),
+        (("cloud-telefonie", "telefonanlage", "telefonie", "voip", "sip"), "Telefonie-Migration und Einrichtung"),
+        (("rufnummer", "portierung"), "Rufnummernportierung und Provider-Abstimmung"),
+        (("yealink", "telefon", "endgerät", "endgeraet"), "Telefonie-Endgeräte konfigurieren"),
+        (("firewall", "utm"), "Firewall-Konfiguration und Inbetriebnahme"),
+        (("vpn",), "VPN-Einrichtung"),
+        (("wlan", "access point", "accesspoint", "wifi"), "WLAN-Planung und Einrichtung"),
+        (("backup", "datensicherung"), "Backup-Prüfung und Umsetzung"),
+        (("server", "virtualisierung", "vmware", "hyper-v"), "Server- und Systemleistung"),
+        (("migration", "umzug", "übernahme", "uebernahme"), "Migration und Umstellung"),
+        (("mail", "e-mail", "email", "outlook", "postfach", "m365", "office 365"), "E-Mail- und Microsoft-365-Leistung"),
+        (("mfa", "2fa", "sicherheit", "security", "virenschutz", "xdr", "edr"), "IT-Sicherheitsleistung"),
+        (("notebook", "arbeitsplatz", "pc", "client"), "Arbeitsplatz- und Clientleistung"),
+        (("dokumentation",), "Dokumentation und Übergabe"),
+        (("projektleitung", "koordination", "abstimmung"), "Projektkoordination und Abstimmung"),
+        (("schulung", "einweisung"), "Einweisung und Schulung"),
+    ]
+    for needles, title in mappings:
+        if any(needle in lower for needle in needles):
+            return title
+    if re.search(r"\b(?:h|std\.?|stunden?)\b", lower):
+        return "Technische Arbeitszeit"
+    words = re.sub(r"\b(?:angebot|bitte|kunde|für|fuer|und|mit|der|die|das|ein|eine|einen)\b", " ", segment, flags=re.IGNORECASE)
+    words = _offer_prefill_text(words, 80)
+    return words[:1].upper() + words[1:] if words else "IT-Dienstleistung"
+
+
+def _offer_prefill_is_material(segment: str) -> bool:
+    lower = segment.lower()
+    material_terms = (
+        "notebook", "laptop", "pc", "workstation", "monitor", "switch", "firewall appliance",
+        "router", "access point", "accesspoint", "server", "nas", "usv", "drucker", "scanner",
+        "hardware", "gerät", "geraet", "lizenz", "license",
+    )
+    service_terms = ("einrichtung", "konfiguration", "installation", "migration", "arbeitszeit", "stunden", "service")
+    return any(term in lower for term in material_terms) and not any(term in lower for term in service_terms)
+
+
+def _offer_prefill_derive_items(description: str) -> Dict[str, Any]:
+    segments = _offer_prefill_segments(description)
+    line_items: List[Dict[str, Any]] = []
+    device_items: List[Dict[str, Any]] = []
+    for segment in segments:
+        lower = segment.lower()
+        if len(segment) < 8 or lower.startswith(("sehr geehrte", "hallo", "danke")):
+            continue
+        price = _offer_prefill_price_from_text(segment)
+        if _offer_prefill_is_material(segment):
+            quantity, unit = _offer_prefill_quantity_unit(segment, default_unit="piece")
+            if unit not in {"piece", "device", "license", "user"}:
+                unit = "piece"
+            product = _offer_prefill_service_title(segment)
+            if product.endswith("leistung") or product == "IT-Dienstleistung":
+                product = _offer_prefill_text(segment, 90)
+            device_items.append(
+                {
+                    "product": product,
+                    "title": product,
+                    "description": segment,
+                    "quantity": quantity,
+                    "price": price,
+                    "billingCycle": "monthly" if any(term in lower for term in ("monatlich", "pro monat", "/monat")) else "once",
+                }
+            )
+            continue
+        quantity, unit = _offer_prefill_quantity_unit(segment, default_unit="hours")
+        title = _offer_prefill_service_title(segment)
+        line_items.append(
+            {
+                "title": title,
+                "description": segment,
+                "quantity": quantity,
+                "unit": unit,
+                "price": price,
+                "billingCycle": "monthly" if any(term in lower for term in ("monatlich", "pro monat", "/monat")) else "once",
+                "keywords": [word for word in ("Firewall", "VPN", "WLAN", "Backup", "Server", "Microsoft 365", "Migration", "Sicherheit") if word.lower().replace(" ", "") in lower.replace(" ", "")],
+                "securityRelevant": any(term in lower for term in ("firewall", "vpn", "backup", "mfa", "sicherheit", "security")),
+            }
+        )
+    deduped_line_items: List[Dict[str, Any]] = []
+    seen_titles: Set[str] = set()
+    for item in line_items:
+        key = f"{item.get('title')}|{item.get('description')[:80]}".lower()
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+        deduped_line_items.append(item)
+    deduped_device_items: List[Dict[str, Any]] = []
+    seen_products: Set[str] = set()
+    for item in device_items:
+        key = f"{item.get('product')}|{item.get('description')[:80]}".lower()
+        if key in seen_products:
+            continue
+        seen_products.add(key)
+        deduped_device_items.append(item)
+    return {"lineItems": deduped_line_items[:10], "deviceItems": deduped_device_items[:10]}
+
+
+def _offer_prefill_is_weak_result(offer: Dict[str, Any], description: str) -> bool:
+    line_items = offer.get("lineItems") if isinstance(offer.get("lineItems"), list) else []
+    device_items = offer.get("deviceItems") if isinstance(offer.get("deviceItems"), list) else []
+    item_count = len(line_items) + len(device_items)
+    if item_count == 0:
+        return True
+    if item_count > 1:
+        return False
+    only_item = (line_items or device_items or [{}])[0]
+    title = str(only_item.get("title") or only_item.get("product") or "").strip().lower()
+    generic_titles = {"it-dienstleistung", "projektleistung", "leistung", "material", "technische arbeitszeit"}
+    if title in generic_titles and len(_offer_prefill_segments(description)) > 1:
+        return True
+    if title and title in str(description or "").strip().lower() and len(title) > 90:
+        return True
+    return False
+
+
+def _merge_offer_prefill_with_deterministic(normalized: Dict[str, Any], deterministic: Dict[str, Any], description: str) -> Dict[str, Any]:
+    derived_line_items = deterministic.get("lineItems") if isinstance(deterministic.get("lineItems"), list) else []
+    derived_device_items = deterministic.get("deviceItems") if isinstance(deterministic.get("deviceItems"), list) else []
+    if _offer_prefill_is_weak_result(normalized, description) and (derived_line_items or derived_device_items):
+        normalized["lineItems"] = [
+            item for item in (_normalize_offer_prefill_item(entry, kind="line") for entry in derived_line_items) if item
+        ][:12]
+        normalized["deviceItems"] = [
+            item for item in (_normalize_offer_prefill_item(entry, kind="device") for entry in derived_device_items) if item
+        ][:12]
+        hints = normalized.get("hints") if isinstance(normalized.get("hints"), list) else []
+        normalized["hints"] = [*hints, "Positionen wurden aus dem Freitext strukturiert, weil die KI-Ausgabe zu allgemein war."]
+    return normalized
+
+
+def _offer_prefill_extract_sections(description: str) -> Dict[str, List[str]]:
+    relevant = _offer_prefill_relevant_description(description)
+    sections: Dict[str, List[str]] = {}
+    current = "Projektkontext"
+    sections[current] = []
+    for raw_line in relevant.replace("\r", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        heading = re.match(r"^([A-ZÄÖÜ][A-Za-zÄÖÜäöüß0-9 \-/()]{2,90}):\s*$", line)
+        if heading:
+            current = _offer_prefill_text(heading.group(1), 90)
+            sections.setdefault(current, [])
+            continue
+        clean = _offer_prefill_text(re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", line), 500)
+        lower_clean = clean.lower()
+        if not clean:
+            continue
+        if lower_clean.startswith(("bitte fülle", "bitte fuelle", "zusätzliche anforderungen", "zusaetzliche anforderungen", "erwartete json-struktur")):
+            break
+        if re.match(r"^\d+\.\s*[a-z_]+$", lower_clean):
+            continue
+        sections.setdefault(current, []).append(clean)
+    return {key: value for key, value in sections.items() if value}
+
+
+def _offer_prefill_flatten_sections(sections: Dict[str, List[str]], limit: int = 18) -> List[str]:
+    result: List[str] = []
+    for items in sections.values():
+        for item in items:
+            if item not in result:
+                result.append(item)
+            if len(result) >= limit:
+                return result
+    return result
+
+
+def _offer_prefill_topic(description: str, sections: Dict[str, List[str]]) -> str:
+    text_value = str(description or "")
+    match = re.search(r"Angebot\s+(?:zu|für|fuer)\s+(?:ein(?:em|en|e)?\s+)?(.{8,120}?)(?:\.|\n|$)", text_value, flags=re.IGNORECASE)
+    if match:
+        topic = _offer_prefill_text(match.group(1), 90)
+        topic = re.sub(r"^(?:einem|einen|eine|ein)\s+", "", topic, flags=re.IGNORECASE).strip()
+        if topic:
+            return topic[:1].upper() + topic[1:]
+    relevant = _offer_prefill_relevant_description(description)
+    goal_match = re.search(r"\bZiel\s*:\s*([^\n]+)", relevant, flags=re.IGNORECASE)
+    if goal_match:
+        goal = _offer_prefill_text(goal_match.group(1), 110)
+        goal = re.sub(r"^(?:Vorbereitung und Durchführung|Durchführung|Umsetzung)\s+(?:eines|einer|des|der)\s+", "", goal, flags=re.IGNORECASE).strip()
+        if goal:
+            return goal[:1].upper() + goal[1:]
+    items = _offer_prefill_flatten_sections(sections, limit=5)
+    for item in items:
+        if any(term in item.lower() for term in ("upgrade", "migration", "umstellung", "einrichtung", "erneuerung", "tausch", "projekt", "website", "server", "firewall", "backup")):
+            return _offer_prefill_text(item, 90)
+    return "Kundenprojekt"
+
+
+def _offer_prefill_items_containing(items: List[str], terms: Tuple[str, ...], limit: int = 5) -> List[str]:
+    result: List[str] = []
+    for item in items:
+        lower = item.lower()
+        if any(term in lower for term in terms):
+            result.append(item)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _offer_prefill_join(items: List[str], fallback: str, limit: int = 900) -> str:
+    clean_items = [_offer_prefill_text(item, 220) for item in items if _offer_prefill_text(item, 220)]
+    return _offer_prefill_text(" ".join(clean_items) if clean_items else fallback, limit)
+
+
+def _build_structured_offer_prefill(description: str, customers: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    lower_description = str(description or "").lower()
+    structured_markers = (
+        "projektkontext:",
+        "projektdaten:",
+        "ausgangssituation:",
+        "ziel des angebots:",
+        "leistungsumfang",
+        "technische_vorgehensweise",
+        "risiken_und_annahmen",
+        "voraussetzungen_kundenseite",
+        "qualitaetssicherung_tests",
+        "qualitätssicherung",
+        "deployment_go_live",
+        "aufwand_einschaetzung",
+        "preislogik",
+    )
+    if sum(1 for marker in structured_markers if marker in lower_description) < 2:
+        return None
+    sections = _offer_prefill_extract_sections(description)
+    facts = _offer_prefill_flatten_sections(sections, limit=30)
+    if len(facts) < 3:
+        return None
+    topic = _offer_prefill_topic(description, sections)
+    customer_name = _offer_prefill_detect_customer(description, customers)
+    technical_items = _offer_prefill_items_containing(
+        facts,
+        (
+            "upgrade", "migration", "runtime", "php", "server", "firewall", "vpn", "backup", "modul", "module",
+            "datenbank", "schema", "schnittstelle", "api", "test", "clone", "theme", "ckeditor", "deployment",
+            "go-live", "wartungsfenster", "rollback", "validierung", "nachkontrolle", "cloud", "microsoft", "m365",
+        ),
+        limit=14,
+    )
+    risk_items = _offer_prefill_items_containing(
+        facts,
+        ("risiko", "annahme", "abhängig", "abhaengig", "voraussetzung", "fehlt", "rollback", "ausfall", "nicht enthalten", "kundenseite"),
+        limit=8,
+    )
+    goal_items = _offer_prefill_items_containing(
+        facts,
+        ("ziel", "stabil", "minimierung", "absicherung", "durchführung", "durchfuehrung", "vorbereitung", "geordnet", "nachkontrolle"),
+        limit=8,
+    )
+    if not goal_items:
+        goal_items = facts[:4]
+    section_html = []
+    section_titles = {
+        "Ausgangssituation": ("ausgang", "projektkontext", "projektdaten"),
+        "Projektziel": ("ziel",),
+        "Leistungsumfang": ("umfang", "technische", "erkenntnisse", "vorgehensweise"),
+        "Risiken und Annahmen": ("risiko", "annahme", "voraussetzung", "nicht"),
+        "Qualitätssicherung, Go-Live und Nachbetreuung": ("test", "qualität", "qualitaet", "deployment", "go-live", "nachbetreuung"),
+    }
+    used_items: Set[str] = set()
+    for heading, terms in section_titles.items():
+        grouped: List[str] = []
+        for section_title, items in sections.items():
+            section_lower = section_title.lower()
+            if any(term in section_lower for term in terms):
+                grouped.extend(items)
+        if not grouped and heading == "Leistungsumfang":
+            grouped = technical_items[:8]
+        if not grouped and heading == "Risiken und Annahmen":
+            grouped = risk_items[:6]
+        if not grouped and heading == "Projektziel":
+            grouped = goal_items[:5]
+        if not grouped and heading == "Ausgangssituation":
+            grouped = facts[:5]
+        if grouped:
+            used_items.update(grouped)
+            section_html.append(f"<h3>{escape(heading)}</h3><ul>{''.join(f'<li>{escape(item)}</li>' for item in grouped[:10])}</ul>")
+    remaining = [item for item in technical_items if item not in used_items][:8]
+    if remaining:
+        section_html.append(f"<h3>Technische Details</h3><ul>{''.join(f'<li>{escape(item)}</li>' for item in remaining)}</ul>")
+    derived = _offer_prefill_derive_items(_offer_prefill_relevant_description(description))
+    derived_line_items = derived.get("lineItems") if isinstance(derived.get("lineItems"), list) else []
+    line_items: List[Dict[str, Any]] = [
+        {
+            "title": "Projektvorbereitung und Bestandsaufnahme",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": _offer_prefill_join(facts[:5], "Sichtung der Ausgangslage, Abstimmung des Zielbilds und Vorbereitung der Umsetzung."),
+            "keywords": ["Vorbereitung", "Analyse"],
+        },
+        {
+            "title": "Technische Umsetzung",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": _offer_prefill_join(technical_items[:7] or facts[2:9], "Umsetzung der beschriebenen technischen Arbeitspakete."),
+            "keywords": ["Umsetzung"],
+            "securityRelevant": any(term in lower_description for term in ("sicherheit", "security", "backup", "firewall", "rollback")),
+        },
+        {
+            "title": "Qualitätssicherung und Tests",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": _offer_prefill_join(_offer_prefill_items_containing(facts, ("test", "validierung", "prüfung", "pruefung", "kontrolle", "clone"), limit=6), "Funktionsprüfung und Validierung der relevanten Ergebnisse."),
+            "keywords": ["Tests", "Qualitätssicherung"],
+        },
+        {
+            "title": "Deployment, Go-Live und Nachkontrolle",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": _offer_prefill_join(_offer_prefill_items_containing(facts, ("deployment", "go-live", "wartungsfenster", "livegang", "nachkontrolle", "rollback"), limit=6), "Geordnete Durchführung, Übergabe und Nachkontrolle nach Abschluss."),
+            "keywords": ["Go-Live", "Nachkontrolle"],
+        },
+    ]
+    for item in derived_line_items[:6]:
+        title = str(item.get("title") or "").strip()
+        description_value = str(item.get("description") or "").strip()
+        too_raw = bool(re.match(r"^\d", title)) or title.lower() == description_value.lower() or len(title) > 80
+        if title and not too_raw and title.lower() not in {existing["title"].lower() for existing in line_items}:
+            line_items.insert(-2, item)
+    missing_fields = ["konkreter Preis", "finaler Leistungsumfang", "Termin/Wartungsfenster", "kundenseitige Freigabe"]
+    if risk_items:
+        missing_fields.append("Bewertung der genannten Annahmen/Risiken")
+    return _normalize_offer_prefill_payload(
+        {
+            "customer": customer_name,
+            "salutation": "Sehr geehrte Damen und Herren,",
+            "introText": f"vielen Dank für Ihre Anfrage. Gerne unterbreiten wir Ihnen ein Angebot für {topic}.",
+            "coverEnabled": True,
+            "coverHeadline": f"Angebot für {topic}",
+            "coverIntro": f"Dieses Angebot fasst die vorgesehene Leistung für {customer_name or 'Ihr Projekt'} strukturiert zusammen und berücksichtigt Ausgangslage, Zielbild, technische Umsetzung, Qualitätssicherung und Nachkontrolle.",
+            "overviewText": _offer_prefill_join(goal_items or facts[:6], f"Ziel ist die strukturierte Vorbereitung und Durchführung von {topic}.", limit=1600),
+            "calculationText": (
+                "Preislogik: Die Vorerfassung legt Leistungspakete ohne konkrete Preise an. "
+                "Preise, Mengen und Stundenansätze sind vor Angebotsversand anhand finalem Leistungsumfang, Risiken und Kundenvoraussetzungen zu ergänzen."
+            ),
+            "detailHtml": "".join(section_html) or f"<p>{escape(_offer_prefill_join(facts[:10], 'Projektinformationen wurden aus dem Freitext übernommen.'))}</p>",
+            "lineItems": line_items[:10],
+            "deviceItems": derived.get("deviceItems") or [],
+            "hints": [
+                "Strukturierter Projektprompt erkannt und allgemein in Angebotsfelder überführt.",
+                "Vom Benutzer gewünschte externe JSON-Keys wurden nicht als Zielformat verwendet, sondern auf das Angebotsmodul gemappt.",
+                "Preise wurden bewusst auf 0 gesetzt, sofern keine konkreten Preise genannt wurden.",
+            ],
+            "missingFields": missing_fields,
+        },
+        _offer_prefill_relevant_description(description),
+    )
+
+
+def _build_drupal_upgrade_prefill(description: str, customers: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    relevant = _offer_prefill_relevant_description(description)
+    lower = relevant.lower()
+    if "drupal" not in lower or "upgrade" not in lower:
+        return None
+    customer_name = _offer_prefill_detect_customer(description, customers)
+    target = "Drupal 10/11 unter PHP 8.3" if "php 8.3" in lower or "drupal 11" in lower else "aktueller Drupal-Zielversion"
+    technical_scope = [
+        "Vorbereitung des Echtsystems inklusive Sicherung, Abstimmung des Wartungsfensters und Rollback-Konzept.",
+        "Stufenweises Upgrade der bestehenden Drupal-Installation. Annahme: Der im Test bestätigte Upgradepfad kann im Echtsystem grundsätzlich wiederverwendet werden.",
+        "Upgrade von Drupal 8.9.15 auf Drupal 9.5 und anschließend auf Drupal 10.6.7; Vorbereitung bzw. Validierung des Pfads Richtung Drupal 11 unter PHP 8.3.",
+        "Portierung des Custom Themes für Drupal 10/11 und Umstellung von CKEditor alt auf CKEditor 5.",
+        "Austausch des Admin-Themes Seven durch Claro.",
+        "Aktualisierung, Ersatz oder technische Nachbearbeitung betroffener Contrib-Module, unter anderem Redirect, Simple XML Sitemap, Webform, Honeypot, Twig Tweak, Metatag, Pathauto, Field Group, File MDM, Admin Toolbar, Spamspan, Extlink, Rabbit Hole und eu_cookie_compliance.",
+        "Bereinigung von Datenbankupdates, Entity-/Felddefinitionen, Post-Updates, Schema-Ständen, veralteten Hooks, Requirements-Prüfungen und Cache-Flush-Verhalten.",
+        "Anpassung der PHP/GD-Umgebung für moderne Bildformate wie WEBP und AVIF, soweit dies für den Betrieb erforderlich ist.",
+        "Validierung nach der Umstellung inklusive Funktionsprüfung, Sichtprüfung zentraler Seitentypen und Nachkontrolle nach dem Livegang.",
+    ]
+    risks = [
+        "Annahme: Der vorhandene Test-Clone entspricht dem produktiven System ausreichend genau.",
+        "Annahme: Zugänge, Hosting-/Serverrechte, Datenbankzugriff und Wartungsfenster werden rechtzeitig bereitgestellt.",
+        "Nicht enthalten sind fachliche Inhaltsänderungen, Design-Relaunch, neue Funktionen außerhalb des Upgradeumfangs sowie dauerhafte redaktionelle Pflege.",
+        "Restrisiken bestehen bei abweichenden produktiven Daten, nicht getesteten Sonderfällen, Drittmodulen ohne kompatible Version und kurzfristigen Hosting-Abhängigkeiten.",
+    ]
+    detail_html = (
+        "<h3>Ausgangssituation</h3>"
+        "<p>Die bestehende Website basiert auf Drupal 8.9.15 und wurde ursprünglich unter PHP 7.4 betrieben. "
+        "Ein interner Testlauf auf einem Clone wurde bereits erfolgreich durchgeführt. Dabei wurde bestätigt, dass das Upgrade nicht als Direkt-Upgrade, sondern stufenweise erfolgen muss.</p>"
+        "<h3>Projektziel</h3>"
+        f"<p>Ziel ist die kontrollierte Vorbereitung und Durchführung des Drupal-Upgrades auf einen stabilen Stand unter {escape(target)}. "
+        "Ausfallrisiken sollen durch Backup, Test, Validierung, Rollback-Konzept und eine geordnete Durchführung im Wartungsfenster reduziert werden.</p>"
+        "<h3>Technische Vorgehensweise</h3>"
+        f"<ul>{''.join(f'<li>{escape(item)}</li>' for item in technical_scope)}</ul>"
+        "<h3>Risiken und Annahmen</h3>"
+        f"<ul>{''.join(f'<li>{escape(item)}</li>' for item in risks)}</ul>"
+        "<h3>Qualitätssicherung und Go-Live</h3>"
+        "<p>Vor dem Livegang werden die wesentlichen Funktionen, Seitentypen, Formulare, Weiterleitungen, Metadaten, Sitemaps und redaktionellen Kernabläufe geprüft. "
+        "Die produktive Umstellung erfolgt in einem abgestimmten Wartungsfenster mit Nachkontrolle nach dem Livegang.</p>"
+    )
+    line_items = [
+        {
+            "title": "Projektvorbereitung, Backup und Rollback-Konzept",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": "Bestandsprüfung, Sicherungsstrategie, Abstimmung des Wartungsfensters und Vorbereitung eines Rollback-Vorgehens.",
+            "keywords": ["Drupal", "Backup", "Rollback"],
+            "securityRelevant": True,
+        },
+        {
+            "title": "Stufenweises Drupal-Core-Upgrade",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": "Durchführung des bestätigten Upgradepfads von Drupal 8.9.15 über Drupal 9.5 und Drupal 10.6.7 Richtung Drupal 11 unter PHP 8.3.",
+            "keywords": ["Drupal", "Upgrade"],
+            "securityRelevant": True,
+        },
+        {
+            "title": "Theme-, CKEditor- und Admin-Theme-Anpassungen",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": "Portierung des Custom Themes, Umstellung auf CKEditor 5 und Austausch von Seven durch Claro.",
+            "keywords": ["Theme", "CKEditor", "Claro"],
+        },
+        {
+            "title": "Contrib-Module und technische Nacharbeiten",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": "Aktualisierung, Ersatz oder technische Nachbearbeitung betroffener Module inklusive Redirect, Webform, Metatag, Pathauto, Sitemap, Honeypot und weiterer genannter Module.",
+            "keywords": ["Module", "Webform", "Redirect"],
+        },
+        {
+            "title": "Datenbank-, Entity- und Schema-Bereinigung",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": "Bereinigung von Datenbankupdates, Entity-/Felddefinitionen, Post-Updates, Schema-Ständen, veralteten Hooks und Cache-Verhalten.",
+            "keywords": ["Datenbank", "Schema"],
+        },
+        {
+            "title": "Tests, Go-Live und Nachkontrolle",
+            "quantity": 1,
+            "unit": "flat",
+            "price": 0,
+            "description": "Funktionsprüfung, Sichtprüfung, Durchführung im Wartungsfenster, Livegangsbegleitung und Nachkontrolle.",
+            "keywords": ["Test", "Go-Live"],
+        },
+    ]
+    return _normalize_offer_prefill_payload(
+        {
+            "customer": customer_name,
+            "salutation": "Sehr geehrte Damen und Herren,",
+            "introText": "vielen Dank für Ihre Anfrage. Gerne unterbreiten wir Ihnen ein Angebot für die Vorbereitung und Durchführung des stufenweisen Drupal-Upgrades.",
+            "coverEnabled": True,
+            "coverHeadline": "Angebot für stufenweises Drupal-Upgrade",
+            "coverIntro": "Dieses Angebot beschreibt die kontrollierte Modernisierung der bestehenden Drupal-Website inklusive technischer Nacharbeiten, Tests, Go-Live-Begleitung und Nachkontrolle.",
+            "overviewText": (
+                "Die bestehende Website läuft auf Drupal 8.9.15 und wurde ursprünglich unter PHP 7.4 betrieben. "
+                "Ein Testlauf auf einem Clone war erfolgreich und zeigt, dass das Upgrade stufenweise erfolgen muss. "
+                "Der Leistungsumfang umfasst Vorbereitung, technische Umsetzung, Modul- und Theme-Anpassungen, Validierung, Go-Live und Nachkontrolle."
+            ),
+            "calculationText": (
+                "Preislogik: Die Positionen sind als Leistungspakete ohne Einzelpreise vorbefüllt. "
+                "Konkrete Preise und Stundenansätze sind vor Angebotsversand anhand Wartungsfenster, Hostingzugängen und finalem Echtsystemstand zu ergänzen."
+            ),
+            "detailHtml": detail_html,
+            "lineItems": line_items,
+            "hints": [
+                "Drupal-Upgrade-Projekt erkannt und in Angebotsfelder überführt.",
+                "Annahmen, nicht enthaltene Leistungen und technische Risiken wurden im Detailtext ausgewiesen.",
+                "Preise wurden bewusst auf 0 gesetzt, da im Prompt keine konkreten Preise genannt wurden.",
+            ],
+            "missingFields": ["konkreter Preis", "finales Wartungsfenster", "Hosting-/Serverzugänge", "Abnahmekriterien Kundenseite"],
+        },
+        relevant,
+    )
+
+
+def _build_offer_prefill_fallback(description: str, customers: List[Dict[str, Any]]) -> Dict[str, Any]:
+    relevant = _offer_prefill_relevant_description(description)
+    clean = _offer_prefill_text(relevant or description, 1600)
+    lower = clean.lower()
+    customer_name = _offer_prefill_detect_customer(description, customers)
+    service_title = "IT-Dienstleistung"
+    if "backup" in lower:
+        service_title = "Backup-Prüfung und Umsetzung"
+    elif "firewall" in lower or "vpn" in lower:
+        service_title = "Firewall- und Netzwerkleistung"
+    elif "server" in lower:
+        service_title = "Serverleistung"
+    elif "arbeitsplatz" in lower or "notebook" in lower or "pc" in lower:
+        service_title = "Arbeitsplatz- und Clientleistung"
+    hours_match = re.search(r"(\d+(?:[,.]\d+)?)\s*(?:h|std|stunden?)\b", lower)
+    quantity = _offer_prefill_number(hours_match.group(1), 1) if hours_match else 1
+    derived = _offer_prefill_derive_items(relevant or description)
+    fallback_line_items = derived.get("lineItems") or [
+        {
+            "title": service_title,
+            "quantity": quantity,
+            "unit": "hours",
+            "price": 0,
+            "description": clean,
+            "keywords": [word for word in ("Backup", "Firewall", "Server", "Client") if word.lower() in lower],
+        }
+    ]
+    return _normalize_offer_prefill_payload(
+        {
+            "customer": customer_name,
+            "introText": "vielen Dank für Ihre Anfrage. Gerne unterbreiten wir Ihnen das gewünschte freibleibende Angebot:",
+            "coverEnabled": True,
+            "coverHeadline": f"Angebot {service_title}",
+            "coverIntro": f"Dieses Angebot fasst die vorgesehenen Leistungen für {customer_name or 'Ihr Unternehmen'} kompakt zusammen.",
+            "overviewText": f"Geplant sind die im Folgenden beschriebenen Leistungen. Die Mengen und Preise sollten vor Versand final geprüft werden.\n\n{clean}",
+            "calculationText": "Hinweis zur Kalkulation: Mengen und Preise können vor Angebotsversand bei Bedarf angepasst werden.",
+            "detailHtml": "<p>Vorgesehen sind Bestandsaufnahme, Abstimmung, Umsetzung, Funktionstest und kurze Übergabe. Offene technische Details werden vor finaler Beauftragung geprüft.</p>",
+            "lineItems": fallback_line_items,
+            "deviceItems": derived.get("deviceItems") or [],
+            "hints": ["Fallback-Vorerfassung verwendet, bitte Preise und Mengen prüfen."],
+        },
+        clean,
+    )
+
+
+@app.post("/api/offer_ai_prefill")
+def generate_offer_prefill(data: OfferAiPrefillRequest):
+    description = str(data.description or "").strip()
+    if len(description) < 10:
+        raise HTTPException(400, "Beschreibung zu kurz")
+    customers = data.customers or []
+    customer_names = [
+        _offer_prefill_text(customer.get("name"), 180)
+        for customer in customers[:80]
+        if isinstance(customer, dict) and _offer_prefill_text(customer.get("name"), 180)
+    ]
+    deterministic_prefill = (
+        _build_structured_offer_prefill(description, customers)
+        or _build_drupal_upgrade_prefill(description, customers)
+        or _build_offer_prefill_fallback(description, customers)
+    )
+    prompt = (
+        "Du erstellst eine brauchbare Vorerfassung fuer ein IT-Angebot der Quansatech GmbH.\n"
+        "Ziel: Der Benutzer soll danach moeglichst wenig manuell nachtragen muessen.\n"
+        "Antworte ausschliesslich als JSON-Objekt, ohne Markdown und ohne Erklaertext.\n"
+        "Wenn der Benutzer im Freitext ein eigenes JSON-Schema oder Feldliste vorgibt, ignoriere dieses Ausgabeformat und mappe die Inhalte in das untenstehende Angebotsmodul-Schema.\n"
+        "Nutze Projektkontext, technische Erkenntnisse, Ziele, Risiken, Annahmen und Nicht-Leistungen fuer overviewText, detailHtml, calculationText und lineItems.\n"
+        "Zerlege den Freitext in konkrete Angebotspositionen. Eine Position pro klar erkennbarem Arbeitspaket oder Material.\n"
+        "Vermeide generische Sammelpositionen wie 'IT-Dienstleistung', wenn konkrete Punkte genannt sind.\n"
+        "Erfinde keine konkreten Preise, Versionsnummern oder Termine. Wenn kein Preis genannt ist, setze price auf 0.\n"
+        "Wenn Arbeitszeit erkennbar ist, nutze quantity und unit=hours. Wenn pauschal genannt ist, unit=flat.\n"
+        "Wenn Hardware oder Lizenzen erkennbar sind, lege deviceItems an. Dienstleistungen bleiben lineItems.\n"
+        "Formuliere Positionstitel fakturierbar und kurz, z.B. 'Firewall-Konfiguration', 'VPN-Einrichtung', 'Microsoft-365-Migration'.\n"
+        "Kunde darf nur aus der Kundenliste gewaehlt werden, wenn eindeutig erkennbar; sonst leer lassen.\n\n"
+        "JSON-Schema:\n"
+        "{\n"
+        "  \"customer\": \"Kundenname oder leer\",\n"
+        "  \"recipientName\": \"optional\",\n"
+        "  \"recipientCompany\": \"optional\",\n"
+        "  \"salutation\": \"Sehr geehrte Damen und Herren,\",\n"
+        "  \"introText\": \"kurze Angebotseinleitung\",\n"
+        "  \"coverEnabled\": true,\n"
+        "  \"coverHeadline\": \"kurzer Deckblatt-Titel\",\n"
+        "  \"coverIntro\": \"kurze Deckblatt-Einleitung\",\n"
+        "  \"overviewText\": \"kurzer Angebotsueberblick\",\n"
+        "  \"calculationText\": \"knapper Kalkulationshinweis\",\n"
+        "  \"detailHtml\": \"Projektablauf als einfacher Text, kein komplexes HTML\",\n"
+        "  \"lineItems\": [{\"title\":\"\",\"description\":\"\",\"quantity\":1,\"unit\":\"hours|flat|piece|days|user|device|license\",\"price\":0,\"billingCycle\":\"once|monthly|yearly\",\"keywords\":[]}],\n"
+        "  \"deviceItems\": [{\"product\":\"\",\"manufacturer\":\"\",\"model\":\"\",\"description\":\"\",\"quantity\":1,\"price\":0,\"billingCycle\":\"once|monthly|yearly\"}],\n"
+        "  \"hints\": [\"kurze Pruefhinweise\"],\n"
+        "  \"missingFields\": [\"preis\", \"menge\"]\n"
+        "}\n\n"
+        "Beispiel: 'Kunde Müller, Firewalltausch, VPN fuer 5 User, 4 Stunden Einrichtung, optional WLAN AP'\n"
+        "=> lineItems: Firewall-Konfiguration 4 hours, VPN-Einrichtung 5 user; deviceItems: WLAN Access Point optional.\n\n"
+        f"Deterministisch erkannte Vorstruktur, falls plausibel uebernehmen und verbessern:\n{json.dumps(deterministic_prefill, ensure_ascii=False)[:5000]}\n\n"
+        f"Kundenliste:\n{json.dumps(customer_names, ensure_ascii=False)}\n\n"
+        f"Freitext:\n{description[:5000]}"
+    )
+    try:
+        payload, model, provider = _ai_generate(
+            prompt,
+            model_candidates=_resolve_ai_models(purpose="offer_text"),
+            purpose="offer_text",
+            response_format="json",
+            temperature=0.15,
+            max_tokens=min(2200, int(INTERNAL_AI_TOOL_MAX_TOKENS)),
+            timeout=INTERNAL_AI_TOOL_TIMEOUT_SECONDS,
+            system_prompt=_WORKBENCH_SYSTEM_PROMPT,
+        )
+        parsed = _extract_offer_prefill_json((payload or {}).get("response") or payload)
+        normalized = _normalize_offer_prefill_payload(parsed, description)
+        if not parsed:
+            normalized = deterministic_prefill
+            return {"offer": normalized, "provider": "fallback", "model": "", "usedFallback": True}
+        normalized = _merge_offer_prefill_with_deterministic(normalized, deterministic_prefill, description)
+        if not normalized.get("customer"):
+            normalized["customer"] = deterministic_prefill.get("customer") or ""
+        for key in ("introText", "coverHeadline", "coverIntro", "overviewText", "calculationText", "detailHtml"):
+            if not normalized.get(key) and deterministic_prefill.get(key):
+                normalized[key] = deterministic_prefill.get(key)
+        return {"offer": normalized, "provider": provider, "model": model, "usedFallback": False}
+    except Exception as exc:
+        logger.warning("offer ai prefill failed: %s", exc)
+        return {
+            "offer": deterministic_prefill,
+            "provider": "fallback",
+            "model": "",
+            "usedFallback": True,
+        }
 
 # ============== REPORT CATALOG =============
 @app.get("/api/report_catalog")
@@ -23819,10 +27207,11 @@ def generate_newsletter_from_rss(data: NewsletterRssGenerateRequest):
         raise HTTPException(400, "Unsupported mode")
     source_text = _build_newsletter_rss_source_text(articles)
     prompt_text = _build_newsletter_rss_prompt(mode, str(data.tone or "sachlich"), len(articles))
-    model_candidates = _resolve_internal_ai_tool_models(None)
+    model_candidates = _resolve_ai_models(purpose="newsletter")
     payload, used_model, provider = _ai_generate(
         _build_internal_ai_prompt(prompt_text, source_text),
         model_candidates=model_candidates,
+        purpose="newsletter",
         temperature=0.25 if mode == "newsletter" else 0.2,
         max_tokens=min(1600 if mode == "newsletter" else 500, int(INTERNAL_AI_MAX_TOKENS)),
         timeout=min(int(INTERNAL_AI_TOOL_TIMEOUT_SECONDS), max(10, int(OLLAMA_TIMEOUT_SECONDS))),
@@ -23839,6 +27228,45 @@ def generate_newsletter_from_rss(data: NewsletterRssGenerateRequest):
         "provider": provider,
         "model": used_model or "",
         "article_count": len(articles),
+        "generated_at": int(time.time() * 1000),
+    }
+
+
+@app.post("/api/newsletter_generate")
+def generate_newsletter_from_raw_text(data: NewsletterRawGenerateRequest):
+    raw_text = str(data.raw_text or "").strip()
+    if len(raw_text) < 20:
+        raise HTTPException(400, "Rohtext ist zu kurz")
+    source_text = _truncate_middle_text(_html_to_plain_text(raw_text), 6000)
+    prompt_text = _build_newsletter_raw_prompt()
+    model_candidates = _resolve_ai_models(purpose="newsletter")
+    provider = ""
+    used_model = ""
+    try:
+        payload, used_model, provider = _ai_generate(
+            _build_internal_ai_prompt(prompt_text, source_text),
+            model_candidates=model_candidates,
+            purpose="newsletter",
+            temperature=0.2,
+            max_tokens=min(1800, int(INTERNAL_AI_MAX_TOKENS)),
+            timeout=min(int(INTERNAL_AI_TOOL_TIMEOUT_SECONDS), max(10, int(OLLAMA_TIMEOUT_SECONDS))),
+            use_cache=False,
+            raw=True,
+        )
+        html = _clean_newsletter_generated_body(str(payload.get("response") or ""))
+    except Exception as exc:
+        logger.warning("Newsletter raw AI generation fallback: %s", exc)
+        html = ""
+        provider = "fallback"
+    if not html:
+        html = _fallback_newsletter_body_from_raw(source_text)
+        provider = "fallback"
+    subject = _newsletter_body_subject_from_html(html) if data.generate_subject is not False else ""
+    return {
+        "html": html,
+        "subject": subject,
+        "provider": provider,
+        "model": used_model or "",
         "generated_at": int(time.time() * 1000),
     }
 
@@ -24427,10 +27855,10 @@ def update_ai_prompts(data: AiPromptsUpdate):
                     key = _normalize_contract_variable_key(raw_key)
                     if not key:
                         continue
-                    if isinstance(raw_entry, dict):
-                        next_entry = dict(raw_entry)
-                    else:
-                        next_entry = {"value": str(raw_entry or "")}
+                        if isinstance(raw_entry, dict):
+                            next_entry = dict(raw_entry)
+                        else:
+                            next_entry = {"value": str(raw_entry or "")}
                     if key in requested_values_normalized:
                         next_entry["value"] = requested_values_normalized[key]
                     overlay_definitions[key] = next_entry
@@ -25077,7 +28505,8 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
         counts_source = "request"
         monthly_total = float(data.monthly_total or 0.0)
         yearly_total = float(data.yearly_total or 0.0)
-        service_scope = (
+        note_raw = str(data.note or "").strip()
+        service_scope = note_raw or (
             "Standardleistungen laut vereinbartem Serviceumfang."
             if is_service_contract
             else "Regelungen laut AVV/DSGVO."
@@ -25097,7 +28526,8 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 network_devices = _safe_nonnegative_int(meta_hub_counts.get("network_devices"))
                 iot_devices = _safe_nonnegative_int(meta_hub_counts.get("iot_devices"))
                 counts_source = "meta_hub"
-                service_scope = "Meta-Hub Infrastrukturvorschlag (RMM/Discovery konsolidiert)."
+                if not note_raw:
+                    service_scope = "Meta-Hub Infrastrukturvorschlag (RMM/Discovery konsolidiert)."
 
         tariff = None
         if data.calculation_id:
@@ -25110,7 +28540,7 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 counts_source = "calculation"
                 monthly_total = float(calc.monthly_total or 0.0)
                 yearly_total = float(calc.yearly_total or 0.0)
-                if is_service_contract and calc.tariff_name:
+                if is_service_contract and calc.tariff_name and not note_raw:
                     service_scope = f"Tarif: {calc.tariff_name}."
                 if is_service_contract and calc.tariff_id:
                     tariff = db.query(ContractTariff).get(int(calc.tariff_id))
@@ -25137,15 +28567,13 @@ def preview_customer_contract_document(customer_id: int, data: CustomerContractP
                 monthly_total = suggested_monthly_total
             if data.yearly_total is None:
                 yearly_total = monthly_total * 12.0 if data.monthly_total is not None else suggested_yearly_total
-            service_scope = f"Tarif: {str(tariff.name or 'Service').strip()}."
+            if not note_raw:
+                service_scope = f"Tarif: {str(tariff.name or 'Service').strip()}."
         else:
             suggested_monthly_total = float(monthly_total or 0.0)
             suggested_yearly_total = float(yearly_total or 0.0)
-        if is_service_contract and not tariff:
-            raise HTTPException(400, "tariff_id is required for wartung/monitoring contracts")
         hourly_price = _safe_nonnegative_float(tariff.hourly_price if is_service_contract and tariff else 0.0)
 
-        note_raw = str(data.note or "").strip()
         note_block = (
             f"Hinweis: {escape(note_raw).replace(chr(10), '<br/>')}" if note_raw else "Ohne Zusatzhinweise."
         )
@@ -25346,9 +28774,7 @@ def create_customer_contract_document(customer_id: int, data: CustomerContractDo
         if not is_service_contract:
             monthly_hours_included = 0.0
         tariff = None
-        if is_service_contract:
-            if not data.tariff_id:
-                raise HTTPException(400, "tariff_id is required for wartung/monitoring contracts")
+        if is_service_contract and data.tariff_id:
             tariff = db.query(ContractTariff).get(int(data.tariff_id))
             if not tariff:
                 raise HTTPException(404, "Tariff not found")
@@ -25514,9 +28940,7 @@ def update_customer_contract_document(customer_id: int, contract_id: int, data: 
         if not is_service_contract:
             monthly_hours_included = 0.0
         tariff = None
-        if is_service_contract:
-            if not data.tariff_id:
-                raise HTTPException(400, "tariff_id is required for wartung/monitoring contracts")
+        if is_service_contract and data.tariff_id:
             tariff = db.query(ContractTariff).get(int(data.tariff_id))
             if not tariff:
                 raise HTTPException(404, "Tariff not found")
@@ -25804,11 +29228,15 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
     reports_confirmed = 0
     reports_opened = 0
     reports_unread = 0
+    reports_open = 0
+    reports_done = 0
+    reports_rejected = 0
     reports_sent = 0
     month_stats: Dict[str, Dict[str, Any]] = {}
     hourly_rate = 0.0
     sevdesk_config: Optional[SevdeskConfig] = None
     contracts_stats: Dict[str, Any] = {}
+    project_value_stats: Dict[str, Any] = {}
     inactive_customer_name_keys: Set[str] = set()
     active_customer_name_keys: Set[str] = set()
     inactive_customer_number_keys: Set[str] = set()
@@ -25882,22 +29310,22 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                     open_time_ms += elapsed
 
         if load_reports:
-            reports_total = db.query(Report).count()
-            reports_confirmed = (
-                db.query(Report).filter(Report.customer_status == "Bestätigt").count()
-            )
-            reports_opened = (
-                db.query(Report)
-                .filter(
-                    or_(
-                        Report.opened_count > 0,
-                        func.lower(Report.customer_status).in_(["gelesen", "bestätigt"]),
-                    )
-                )
-                .count()
-            )
-            reports_unread = max(0, reports_total - reports_opened)
-            reports_sent = db.query(Report).filter(Report.sent_at > 0).count()
+            report_all_rows = db.query(Report).all()
+            reports_total = len(report_all_rows)
+            reports_sent = sum(1 for report in report_all_rows if (report.sent_at or 0) > 0)
+            reports_opened = sum(1 for report in report_all_rows if (report.opened_count or 0) > 0)
+            for report in report_all_rows:
+                status_key = (report.customer_status or "").strip().lower()
+                if status_key == "bestätigt":
+                    reports_confirmed += 1
+                elif status_key in {"erledigt", "aufgabe erstellt"}:
+                    reports_done += 1
+                elif status_key == "abgelehnt":
+                    reports_rejected += 1
+                else:
+                    # "Gelesen" is intentionally treated as open; it is not a business decision.
+                    reports_open += 1
+            reports_unread = 0
 
             month_cursor = datetime(now_dt.year, now_dt.month, 1)
             month_starts = []
@@ -25913,12 +29341,15 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                     "key": f"{m.year:04d}-{m.month:02d}",
                     "year": m.year,
                     "month": m.month,
-                    "total": 0,
-                    "sent": 0,
-                    "opened": 0,
-                    "unread": 0,
-                    "confirmed": 0,
-                }
+                        "total": 0,
+                        "sent": 0,
+                        "opened": 0,
+                        "unread": 0,
+                        "open": 0,
+                        "confirmed": 0,
+                        "done": 0,
+                        "rejected": 0,
+                    }
                 for m in month_starts
             }
             report_rows = (
@@ -25934,21 +29365,26 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                 if not bucket:
                     continue
                 is_sent = (report.sent_at or 0) > 0
-                is_read = (report.opened_count or 0) > 0 or (
-                    (report.customer_status or "").strip().lower() in {"gelesen", "bestätigt"}
-                )
+                status_key = (report.customer_status or "").strip().lower()
                 bucket["total"] += 1
                 if is_sent:
                     bucket["sent"] += 1
-                if is_read:
+                if (report.opened_count or 0) > 0:
                     bucket["opened"] += 1
-                else:
-                    bucket["unread"] += 1
-                if (report.customer_status or "").strip() == "Bestätigt":
+                if status_key == "bestätigt":
                     bucket["confirmed"] += 1
+                elif status_key in {"erledigt", "aufgabe erstellt"}:
+                    bucket["done"] += 1
+                elif status_key == "abgelehnt":
+                    bucket["rejected"] += 1
+                else:
+                    bucket["open"] += 1
 
         if load_contracts:
             contracts_stats = _build_contracts_stats(db, now_ms)
+
+        if load_general:
+            project_value_stats = _build_project_value_stats(db)
 
         if load_sevdesk:
             if not integration_settings:
@@ -26074,7 +29510,7 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                         }
                         for value in tag_totals.values()
                     ],
-                    key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("tagName") or "").lower()),
+                key=lambda item: (-float(item.get("monthlyEur") or 0.0), str(item.get("tagName") or "").lower()),
                 ),
                 "customerRows": filtered_customer_rows,
             }
@@ -26127,6 +29563,7 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                 "revenueEstimateTodayEur": revenue_estimate_today,
                 "revenueEstimateWeekEur": revenue_estimate_week,
                 "hourlyRateEur": hourly_rate,
+                "projectValue": project_value_stats,
             }
         )
     if load_telephony:
@@ -26140,10 +29577,13 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                 "reports": {
                     "total": reports_total,
                     "sent": reports_sent,
-                    "opened": reports_opened,
-                    "unread": reports_unread,
-                    "confirmed": reports_confirmed,
-                },
+                        "opened": reports_opened,
+                        "unread": reports_unread,
+                        "open": reports_open,
+                        "confirmed": reports_confirmed,
+                        "done": reports_done,
+                        "rejected": reports_rejected,
+                    },
                 "reportsMonthly": list(month_stats.values()),
             }
         )

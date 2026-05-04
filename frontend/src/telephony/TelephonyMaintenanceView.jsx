@@ -170,8 +170,10 @@ export default function TelephonyMaintenanceView() {
     setEditingCell({ key: null, field: null });
   };
 
-  const deleteEntry = async (entryId) => {
-    if (!window.confirm("Eintrag wirklich entfernen?")) return;
+  const deleteEntry = async (entryId, entry) => {
+    const name = entry?.name || "Unbenannt";
+    const number = entry?.number || "—";
+    if (!window.confirm(`"${name}" (${number}) wirklich entfernen?`)) return;
     setStatus("saving");
     try {
       await requestOk(endpointFor(entryId), { method: "DELETE" });
@@ -191,7 +193,7 @@ export default function TelephonyMaintenanceView() {
           </div>
           <div>
             <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
-            <h1 className="text-xl font-display text-sand-900">Anlagenwartung</h1>
+            <h1 className="text-xl font-display text-sand-900">Telefonbuch</h1>
           </div>
         </div>
       </header>
@@ -211,7 +213,10 @@ export default function TelephonyMaintenanceView() {
             />
           </div>
           {remoteError ? (
-            <p className="mb-2 text-xs text-rose-600">{remoteError}</p>
+            <div className="mb-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+              <span className="mt-0.5 shrink-0">⚠</span>
+              <span>{remoteError}</span>
+            </div>
           ) : null}
 
           <div className="grid gap-2 md:grid-cols-4">
@@ -239,7 +244,8 @@ export default function TelephonyMaintenanceView() {
               <button
                 type="button"
                 onClick={createEntry}
-                className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-2 text-xs uppercase tracking-wide text-white"
+                disabled={!draft.name.trim() || !draft.number.trim() || status === "saving"}
+                className="inline-flex items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-2 text-xs uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Plus size={12} /> Neu
               </button>
@@ -286,7 +292,7 @@ export default function TelephonyMaintenanceView() {
                               className="w-full rounded-md border border-sand-200 bg-white px-2 py-1 text-xs"
                             />
                           ) : (
-                            <span className="cursor-pointer">
+                            <span className="cursor-pointer border-b border-dashed border-sand-300 hover:border-sand-600">
                               {entry.name || <span className="text-sand-400">Unbenannt</span>}
                             </span>
                           )}
@@ -309,7 +315,7 @@ export default function TelephonyMaintenanceView() {
                               className="w-full rounded-md border border-sand-200 bg-white px-2 py-1 text-xs"
                             />
                           ) : (
-                            <span className="cursor-pointer text-sand-700">
+                            <span className="cursor-pointer border-b border-dashed border-sand-300 text-sand-700 hover:border-sand-600">
                               {entry.number || <span className="text-sand-400">—</span>}
                             </span>
                           )}
@@ -324,7 +330,7 @@ export default function TelephonyMaintenanceView() {
                         <td className="px-4 py-3 text-right">
                           <button
                             type="button"
-                            onClick={() => deleteEntry(entry.id)}
+                            onClick={() => deleteEntry(entry.id, entry)}
                             disabled={!entry.id}
                             className="rounded-full border border-sand-200 bg-white p-2 text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-40"
                             title="Entfernen"

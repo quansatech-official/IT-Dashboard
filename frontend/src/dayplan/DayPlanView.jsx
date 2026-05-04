@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
+  CalendarDays,
   CheckCircle,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ClipboardList,
   Clock,
@@ -11,6 +13,7 @@ import {
   Heart,
   Info,
   Loader2,
+  ListTodo,
   Mail,
   Pin,
   Play,
@@ -86,6 +89,7 @@ const api = {
 
 const columns = [{ id: "todo", label: "Aufgaben" }];
 const NEW_TASK_HIGHLIGHT_MS = 60 * 1000;
+const CALENDAR_UNASSIGNED_DROP_KEY = "__calendar_unassigned__";
 const formatDoneDate = (value) => {
   const date = new Date(Number(value || 0));
   if (!value || Number.isNaN(date.getTime())) return "";
@@ -94,6 +98,61 @@ const formatDoneDate = (value) => {
     month: "2-digit",
     year: "numeric"
   });
+};
+
+const toDateKey = (date) => {
+  const value = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(value.getTime())) return "";
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const getMonthKey = (date = new Date()) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+
+const getTaskDateKey = (task) => {
+  const raw = String(task?.internal_date || "").trim();
+  if (!raw) return "";
+  const direct = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (direct) return direct[1];
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? "" : toDateKey(date);
+};
+
+const getCalendarMonthDays = (monthKey) => {
+  const [yearValue, monthValue] = String(monthKey || "").split("-").map((item) => Number(item));
+  const today = new Date();
+  const year = Number.isFinite(yearValue) ? yearValue : today.getFullYear();
+  const monthIndex = Number.isFinite(monthValue) ? monthValue - 1 : today.getMonth();
+  const first = new Date(year, monthIndex, 1);
+  const firstWeekday = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const cells = [];
+  for (let index = 0; index < firstWeekday; index += 1) {
+    cells.push({ key: `blank-${index}`, dateKey: "", day: "", inMonth: false });
+  }
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = new Date(year, monthIndex, day);
+    cells.push({
+      key: toDateKey(date),
+      dateKey: toDateKey(date),
+      day,
+      inMonth: true,
+      isToday: toDateKey(date) === toDateKey(new Date())
+    });
+  }
+  while (cells.length % 7 !== 0) {
+    cells.push({ key: `blank-end-${cells.length}`, dateKey: "", day: "", inMonth: false });
+  }
+  return cells;
+};
+
+const formatMonthLabel = (monthKey) => {
+  const [yearValue, monthValue] = String(monthKey || "").split("-").map((item) => Number(item));
+  const date = new Date(yearValue || new Date().getFullYear(), (monthValue || 1) - 1, 1);
+  return date.toLocaleDateString("de-DE", { month: "long", year: "numeric" });
 };
 
 const openSinceDays = (value) => {
@@ -245,6 +304,17 @@ export default function DayPlanView() {
   const lastCreateRef = useRef({ text: "", groupId: null, at: 0 });
   const taskHighlightTimeoutsRef = useRef({});
   const [highlightedTaskIds, setHighlightedTaskIds] = useState({});
+  const [taskViewMode, setTaskViewMode] = useState(() => {
+    if (typeof window === "undefined") return "list";
+    return window.localStorage.getItem("qt_dayplan_view_mode") === "calendar" ? "calendar" : "list";
+  });
+  const [calendarMonth, setCalendarMonth] = useState(() => getMonthKey(new Date()));
+  const [calendarDragOverDate, setCalendarDragOverDate] = useState("");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("qt_dayplan_view_mode", taskViewMode);
+  }, [taskViewMode]);
 
   const markTaskAsNew = (taskId) => {
     const id = Number(taskId || 0);
@@ -596,6 +666,41 @@ export default function DayPlanView() {
     const task = tasks.find((item) => item.id === id);
     if (!task) return;
     updateTask(task, { status: "done" });
+  };
+
+  const handleCalendarDrop = (event, dateKey) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCalendarDragOverDate("");
+    const payload = event.dataTransfer.getData("text/plain");
+    if (!payload || !payload.startsWith("task:") || !dateKey) return;
+    const id = Number(payload.replace("task:", ""));
+    const task = tasks.find((item) => item.id === id);
+    if (!task) return;
+    updateTask(task, { internal_date: dateKey });
+  };
+
+  const clearCalendarDate = (task) => {
+    if (!task?.id || !getTaskDateKey(task)) return;
+    updateTask(task, { internal_date: "" });
+  };
+
+  const handleCalendarUnassignedDrop = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCalendarDragOverDate("");
+    const payload = event.dataTransfer.getData("text/plain");
+    if (!payload || !payload.startsWith("task:")) return;
+    const id = Number(payload.replace("task:", ""));
+    const task = tasks.find((item) => item.id === id);
+    if (!task || !getTaskDateKey(task)) return;
+    updateTask(task, { internal_date: "" });
+  };
+
+  const shiftCalendarMonth = (delta) => {
+    const [yearValue, monthValue] = calendarMonth.split("-").map((item) => Number(item));
+    const date = new Date(yearValue || new Date().getFullYear(), (monthValue || 1) - 1 + delta, 1);
+    setCalendarMonth(getMonthKey(date));
   };
 
   const createGroup = async (columnId) => {
@@ -1219,6 +1324,33 @@ export default function DayPlanView() {
     return billedTasks.filter((task) => matchesTask(task, needle));
   }, [billedTasks, billedFilter]);
 
+  const calendarOpenTasks = useMemo(() => grouped.todo, [grouped.todo]);
+
+  const calendarCells = useMemo(() => getCalendarMonthDays(calendarMonth), [calendarMonth]);
+
+  const scheduledTasksByDate = useMemo(() => {
+    const map = {};
+    calendarOpenTasks.forEach((task) => {
+      const dateKey = getTaskDateKey(task);
+      if (!dateKey || !dateKey.startsWith(`${calendarMonth}-`)) return;
+      if (!map[dateKey]) map[dateKey] = [];
+      map[dateKey].push(task);
+    });
+    Object.values(map).forEach((items) => {
+      items.sort((a, b) => {
+        const dateCompare = String(a.internal_date || "").localeCompare(String(b.internal_date || ""));
+        if (dateCompare !== 0) return dateCompare;
+        return String(a.customer || "").localeCompare(String(b.customer || ""), "de");
+      });
+    });
+    return map;
+  }, [calendarOpenTasks, calendarMonth]);
+
+  const unscheduledCalendarTasks = useMemo(
+    () => calendarOpenTasks.filter((task) => !getTaskDateKey(task)),
+    [calendarOpenTasks]
+  );
+
   const msToHHMMSS = (ms = 0) => {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -1719,6 +1851,282 @@ export default function DayPlanView() {
     return names.filter((name) => name.toLowerCase().includes(needle));
   }, [customers, suggestionQuery]);
 
+  const renderEmailDropBadge = () => (
+    <div
+      ref={emailDropBadgeRef}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.1em] ${
+        emailDropHover
+          ? "border-blue-300 bg-blue-50 text-blue-700"
+          : "border-sand-200 bg-sand-50 text-sand-500"
+      }`}
+      onDragEnter={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setEmailDropHover(true);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setEmailDropHover(true);
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDragLeave={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setEmailDropHover(false);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const transfer = event.dataTransfer || event.nativeEvent?.dataTransfer;
+        if (!transfer) return;
+        triggerEmailDropTransfer(transfer);
+      }}
+      title="E-Mail hier ablegen, um Aufgabe per KI vorzubereiten"
+    >
+      <Plus size={9} />
+      <Mail size={9} />
+      <span>email drag&drop</span>
+      {emailDropBusy ? <span className="text-[8px]">...</span> : null}
+    </div>
+  );
+
+  const renderViewToggle = () => (
+    <div className="inline-flex items-center rounded-full border border-sand-200 bg-sand-50 p-0.5">
+      <button
+        type="button"
+        onClick={() => setTaskViewMode("list")}
+        className={`inline-flex h-6 items-center gap-1 rounded-full px-2 text-[10px] uppercase tracking-[0.12em] transition ${
+          taskViewMode === "list"
+            ? "bg-white text-sand-800 shadow-sm"
+            : "text-sand-500 hover:text-sand-800"
+        }`}
+        title="Aufgabenansicht"
+      >
+        <ListTodo size={11} />
+        Liste
+      </button>
+      <button
+        type="button"
+        onClick={() => setTaskViewMode("calendar")}
+        className={`inline-flex h-6 items-center gap-1 rounded-full px-2 text-[10px] uppercase tracking-[0.12em] transition ${
+          taskViewMode === "calendar"
+            ? "bg-white text-sand-800 shadow-sm"
+            : "text-sand-500 hover:text-sand-800"
+        }`}
+        title="Kalenderansicht"
+      >
+        <CalendarDays size={11} />
+        Monat
+      </button>
+    </div>
+  );
+
+  const renderCalendarListTask = (task) => {
+    const dateKey = getTaskDateKey(task);
+    const assignedEmployee = employees.find((employee) => employee.id === task.employee_id);
+    return (
+      <div
+        key={task.id}
+        draggable
+        onDragStart={(event) => {
+          event.dataTransfer.setData("text/plain", `task:${task.id}`);
+        }}
+        className="cursor-grab rounded-lg border border-sand-200 bg-white px-3 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] active:cursor-grabbing"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="truncate text-xs font-medium text-sand-900">{task.title}</p>
+            <p className="mt-0.5 truncate text-[11px] text-sand-500">
+              {task.customer || "Ohne Kunde"}
+            </p>
+          </div>
+          {assignedEmployee ? (
+            <span
+              className="shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium"
+              style={{ borderColor: assignedEmployee.color || undefined, color: assignedEmployee.color || undefined }}
+            >
+              {assignedEmployee.short_code || assignedEmployee.name}
+            </span>
+          ) : null}
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.14em]">
+          <span className={dateKey ? "text-emerald-700" : "text-sand-400"}>
+            {dateKey ? new Date(dateKey).toLocaleDateString("de-DE") : "Nicht geplant"}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            {dateKey ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  clearCalendarDate(task);
+                }}
+                className="rounded-full border border-sand-200 bg-white p-0.5 text-sand-400 hover:bg-sand-100 hover:text-sand-700"
+                title="Tageszuordnung entfernen"
+              >
+                <X size={10} />
+              </button>
+            ) : null}
+            <GripVertical size={12} className="text-sand-300" />
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderCalendarDayTask = (task) => (
+    <div
+      key={task.id}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.setData("text/plain", `task:${task.id}`);
+      }}
+      className="group rounded-md border border-amber-100 bg-amber-50 px-2 py-1 text-[11px] text-sand-800 shadow-sm cursor-grab active:cursor-grabbing"
+      title={task.title}
+    >
+      <div className="flex items-start justify-between gap-1">
+        <p className="min-w-0 truncate font-medium">{task.title}</p>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            clearCalendarDate(task);
+          }}
+          className="shrink-0 rounded-full p-0.5 text-sand-400 opacity-0 hover:bg-white hover:text-sand-700 group-hover:opacity-100"
+          title="Tageszuordnung entfernen"
+        >
+          <X size={10} />
+        </button>
+      </div>
+      {task.customer ? <p className="truncate text-[10px] text-sand-500">{task.customer}</p> : null}
+    </div>
+  );
+
+  const renderCalendarView = () => (
+    <section className="rounded-2xl border border-sand-200 bg-white p-4 shadow-[0_6px_20px_rgba(150,120,60,0.08)]">
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">Aufgaben</h2>
+          {renderEmailDropBadge()}
+          {renderViewToggle()}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => shiftCalendarMonth(-1)}
+            className="rounded-lg border border-sand-200 bg-white p-1.5 text-sand-600 hover:bg-sand-50"
+            title="Vorheriger Monat"
+          >
+            <ChevronLeft size={14} />
+          </button>
+          <div className="min-w-[150px] text-center text-sm font-medium text-sand-800">
+            {formatMonthLabel(calendarMonth)}
+          </div>
+          <button
+            type="button"
+            onClick={() => shiftCalendarMonth(1)}
+            className="rounded-lg border border-sand-200 bg-white p-1.5 text-sand-600 hover:bg-sand-50"
+            title="Nächster Monat"
+          >
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <aside
+          className={`rounded-xl border p-3 ${
+            calendarDragOverDate === CALENDAR_UNASSIGNED_DROP_KEY
+              ? "border-blue-200 bg-blue-50 ring-2 ring-blue-100"
+              : "border-sand-200 bg-sand-50"
+          }`}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setCalendarDragOverDate(CALENDAR_UNASSIGNED_DROP_KEY);
+          }}
+          onDragLeave={() => setCalendarDragOverDate("")}
+          onDrop={handleCalendarUnassignedDrop}
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-[11px] uppercase tracking-[0.18em] text-sand-500">
+              Alle Aufgaben
+            </p>
+            <span className="text-[11px] text-sand-400">{calendarOpenTasks.length}</span>
+          </div>
+          <div className="space-y-2 max-h-[calc(100vh-340px)] min-h-[420px] overflow-auto pr-1">
+            {calendarOpenTasks.length ? (
+              calendarOpenTasks.map((task) => renderCalendarListTask(task))
+            ) : (
+              <div className="rounded-lg border border-sand-200 bg-white px-3 py-2 text-xs text-sand-400">
+                Keine offenen Aufgaben.
+              </div>
+            )}
+          </div>
+          {unscheduledCalendarTasks.length ? (
+            <p className="mt-2 text-[11px] text-sand-400">
+              {unscheduledCalendarTasks.length} ohne Termin · Aufgabe hierher ziehen, um die Tageszuordnung zu entfernen
+            </p>
+          ) : null}
+        </aside>
+        <div className="min-w-0">
+          <div className="grid grid-cols-7 border-l border-t border-sand-200 text-center text-[10px] uppercase tracking-[0.16em] text-sand-400">
+            {["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"].map((label) => (
+              <div key={label} className="border-b border-r border-sand-200 bg-sand-50 py-2">
+                {label}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 border-l border-sand-200">
+            {calendarCells.map((cell) => {
+              const dayTasks = cell.dateKey ? scheduledTasksByDate[cell.dateKey] || [] : [];
+              return (
+                <div
+                  key={cell.key}
+                  className={`min-h-[122px] border-b border-r border-sand-200 p-2 ${
+                    !cell.inMonth
+                      ? "bg-sand-50/70"
+                      : calendarDragOverDate === cell.dateKey
+                      ? "bg-blue-50 ring-2 ring-inset ring-blue-200"
+                      : "bg-white"
+                  }`}
+                  onDragOver={(event) => {
+                    if (!cell.dateKey) return;
+                    event.preventDefault();
+                    setCalendarDragOverDate(cell.dateKey);
+                  }}
+                  onDragLeave={() => setCalendarDragOverDate("")}
+                  onDrop={(event) => cell.dateKey && handleCalendarDrop(event, cell.dateKey)}
+                >
+                  {cell.inMonth ? (
+                    <>
+                      <div className="mb-1 flex items-center justify-between gap-1">
+                        <span
+                          className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium ${
+                            cell.isToday ? "bg-amber-100 text-amber-800" : "text-sand-600"
+                          }`}
+                        >
+                          {cell.day}
+                        </span>
+                        {dayTasks.length ? (
+                          <span className="text-[10px] text-sand-400">{dayTasks.length}</span>
+                        ) : null}
+                      </div>
+                      <div className="space-y-1">
+                        {dayTasks.map((task) => renderCalendarDayTask(task))}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+
   const renderTaskCard = (task) => {
     const suggestions = getCustomerSuggestions(task);
     const hasCustomer = Boolean(task.customer || task.customer_number);
@@ -1853,10 +2261,10 @@ export default function DayPlanView() {
                 >
                   <Sparkles size={12} />
                 </button>
-                <div className="inline-flex flex-col items-center gap-0.5">
-                  {!task.time_enabled || isTimerCollapsed ? (
-                    <button
-                      type="button"
+	                <div className="inline-flex items-center">
+	                  {!task.time_enabled || isTimerCollapsed ? (
+	                    <button
+	                      type="button"
                       onClick={() => {
                         if (task.time_enabled) {
                           setCollapsedTimers((prev) => {
@@ -1870,37 +2278,37 @@ export default function DayPlanView() {
                         enableTime(task);
                       }}
                       disabled={!canPromote && !task.time_enabled}
-                      className={`rounded-full border p-1 ${
-                        canPromote || task.time_enabled
-                          ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                          : "border-sand-100 text-sand-300 cursor-not-allowed"
-                      }`}
-                      title="Zeit in Aufgabe aktivieren"
-                    >
-                      <Clock size={12} />
-                    </button>
-                  ) : (
-                    <div
-                      className="flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2 py-1"
-                      onDoubleClick={() =>
-                        setCollapsedTimers((prev) => ({ ...prev, [task.id]: true }))
-                      }
+	                      className={`inline-flex h-5 w-5 items-center justify-center rounded-full border ${
+	                        canPromote || task.time_enabled
+	                          ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+	                          : "border-sand-100 text-sand-300 cursor-not-allowed"
+	                      }`}
+	                      title="Zeit in Aufgabe aktivieren"
+	                    >
+	                      <Clock size={10} />
+	                    </button>
+	                  ) : (
+	                    <div
+	                      className="flex h-6 items-center gap-1 rounded-full border border-sand-200 bg-white px-1.5 py-0.5"
+	                      onDoubleClick={() =>
+	                        setCollapsedTimers((prev) => ({ ...prev, [task.id]: true }))
+	                      }
                       title="Doppelklick zum Ausblenden"
                     >
                       <button
-                        type="button"
-                        onClick={() => toggleTimeTask(timeTask)}
-                        className={`rounded-full border p-1 ${
-                          timeTask?.running
-                            ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
-                            : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+	                        type="button"
+	                        onClick={() => toggleTimeTask(timeTask)}
+	                        className={`inline-flex h-4 w-4 items-center justify-center rounded-full border ${
+	                          timeTask?.running
+	                            ? "border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+	                            : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
                         }`}
-                        title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
-                        disabled={!timeTask}
-                      >
-                        {timeTask?.running ? <Square size={10} /> : <Play size={10} />}
-                      </button>
-                      <input
+	                        title={timeTask?.running ? "Zeit stoppen" : "Zeit starten"}
+	                        disabled={!timeTask}
+	                      >
+	                        {timeTask?.running ? <Square size={8} /> : <Play size={8} />}
+	                      </button>
+	                      <input
                         value={timeInputValue}
                         onChange={(event) =>
                           setTimeEdits((prev) => ({ ...prev, [task.id]: event.target.value }))
@@ -1912,10 +2320,10 @@ export default function DayPlanView() {
                             commitManualTime(task.id, timeTask, timeInputValue);
                           }
                         }}
-                        className="w-[78px] bg-transparent text-base font-mono text-sand-600 focus:outline-none md:text-[10px]"
-                        title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
-                        disabled={!timeTask}
-                      />
+	                        className="w-[58px] bg-transparent font-mono text-[10px] leading-none text-sand-600 focus:outline-none"
+	                        title="Zeit manuell bearbeiten (MM:SS oder HH:MM:SS)"
+	                        disabled={!timeTask}
+	                      />
                     </div>
                   )}
                 </div>
@@ -2416,6 +2824,10 @@ export default function DayPlanView() {
           </div>
         ) : null}
 
+        {taskViewMode === "calendar" ? (
+          renderCalendarView()
+        ) : (
+          <>
         <div className="grid gap-5 lg:grid-cols-1">
           {columns.map((column) => (
             <div
@@ -2437,47 +2849,8 @@ export default function DayPlanView() {
                   <h2 className="text-sm uppercase tracking-[0.3em] text-sand-500">
                     {column.label}
                   </h2>
-                  {column.id === "todo" ? (
-                    <div
-                      ref={emailDropBadgeRef}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.1em] ${
-                        emailDropHover
-                          ? "border-blue-300 bg-blue-50 text-blue-700"
-                          : "border-sand-200 bg-sand-50 text-sand-500"
-                      }`}
-                      onDragEnter={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setEmailDropHover(true);
-                      }}
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setEmailDropHover(true);
-                        if (event.dataTransfer) {
-                          event.dataTransfer.dropEffect = "copy";
-                        }
-                      }}
-                      onDragLeave={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setEmailDropHover(false);
-                      }}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        const transfer = event.dataTransfer || event.nativeEvent?.dataTransfer;
-                        if (!transfer) return;
-                        triggerEmailDropTransfer(transfer);
-                      }}
-                      title="E-Mail hier ablegen, um Aufgabe per KI vorzubereiten"
-                    >
-                      <Plus size={9} />
-                      <Mail size={9} />
-                      <span>email drag&drop</span>
-                      {emailDropBusy ? <span className="text-[8px]">…</span> : null}
-                    </div>
-                  ) : null}
+                  {column.id === "todo" ? renderEmailDropBadge() : null}
+                  {column.id === "todo" ? renderViewToggle() : null}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-sand-500">{grouped[column.id].length}</span>
@@ -2751,6 +3124,8 @@ export default function DayPlanView() {
             )}
           </div>
         </section>
+          </>
+        )}
       </main>
       <datalist id="dayplan-customers">
         {customers.map((customer) => (

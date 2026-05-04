@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Plus, Search, Star, Trash2 } from "lucide-react";
+import { BookOpen, Clock3, FileText, FolderOpen, Plus, Search, Star, Tags, Trash2 } from "lucide-react";
 import NotesRichTextEditor from "../components/NotesRichTextEditor";
 
 const API = "/api";
@@ -56,6 +56,8 @@ const plainTextFromHtml = (value) =>
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
+const tagClass = "inline-flex max-w-full items-center rounded-full border border-sand-200 bg-sand-50 px-2 py-0.5 text-[11px] text-sand-600";
 
 export default function KnowledgeBaseView() {
   const [articles, setArticles] = useState([]);
@@ -145,6 +147,8 @@ export default function KnowledgeBaseView() {
     () => articles.find((article) => article.id === activeId) || null,
     [articles, activeId]
   );
+  const pinnedCount = articles.filter((article) => article.pinned).length;
+  const activeArticleWords = activeArticle ? plainTextFromHtml(activeArticle.content).split(/\s+/).filter(Boolean).length : 0;
 
   const scheduleUpdate = (id, patch) => {
     pendingPatchesRef.current[id] = {
@@ -216,42 +220,58 @@ export default function KnowledgeBaseView() {
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-5 py-3 flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
-            <BookOpen size={18} />
+        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-6 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-200)] bg-[var(--nav-active-bg)] text-[var(--nav-accent)]">
+              <BookOpen size={18} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+              <h1 className="truncate text-xl font-display text-sand-900">Wissens-DB</h1>
+            </div>
           </div>
-          <div>
-            <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
-            <h1 className="text-xl font-display text-sand-900">Wissens-DB</h1>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-sand-600">
+            <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1">
+              <FileText size={12} />
+              {articles.length} Artikel
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-700">
+              <Star size={12} className={pinnedCount ? "fill-amber-400" : ""} />
+              {pinnedCount} fixiert
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-2.5 py-1">
+              <FolderOpen size={12} />
+              {uniqueCategories.length} Kategorien
+            </span>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-          <section className="lg:col-span-4 rounded-3xl border border-sand-200 bg-white shadow-soft overflow-hidden">
-            <div className="border-b border-sand-200 p-3 space-y-2">
+      <main className="mx-auto max-w-[1440px] px-6 py-5">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[380px_minmax(0,1fr)]">
+          <section className="overflow-hidden rounded-[26px] border border-sand-200 bg-white shadow-soft">
+            <div className="border-b border-sand-200 bg-sand-50/70 p-3">
               <button
                 type="button"
                 onClick={addArticle}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-sand-900 bg-sand-900 px-3 py-2 text-sm text-white hover:opacity-90"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-sand-900 bg-sand-900 px-3 py-2 text-sm font-medium text-white hover:opacity-90"
               >
                 <Plus size={14} /> Neuer Artikel
               </button>
-              <div className="relative">
+              <div className="relative mt-2">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sand-500" />
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="Suche Titel, Inhalt, Tags..."
-                  className="w-full rounded-xl border border-sand-200 bg-white pl-8 pr-2 py-2 text-sm focus:outline-none"
+                  className="w-full rounded-xl border border-sand-200 bg-white py-2 pl-8 pr-2 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                 />
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
                 <select
                   value={categoryFilter}
                   onChange={(event) => setCategoryFilter(event.target.value)}
-                  className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none"
+                  className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-800 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                 >
                   <option value="">Alle Kategorien</option>
                   {uniqueCategories.map((category) => (
@@ -263,7 +283,7 @@ export default function KnowledgeBaseView() {
                 <select
                   value={tagFilter}
                   onChange={(event) => setTagFilter(event.target.value)}
-                  className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none"
+                  className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-800 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                 >
                   <option value="">Alle Tags</option>
                   {uniqueTags.map((tag) => (
@@ -273,32 +293,65 @@ export default function KnowledgeBaseView() {
                   ))}
                 </select>
               </div>
+              <div className="mt-2 flex items-center justify-between text-[11px] text-sand-500">
+                <span>{filteredArticles.length} Treffer</span>
+                {(query || tagFilter || categoryFilter) ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuery("");
+                      setTagFilter("");
+                      setCategoryFilter("");
+                    }}
+                    className="rounded-full border border-sand-200 bg-white px-2 py-0.5 text-sand-600 hover:bg-sand-100"
+                  >
+                    Filter leeren
+                  </button>
+                ) : null}
+              </div>
             </div>
 
-            <div className="max-h-[65vh] overflow-auto">
+            <div className="max-h-[calc(100vh-245px)] overflow-auto">
               {filteredArticles.length === 0 ? (
-                <p className="p-4 text-sm text-sand-500">Keine passenden Artikel.</p>
+                <div className="p-8 text-center text-sm text-sand-500">
+                  Keine passenden Artikel.
+                </div>
               ) : (
                 filteredArticles.map((article) => (
                   <button
                     key={article.id}
                     type="button"
                     onClick={() => setActiveId(article.id)}
-                    className={`w-full text-left border-b border-sand-200 px-3 py-2.5 hover:bg-sand-100 ${
-                      article.id === activeId ? "bg-sand-100" : ""
+                    className={`w-full border-b border-sand-100 px-3 py-3 text-left transition hover:bg-sand-50 ${
+                      article.id === activeId ? "bg-sky-50/70 shadow-[inset_3px_0_0_var(--nav-accent)]" : ""
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-medium text-sand-900 line-clamp-1">{article.title || "Ohne Titel"}</p>
-                      {article.pinned ? <Star size={13} className="text-amber-500 fill-amber-500" /> : null}
+                    <div className="flex min-w-0 items-start justify-between gap-2">
+                      <p className="line-clamp-1 text-sm font-semibold text-sand-900">{article.title || "Ohne Titel"}</p>
+                      {article.pinned ? <Star size={13} className="mt-0.5 shrink-0 fill-amber-500 text-amber-500" /> : null}
                     </div>
-                    <p className="text-xs text-sand-500 line-clamp-1">
-                      {(article.category || "Keine Kategorie") + " · " + formatDate(article.updatedAt)}
-                    </p>
+                    <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] text-sand-500">
+                      <span className="inline-flex min-w-0 items-center gap-1">
+                        <FolderOpen size={11} className="shrink-0 text-sand-400" />
+                        <span className="truncate">{article.category || "Keine Kategorie"}</span>
+                      </span>
+                      <span className="shrink-0 text-sand-300">·</span>
+                      <span className="inline-flex min-w-0 items-center gap-1">
+                        <Clock3 size={11} className="shrink-0 text-sand-400" />
+                        <span className="truncate">{formatDate(article.updatedAt)}</span>
+                      </span>
+                    </div>
                     {(article.tags || []).length ? (
-                      <p className="text-xs text-sand-600 line-clamp-1 mt-1">
-                        {(article.tags || []).map((tag) => `#${tag}`).join(" ")}
-                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {(article.tags || []).slice(0, 4).map((tag) => (
+                          <span key={`${article.id}-${tag}`} className={tagClass}>
+                            #{tag}
+                          </span>
+                        ))}
+                        {(article.tags || []).length > 4 ? (
+                          <span className={tagClass}>+{(article.tags || []).length - 4}</span>
+                        ) : null}
+                      </div>
                     ) : null}
                   </button>
                 ))
@@ -306,52 +359,63 @@ export default function KnowledgeBaseView() {
             </div>
           </section>
 
-          <section className="lg:col-span-8 rounded-3xl border border-sand-200 bg-white shadow-soft p-4">
+          <section className="min-w-0 rounded-[26px] border border-sand-200 bg-white p-4 shadow-soft">
             {!activeArticle ? (
-              <div className="h-full min-h-[420px] flex items-center justify-center text-sand-500 text-sm">
-                Kein Artikel ausgewählt.
+              <div className="flex h-full min-h-[520px] items-center justify-center rounded-2xl border border-dashed border-sand-300 bg-sand-50/60 text-sm text-sand-500">
+                Artikel auswählen oder neu anlegen.
               </div>
             ) : (
               <div className="space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 space-y-2">
+                <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-sand-200 bg-sand-50/70 p-3">
+                  <div className="min-w-0 flex-1 space-y-2">
                     <input
                       value={activeArticle.title || ""}
                       onChange={(event) =>
                         updateArticle(activeArticle.id, { title: event.target.value })
                       }
                       placeholder="Titel"
-                      className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-base font-medium focus:outline-none"
+                      className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-lg font-semibold text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                     />
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <input
-                        value={activeArticle.category || ""}
-                        onChange={(event) =>
-                          updateArticle(activeArticle.id, { category: event.target.value })
-                        }
-                        placeholder="Kategorie (z. B. Netzwerk, Microsoft, SOP)"
-                        className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none"
-                      />
-                      <input
-                        value={(activeArticle.tags || []).join(", ")}
-                        onChange={(event) =>
-                          updateArticle(activeArticle.id, { tags: toTagArray(event.target.value) })
-                        }
-                        placeholder="Tags (Komma-getrennt)"
-                        className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm focus:outline-none"
-                      />
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-[220px_minmax(0,1fr)]">
+                      <label className="relative">
+                        <FolderOpen size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sand-400" />
+                        <input
+                          value={activeArticle.category || ""}
+                          onChange={(event) =>
+                            updateArticle(activeArticle.id, { category: event.target.value })
+                          }
+                          placeholder="Kategorie"
+                          className="w-full rounded-xl border border-sand-200 bg-white py-2 pl-8 pr-3 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                        />
+                      </label>
+                      <label className="relative">
+                        <Tags size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sand-400" />
+                        <input
+                          value={(activeArticle.tags || []).join(", ")}
+                          onChange={(event) =>
+                            updateArticle(activeArticle.id, { tags: toTagArray(event.target.value) })
+                          }
+                          placeholder="Tags, Komma-getrennt"
+                          className="w-full rounded-xl border border-sand-200 bg-white py-2 pl-8 pr-3 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                        />
+                      </label>
                     </div>
-                    <p className="text-xs text-sand-500">
-                      Aktualisiert: {formatDate(activeArticle.updatedAt)}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-sand-500">
+                      <span className="inline-flex items-center gap-1">
+                        <Clock3 size={12} />
+                        Aktualisiert: {formatDate(activeArticle.updatedAt)}
+                      </span>
+                      <span className="text-sand-300">·</span>
+                      <span>{activeArticleWords} Wörter</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 items-center gap-2">
                     <button
                       type="button"
                       onClick={() =>
                         updateArticle(activeArticle.id, { pinned: !Boolean(activeArticle.pinned) })
                       }
-                      className={`inline-flex items-center justify-center rounded-xl border p-2 ${
+                      className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border ${
                         activeArticle.pinned
                           ? "border-amber-300 bg-amber-50 text-amber-700"
                           : "border-sand-200 text-sand-600 hover:bg-sand-100"
@@ -363,7 +427,7 @@ export default function KnowledgeBaseView() {
                     <button
                       type="button"
                       onClick={() => removeArticle(activeArticle.id)}
-                      className="inline-flex items-center justify-center rounded-xl border border-sand-200 p-2 text-sand-600 hover:bg-sand-100"
+                      className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-sand-200 text-sand-600 hover:bg-rose-50 hover:text-rose-700"
                       title="Löschen"
                     >
                       <Trash2 size={15} />
@@ -375,7 +439,13 @@ export default function KnowledgeBaseView() {
                   value={activeArticle.content || ""}
                   onChange={(next) => updateArticle(activeArticle.id, { content: next })}
                   placeholder="Wissensartikel hier dokumentieren..."
-                  minHeight="420px"
+                  minHeight="520px"
+                  aiModule="knowledge"
+                  aiContext={{
+                    topic: activeArticle.title,
+                    module: "Wissens-DB",
+                    notes: [activeArticle.category, activeArticle.tags].filter(Boolean).join(" ")
+                  }}
                 />
               </div>
             )}

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Mail, Plus, Settings, Trash2, Users2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Mail, Plus, Settings, Trash2, Users2, Search, ChevronRight } from "lucide-react";
 import { telephonyService } from "../telephony/telephonyService";
 import NotesRichTextEditor from "../components/NotesRichTextEditor";
 
@@ -167,6 +167,7 @@ const defaultMetaHub = {
   rmm_enabled: true,
   rmm_customer_field_name: "Kundennummer",
   email_enabled: false,
+  sevdesk_enabled: false,
   refresh_seconds: "300",
   mailboxes: []
 };
@@ -223,7 +224,78 @@ const defaultAiConnection = {
   ai_customer_ranking_model: "",
   ai_customer_development_model: "",
   ai_offer_model: "",
-  ai_invoice_model: ""
+  ai_invoice_model: "",
+  ai_newsletter_model: "",
+  ai_meta_hub_model: "",
+  ai_project_folder_model: "",
+  ai_endpoints: [],
+  ai_purpose_routes: {},
+  ai_purpose_labels: {}
+};
+
+const defaultAiEndpoint = () => ({
+  id: `endpoint_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+  name: "Neuer KI Endpoint",
+  provider: "openai_compatible",
+  base_url: "",
+  api_key: "",
+  has_api_key: false,
+  default_model: "",
+  enabled: true,
+  notes: ""
+});
+
+const normalizeAiConnectionFromSettings = (data, previous = defaultAiConnection) => {
+  const provider = data?.ai_provider || defaultAiConnection.ai_provider;
+  const endpoints = Array.isArray(data?.ai_endpoints) && data.ai_endpoints.length
+    ? data.ai_endpoints
+    : [
+        {
+          id: "default",
+          name: "Standard",
+          provider,
+          base_url:
+            data?.ai_base_url ||
+            (provider === "openai_compatible" ? "" : defaultAiConnection.ai_base_url),
+          default_model: data?.ai_default_model || "",
+          has_api_key: Boolean(data?.has_ai_api_key),
+          enabled: true,
+          notes: ""
+        }
+      ];
+  return {
+    ...previous,
+    ai_provider: provider,
+    ai_base_url:
+      data?.ai_base_url ||
+      (provider === "openai_compatible" ? "" : defaultAiConnection.ai_base_url),
+    ai_api_key: "",
+    has_ai_api_key: Boolean(data?.has_ai_api_key),
+    ai_default_model: data?.ai_default_model || "",
+    ai_internal_model: data?.ai_internal_model || "",
+    ai_action_model: data?.ai_action_model || "",
+    ai_task_model: data?.ai_task_model || "",
+    ai_customer_ranking_model: data?.ai_customer_ranking_model || "",
+    ai_customer_development_model: data?.ai_customer_development_model || "",
+    ai_offer_model: data?.ai_offer_model || "",
+    ai_invoice_model: data?.ai_invoice_model || "",
+    ai_newsletter_model: data?.ai_newsletter_model || "",
+    ai_meta_hub_model: data?.ai_meta_hub_model || "",
+    ai_project_folder_model: data?.ai_project_folder_model || "",
+    ai_endpoints: endpoints.map((endpoint) => ({
+      id: String(endpoint?.id || ""),
+      name: String(endpoint?.name || endpoint?.id || "KI Endpoint"),
+      provider: String(endpoint?.provider || "openai_compatible"),
+      base_url: String(endpoint?.base_url || ""),
+      api_key: "",
+      has_api_key: Boolean(endpoint?.has_api_key),
+      default_model: String(endpoint?.default_model || ""),
+      enabled: endpoint?.enabled !== false,
+      notes: String(endpoint?.notes || "")
+    })),
+    ai_purpose_routes: data?.ai_purpose_routes && typeof data.ai_purpose_routes === "object" ? data.ai_purpose_routes : {},
+    ai_purpose_labels: data?.ai_purpose_labels && typeof data.ai_purpose_labels === "object" ? data.ai_purpose_labels : {}
+  };
 };
 
 const defaultContractTemplates = {
@@ -800,12 +872,18 @@ export default function SettingsView() {
   const [aiConnectionModelsStatus, setAiConnectionModelsStatus] = useState("idle");
   const [aiConnectionModels, setAiConnectionModels] = useState([]);
   const [aiConnectionModelsInfo, setAiConnectionModelsInfo] = useState({
+    endpointId: "",
     provider: "",
     baseUrl: "",
+    endpointName: "",
     defaultModel: "",
+    responsePreview: "",
+    durationMs: 0,
     error: ""
   });
   const [aiModelDraft, setAiModelDraft] = useState("");
+  const [selectedAiEndpointId, setSelectedAiEndpointId] = useState("default");
+  const [aiSubTab, setAiSubTab] = useState("endpoints");
   const [aiModelManageStatus, setAiModelManageStatus] = useState("idle");
   const [aiModelManageMessage, setAiModelManageMessage] = useState("");
   const [sevdeskHealth, setSevdeskHealth] = useState({
@@ -859,6 +937,11 @@ export default function SettingsView() {
   const [dbMaintenanceStatus, setDbMaintenanceStatus] = useState("idle");
   const [dbMaintenanceInfo, setDbMaintenanceInfo] = useState("");
   const [debugTablesOpen, setDebugTablesOpen] = useState(false);
+  const [telemetryOpen, setTelemetryOpen] = useState(true);
+  const [telemetryDays, setTelemetryDays] = useState(14);
+  const [telemetryStatus, setTelemetryStatus] = useState("idle");
+  const [telemetrySummary, setTelemetrySummary] = useState(null);
+  const [telemetryMessage, setTelemetryMessage] = useState("");
   const [aiPromptsOpen, setAiPromptsOpen] = useState(false);
   const [contractTemplatesOpen, setContractTemplatesOpen] = useState(false);
   const [contractTariffsOpen, setContractTariffsOpen] = useState(false);
@@ -1025,6 +1108,7 @@ export default function SettingsView() {
           rmm_enabled: data?.meta_hub_rmm_enabled !== false,
           rmm_customer_field_name: data?.meta_hub_rmm_customer_field_name || "Kundennummer",
           email_enabled: Boolean(data?.meta_hub_email_enabled),
+          sevdesk_enabled: Boolean(data?.meta_hub_sevdesk_enabled),
           refresh_seconds: String(Number(data?.meta_hub_refresh_seconds || 300)),
           mailboxes: Array.isArray(data?.meta_hub_mailboxes)
             ? data.meta_hub_mailboxes.map((row) => normalizeMetaHubMailbox(row))
@@ -1079,26 +1163,7 @@ export default function SettingsView() {
           sevdesk_hourly_rate_eur: data?.sevdesk_hourly_rate_eur || "",
           has_sevdesk_api_token: Boolean(data?.has_sevdesk_api_token)
         }));
-        setAiConnection((prev) => {
-          const provider = data?.ai_provider || defaultAiConnection.ai_provider;
-          return {
-            ...prev,
-            ai_provider: provider,
-            ai_base_url:
-              data?.ai_base_url ||
-              (provider === "openai_compatible" ? "" : defaultAiConnection.ai_base_url),
-            ai_api_key: "",
-            has_ai_api_key: Boolean(data?.has_ai_api_key),
-            ai_default_model: data?.ai_default_model || "",
-            ai_internal_model: data?.ai_internal_model || "",
-            ai_action_model: data?.ai_action_model || "",
-            ai_task_model: data?.ai_task_model || "",
-            ai_customer_ranking_model: data?.ai_customer_ranking_model || "",
-            ai_customer_development_model: data?.ai_customer_development_model || "",
-            ai_offer_model: data?.ai_offer_model || "",
-            ai_invoice_model: data?.ai_invoice_model || ""
-          };
-        });
+        setAiConnection((prev) => normalizeAiConnectionFromSettings(data, prev));
         setPbxLoadStatus("ready");
         setMarketplaceLoadStatus("ready");
         setIcecatLoadStatus("ready");
@@ -1183,6 +1248,26 @@ export default function SettingsView() {
       active = false;
     };
   }, []);
+
+  const refreshTelemetrySummary = async () => {
+    setTelemetryStatus("loading");
+    setTelemetryMessage("");
+    try {
+      const res = await fetch(`${API}/telemetry/summary?days=${telemetryDays}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || "telemetry_failed");
+      setTelemetrySummary(data || null);
+      setTelemetryStatus("ready");
+    } catch (error) {
+      setTelemetrySummary(null);
+      setTelemetryStatus("error");
+      setTelemetryMessage(error?.message ? String(error.message) : "Telemetrie konnte nicht geladen werden.");
+    }
+  };
+
+  useEffect(() => {
+    refreshTelemetrySummary();
+  }, [telemetryDays]);
 
   useEffect(() => {
     let active = true;
@@ -2073,31 +2158,17 @@ export default function SettingsView() {
           ai_customer_ranking_model: aiConnection.ai_customer_ranking_model,
           ai_customer_development_model: aiConnection.ai_customer_development_model,
           ai_offer_model: aiConnection.ai_offer_model,
-          ai_invoice_model: aiConnection.ai_invoice_model
+          ai_invoice_model: aiConnection.ai_invoice_model,
+          ai_newsletter_model: aiConnection.ai_newsletter_model,
+          ai_meta_hub_model: aiConnection.ai_meta_hub_model,
+          ai_project_folder_model: aiConnection.ai_project_folder_model,
+          ai_endpoints: aiConnection.ai_endpoints,
+          ai_purpose_routes: aiConnection.ai_purpose_routes
         })
       });
       if (!res.ok) throw new Error("save_failed");
       const data = await res.json();
-      setAiConnection((prev) => {
-        const provider = data?.ai_provider || defaultAiConnection.ai_provider;
-        return {
-          ...prev,
-          ai_provider: provider,
-          ai_base_url:
-            data?.ai_base_url ||
-            (provider === "openai_compatible" ? "" : defaultAiConnection.ai_base_url),
-          ai_api_key: "",
-          has_ai_api_key: Boolean(data?.has_ai_api_key),
-          ai_default_model: data?.ai_default_model || "",
-          ai_internal_model: data?.ai_internal_model || "",
-          ai_action_model: data?.ai_action_model || "",
-          ai_task_model: data?.ai_task_model || "",
-          ai_customer_ranking_model: data?.ai_customer_ranking_model || "",
-          ai_customer_development_model: data?.ai_customer_development_model || "",
-          ai_offer_model: data?.ai_offer_model || "",
-          ai_invoice_model: data?.ai_invoice_model || ""
-        };
-      });
+      setAiConnection((prev) => normalizeAiConnectionFromSettings(data, prev));
       setAiConnectionStatus("saved");
     } catch (error) {
       setAiConnectionStatus("error");
@@ -2105,44 +2176,197 @@ export default function SettingsView() {
     setTimeout(() => setAiConnectionStatus("idle"), 2000);
   };
 
-  const loadAiProviderModels = async () => {
+  const updateAiEndpoint = (endpointId, patch) => {
+    setAiConnection((prev) => ({
+      ...prev,
+      ai_endpoints: (prev.ai_endpoints || []).map((endpoint) =>
+        endpoint.id === endpointId ? { ...endpoint, ...patch } : endpoint
+      )
+    }));
+  };
+
+  const setAiEndpointFallbackModel = (endpointId, modelName) => {
+    const normalizedEndpointId = endpointId || "default";
+    const normalizedModelName = String(modelName || "").trim();
+    setAiModelDraft(normalizedModelName);
+    setAiConnection((prev) => {
+      if (normalizedEndpointId === "default") {
+        return { ...prev, ai_default_model: normalizedModelName };
+      }
+      return {
+        ...prev,
+        ai_endpoints: (prev.ai_endpoints || []).map((endpoint) =>
+          endpoint.id === normalizedEndpointId ? { ...endpoint, default_model: normalizedModelName } : endpoint
+        )
+      };
+    });
+  };
+
+  const addAiEndpoint = () => {
+    const endpoint = defaultAiEndpoint();
+    setAiConnection((prev) => ({
+      ...prev,
+      ai_endpoints: [...(prev.ai_endpoints || []), endpoint]
+    }));
+    setSelectedAiEndpointId(endpoint.id);
+  };
+
+  const removeAiEndpoint = (endpointId) => {
+    if (endpointId === "default") return;
+    setAiConnection((prev) => ({
+      ...prev,
+      ai_endpoints: (prev.ai_endpoints || []).filter((endpoint) => endpoint.id !== endpointId),
+      ai_purpose_routes: Object.fromEntries(
+        Object.entries(prev.ai_purpose_routes || {}).map(([purpose, routedEndpoint]) => [
+          purpose,
+          routedEndpoint === endpointId ? "default" : routedEndpoint
+        ])
+      )
+    }));
+    if (selectedAiEndpointId === endpointId) setSelectedAiEndpointId("default");
+  };
+
+  const loadAiProviderModels = async (endpointIdOverride) => {
     setAiConnectionModelsStatus("loading");
     setAiConnectionModelsInfo((prev) => ({ ...prev, error: "" }));
+    const targetId = endpointIdOverride || selectedAiEndpointId;
+    if (endpointIdOverride && endpointIdOverride !== selectedAiEndpointId) {
+      setSelectedAiEndpointId(endpointIdOverride);
+    }
+    const selectedEndpoint =
+      (aiConnection.ai_endpoints || []).find((endpoint) => endpoint.id === targetId) ||
+      (aiConnection.ai_endpoints || [])[0] ||
+      null;
     try {
       const res = await fetch(`${API}/integrations/ai_models`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ai_provider: aiConnection.ai_provider,
-          ai_base_url: aiConnection.ai_base_url,
-          ai_api_key: aiConnection.ai_api_key,
-          ai_default_model: aiConnection.ai_default_model,
+          ai_endpoint_id: selectedEndpoint?.id || "default",
+          ai_provider: selectedEndpoint?.provider || aiConnection.ai_provider,
+          ai_base_url: selectedEndpoint?.base_url || aiConnection.ai_base_url,
+          ai_api_key: selectedEndpoint?.api_key || aiConnection.ai_api_key,
+          ai_default_model: selectedEndpoint?.default_model || aiConnection.ai_default_model,
           ai_internal_model: aiConnection.ai_internal_model,
           ai_action_model: aiConnection.ai_action_model,
           ai_task_model: aiConnection.ai_task_model,
           ai_customer_ranking_model: aiConnection.ai_customer_ranking_model,
           ai_customer_development_model: aiConnection.ai_customer_development_model,
           ai_offer_model: aiConnection.ai_offer_model,
-          ai_invoice_model: aiConnection.ai_invoice_model
+          ai_invoice_model: aiConnection.ai_invoice_model,
+          ai_newsletter_model: aiConnection.ai_newsletter_model,
+          ai_meta_hub_model: aiConnection.ai_meta_hub_model,
+          ai_project_folder_model: aiConnection.ai_project_folder_model,
+          ai_endpoints: aiConnection.ai_endpoints,
+          ai_purpose_routes: aiConnection.ai_purpose_routes
         })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.detail || "model_probe_failed");
       setAiConnectionModels(Array.isArray(data?.models) ? data.models : []);
       setAiConnectionModelsInfo({
+        endpointId: String(selectedEndpoint?.id || "default"),
         provider: String(data?.provider || aiConnection.ai_provider || ""),
         baseUrl: String(data?.base_url || aiConnection.ai_base_url || ""),
+        endpointName: String(data?.endpoint_name || selectedEndpoint?.name || ""),
         defaultModel: String(data?.default_model || ""),
+        responsePreview: "",
+        durationMs: 0,
         error: ""
       });
       setAiConnectionModelsStatus("ready");
     } catch (error) {
       setAiConnectionModels([]);
       setAiConnectionModelsInfo({
+        endpointId: String(selectedEndpoint?.id || "default"),
         provider: String(aiConnection.ai_provider || ""),
         baseUrl: String(aiConnection.ai_base_url || ""),
+        endpointName: String(selectedEndpoint?.name || ""),
         defaultModel: "",
+        responsePreview: "",
+        durationMs: 0,
         error: error?.message ? String(error.message) : "Modellliste konnte nicht geladen werden"
+      });
+      setAiConnectionModelsStatus("error");
+    }
+  };
+
+  const testAiEndpoint = async (endpointIdOverride) => {
+    setAiConnectionModelsStatus("loading");
+    setAiConnectionModelsInfo((prev) => ({ ...prev, error: "", responsePreview: "", durationMs: 0 }));
+    const targetId = endpointIdOverride || selectedAiEndpointId || "default";
+    if (endpointIdOverride && endpointIdOverride !== selectedAiEndpointId) {
+      setSelectedAiEndpointId(endpointIdOverride);
+    }
+    const selectedEndpoint =
+      (aiConnection.ai_endpoints || []).find((endpoint) => endpoint.id === targetId) ||
+      (aiConnection.ai_endpoints || [])[0] ||
+      null;
+    const endpointProvider = String(selectedEndpoint?.provider || aiConnection.ai_provider || "");
+    const endpointBaseUrl = String(selectedEndpoint?.base_url || aiConnection.ai_base_url || "").trim();
+    const endpointModel = String(selectedEndpoint?.default_model || aiConnection.ai_default_model || "").trim();
+    if (!endpointBaseUrl) {
+      setAiConnectionModelsInfo({
+        endpointId: String(selectedEndpoint?.id || "default"),
+        provider: endpointProvider,
+        baseUrl: "",
+        endpointName: String(selectedEndpoint?.name || ""),
+        defaultModel: endpointModel,
+        responsePreview: "",
+        durationMs: 0,
+        error: "Bitte zuerst eine Base URL fuer diesen KI-Endpunkt eintragen."
+      });
+      setAiConnectionModelsStatus("error");
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/integrations/ai_test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ai_endpoint_id: selectedEndpoint?.id || "default",
+          ai_provider: endpointProvider,
+          ai_base_url: endpointBaseUrl,
+          ai_api_key: selectedEndpoint?.api_key || aiConnection.ai_api_key,
+          ai_default_model: endpointModel,
+          ai_internal_model: aiConnection.ai_internal_model,
+          ai_action_model: aiConnection.ai_action_model,
+          ai_task_model: aiConnection.ai_task_model,
+          ai_customer_ranking_model: aiConnection.ai_customer_ranking_model,
+          ai_customer_development_model: aiConnection.ai_customer_development_model,
+          ai_offer_model: aiConnection.ai_offer_model,
+          ai_invoice_model: aiConnection.ai_invoice_model,
+          ai_newsletter_model: aiConnection.ai_newsletter_model,
+          ai_meta_hub_model: aiConnection.ai_meta_hub_model,
+          ai_project_folder_model: aiConnection.ai_project_folder_model,
+          ai_endpoints: aiConnection.ai_endpoints,
+          ai_purpose_routes: aiConnection.ai_purpose_routes
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || "ai_test_failed");
+      setAiConnectionModels(Array.isArray(data?.models) ? data.models : []);
+      setAiConnectionModelsInfo({
+        endpointId: String(selectedEndpoint?.id || "default"),
+        provider: String(data?.provider || selectedEndpoint?.provider || aiConnection.ai_provider || ""),
+        baseUrl: String(data?.base_url || selectedEndpoint?.base_url || aiConnection.ai_base_url || ""),
+        endpointName: String(data?.endpoint_name || selectedEndpoint?.name || ""),
+        defaultModel: String(data?.model || selectedEndpoint?.default_model || ""),
+        responsePreview: String(data?.response_preview || ""),
+        durationMs: Number(data?.duration_ms || 0),
+        error: ""
+      });
+      setAiConnectionModelsStatus("ready");
+    } catch (error) {
+      setAiConnectionModelsInfo({
+        endpointId: String(selectedEndpoint?.id || "default"),
+        provider: endpointProvider,
+        baseUrl: endpointBaseUrl,
+        endpointName: String(selectedEndpoint?.name || ""),
+        defaultModel: endpointModel,
+        responsePreview: "",
+        durationMs: 0,
+        error: error?.message ? String(error.message) : "KI-Test fehlgeschlagen"
       });
       setAiConnectionModelsStatus("error");
     }
@@ -2157,6 +2381,10 @@ export default function SettingsView() {
     }
     setAiModelManageStatus("loading");
     setAiModelManageMessage("");
+    const selectedEndpoint =
+      (aiConnection.ai_endpoints || []).find((endpoint) => endpoint.id === selectedAiEndpointId) ||
+      (aiConnection.ai_endpoints || [])[0] ||
+      null;
     try {
       const res = await fetch(`${API}/integrations/ai_models/manage`, {
         method: "POST",
@@ -2164,9 +2392,11 @@ export default function SettingsView() {
         body: JSON.stringify({
           action,
           model,
-          ai_provider: aiConnection.ai_provider,
-          ai_base_url: aiConnection.ai_base_url,
-          ai_api_key: aiConnection.ai_api_key
+          ai_endpoint_id: selectedEndpoint?.id || "default",
+          ai_provider: selectedEndpoint?.provider || aiConnection.ai_provider,
+          ai_base_url: selectedEndpoint?.base_url || aiConnection.ai_base_url,
+          ai_api_key: selectedEndpoint?.api_key || aiConnection.ai_api_key,
+          ai_endpoints: aiConnection.ai_endpoints
         })
       });
       const data = await res.json().catch(() => ({}));
@@ -2289,6 +2519,7 @@ export default function SettingsView() {
           meta_hub_rmm_enabled: Boolean(metaHub.rmm_enabled),
           meta_hub_rmm_customer_field_name: String(metaHub.rmm_customer_field_name || "Kundennummer"),
           meta_hub_email_enabled: Boolean(metaHub.email_enabled),
+          meta_hub_sevdesk_enabled: Boolean(metaHub.sevdesk_enabled),
           meta_hub_refresh_seconds: Math.max(30, Number(metaHub.refresh_seconds) || 300)
         })
       });
@@ -2299,6 +2530,7 @@ export default function SettingsView() {
         rmm_enabled: data?.meta_hub_rmm_enabled !== false,
         rmm_customer_field_name: data?.meta_hub_rmm_customer_field_name || "Kundennummer",
         email_enabled: Boolean(data?.meta_hub_email_enabled),
+        sevdesk_enabled: Boolean(data?.meta_hub_sevdesk_enabled),
         refresh_seconds: String(Number(data?.meta_hub_refresh_seconds || 300)),
         mailboxes: Array.isArray(data?.meta_hub_mailboxes)
           ? data.meta_hub_mailboxes.map((row) => normalizeMetaHubMailbox(row))
@@ -2834,12 +3066,218 @@ export default function SettingsView() {
         aiConnection.ai_customer_ranking_model,
         aiConnection.ai_customer_development_model,
         aiConnection.ai_offer_model,
-        aiConnection.ai_invoice_model
+        aiConnection.ai_invoice_model,
+        aiConnection.ai_newsletter_model,
+        aiConnection.ai_meta_hub_model,
+        aiConnection.ai_project_folder_model,
+        ...(aiConnection.ai_endpoints || []).map((endpoint) => endpoint?.default_model)
       ]
         .map((value) => String(value || "").trim())
         .filter(Boolean)
     )
   );
+  const formatTelemetryTime = (value) => {
+    const timestamp = Number(value || 0);
+    if (!timestamp) return "nie";
+    try {
+      return new Date(timestamp).toLocaleString("de-AT", {
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    } catch {
+      return "unbekannt";
+    }
+  };
+  const telemetryTotals = telemetrySummary?.totals || {};
+  const telemetryModules = Array.isArray(telemetrySummary?.modules) ? telemetrySummary.modules : [];
+  const telemetrySlowRoutes = Array.isArray(telemetrySummary?.slow_routes) ? telemetrySummary.slow_routes : [];
+  const telemetryUnusedHints = Array.isArray(telemetrySummary?.unused_hints) ? telemetrySummary.unused_hints : [];
+  const telemetryAiRequests = telemetrySummary?.ai_requests || {};
+  const telemetryAiEndpoints = Array.isArray(telemetryAiRequests?.endpoints) ? telemetryAiRequests.endpoints : [];
+  const telemetryAiModels = Array.isArray(telemetryAiRequests?.models) ? telemetryAiRequests.models : [];
+  const telemetryAiRecent = Array.isArray(telemetryAiRequests?.recent) ? telemetryAiRequests.recent : [];
+  const aiEndpoints = Array.isArray(aiConnection.ai_endpoints) ? aiConnection.ai_endpoints : [];
+  const selectedAiEndpoint = aiEndpoints.find((endpoint) => endpoint.id === selectedAiEndpointId) || aiEndpoints[0] || null;
+  const aiPurposeLabels = aiConnection.ai_purpose_labels || {};
+  const aiPurposeKeys = Object.keys(aiPurposeLabels).length
+    ? Object.keys(aiPurposeLabels)
+    : [
+        "newsletter",
+        "offer_text",
+        "meta_hub",
+        "customer_development",
+        "project_folder",
+        "task_draft",
+        "action",
+        "invoice_summary",
+        "internal_ai"
+      ];
+  const aiPurposeModelFields = {
+    internal_ai: "ai_internal_model",
+    action: "ai_action_model",
+    task_draft: "ai_task_model",
+    customer_ranking: "ai_customer_ranking_model",
+    customer_development: "ai_customer_development_model",
+    offer_text: "ai_offer_model",
+    newsletter: "ai_newsletter_model",
+    invoice_summary: "ai_invoice_model",
+    meta_hub: "ai_meta_hub_model",
+    project_folder: "ai_project_folder_model"
+  };
+
+  const SETTINGS_SECTIONS = useMemo(() => ([
+    { key: "telemetry", label: "Nutzung & Performance", category: "general", keywords: "telemetrie performance metric" },
+    { key: "mail", label: "Mailprofile", category: "mail", keywords: "imap smtp mail postfach" },
+    { key: "contracts-templates", label: "Vertrags-Templates", category: "billing", keywords: "vertrag template" },
+    { key: "contracts-tariffs", label: "Tarifpflege", category: "billing", keywords: "tarif preise vertrag" },
+    { key: "company", label: "Unternehmensstamm", category: "general", keywords: "firma adresse stammdaten" },
+    { key: "ai-connection", label: "KI Anbindung", category: "ai", keywords: "openai ollama anthropic claude provider modell" },
+    { key: "ai-prompts", label: "KI Prompts", category: "ai", keywords: "prompt vorlage" },
+    { key: "api-test", label: "API Test", category: "ai", keywords: "test request debug" },
+    { key: "rmm", label: "RMM Verbindung", category: "datasources", keywords: "rmm syncro tactical" },
+    { key: "metahub", label: "Meta-Hub Quellen", category: "datasources", keywords: "metahub aggregation" },
+    { key: "icecat", label: "Anlagen / Icecat", category: "datasources", keywords: "icecat hardware anlagen" },
+    { key: "sevdesk", label: "Faktura sevDesk", category: "billing", keywords: "sevdesk rechnung faktura" },
+    { key: "marketplace", label: "Distributoren / Marketplace", category: "datasources", keywords: "also marketplace techdata distributor" },
+    { key: "telephony", label: "NFON · Numerify", category: "telephony", keywords: "nfon cti numerify telefonie pbx" },
+    { key: "database", label: "Datenbank", category: "system", keywords: "db datenbank wartung" }
+  ]), []);
+
+  const SETTINGS_CATEGORIES = useMemo(() => ([
+    { key: "all", label: "Alle" },
+    { key: "general", label: "Allgemein" },
+    { key: "mail", label: "Mail" },
+    { key: "telephony", label: "Telefonie" },
+    { key: "ai", label: "KI" },
+    { key: "billing", label: "Faktura & Verträge" },
+    { key: "datasources", label: "Datenquellen" },
+    { key: "system", label: "System" }
+  ]), []);
+
+  const [connectionsHealth, setConnectionsHealth] = useState({});
+
+  const HEALTH_PROBES = useMemo(() => ({
+    "ai-connection": { url: "/ai/health", okFn: (d) => d?.connected !== false && d?.ok !== false },
+    sevdesk: { url: "/sevdesk/health", okFn: (d) => d?.connected === true },
+    rmm: { url: "/rmm/health", okFn: (d) => d?.connected === true },
+    icecat: { url: "/integrations/icecat/status", okFn: (d) => d?.connected === true || d?.ok === true },
+    metahub: { url: "/meta_hub/status", okFn: (d) => d?.ok === true || d?.connected === true || d?.status === "ok" },
+    marketplace: { url: "/marketplace/also/status", okFn: (d) => d?.ok === true || d?.connected === true },
+    telephony: { url: "/pbx_phonebook/health", okFn: (d) => d?.connected === true || d?.ok === true }
+  }), []);
+
+  const healthProbeUrl = (path) => {
+    const value = String(path || "").trim();
+    if (!value) return API;
+    if (value.startsWith("http://") || value.startsWith("https://")) return value;
+    if (value === API || value.startsWith(`${API}/`)) return value;
+    return `${API}${value.startsWith("/") ? value : `/${value}`}`;
+  };
+
+  const probeHealth = async (key) => {
+    const probe = HEALTH_PROBES[key];
+    if (!probe) return;
+    setConnectionsHealth((prev) => ({ ...prev, [key]: { status: "load", checkedAt: Date.now() } }));
+    try {
+      const res = await fetch(healthProbeUrl(probe.url));
+      const data = await res.json().catch(() => ({}));
+      const ok = res.ok && probe.okFn(data);
+      setConnectionsHealth((prev) => ({
+        ...prev,
+        [key]: {
+          status: ok ? "ok" : "err",
+          checkedAt: Date.now(),
+          message: data?.error || data?.detail || data?.message || (res.ok ? "" : `HTTP ${res.status}`)
+        }
+      }));
+    } catch (probeError) {
+      setConnectionsHealth((prev) => ({
+        ...prev,
+        [key]: { status: "err", checkedAt: Date.now(), message: String(probeError?.message || "fehlgeschlagen") }
+      }));
+    }
+  };
+
+  const runAllHealthChecks = () => {
+    Object.keys(HEALTH_PROBES).forEach((key) => { probeHealth(key); });
+  };
+
+  useEffect(() => {
+    runAllHealthChecks();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const sectionStatus = (key) => {
+    const probed = connectionsHealth[key]?.status;
+    if (probed) return probed;
+    const map = {
+      mail: mailStatus === "saved" || mailStatus === "ready" ? "ok" : mailStatus === "error" ? "err" : mailStatus === "loading" || mailStatus === "saving" ? "load" : "idle",
+      "ai-connection": aiConnectionLoadStatus === "error" ? "err" : aiConnectionStatus === "saved" ? "ok" : aiConnectionLoadStatus === "loading" ? "load" : "idle",
+      rmm: rmmHealth?.connected === true ? "ok" : rmmHealth?.connected === false || rmmHealthStatus === "error" ? "err" : rmmHealthStatus === "loading" ? "load" : "idle",
+      metahub: metaHubRuntimeStatus?.connected === true ? "ok" : metaHubRuntimeStatus?.connected === false || metaHubRuntimeStatus?.status === "error" || metaHubStatus === "error" ? "err" : metaHubRuntimeStatus?.status === "loading" ? "load" : metaHubStatus === "saved" ? "ok" : "idle",
+      icecat: icecatHealth?.ok === true ? "ok" : icecatHealth?.ok === false || icecatLoadStatus === "error" ? "err" : icecatHealth?.status === "loading" ? "load" : "idle",
+      sevdesk: sevdeskHealth?.connected === true ? "ok" : sevdeskHealth?.connected === false || sevdeskLoadStatus === "error" ? "err" : "idle",
+      marketplace: alsoStatus?.connected === true ? "ok" : alsoStatus?.connected === false || marketplaceLoadStatus === "error" ? "err" : alsoStatus?.status === "loading" ? "load" : marketplaceStatus === "saved" ? "ok" : "idle",
+      telephony: pbxDebugInfo?.lastCheckOk === true ? "ok" : pbxDebugInfo?.lastCheckOk === false || ctiLoadStatus === "error" || pbxLoadStatus === "error" ? "err" : pbxApiStatus === "loading" || pbxLoadStatus === "loading" || ctiLoadStatus === "loading" ? "load" : ctiStatus === "saved" || pbxStatus === "saved" ? "ok" : "idle",
+      database: debugStatus === "error" ? "err" : debugStatus === "cleared" ? "ok" : "idle"
+    };
+    return map[key] || "idle";
+  };
+
+  const STATUS_PILL = {
+    ok: { dot: "bg-emerald-500", title: "Verbunden" },
+    err: { dot: "bg-rose-500", title: "Fehler" },
+    load: { dot: "bg-amber-400 animate-pulse", title: "Prüft…" },
+    idle: { dot: "bg-sand-300", title: "Ungeprüft" }
+  };
+
+  const mainRef = useRef(null);
+  const [settingsSearch, setSettingsSearch] = useState("");
+  const [settingsCategory, setSettingsCategory] = useState("all");
+
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    const cards = Array.from(root.querySelectorAll(":scope > div.rounded-3xl"));
+    cards.forEach((card, idx) => {
+      const meta = SETTINGS_SECTIONS[idx];
+      if (!meta) return;
+      card.id = `settings-${meta.key}`;
+      card.setAttribute("data-settings-key", meta.key);
+      card.setAttribute("data-settings-category", meta.category);
+      card.setAttribute("data-settings-search", `${meta.label} ${meta.keywords}`.toLowerCase());
+      card.classList.add("scroll-mt-24");
+    });
+  }, [SETTINGS_SECTIONS]);
+
+  useEffect(() => {
+    const root = mainRef.current;
+    if (!root) return;
+    const q = settingsSearch.trim().toLowerCase();
+    Array.from(root.querySelectorAll(":scope > div.rounded-3xl")).forEach((card) => {
+      const cat = card.getAttribute("data-settings-category") || "";
+      const text = card.getAttribute("data-settings-search") || "";
+      const matchCat = settingsCategory === "all" || cat === settingsCategory;
+      const matchSearch = !q || text.includes(q);
+      card.style.display = matchCat && matchSearch ? "" : "none";
+    });
+  }, [settingsSearch, settingsCategory]);
+
+  const visibleSections = useMemo(() => {
+    const q = settingsSearch.trim().toLowerCase();
+    return SETTINGS_SECTIONS.filter((section) => {
+      if (settingsCategory !== "all" && section.category !== settingsCategory) return false;
+      if (!q) return true;
+      return `${section.label} ${section.keywords}`.toLowerCase().includes(q);
+    });
+  }, [SETTINGS_SECTIONS, settingsSearch, settingsCategory]);
+
+  const scrollToSection = (key) => {
+    const el = document.getElementById(`settings-${key}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
     <div className="min-h-screen bg-sand-50">
@@ -2855,7 +3293,408 @@ export default function SettingsView() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-6 py-8 space-y-6">
+      <div className="mx-auto max-w-7xl px-6 py-6 lg:grid lg:grid-cols-[220px_minmax(0,1fr)] lg:gap-6">
+        <aside className="mb-4 lg:mb-0 lg:sticky lg:top-4 lg:self-start">
+          <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
+            <div className="relative mb-3">
+              <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sand-400" />
+              <input
+                value={settingsSearch}
+                onChange={(e) => setSettingsSearch(e.target.value)}
+                placeholder="Suchen…"
+                className="w-full rounded-xl border border-sand-200 bg-sand-50 py-1.5 pl-7 pr-2 text-xs text-sand-800 placeholder:text-sand-400 focus:border-sand-400 focus:outline-none"
+              />
+            </div>
+            <div className="mb-3 flex flex-wrap gap-1">
+              {SETTINGS_CATEGORIES.map((cat) => (
+                <button
+                  key={cat.key}
+                  type="button"
+                  onClick={() => setSettingsCategory(cat.key)}
+                  className={`rounded-full px-2.5 py-1 text-[10px] uppercase tracking-wide transition ${
+                    settingsCategory === cat.key
+                      ? "bg-sand-900 text-white"
+                      : "border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+            <div className="mb-2 flex items-center justify-between px-1">
+              <span className="text-[10px] uppercase tracking-[0.18em] text-sand-500">Sektionen</span>
+              <button
+                type="button"
+                onClick={runAllHealthChecks}
+                className="rounded-md border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-600 hover:bg-sand-100"
+                title="Alle Verbindungen neu prüfen"
+              >
+                ↻ Health
+              </button>
+            </div>
+            <nav className="space-y-0.5">
+              {visibleSections.length ? visibleSections.map((section) => {
+                const status = sectionStatus(section.key);
+                const pill = STATUS_PILL[status];
+                const health = connectionsHealth[section.key];
+                const healthAge = health?.checkedAt ? Math.round((Date.now() - health.checkedAt) / 1000) : null;
+                const probeable = Boolean(HEALTH_PROBES[section.key]);
+                const tip = probeable
+                  ? `${pill.title}${health?.message ? ` — ${health.message}` : ""}${healthAge !== null ? ` (vor ${healthAge}s)` : ""}`
+                  : pill.title;
+                return (
+                  <div key={section.key} className="group flex items-center gap-1 rounded-lg pr-1 hover:bg-sand-100">
+                    <button
+                      type="button"
+                      onClick={() => scrollToSection(section.key)}
+                      className="flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-sand-700"
+                    >
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${pill.dot}`} title={tip} />
+                      <span className="truncate">{section.label}</span>
+                    </button>
+                    {probeable ? (
+                      <button
+                        type="button"
+                        onClick={() => probeHealth(section.key)}
+                        className="shrink-0 rounded p-1 text-sand-400 opacity-0 transition hover:bg-white hover:text-sand-700 group-hover:opacity-100"
+                        title="Erneut prüfen"
+                      >
+                        ↻
+                      </button>
+                    ) : (
+                      <ChevronRight size={12} className="shrink-0 text-sand-400 opacity-0 transition group-hover:opacity-100" />
+                    )}
+                  </div>
+                );
+              }) : (
+                <div className="px-2 py-2 text-[11px] text-sand-500">Keine Treffer.</div>
+              )}
+            </nav>
+          </div>
+        </aside>
+      <main ref={mainRef} className="min-w-0 space-y-4">
+        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+          <button
+            type="button"
+            onClick={() => setTelemetryOpen((current) => !current)}
+            className="flex w-full items-center justify-between gap-2 text-sand-700"
+          >
+            <div className="flex items-center gap-2">
+              <Settings size={18} />
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Nutzung & Performance</p>
+                <p className="text-xs text-sand-500">Langsame API-Abfragen und Modulnutzung im Hintergrund.</p>
+              </div>
+            </div>
+            <span className="text-sm text-sand-500">{telemetryOpen ? "–" : "+"}</span>
+          </button>
+          {telemetryOpen ? (
+            <div className="mt-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs uppercase tracking-wide text-sand-500">Zeitraum</span>
+                  {[7, 14, 30, 90].map((days) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => setTelemetryDays(days)}
+                      className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                        telemetryDays === days
+                          ? "border-sand-900 bg-sand-900 text-white"
+                          : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+                      }`}
+                    >
+                      {days} Tage
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={refreshTelemetrySummary}
+                  disabled={telemetryStatus === "loading"}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[10px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-60"
+                >
+                  {telemetryStatus === "loading" ? "Lädt..." : "Aktualisieren"}
+                </button>
+              </div>
+
+              {telemetryStatus === "error" ? (
+                <div className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                  {telemetryMessage || "Telemetrie konnte nicht geladen werden."}
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+                {[
+                  ["Events", telemetryTotals.events || 0],
+                  ["Views", telemetryTotals.views || 0],
+                  ["API Calls", telemetryTotals.api_calls || 0],
+                  ["KI Calls", telemetryTotals.ai_calls || 0],
+                  ["Langsam", telemetryTotals.slow_events || 0],
+                  ["Fehler", telemetryTotals.errors || 0]
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2">
+                    <div className="text-[10px] uppercase tracking-wide text-sand-500">{label}</div>
+                    <div className="text-lg font-semibold text-sand-900">{value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-2xl border border-sand-200 bg-white overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sand-200 bg-sand-50 px-3 py-2">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-sand-500">KI Anfragen nach Endpoint und Modell</p>
+                    <p className="mt-0.5 text-[11px] text-sand-500">
+                      Diagnose der lokalen und OpenAI-kompatiblen KI-Aufrufe im gewählten Zeitraum.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-sand-600">
+                    <span className="rounded-full border border-sand-200 bg-white px-2 py-1">
+                      {telemetryAiRequests.count || 0} Calls
+                    </span>
+                    <span className="rounded-full border border-sand-200 bg-white px-2 py-1">
+                      Ø {telemetryAiRequests.avg_duration_ms || 0} ms
+                    </span>
+                    <span className={`rounded-full border px-2 py-1 ${
+                      telemetryAiRequests.errors
+                        ? "border-rose-200 bg-rose-50 text-rose-700"
+                        : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    }`}>
+                      {telemetryAiRequests.errors || 0} Fehler
+                    </span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-0 xl:grid-cols-2">
+                  <div className="border-b border-sand-200 xl:border-b-0 xl:border-r">
+                    <div className="bg-white px-3 py-2 text-[11px] uppercase tracking-wide text-sand-500">
+                      Endpunkte
+                    </div>
+                    <div className="max-h-72 overflow-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-sand-50 text-sand-500">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">Endpoint</th>
+                            <th className="px-3 py-2 font-medium">Provider</th>
+                            <th className="px-3 py-2 font-medium">Calls</th>
+                            <th className="px-3 py-2 font-medium">Ø</th>
+                            <th className="px-3 py-2 font-medium">Max</th>
+                            <th className="px-3 py-2 font-medium">Fehler</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {telemetryAiEndpoints.length ? (
+                            telemetryAiEndpoints.map((endpoint) => (
+                              <tr key={endpoint.endpoint_id || endpoint.endpoint_name} className="border-t border-sand-100">
+                                <td className="px-3 py-2 text-sand-700">
+                                  <div className="font-semibold">{endpoint.endpoint_name || endpoint.endpoint_id || "Standard"}</div>
+                                  <div className="max-w-[260px] truncate font-mono text-[10px] text-sand-400" title={endpoint.base_url || ""}>
+                                    {endpoint.base_url || "n/a"}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-sand-600">{endpoint.provider || "n/a"}</td>
+                                <td className="px-3 py-2 text-sand-600">{endpoint.count || 0}</td>
+                                <td className="px-3 py-2 text-sand-600">{endpoint.avg_duration_ms || 0} ms</td>
+                                <td className="px-3 py-2 text-sand-600">{endpoint.max_duration_ms || 0} ms</td>
+                                <td className="px-3 py-2 text-sand-600">{endpoint.errors || 0}</td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td className="px-3 py-4 text-sand-500" colSpan={6}>
+                                Noch keine KI-Anfragen im gewählten Zeitraum.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="bg-white px-3 py-2 text-[11px] uppercase tracking-wide text-sand-500">
+                      Modelle
+                    </div>
+                    <div className="max-h-72 overflow-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-sand-50 text-sand-500">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">Modell</th>
+                            <th className="px-3 py-2 font-medium">Provider</th>
+                            <th className="px-3 py-2 font-medium">Calls</th>
+                            <th className="px-3 py-2 font-medium">Ø</th>
+                            <th className="px-3 py-2 font-medium">Zuletzt</th>
+                            <th className="px-3 py-2 font-medium">Fehler</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {telemetryAiModels.length ? (
+                            telemetryAiModels.map((model) => (
+                              <tr key={model.model} className="border-t border-sand-100">
+                                <td className="px-3 py-2 text-sand-700">
+                                  <div className="max-w-[240px] truncate font-semibold" title={model.model || ""}>
+                                    {model.model || "unbekannt"}
+                                  </div>
+                                  <div className="text-[10px] text-sand-400">
+                                    {(model.endpoints || []).slice(0, 2).map((entry) => entry.endpoint).join(", ") || "n/a"}
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-sand-600">{model.provider || "n/a"}</td>
+                                <td className="px-3 py-2 text-sand-600">{model.count || 0}</td>
+                                <td className="px-3 py-2 text-sand-600">{model.avg_duration_ms || 0} ms</td>
+                                <td className="px-3 py-2 text-sand-600">{formatTelemetryTime(model.last_seen_at)}</td>
+                                <td className="px-3 py-2 text-sand-600">{model.errors || 0}</td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td className="px-3 py-4 text-sand-500" colSpan={6}>
+                                Noch keine Modellnutzung im gewählten Zeitraum.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+                <div className="border-t border-sand-200 bg-sand-50 px-3 py-2 text-[11px] uppercase tracking-wide text-sand-500">
+                  Letzte KI-Anfragen
+                </div>
+                <div className="max-h-64 overflow-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-white text-sand-500">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">Zeit</th>
+                        <th className="px-3 py-2 font-medium">Zweck</th>
+                        <th className="px-3 py-2 font-medium">Endpoint</th>
+                        <th className="px-3 py-2 font-medium">Modell</th>
+                        <th className="px-3 py-2 font-medium">Dauer</th>
+                        <th className="px-3 py-2 font-medium">Prompt/Antwort</th>
+                        <th className="px-3 py-2 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {telemetryAiRecent.length ? (
+                        telemetryAiRecent.slice(0, 20).map((entry, index) => (
+                          <tr key={`${entry.created_at}-${index}`} className="border-t border-sand-100">
+                            <td className="px-3 py-2 text-sand-600">{formatTelemetryTime(entry.created_at)}</td>
+                            <td className="px-3 py-2 text-sand-700">{entry.purpose || "unspecified"}</td>
+                            <td className="px-3 py-2 text-sand-600">{entry.endpoint_name || entry.endpoint_id || "Standard"}</td>
+                            <td className="px-3 py-2 text-sand-600">
+                              <span className="max-w-[220px] truncate inline-block align-bottom" title={entry.model || ""}>
+                                {entry.model || "unbekannt"}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-sand-600">{entry.duration_ms || 0} ms</td>
+                            <td className="px-3 py-2 text-sand-600">
+                              {entry.prompt_chars || 0}/{entry.response_chars || 0} Zeichen
+                            </td>
+                            <td className={`px-3 py-2 ${entry.success ? "text-emerald-700" : "text-rose-700"}`}>
+                              {entry.success ? "ok" : "Fehler"}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td className="px-3 py-4 text-sand-500" colSpan={7}>
+                            Noch keine KI-Anfragen im gewählten Zeitraum.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-2xl border border-sand-200 bg-white overflow-hidden">
+                  <div className="border-b border-sand-200 bg-sand-50 px-3 py-2 text-xs uppercase tracking-wide text-sand-500">
+                    Langsame oder fehlerhafte Abfragen
+                  </div>
+                  <div className="max-h-72 overflow-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-white text-sand-500">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Route</th>
+                          <th className="px-3 py-2 font-medium">Calls</th>
+                          <th className="px-3 py-2 font-medium">Ø</th>
+                          <th className="px-3 py-2 font-medium">Max</th>
+                          <th className="px-3 py-2 font-medium">Fehler</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {telemetrySlowRoutes.length ? (
+                          telemetrySlowRoutes.map((route) => (
+                            <tr key={`${route.method}-${route.route}`} className="border-t border-sand-100">
+                              <td className="px-3 py-2 text-sand-700">
+                                <span className="font-semibold">{route.method || "GET"}</span>{" "}
+                                <span className="break-all">{route.route}</span>
+                              </td>
+                              <td className="px-3 py-2 text-sand-600">{route.count || 0}</td>
+                              <td className="px-3 py-2 text-sand-600">{route.avg_duration_ms || 0} ms</td>
+                              <td className="px-3 py-2 text-sand-600">{route.max_duration_ms || 0} ms</td>
+                              <td className="px-3 py-2 text-sand-600">{route.errors || 0}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td className="px-3 py-4 text-sand-500" colSpan={5}>
+                              Noch keine API-Daten im gewählten Zeitraum.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-sand-200 bg-white overflow-hidden">
+                  <div className="border-b border-sand-200 bg-sand-50 px-3 py-2 text-xs uppercase tracking-wide text-sand-500">
+                    Modulnutzung
+                  </div>
+                  <div className="max-h-72 overflow-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-white text-sand-500">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Modul</th>
+                          <th className="px-3 py-2 font-medium">Views</th>
+                          <th className="px-3 py-2 font-medium">API</th>
+                          <th className="px-3 py-2 font-medium">Zuletzt</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {telemetryModules.length ? (
+                          telemetryModules.map((module) => (
+                            <tr key={module.module} className="border-t border-sand-100">
+                              <td className="px-3 py-2 text-sand-700">{module.label || module.module}</td>
+                              <td className="px-3 py-2 text-sand-600">{module.views || 0}</td>
+                              <td className="px-3 py-2 text-sand-600">{module.api_calls || 0}</td>
+                              <td className="px-3 py-2 text-sand-600">{formatTelemetryTime(module.last_seen_at)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td className="px-3 py-4 text-sand-500" colSpan={4}>
+                              Noch keine Nutzungsdaten im gewählten Zeitraum.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {telemetryUnusedHints.length ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <span className="font-semibold">Bereinigungskandidaten ohne View im Zeitraum:</span>{" "}
+                  {telemetryUnusedHints.map((item) => item.label || item.module).join(", ")}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
         <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
           <button
             type="button"
@@ -3128,6 +3967,7 @@ export default function SettingsView() {
                         onChange={(value) => setMailDraft((prev) => ({ ...prev, signature_html: value }))}
                         placeholder="Mit freundlichen Gruessen"
                         minHeight="120px"
+                        enableAi={false}
                       />
                     </div>
                   </div>
@@ -3344,6 +4184,7 @@ export default function SettingsView() {
                               }
                             }));
                           }}
+                          enableAi={false}
                           minHeight="200px"
                           allowHtmlSource
                         />
@@ -3731,87 +4572,661 @@ export default function SettingsView() {
           </button>
           {aiConnectionOpen ? (
             <>
-              <p className="mt-4 text-xs text-sand-500">
-                Zentrale KI-Konfiguration fuer Workbench. Damit kann lokal `Ollama` oder ein externer
-                `vLLM / OpenAI-kompatibler` Server genutzt werden, ohne die App ueber `.env` zu verdrahten.
-              </p>
-              <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label className="text-xs text-sand-500">Provider</label>
-                  <select
-                    value={aiConnection.ai_provider}
-                    onChange={(event) =>
-                      setAiConnection((prev) => {
-                        const nextProvider = event.target.value;
-                        const currentBaseUrl = String(prev.ai_base_url || "").trim();
-                        const exampleBaseUrl =
-                          nextProvider === "openai_compatible"
-                            ? "https://llm.example.tld/v1"
-                            : defaultAiConnection.ai_base_url;
-                        const shouldReplaceBaseUrl =
-                          !currentBaseUrl ||
-                          currentBaseUrl === defaultAiConnection.ai_base_url ||
-                          currentBaseUrl === "https://llm.example.tld/v1";
-                        return {
-                          ...prev,
-                          ai_provider: nextProvider,
-                          ai_base_url: shouldReplaceBaseUrl ? exampleBaseUrl : prev.ai_base_url
-                        };
-                      })
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
+              {(() => {
+                const aiPresets = [
+                  { key: "ollama-local", label: "Ollama (lokal)", provider: "ollama", base_url: "http://ollama:11434", model: "qwen2.5:7b-instruct" },
+                  { key: "openai", label: "OpenAI", provider: "openai_compatible", base_url: "https://api.openai.com/v1", model: "gpt-4o-mini" },
+                  { key: "anthropic", label: "Anthropic Claude", provider: "openai_compatible", base_url: "https://api.anthropic.com/v1", model: "claude-haiku-4-5-20251001" },
+                  { key: "azure", label: "Azure AI", provider: "openai_compatible", base_url: "https://<resource>.openai.azure.com/openai/v1", model: "" },
+                  { key: "vllm", label: "vLLM lokal", provider: "openai_compatible", base_url: "http://vllm:8000/v1", model: "" },
+                  { key: "codex-bridge", label: "Codex Bridge", provider: "openai_compatible", base_url: "http://codex-bridge:8020/v1", model: "codex-cli" }
+                ];
+                const applyPreset = (preset) =>
+                  setAiConnection((prev) => ({
+                    ...prev,
+                    ai_provider: preset.provider,
+                    ai_base_url: preset.base_url,
+                    ai_default_model: preset.model || prev.ai_default_model
+                  }));
+                const aiSubTabs = [
+                  { key: "endpoints", label: "Endpunkte" },
+                  { key: "routing", label: "Zuordnung" }
+                ];
+                const TabBtn = ({ k, label }) => (
+                  <button
+                    type="button"
+                    onClick={() => setAiSubTab(k)}
+                    className={`rounded-full px-3 py-1.5 text-xs transition ${
+                      aiSubTab === k
+                        ? "bg-sand-900 text-white shadow-sm"
+                        : "bg-white text-sand-600 hover:bg-sand-100 border border-sand-200"
+                    }`}
                   >
-                    <option value="ollama">Ollama</option>
-                    <option value="openai_compatible">vLLM / OpenAI-kompatibel</option>
-                  </select>
+                    {label}
+                  </button>
+                );
+                return (
+                  <>
+                <div className="mt-4 flex flex-wrap items-center gap-1.5">
+                  {aiSubTabs.map((tab) => <TabBtn key={tab.key} k={tab.key} label={tab.label} />)}
+                  <span className="ml-auto text-[11px] text-sand-500">
+                    {aiEndpoints.length} Endpunkt{aiEndpoints.length === 1 ? "" : "e"} · Standard: {aiProviderLabel}
+                  </span>
                 </div>
-                <div>
-                  <label className="text-xs text-sand-500">Base URL</label>
-                  <input
-                    value={aiConnection.ai_base_url}
-                    onChange={(event) =>
-                      setAiConnection((prev) => ({ ...prev, ai_base_url: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder={aiBaseUrlPlaceholder}
-                  />
-                  <p className="mt-1 text-[11px] text-sand-400">
-                    Bei `vLLM` funktionieren URLs mit oder ohne `/v1`.
-                  </p>
-                </div>
-                {aiConnection.ai_provider === "openai_compatible" ? (
+
+                {aiSubTab === "endpoints" ? (
+                  <div className="mt-4 space-y-4">
+                    <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Standard-Endpunkt</p>
+                        <button
+                          type="button"
+                          onClick={() => testAiEndpoint("default")}
+                          className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] text-sand-700 hover:bg-sand-50"
+                        >
+                          Endpoint testen
+                        </button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {aiPresets.map((preset) => (
+                          <button
+                            key={preset.key}
+                            type="button"
+                            onClick={() => applyPreset(preset)}
+                            className="rounded-full border border-sand-200 bg-sand-50 px-2.5 py-1 text-[11px] text-sand-600 hover:bg-sand-100"
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div>
+                          <label className="text-xs text-sand-500">Provider</label>
+                          <select
+                            value={aiConnection.ai_provider}
+                            onChange={(event) =>
+                              setAiConnection((prev) => {
+                                const nextProvider = event.target.value;
+                                const currentBaseUrl = String(prev.ai_base_url || "").trim();
+                                const shouldReplaceBaseUrl =
+                                  !currentBaseUrl ||
+                                  currentBaseUrl === defaultAiConnection.ai_base_url ||
+                                  currentBaseUrl === "https://llm.example.tld/v1";
+                                return {
+                                  ...prev,
+                                  ai_provider: nextProvider,
+                                  ai_base_url: shouldReplaceBaseUrl
+                                    ? (nextProvider === "openai_compatible" ? "https://llm.example.tld/v1" : defaultAiConnection.ai_base_url)
+                                    : prev.ai_base_url
+                                };
+                              })
+                            }
+                            className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                          >
+                            <option value="ollama">Ollama</option>
+                            <option value="openai_compatible">OpenAI-kompatibel (OpenAI · Anthropic · vLLM · Azure)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs text-sand-500">Base URL</label>
+                          <input
+                            value={aiConnection.ai_base_url}
+                            onChange={(event) =>
+                              setAiConnection((prev) => ({ ...prev, ai_base_url: event.target.value }))
+                            }
+                            className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                            placeholder={aiBaseUrlPlaceholder}
+                          />
+                        </div>
+                        {aiConnection.ai_provider === "openai_compatible" ? (
+                          <div>
+                            <label className="text-xs text-sand-500">API Key</label>
+                            <input
+                              type="password"
+                              value={aiConnection.ai_api_key}
+                              onChange={(event) =>
+                                setAiConnection((prev) => ({ ...prev, ai_api_key: event.target.value }))
+                              }
+                              className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                              placeholder={aiConnection.has_ai_api_key ? "✓ Gespeichert" : "sk-…"}
+                            />
+                          </div>
+                        ) : (
+                          <div className="rounded-xl border border-dashed border-sand-200 bg-sand-50 px-3 py-2 text-[11px] text-sand-500 self-end">
+                            Ollama benötigt keinen API Key.
+                          </div>
+                        )}
+                        <div>
+                          <label className="text-xs text-sand-500">Standard/Fallback Modell</label>
+                          <input
+                            list={aiKnownModels.length ? aiModelDatalistId : undefined}
+                            value={aiConnection.ai_default_model}
+                            onChange={(event) =>
+                              setAiConnection((prev) => ({ ...prev, ai_default_model: event.target.value }))
+                            }
+                            className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                            placeholder="leer = automatisch erstes Provider-Modell"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Zusätzliche Endpunkte</p>
+                          <p className="mt-0.5 text-[11px] text-sand-500">Mehrere Endpoints parallel betreiben und einzelnen Bereichen zuordnen.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={addAiEndpoint}
+                          className="rounded-full border border-sand-900 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90"
+                        >
+                          + Endpoint
+                        </button>
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {aiEndpoints.filter((e) => e.id !== "default").map((endpoint) => (
+                          <div key={endpoint.id} className="rounded-xl border border-sand-200 bg-sand-50/40 p-3">
+                            <div className="grid grid-cols-1 gap-2 lg:grid-cols-[1.1fr_0.9fr_1.4fr_1fr]">
+                              <input
+                                value={endpoint.name}
+                                onChange={(event) => updateAiEndpoint(endpoint.id, { name: event.target.value })}
+                                className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                                placeholder="Name"
+                              />
+                              <select
+                                value={endpoint.provider}
+                                onChange={(event) => updateAiEndpoint(endpoint.id, { provider: event.target.value })}
+                                className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                              >
+                                <option value="ollama">Ollama</option>
+                                <option value="openai_compatible">OpenAI-kompatibel</option>
+                              </select>
+                              <input
+                                value={endpoint.base_url}
+                                onChange={(event) => updateAiEndpoint(endpoint.id, { base_url: event.target.value })}
+                                className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                                placeholder="Base URL"
+                              />
+                              <input
+                                value={endpoint.default_model}
+                                onChange={(event) => updateAiEndpoint(endpoint.id, { default_model: event.target.value })}
+                                className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                                placeholder="Standard/Fallback Modell"
+                              />
+                            </div>
+                            <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[1fr_auto_auto]">
+                              <input
+                                type="password"
+                                value={endpoint.api_key || ""}
+                                onChange={(event) => updateAiEndpoint(endpoint.id, { api_key: event.target.value })}
+                                className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                                placeholder={endpoint.has_api_key ? "✓ API Key gespeichert" : "API Key (optional)"}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => testAiEndpoint(endpoint.id)}
+                                className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100"
+                              >
+                                Testen
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeAiEndpoint(endpoint.id)}
+                                className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11px] text-rose-700 hover:bg-rose-100"
+                              >
+                                Entfernen
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                        {aiEndpoints.filter((e) => e.id !== "default").length === 0 ? (
+                          <div className="rounded-xl border border-dashed border-sand-200 bg-white px-3 py-4 text-center text-[11px] text-sand-500">
+                            Keine zusätzlichen Endpunkte. Standard wird überall verwendet.
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {aiSubTab === "routing" ? (
+                  <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Zuordnung pro Bereich</p>
+                        <p className="mt-1 text-xs text-sand-500">
+                          Endpoint und Modell werden hier gemeinsam gepflegt. Leeres Modell = Standard/Fallback-Modell des gewählten Endpunkts.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                      onClick={() => testAiEndpoint(selectedAiEndpointId)}
+                        className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] text-sand-700 hover:bg-sand-50"
+                      >
+                        Gewählten Endpoint testen
+                      </button>
+                    </div>
+                    {aiKnownModels.length ? (
+                      <datalist id={aiModelDatalistId}>
+                        {aiKnownModels.map((modelName) => (
+                          <option key={modelName} value={modelName} />
+                        ))}
+                      </datalist>
+                    ) : null}
+                    <div className="mt-3 overflow-hidden rounded-2xl border border-sand-200">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-sand-50 text-sand-500">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">Bereich</th>
+                            <th className="px-3 py-2 font-medium">Endpoint</th>
+                            <th className="px-3 py-2 font-medium">Modell</th>
+                            <th className="px-3 py-2 font-medium">Test</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {aiPurposeKeys.map((purpose) => {
+                            const modelField = aiPurposeModelFields[purpose] || "";
+                            const routedEndpointId = aiConnection.ai_purpose_routes?.[purpose] || "default";
+                            return (
+                              <tr key={purpose} className="border-t border-sand-100">
+                                <td className="px-3 py-2 text-sm text-sand-700">{aiPurposeLabels[purpose] || purpose}</td>
+                                <td className="px-3 py-2">
+                                  <select
+                                    value={routedEndpointId}
+                                    onChange={(event) =>
+                                      setAiConnection((prev) => ({
+                                        ...prev,
+                                        ai_purpose_routes: {
+                                          ...(prev.ai_purpose_routes || {}),
+                                          [purpose]: event.target.value
+                                        }
+                                      }))
+                                    }
+                                    className="w-full rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-sm"
+                                  >
+                                    {aiEndpoints.map((endpoint) => (
+                                      <option key={endpoint.id} value={endpoint.id}>
+                                        {endpoint.name || endpoint.id}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </td>
+                                <td className="px-3 py-2">
+                                  <input
+                                    list={aiKnownModels.length ? aiModelDatalistId : undefined}
+                                    value={modelField ? (aiConnection[modelField] || "") : ""}
+                                    onChange={(event) =>
+                                      modelField &&
+                                      setAiConnection((prev) => ({
+                                        ...prev,
+                                        [modelField]: event.target.value
+                                      }))
+                                    }
+                                    className="w-full rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-sm"
+                                    placeholder="Fallback"
+                                  />
+                                </td>
+                                <td className="px-3 py-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => testAiEndpoint(routedEndpointId)}
+                                    className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] text-sand-700 hover:bg-sand-100"
+                                  >
+                                    Testen
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : null}
+
+                {aiConnectionModelsStatus === "loading" ? (
+                  <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-500">
+                    KI-Endpunkt wird getestet…
+                  </div>
+                ) : null}
+                {aiConnectionModelsStatus === "error" ? (
+                  <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    {aiConnectionModelsInfo.error || "KI-Test fehlgeschlagen."}
+                  </div>
+                ) : null}
+                {aiConnectionModelsStatus === "ready" && aiConnectionModelsInfo.responsePreview ? (
+                  <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                    Test ok: {aiConnectionModelsInfo.endpointName || "Endpoint"} · {aiConnectionModelsInfo.defaultModel || "Modell"} · {aiConnectionModelsInfo.durationMs || 0} ms · Antwort: {aiConnectionModelsInfo.responsePreview}
+                  </div>
+                ) : null}
+                {aiConnectionModelsStatus === "ready" && aiConnectionModels.length ? (() => {
+                  const fallbackEndpointId = aiConnectionModelsInfo.endpointId || selectedAiEndpointId || "default";
+                  const fallbackEndpoint = aiEndpoints.find((endpoint) => endpoint.id === fallbackEndpointId);
+                  const fallbackEndpointName =
+                    fallbackEndpointId === "default"
+                      ? "Standard-Endpunkt"
+                      : fallbackEndpoint?.name || aiConnectionModelsInfo.endpointName || fallbackEndpointId;
+                  const currentFallbackModel =
+                    fallbackEndpointId === "default"
+                      ? aiConnection.ai_default_model
+                      : String(fallbackEndpoint?.default_model || "");
+                  const testedModel = aiConnectionModelsInfo.defaultModel || aiConnectionModels[0] || "";
+                  return (
+                    <div className="mt-3 rounded-2xl border border-sand-200 bg-white p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Standard/Fallback Modell</p>
+                          <p className="mt-0.5 text-[11px] text-sand-500">
+                            {fallbackEndpointName}: wird verwendet, wenn in der Zuordnung kein eigenes Modell gesetzt ist.
+                          </p>
+                        </div>
+                        {testedModel ? (
+                          <button
+                            type="button"
+                            onClick={() => setAiEndpointFallbackModel(fallbackEndpointId, testedModel)}
+                            className="rounded-full border border-emerald-200 bg-emerald-600 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:bg-emerald-700"
+                          >
+                            Getestetes Modell als Fallback
+                          </button>
+                        ) : null}
+                      </div>
+                      <select
+                        value={currentFallbackModel || ""}
+                        onChange={(event) => setAiEndpointFallbackModel(fallbackEndpointId, event.target.value)}
+                        className="mt-3 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="">Automatisch: erstes Provider-Modell</option>
+                        {aiConnectionModels.map((modelName) => (
+                          <option key={modelName} value={modelName}>
+                            {modelName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })() : null}
+
+                {aiSubTab === "models" ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Provider-Modelle</p>
+                          <p className="mt-0.5 text-[11px] text-sand-500">
+                            {selectedAiEndpoint?.name || "Standard"} · {selectedAiEndpoint?.provider || aiConnection.ai_provider}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => loadAiProviderModels()}
+                          className="rounded-full border border-sand-900 bg-sand-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90"
+                        >
+                          Modelle abfragen
+                        </button>
+                      </div>
+                      {aiConnectionModelsStatus === "loading" ? (
+                        <p className="mt-3 text-xs text-sand-500">Lade Modellliste…</p>
+                      ) : null}
+                      {aiConnectionModelsStatus === "error" ? (
+                        <p className="mt-3 text-xs text-rose-600">{aiConnectionModelsInfo.error || "Modellliste konnte nicht geladen werden."}</p>
+                      ) : null}
+                      {aiConnectionModelsStatus === "ready" ? (
+                        aiConnectionModels.length ? (
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            {aiConnectionModels.map((modelName) => (
+                              <button
+                                key={modelName}
+                                type="button"
+                                onClick={() => {
+                                  setAiConnection((prev) => ({ ...prev, ai_default_model: modelName }));
+                                  setAiModelDraft(modelName);
+                                }}
+                                className={`rounded-full border px-2.5 py-1 text-[11px] transition ${
+                                  aiConnection.ai_default_model === modelName
+                                    ? "border-emerald-500 bg-emerald-500 text-white"
+                                    : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                }`}
+                                title="Klick setzt dieses Modell als Default."
+                              >
+                                {modelName}
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-xs text-sand-500">Keine Modelle zurückgegeben.</p>
+                        )
+                      ) : null}
+                    </div>
+
+                    {(selectedAiEndpoint?.provider || aiConnection.ai_provider) === "ollama" ? (
+                      <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                        <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Ollama-Modellverwaltung</p>
+                        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                          <input
+                            list={aiKnownModels.length ? aiModelDatalistId : undefined}
+                            value={aiModelDraft}
+                            onChange={(event) => setAiModelDraft(event.target.value)}
+                            className="rounded-xl border border-sand-200 px-3 py-2 text-sm"
+                            placeholder="z. B. qwen2.5:32b-instruct-q4_K_M"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => manageAiProviderModel("pull")}
+                            className="rounded-full border border-emerald-200 bg-emerald-600 px-3 py-2 text-[11px] uppercase tracking-wide text-white hover:bg-emerald-700"
+                          >
+                            Laden
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => manageAiProviderModel("delete")}
+                            className="rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                          >
+                            Löschen
+                          </button>
+                        </div>
+                        {aiModelManageStatus === "loading" ? (
+                          <p className="mt-2 text-xs text-sand-500">Ollama verarbeitet…</p>
+                        ) : null}
+                        {aiModelManageMessage ? (
+                          <p className={`mt-2 text-xs ${aiModelManageStatus === "error" ? "text-rose-600" : "text-emerald-700"}`}>
+                            {aiModelManageMessage}
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-sand-200 bg-sand-50 p-4 text-xs text-sand-500">
+                        OpenAI-kompatible Endpunkte erlauben nur Modellabfrage – Pull/Delete erfolgt am Server.
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                {aiSubTab === "overrides" ? (
+                  <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">
+                    <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Modell-Overrides</p>
+                    <p className="mt-0.5 text-[11px] text-sand-500">Leer = Default-Modell verwenden.</p>
+                    {aiKnownModels.length ? (
+                      <datalist id={aiModelDatalistId}>
+                        {aiKnownModels.map((modelName) => (
+                          <option key={modelName} value={modelName} />
+                        ))}
+                      </datalist>
+                    ) : null}
+                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                      {[
+                        ["ai_internal_model", "Interne Tools"],
+                        ["ai_action_model", "Kundenbericht / Action"],
+                        ["ai_task_model", "Aufgabenentwurf"],
+                        ["ai_customer_ranking_model", "Kundenranking"],
+                        ["ai_customer_development_model", "Kundenentwicklung"],
+                        ["ai_offer_model", "Angebot / Textentwurf"],
+                        ["ai_invoice_model", "Rechnungszusammenfassung"]
+                      ].map(([key, label]) => (
+                        <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-sand-200 bg-sand-50/40 px-3 py-2">
+                          <span className="text-xs text-sand-600">{label}</span>
+                          <input
+                            list={aiKnownModels.length ? aiModelDatalistId : undefined}
+                            value={aiConnection[key] || ""}
+                            onChange={(event) => setAiConnection((prev) => ({ ...prev, [key]: event.target.value }))}
+                            className="min-w-[180px] flex-1 rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-sm"
+                            placeholder="Default"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                  </>
+                );
+              })()}
+
+              <div className="mt-5 hidden rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <label className="text-xs text-sand-500">API Key</label>
-                    <input
-                      type="password"
-                      value={aiConnection.ai_api_key}
-                      onChange={(event) =>
-                        setAiConnection((prev) => ({ ...prev, ai_api_key: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                      placeholder={aiConnection.has_ai_api_key ? "Gespeichert" : "••••••••"}
-                    />
+                    <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">KI Endpunkte</p>
+                    <p className="mt-1 text-xs text-sand-500">
+                      Der Standard-Endpunkt bleibt aus Kompatibilitaet bestehen. Weitere Endpunkte koennen einzelnen Bereichen zugeordnet werden.
+                    </p>
                   </div>
-                ) : (
-                  <div className="rounded-2xl border border-sand-200 bg-sand-50 px-4 py-3 text-xs text-sand-500">
-                    Ollama verwendet hier keinen API Key.
-                  </div>
-                )}
-                <div>
-                  <label className="text-xs text-sand-500">Default Modell</label>
-                  <input
-                    list={aiKnownModels.length ? aiModelDatalistId : undefined}
-                    value={aiConnection.ai_default_model}
-                    onChange={(event) =>
-                      setAiConnection((prev) => ({ ...prev, ai_default_model: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-2xl border border-sand-200 px-4 py-2"
-                    placeholder="z. B. qwen3:8b oder meta-llama/Llama-3.1-8B-Instruct"
-                  />
+                  <button
+                    type="button"
+                    onClick={addAiEndpoint}
+                    className="rounded-full border border-sand-200 bg-white px-3 py-2 text-[11px] uppercase tracking-wide text-sand-700 hover:bg-sand-100"
+                  >
+                    Endpoint hinzufügen
+                  </button>
+                </div>
+                <div className="mt-4 space-y-3">
+                  {aiEndpoints.map((endpoint) => (
+                    <div key={endpoint.id} className="rounded-2xl border border-sand-200 bg-white p-3">
+                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_0.9fr_1.4fr_1fr]">
+                        <div>
+                          <label className="text-xs text-sand-500">Name</label>
+                          <input
+                            value={endpoint.name}
+                            disabled={endpoint.id === "default"}
+                            onChange={(event) => updateAiEndpoint(endpoint.id, { name: event.target.value })}
+                            className="mt-1 w-full rounded-2xl border border-sand-200 px-3 py-2 text-sm disabled:bg-sand-50"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-sand-500">Typ</label>
+                          <select
+                            value={endpoint.provider}
+                            disabled={endpoint.id === "default"}
+                            onChange={(event) => updateAiEndpoint(endpoint.id, { provider: event.target.value })}
+                            className="mt-1 w-full rounded-2xl border border-sand-200 px-3 py-2 text-sm disabled:bg-sand-50"
+                          >
+                            <option value="ollama">Ollama</option>
+                            <option value="openai_compatible">OpenAI-kompatibel</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-xs text-sand-500">Base URL</label>
+                          <input
+                            value={endpoint.base_url}
+                            disabled={endpoint.id === "default"}
+                            onChange={(event) => updateAiEndpoint(endpoint.id, { base_url: event.target.value })}
+                            className="mt-1 w-full rounded-2xl border border-sand-200 px-3 py-2 text-sm disabled:bg-sand-50"
+                            placeholder="https://api.openai.com/v1 oder http://llama:8080/v1"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-xs text-sand-500">Default Modell</label>
+                          <input
+                            value={endpoint.default_model}
+                            disabled={endpoint.id === "default"}
+                            onChange={(event) => updateAiEndpoint(endpoint.id, { default_model: event.target.value })}
+                            className="mt-1 w-full rounded-2xl border border-sand-200 px-3 py-2 text-sm disabled:bg-sand-50"
+                            placeholder="gpt-4.1-mini, llama..."
+                          />
+                        </div>
+                      </div>
+                      {endpoint.id !== "default" ? (
+                        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_auto_auto]">
+                          <input
+                            type="password"
+                            value={endpoint.api_key || ""}
+                            onChange={(event) => updateAiEndpoint(endpoint.id, { api_key: event.target.value })}
+                            className="rounded-2xl border border-sand-200 px-3 py-2 text-sm"
+                            placeholder={endpoint.has_api_key ? "API Key gespeichert" : "API Key optional"}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setSelectedAiEndpointId(endpoint.id)}
+                            className={`rounded-full border px-3 py-2 text-[11px] uppercase tracking-wide ${
+                              selectedAiEndpointId === endpoint.id
+                                ? "border-sand-900 bg-sand-900 text-white"
+                                : "border-sand-200 bg-white text-sand-700 hover:bg-sand-100"
+                            }`}
+                          >
+                            Für Modelltest
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeAiEndpoint(endpoint.id)}
+                            className="rounded-full border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-100"
+                          >
+                            Entfernen
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-sand-500">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedAiEndpointId("default")}
+                            className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
+                              selectedAiEndpointId === "default"
+                                ? "border-sand-900 bg-sand-900 text-white"
+                                : "border-sand-200 bg-white text-sand-700 hover:bg-sand-100"
+                            }`}
+                          >
+                            Für Modelltest
+                          </button>
+                          Bearbeitung erfolgt oben in der Standard-Konfiguration.
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <div className="mt-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+              <div className="mt-5 hidden rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">Zuordnung pro Bereich</p>
+                <p className="mt-1 text-xs text-sand-500">
+                  Hier wird festgelegt, welcher Endpoint fuer Newsletter, Angebote, Meta-Hub und andere KI-Funktionen genutzt wird.
+                </p>
+                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {aiPurposeKeys.map((purpose) => (
+                    <label key={purpose} className="block">
+                      <span className="text-xs text-sand-500">{aiPurposeLabels[purpose] || purpose}</span>
+                      <select
+                        value={aiConnection.ai_purpose_routes?.[purpose] || "default"}
+                        onChange={(event) =>
+                          setAiConnection((prev) => ({
+                            ...prev,
+                            ai_purpose_routes: {
+                              ...(prev.ai_purpose_routes || {}),
+                              [purpose]: event.target.value
+                            }
+                          }))
+                        }
+                        className="mt-1 w-full rounded-2xl border border-sand-200 px-3 py-2 text-sm"
+                      >
+                        {aiEndpoints.map((endpoint) => (
+                          <option key={endpoint.id} value={endpoint.id}>
+                            {endpoint.name || endpoint.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-5 hidden rounded-2xl border border-sand-200 bg-sand-50 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">Provider-Modelle</p>
@@ -3829,7 +5244,8 @@ export default function SettingsView() {
                 </div>
                 <div className="mt-3 rounded-2xl border border-sand-200 bg-white p-3">
                   <div className="flex flex-wrap gap-3 text-[11px] text-sand-500">
-                    <span>Provider: {aiConnectionModelsInfo.provider || aiProviderLabel}</span>
+                    <span>Endpoint: {aiConnectionModelsInfo.endpointName || selectedAiEndpoint?.name || "Standard"}</span>
+                    <span>Provider: {aiConnectionModelsInfo.provider || selectedAiEndpoint?.provider || aiProviderLabel}</span>
                     <span>URL: {aiConnectionModelsInfo.baseUrl || aiConnection.ai_base_url || "n/a"}</span>
                     <span>Default: {aiConnectionModelsInfo.defaultModel || aiConnection.ai_default_model || "n/a"}</span>
                   </div>
@@ -3871,9 +5287,9 @@ export default function SettingsView() {
                 </div>
               </div>
 
-              <div className="mt-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+              <div className="mt-5 hidden rounded-2xl border border-sand-200 bg-sand-50 p-4">
                 <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">Modellverwaltung</p>
-                {aiConnection.ai_provider === "ollama" ? (
+                {(selectedAiEndpoint?.provider || aiConnection.ai_provider) === "ollama" ? (
                   <>
                     <p className="mt-1 text-xs text-sand-500">
                       Direkt aus dem Settings-Panel Ollama-Modelle nachladen oder loeschen.
@@ -3921,7 +5337,7 @@ export default function SettingsView() {
                 )}
               </div>
 
-              <div className="mt-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+              <div className="mt-5 hidden rounded-2xl border border-sand-200 bg-sand-50 p-4">
                 <p className="text-[11px] uppercase tracking-[0.25em] text-sand-500">Modell-Overrides</p>
                 <p className="mt-1 text-xs text-sand-500">
                   Leer lassen = Default Modell verwenden. Nach `Modelle abfragen` werden die Provider-Modelle direkt als Auswahlvorschläge angeboten.
@@ -4570,6 +5986,16 @@ export default function SettingsView() {
                     }
                   />
                   E-Mail Quelle im Meta-Hub aktivieren
+                </label>
+                <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-xs text-sand-700">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(metaHub.sevdesk_enabled)}
+                    onChange={(event) =>
+                      setMetaHub((prev) => ({ ...prev, sevdesk_enabled: event.target.checked }))
+                    }
+                  />
+                  sevDesk Quelle im Meta-Hub aktivieren
                 </label>
                 <div>
                   <label className="text-xs text-sand-500">RMM Kundennummer-Feldname</label>
@@ -5986,6 +7412,7 @@ export default function SettingsView() {
           ) : null}
         </div>
       </main>
+      </div>
       {contractTemplateCreateOpen ? (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-sand-900/50 px-4 py-6">
           <div className="w-full max-w-3xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">

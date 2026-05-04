@@ -4,6 +4,7 @@ import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import Underline from "@tiptap/extension-underline";
 import { Bold, Italic, Link2, List, ListOrdered, Underline as UnderlineIcon } from "lucide-react";
+import AiTextAssistToolbar from "./AiTextAssistToolbar";
 
 const toolbarButtonClass =
   "inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1 text-sand-600 hover:bg-sand-50";
@@ -21,7 +22,10 @@ export default function RichTextEditor({
   placeholder = "",
   minHeight = "120px",
   disabled = false,
-  showToolbar = true
+  showToolbar = true,
+  enableAi = true,
+  aiModule = "notes",
+  aiContext = {}
 }) {
   const [isEmpty, setIsEmpty] = useState(true);
   const lastValueRef = useRef("");
@@ -69,10 +73,31 @@ export default function RichTextEditor({
     editor.chain().focus().extendMarkRange("link").setLink({ href: normalized }).run();
   };
 
+  const applyAiText = (html) => {
+    const next = normalizeHtml(html);
+    lastValueRef.current = next;
+    onChange?.(next);
+    if (editor) {
+      editor.commands.setContent(next || "", false);
+      setIsEmpty(editor.isEmpty);
+    }
+  };
+
   return (
     <div className="space-y-2">
       {showToolbar ? (
         <div className="flex flex-wrap items-center gap-1">
+          {enableAi ? (
+            <AiTextAssistToolbar
+              value={editor?.getHTML?.() || value}
+              onApply={applyAiText}
+              module={aiModule}
+              context={aiContext}
+              format="html"
+              disabled={disabled}
+              className="mr-1"
+            />
+          ) : null}
           <button
             type="button"
             onClick={() => editor?.chain().focus().toggleBold().run()}

@@ -269,6 +269,8 @@ export default function NewsletterView() {
   const [isRssLoading, setIsRssLoading] = useState(false);
   const [isRssSaving, setIsRssSaving] = useState(false);
   const [isRssGenerating, setIsRssGenerating] = useState(false);
+  const [rawNewsletterText, setRawNewsletterText] = useState("");
+  const [isRawGenerating, setIsRawGenerating] = useState(false);
   const [aiTone, setAiTone] = useState("sachlich");
   const [newsletterTab, setNewsletterTab] = useState("draft");
   const [previewVisible, setPreviewVisible] = useState(true);
@@ -910,6 +912,37 @@ export default function NewsletterView() {
     }
   };
 
+  const generateFromRawText = async () => {
+    const rawText = rawNewsletterText.trim();
+    if (rawText.length < 20) {
+      setToast("Bitte Rohtext mit mindestens 20 Zeichen eingeben.");
+      return;
+    }
+    setIsRawGenerating(true);
+    try {
+      const res = await fetch("/api/newsletter_generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ raw_text: rawText, generate_subject: true })
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.html) {
+        throw new Error(typeof data?.detail === "string" ? data.detail : `status_${res.status}`);
+      }
+      const htmlBody = sanitizeHtml(String(data.html || "").trim());
+      setDraft((prev) => ({
+        ...prev,
+        subject: prev.subject || data.subject || "",
+        content: htmlBody
+      }));
+      setToast("KI-Newsletter aus Rohtext übernommen.");
+    } catch (error) {
+      setToast(`Newsletter-KI konnte nicht erstellt werden.${error?.message ? ` (${error.message})` : ""}`);
+    } finally {
+      setIsRawGenerating(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-sand-50 text-sand-900">
       {toast ? (
@@ -1334,6 +1367,35 @@ export default function NewsletterView() {
         {newsletterTab === "draft" ? (
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_420px]">
             <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
+              <div className="mb-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-sand-500">KI aus Rohtext</p>
+                    <h2 className="mt-1 text-sm font-semibold text-sand-900">Quansatech-Newsletter erzeugen</h2>
+                    <p className="mt-1 max-w-2xl text-xs leading-relaxed text-sand-500">
+                      Die KI erstellt nur den HTML-Body im Quansatech-Stil. Header, Footer und Versandlayout ergänzt das Dashboard.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={generateFromRawText}
+                    disabled={isRawGenerating || rawNewsletterText.trim().length < 20}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Sparkles size={13} /> {isRawGenerating ? "Generiert…" : "HTML-Body erzeugen"}
+                  </button>
+                </div>
+                <textarea
+                  value={rawNewsletterText}
+                  onChange={(event) => setRawNewsletterText(event.target.value)}
+                  rows={6}
+                  className="mt-3 w-full rounded-xl border border-sand-200 bg-white px-4 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  placeholder="Rohtext einfügen, z. B. Hinweis zu Update, Sicherheitsprüfung, Wartung oder geplanter Umstellung. Die KI formuliert daraus eine kurze Kundeninformation."
+                />
+                <p className="mt-2 text-[11px] text-sand-400">
+                  Der erzeugte HTML-Body ersetzt den aktuellen Inhalt im Entwurf. Ein Betreff wird nur gesetzt, wenn das Feld noch leer ist.
+                </p>
+              </div>
               <label className="block">
                 <span className="text-[10px] uppercase tracking-[0.24em] text-sand-500">Betreff</span>
                 <input
@@ -1351,6 +1413,11 @@ export default function NewsletterView() {
                   minHeight="480px"
                   placeholder="Newsletter hier formatieren oder direkt als HTML einfügen."
                   allowHtmlSource
+                  aiModule="newsletter"
+                  aiContext={{
+                    topic: draft.subject,
+                    module: "Newsletter"
+                  }}
                 />
                 <p className="mt-2 text-[11px] text-sand-400">
                   HTML wird direkt gespeichert. Im HTML-Modus kannst du Inhalte aus ChatGPT direkt einfügen.

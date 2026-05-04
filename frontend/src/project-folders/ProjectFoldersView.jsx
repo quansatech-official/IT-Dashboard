@@ -23,6 +23,7 @@ import {
   RotateCcw,
   ShieldAlert,
   Sparkles,
+  Star,
   StickyNote,
   Trash2,
   TrendingUp,
@@ -31,77 +32,60 @@ import {
   X,
   Zap
 } from "lucide-react";
-
-const API = "/api";
-
-const api = {
-  listFolders: () => fetch(`${API}/project_folders`).then((r) => r.json()),
-  getFolder: (id) => fetch(`${API}/project_folders/${id}`).then((r) => r.json()),
-  createFolder: (payload) =>
-    fetch(`${API}/project_folders`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.detail || "Projektmappe konnte nicht erstellt werden.");
-      return data;
-    }),
-  updateFolder: (id, payload) =>
-    fetch(`${API}/project_folders/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.detail || "Projektmappe konnte nicht gespeichert werden.");
-      return data;
-    }),
-  deleteFolder: (id) =>
-    fetch(`${API}/project_folders/${id}`, { method: "DELETE" }).then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.detail || "Projektmappe konnte nicht gelöscht werden.");
-      return data;
-    }),
-  bootstrap: (payload) =>
-    fetch(`${API}/project_folders/bootstrap`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.detail || "Vorschau konnte nicht erzeugt werden.");
-      return data;
-    }),
-  aiAssist: (payload) =>
-    fetch(`${API}/project_folders/ai_assist`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.detail || "KI-Aktion fehlgeschlagen.");
-      return data;
-    }),
-  catalog: () => fetch(`${API}/project_folder_catalog`).then((r) => r.json()),
-  updateCatalog: (payload) =>
-    fetch(`${API}/project_folder_catalog`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data?.detail || "Bausteinkatalog konnte nicht gespeichert werden.");
-      return data;
-    }),
-  customers: () => fetch(`${API}/customers`).then((r) => r.json()),
-  employees: () => fetch(`${API}/employees`).then((r) => r.json())
-};
+import { projectFoldersApi as api } from "./projectFoldersApi";
+import {
+  buildProjectExcelHtml,
+  buildProjectHtml,
+  buildProjectMarkdown,
+  buildProjectOperationalMatrixHtml,
+  buildProjectOperationalPlanHtml,
+  downloadBlob,
+  getProjectExportBaseName
+} from "./projectFolderExport";
 
 const inputClass =
   "w-full rounded-xl border border-sand-200 bg-white/80 px-3 py-2 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100";
 const textareaClass = `${inputClass} min-h-[88px] resize-y`;
 const selectClass = `${inputClass} appearance-none`;
+const CUSTOM_EXPORT_PROFILES_KEY = "qt_project_folder_custom_export_profiles";
+const PROJECT_ESTIMATES_CACHE_KEY = "qt_project_folder_estimates";
+
+const hashText = (value) => {
+  let hash = 2166136261;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const getProjectTaskSignature = (folder) => {
+  const backendSignature = String(folder?.summary?.task_signature || "").trim();
+  if (backendSignature) return backendSignature;
+  const streams = Array.isArray(folder?.content?.streams) ? folder.content.streams : [];
+  if (!streams.length) {
+    const taskCount = Number(folder?.summary?.task_count || 0);
+    return taskCount ? `count:${taskCount}` : "";
+  }
+  const payload = streams.map((stream) => ({
+    streamId: String(stream?.id || ""),
+    streamTitle: String(stream?.title || "").trim(),
+    tasks: (Array.isArray(stream?.tasks) ? stream.tasks : []).map((task) => ({
+      id: String(task?.id || ""),
+      title: String(task?.title || "").trim(),
+      status: String(task?.status || "").trim(),
+      owner: String(task?.owner || "").trim(),
+      dueDate: String(task?.due_date || "").trim(),
+      note: String(task?.note || "").trim(),
+      depth: String(task?.depth || ""),
+      ruleValue: String(task?.rule_value || "").trim(),
+      customValue: String(task?.custom_value || "").trim(),
+      costValue: String(task?.cost_value || "").trim()
+    }))
+  }));
+  return hashText(JSON.stringify(payload));
+};
 
 const statusMeta = {
   red: { label: "Kritisch", badge: "bg-rose-100 text-rose-700 border-rose-200", dot: "bg-rose-500" },
@@ -124,17 +108,61 @@ const creationModes = [
   { key: "template", label: "Vorlage verwenden", text: "Fertige Sammlung mehrerer Bausteine." }
 ];
 
+const exportFormatOptions = [
+  { key: "pdf", label: "PDF", text: "Gestalteter Bericht", icon: Download },
+  { key: "word", label: "Word", text: "Bearbeitbare Datei", icon: FileText },
+  { key: "excel", label: "Excel", text: "Tabellarische Liste", icon: ListChecks },
+  { key: "html", label: "HTML", text: "Browseransicht", icon: FileText },
+  { key: "md", label: "Markdown", text: "Technische Notiz", icon: StickyNote },
+  { key: "json", label: "JSON", text: "Rohdaten", icon: Archive }
+];
+
+const exportOptionGroups = [
+  {
+    title: "Ausgabe",
+    items: [
+      ["operations_layout", "Einsatzplan", "Deckblatt, Ablaufplan und Matrix"],
+      ["customer_view", "Kundenansicht", "Interne Inhalte ausblenden"],
+      ["internal_view", "Interne Ansicht", "Vollständige Arbeitsfassung"]
+    ]
+  },
+  {
+    title: "Inhalte",
+    items: [
+      ["include_tasks", "Aufgaben", "Status und Termine"],
+      ["include_checklists", "Checklisten", "Kontrollpunkte"],
+      ["include_risks", "Risiken", "Offene Risiken"],
+      ["include_internal_notes", "Interne Notizen", "Nur intern sichtbar"]
+    ]
+  },
+  {
+    title: "Planung",
+    items: [
+      ["include_gantt", "Gantt-Zeitplan", "Projektzeitplan"],
+      ["include_offer_positions", "Angebotspositionen", "Optionaler kaufmännischer Teil"]
+    ]
+  }
+];
+
 const projectFolderTagOptions = {
-  intern: { label: "Intern", className: "border-slate-200 bg-slate-100 text-slate-700" },
-  kundenprojekt: { label: "Kundenprojekt", className: "border-sky-200 bg-sky-50 text-sky-700" },
-  wartung: { label: "Wartung", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
-  vorverkauf: { label: "Vorverkauf", className: "border-amber-200 bg-amber-50 text-amber-700" },
-  sonstiges: { label: "Sonstiges", className: "border-violet-200 bg-violet-50 text-violet-700" }
+  intern: { label: "Intern", className: "border-slate-200 bg-slate-100 text-slate-700", dot: "bg-slate-500" },
+  kundenprojekt: { label: "Kundenprojekt", className: "border-sky-200 bg-sky-50 text-sky-700", dot: "bg-sky-500" },
+  wartung: { label: "Wartung", className: "border-emerald-200 bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" },
+  vorverkauf: { label: "Vorverkauf", className: "border-amber-200 bg-amber-50 text-amber-700", dot: "bg-amber-500" },
+  sonstiges: { label: "Sonstiges", className: "border-violet-200 bg-violet-50 text-violet-700", dot: "bg-violet-500" }
 };
 const projectFolderTagOrder = ["kundenprojekt", "intern", "wartung", "vorverkauf", "sonstiges"];
 const getProjectFolderTagMeta = (value) => {
   const key = String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
-  return projectFolderTagOptions[key] || { label: "Ohne Kennzeichen", className: "border-sand-200 bg-sand-50 text-sand-600" };
+  return projectFolderTagOptions[key] || { label: "Ohne Kennzeichen", className: "border-sand-200 bg-sand-50 text-sand-600", dot: "bg-sand-400" };
+};
+
+const projectHealthToneClass = {
+  rose: "border-rose-200 bg-rose-50 text-rose-800",
+  amber: "border-amber-200 bg-amber-50 text-amber-800",
+  sky: "border-sky-200 bg-sky-50 text-sky-800",
+  emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  sand: "border-sand-200 bg-sand-50 text-sand-800"
 };
 
 const aiActions = [
@@ -184,6 +212,21 @@ const blankStream = (owner = "") => ({
 });
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
+
+const loadCustomExportProfiles = () => {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(CUSTOM_EXPORT_PROFILES_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveCustomExportProfiles = (profiles) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(CUSTOM_EXPORT_PROFILES_KEY, JSON.stringify(profiles));
+};
 
 const formatDateTime = (value) => {
   const date = new Date(Number(value || 0));
@@ -269,24 +312,6 @@ const getIsoWeek = (date) => {
 
 const diffDays = (start, end) => Math.round((end.getTime() - start.getTime()) / 86400000);
 
-const downloadBlob = (blob, filename) => {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
-
-const escapeHtml = (value) =>
-  String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
 const isFolderArchived = (folder) => Boolean(folder?.archived || folder?.content?.archive?.is_archived);
 const getFolderArchivedAt = (folder) => Number(folder?.archived_at || folder?.content?.archive?.archived_at || 0);
 const getFolderInvoices = (folder) => (Array.isArray(folder?.content?.invoices) ? folder.content.invoices : []);
@@ -299,23 +324,96 @@ const getInvoiceCandidates = (folder) =>
       streamId: stream.id,
       streamTitle: stream.title || "Baustein",
       suggestedText: String(task.invoice_text || task.title || "Aufgabe").trim(),
-      invoicedAt: Number(task?.invoiced_at || 0)
+      invoicedAt: Number(task?.invoiced_at || 0),
+      defaultHours: Number(task?.estimate_hours || task?.hours || 1) || 1
     }))
   );
 
+const formatEur = (value) =>
+  new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(
+    Number.isFinite(value) ? value : 0
+  );
+
 function Modal({ title, children, onClose, width = "max-w-5xl" }) {
+  useEffect(() => {
+    const handler = (event) => {
+      if (event.key === "Escape") onClose?.();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-sm px-4 py-8 overflow-y-auto">
-      <div className={`mx-auto w-full ${width} rounded-[28px] border border-white/60 bg-[#f7fafc] shadow-soft`}>
-        <div className="flex items-center justify-between border-b border-sand-200 px-6 py-4">
-          <h3 className="font-display text-2xl text-sand-900">{title}</h3>
-          <button onClick={onClose} className="rounded-full border border-sand-200 p-2 text-sand-600 hover:bg-white">
-            <X size={16} />
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/50 px-4 py-8 backdrop-blur-sm">
+      <div className={`mx-auto w-full ${width} overflow-hidden rounded-[28px] border border-white/60 bg-[#f5f2eb] shadow-[0_24px_64px_rgba(0,0,0,0.22)]`}>
+        <div className="flex items-center justify-between border-b border-sand-200/70 bg-white/80 px-6 py-4 backdrop-blur-sm">
+          <h3 className="font-display text-xl text-sand-900">{title}</h3>
+          <button
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-sand-200 bg-white text-sand-500 transition hover:bg-sand-50 hover:text-sand-900"
+          >
+            <X size={15} />
           </button>
         </div>
         <div className="p-6">{children}</div>
       </div>
     </div>
+  );
+}
+
+function InlineSection({ children }) {
+  return (
+    <section className="rounded-[22px] border border-sand-200 bg-white/90 p-5 shadow-soft">
+      {children}
+    </section>
+  );
+}
+
+function ModalHint({ children }) {
+  return (
+    <div className="flex items-start gap-2.5 rounded-[16px] border border-sand-200 bg-white/70 px-4 py-3 text-sm text-sand-600">
+      <span className="mt-0.5 shrink-0 text-sand-400">ⓘ</span>
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function ModalActions({ children }) {
+  return <div className="flex flex-wrap items-center justify-end gap-2">{children}</div>;
+}
+
+function BtnPrimary({ children, onClick, disabled, icon: Icon }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-40">
+      {Icon ? <Icon size={15} /> : null}{children}
+    </button>
+  );
+}
+
+function BtnSecondary({ children, onClick, disabled, icon: Icon }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      className="inline-flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-4 py-2.5 text-sm text-sand-800 transition hover:bg-sand-50 disabled:opacity-40">
+      {Icon ? <Icon size={15} /> : null}{children}
+    </button>
+  );
+}
+
+function BtnAi({ children, onClick, disabled, icon: Icon }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      className="inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:opacity-40">
+      {Icon ? <Icon size={15} /> : null}{children}
+    </button>
+  );
+}
+
+function BtnDanger({ children, onClick, disabled, icon: Icon }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-700 transition hover:bg-rose-100 disabled:opacity-40">
+      {Icon ? <Icon size={15} /> : null}{children}
+    </button>
   );
 }
 
@@ -498,6 +596,74 @@ const getPrimaryGap = (stream) => {
     .find((item) => !item?.done && String(item?.title || "").trim());
   if (openChecklist?.title) return `Fehlt noch: ${openChecklist.title}`;
   return "Baustein ist rund.";
+};
+
+const getTaskStatusKey = (task) => String(task?.status || "open").trim().toLowerCase() || "open";
+
+const getProjectHealthInsights = ({ streams = [], projectDeadline = null, projectDeadlineRaw = "" }) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tasks = streams.flatMap((stream) =>
+    (Array.isArray(stream?.tasks) ? stream.tasks : []).map((task) => {
+      const due = parseDateInput(task?.due_date);
+      return {
+        ...task,
+        streamId: stream?.id || "",
+        streamTitle: stream?.title || "Baustein",
+        statusKey: getTaskStatusKey(task),
+        due,
+        dueDiff: due ? diffDays(today, due) : null
+      };
+    })
+  );
+  const openTasks = tasks.filter((task) => task.statusKey !== "done");
+  const overdueTasks = openTasks.filter((task) => task.due && task.due.getTime() < today.getTime());
+  const soonTasks = openTasks
+    .filter((task) => task.dueDiff !== null && task.dueDiff >= 0 && task.dueDiff <= 7)
+    .sort((a, b) => a.due.getTime() - b.due.getTime());
+  const blockedStreams = streams.filter((stream) => getWorkflowStatus(stream) === "blocked" || (stream?.blockers || []).length > 0);
+  const feedbackStreams = streams.filter((stream) => getWorkflowStatus(stream) === "feedback");
+  const ownerlessStreams = streams.filter((stream) => !(stream?.owner || "").trim());
+  const deadlineDiff = projectDeadline ? diffDays(today, projectDeadline) : null;
+  const reasons = [];
+
+  if (blockedStreams.length) reasons.push({ tone: "rose", text: `${blockedStreams.length} Baustein(e) blockiert`, streamId: blockedStreams[0]?.id || "" });
+  if (overdueTasks.length) reasons.push({ tone: "rose", text: `${overdueTasks.length} Aufgabe(n) überfällig`, streamId: overdueTasks[0]?.streamId || "", taskId: overdueTasks[0]?.id || "" });
+  if (deadlineDiff !== null && deadlineDiff < 0) reasons.push({ tone: "rose", text: `Projekt-Deadline überschritten (${formatDateLabel(projectDeadlineRaw)})` });
+  if (deadlineDiff !== null && deadlineDiff >= 0 && deadlineDiff <= 7) reasons.push({ tone: "amber", text: `Deadline in ${deadlineDiff === 0 ? "heute" : `${deadlineDiff} Tag(en)`}` });
+  if (feedbackStreams.length) reasons.push({ tone: "amber", text: `${feedbackStreams.length} Rückmeldung(en) offen`, streamId: feedbackStreams[0]?.id || "" });
+  if (ownerlessStreams.length) reasons.push({ tone: "sand", text: `${ownerlessStreams.length} Baustein(e) ohne Verantwortliche:n`, streamId: ownerlessStreams[0]?.id || "" });
+  if (!openTasks.length && streams.length) reasons.push({ tone: "emerald", text: "Alle Aufgaben erledigt" });
+  if (!streams.length) reasons.push({ tone: "sand", text: "Noch keine Bausteine angelegt" });
+
+  const nextAction =
+    blockedStreams[0]
+      ? { label: "Blockade klären", detail: blockedStreams[0].title || "Baustein", streamId: blockedStreams[0].id }
+      : overdueTasks[0]
+      ? { label: "Überfällige Aufgabe abschließen", detail: `${overdueTasks[0].streamTitle}: ${overdueTasks[0].title || "Aufgabe"}`, streamId: overdueTasks[0].streamId, taskId: overdueTasks[0].id }
+      : feedbackStreams[0]
+      ? { label: "Kundenrückmeldung einholen", detail: feedbackStreams[0].title || "Baustein", streamId: feedbackStreams[0].id }
+      : soonTasks[0]
+      ? { label: "Nächste fällige Aufgabe", detail: `${soonTasks[0].streamTitle}: ${soonTasks[0].title || "Aufgabe"}`, streamId: soonTasks[0].streamId, taskId: soonTasks[0].id }
+      : openTasks[0]
+      ? { label: "Nächste offene Aufgabe", detail: `${openTasks[0].streamTitle}: ${openTasks[0].title || "Aufgabe"}`, streamId: openTasks[0].streamId, taskId: openTasks[0].id }
+      : { label: "Projekt sauber", detail: streams.length ? "Keine akute Aktion offen" : "Ersten Baustein anlegen" };
+
+  const tone = blockedStreams.length || overdueTasks.length || (deadlineDiff !== null && deadlineDiff < 0)
+    ? "rose"
+    : feedbackStreams.length || (deadlineDiff !== null && deadlineDiff <= 7)
+    ? "amber"
+    : openTasks.length
+    ? "sky"
+    : "emerald";
+
+  return {
+    tone,
+    label: tone === "rose" ? "Handlungsbedarf" : tone === "amber" ? "Aufmerksam bleiben" : tone === "sky" ? "In Arbeit" : "Stabil",
+    reasons: reasons.slice(0, 5),
+    nextAction,
+    dueSoon: soonTasks.slice(0, 4)
+  };
 };
 
 const FLOW_GRID_SIZE = 24;
@@ -734,6 +900,7 @@ export default function ProjectFoldersView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [savingState, setSavingState] = useState("idle");
+  const [savedAt, setSavedAt] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState({
     mode: "empty",
@@ -758,6 +925,31 @@ export default function ProjectFoldersView() {
   const [blockTemplatePrompt, setBlockTemplatePrompt] = useState("");
   const [blockTemplateBusy, setBlockTemplateBusy] = useState(false);
   const [blockTemplatePreview, setBlockTemplatePreview] = useState(null);
+  const [hourlyRate, setHourlyRate] = useState(0);
+  const [estimateCache, setEstimateCache] = useState({});
+  const [estimatesPending, setEstimatesPending] = useState({});
+  const [explorerLayout, setExplorerLayout] = useState("cards");
+  const [explorerSearch, setExplorerSearch] = useState("");
+  const [explorerStatusFilter, setExplorerStatusFilter] = useState("");
+  const [explorerSort, setExplorerSort] = useState("recent");
+  const [favoriteFolderIds, setFavoriteFolderIds] = useState(() => {
+    try {
+      const cached = JSON.parse(window.localStorage.getItem("qt_project_folder_favorites") || "[]");
+      return Array.isArray(cached) ? cached.map(String) : [];
+    } catch { return []; }
+  });
+  const [explorerFavoritesOnly, setExplorerFavoritesOnly] = useState(false);
+  const isFavorite = (folderId) => favoriteFolderIds.includes(String(folderId));
+  const toggleFavorite = (folderId) => {
+    const id = String(folderId);
+    setFavoriteFolderIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      try { window.localStorage.setItem("qt_project_folder_favorites", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [checklistSelection, setChecklistSelection] = useState({});
   const [newStreamTitle, setNewStreamTitle] = useState("");
   const [streamLayoutMode, setStreamLayoutMode] = useState("cards");
   const [calendarMonthSpan, setCalendarMonthSpan] = useState(1);
@@ -774,23 +966,35 @@ export default function ProjectFoldersView() {
   const [aiResult, setAiResult] = useState(null);
   const [aiDialog, setAiDialog] = useState({ open: false, action: "tasks", topic: "", target: null });
   const [overviewOpen, setOverviewOpen] = useState(false);
-  const [checklistOpen, setChecklistOpen] = useState(false);
-  const [timelineOpen, setTimelineOpen] = useState(false);
-  const [calculationOpen, setCalculationOpen] = useState(false);
-  const [materialOpen, setMaterialOpen] = useState(false);
+  const [activeProjectTab, setActiveProjectTab] = useState("bausteine");
+  const checklistOpen = activeProjectTab === "checkliste";
+  const timelineOpen = activeProjectTab === "timeline";
+  const calculationOpen = activeProjectTab === "kalkulation";
+  const materialOpen = activeProjectTab === "material";
+  const setChecklistOpen = (open) => setActiveProjectTab(open ? "checkliste" : "bausteine");
+  const setTimelineOpen = (open) => setActiveProjectTab(open ? "timeline" : "bausteine");
+  const setCalculationOpen = (open) => setActiveProjectTab(open ? "kalkulation" : "bausteine");
+  const setMaterialOpen = (open) => setActiveProjectTab(open ? "material" : "bausteine");
   const [exportOpen, setExportOpen] = useState(false);
-  const [invoiceDialog, setInvoiceDialog] = useState({
+  const INVOICE_DIALOG_INITIAL = {
     open: false,
     folderId: null,
     folderTitle: "",
+    folderCustomer: "",
+    customerNumber: "",
     invoiceTitle: "",
     note: "",
     positions: [],
     improveBusy: false,
-    saveBusy: false
-  });
+    saveBusy: false,
+    pushBusy: false,
+    pushResult: null
+  };
+  const [invoiceDialog, setInvoiceDialog] = useState(INVOICE_DIALOG_INITIAL);
   const [exportFormat, setExportFormat] = useState("pdf");
   const [exportProfile, setExportProfile] = useState("internal_status");
+  const [exportProfileName, setExportProfileName] = useState("");
+  const [customExportProfiles, setCustomExportProfiles] = useState(() => loadCustomExportProfiles());
   const [exportOptions, setExportOptions] = useState({
     include_internal_notes: true,
     include_risks: true,
@@ -798,26 +1002,36 @@ export default function ProjectFoldersView() {
     include_checklists: true,
     include_gantt: true,
     include_offer_positions: false,
+    operations_layout: false,
     customer_view: false,
     internal_view: true
   });
   const exportRef = useRef(null);
   const saveTimerRef = useRef(null);
+  const saveSequenceRef = useRef(0);
   const dragStateRef = useRef(null);
   const flowBoardDataRef = useRef(null);
+  const autoEstimateRunRef = useRef(new Set());
 
   const employeeNames = useMemo(() => employees.map((item) => item.name).filter(Boolean), [employees]);
   const customerNames = useMemo(() => customers.map((item) => item.name).filter(Boolean), [customers]);
+  const exportProfiles = useMemo(
+    () => [...(catalog.export_profiles || []), ...customExportProfiles],
+    [catalog.export_profiles, customExportProfiles]
+  );
+  const selectedExportProfile = exportProfiles.find((profile) => profile.key === exportProfile) || exportProfiles[0] || null;
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.listFolders(), api.catalog(), api.customers(), api.employees()])
-      .then(([folderRows, catalogPayload, customerRows, employeeRows]) => {
+    Promise.all([api.listFolders(), api.catalog(), api.customers(), api.employees(), api.integrations()])
+      .then(([folderRows, catalogPayload, customerRows, employeeRows, integrations]) => {
         if (cancelled) return;
         setFolders(Array.isArray(folderRows) ? folderRows : []);
         setCatalog(catalogPayload || { blocks: [], templates: [], export_profiles: [] });
         setCustomers(Array.isArray(customerRows) ? customerRows : []);
         setEmployees(Array.isArray(employeeRows) ? employeeRows : []);
+        const rate = parseFloat(String(integrations?.sevdesk_hourly_rate_eur || "0").replace(",", "."));
+        setHourlyRate(Number.isFinite(rate) && rate > 0 ? rate : 95);
         setLoading(false);
       })
       .catch((loadError) => {
@@ -825,10 +1039,20 @@ export default function ProjectFoldersView() {
         setError(String(loadError?.message || "Daten konnten nicht geladen werden."));
         setLoading(false);
       });
+    try {
+      const cached = JSON.parse(window.localStorage.getItem(PROJECT_ESTIMATES_CACHE_KEY) || "{}");
+      if (cached && typeof cached === "object") setEstimateCache(cached);
+    } catch {}
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PROJECT_ESTIMATES_CACHE_KEY, JSON.stringify(estimateCache));
+    } catch {}
+  }, [estimateCache]);
 
   useEffect(() => {
     if (!selectedFolderId) {
@@ -883,6 +1107,22 @@ export default function ProjectFoldersView() {
     setSelectedTemplateCatalogIndex((current) => Math.min(current, Math.max(0, templateCatalogDraft.length - 1)));
   }, [templateCatalogDraft.length]);
 
+  useEffect(() => {
+    if (savingState !== "pending" && savingState !== "saving") return undefined;
+    const handler = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [savingState]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+  }, []);
+
   const selectedStream = useMemo(() => {
     if (!activeFolder?.content?.streams?.length) return null;
     return (
@@ -926,11 +1166,24 @@ export default function ProjectFoldersView() {
       ),
     [activeStreams]
   );
+  const overdueTaskCount = useMemo(() => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    return activeStreams.reduce((sum, stream) =>
+      sum + (stream?.tasks || []).filter((task) => {
+        if (String(task?.status || "open").trim().toLowerCase() === "done") return false;
+        const due = parseDateInput(task?.due_date);
+        return due && due.getTime() < today.getTime();
+      }).length, 0);
+  }, [activeStreams]);
   const checklistOpenCount = activeSummary.open_task_count || 0;
   const taskCompletionLabel = `${doneTaskCount}/${totalTaskCount || 0}`;
   const readinessGapCount = checklistOpenCount + blockerCount + feedbackCount + blockedCount;
   const projectPulseLabel =
     readinessGapCount <= 0 ? "Projekt ist rund" : `${readinessGapCount} Punkte fehlen noch bis rund`;
+  const projectHealth = useMemo(
+    () => getProjectHealthInsights({ streams: activeStreams, projectDeadline, projectDeadlineRaw }),
+    [activeStreams, projectDeadline, projectDeadlineRaw]
+  );
   const focusTasks = useMemo(
     () =>
       activeStreams
@@ -939,6 +1192,14 @@ export default function ProjectFoldersView() {
             .filter((task) => String(task?.status || "open").trim().toLowerCase() !== "done")
             .map((task) => ({ ...task, stream_title: stream.title || "Baustein" }))
         )
+        .sort((a, b) => {
+          const aDate = parseDateInput(a.due_date);
+          const bDate = parseDateInput(b.due_date);
+          if (aDate && bDate) return aDate.getTime() - bDate.getTime();
+          if (aDate) return -1;
+          if (bDate) return 1;
+          return 0;
+        })
         .slice(0, 8),
     [activeStreams]
   );
@@ -959,8 +1220,175 @@ export default function ProjectFoldersView() {
   );
   const activeBlockDraft = blockCatalogDraft[selectedBlockCatalogIndex] || null;
   const activeTemplateDraft = templateCatalogDraft[selectedTemplateCatalogIndex] || null;
-  const explorerFolders = useMemo(() => folders.filter((folder) => !isFolderArchived(folder)), [folders]);
+  const requestEstimate = async (folder) => {
+    if (!folder?.id) return;
+    if (estimatesPending[folder.id]) return;
+    setEstimatesPending((prev) => ({ ...prev, [folder.id]: true }));
+    try {
+      let folderForAi = folder;
+      if (!folder?.content?.streams) {
+        try {
+          folderForAi = await api.getFolder(folder.id);
+        } catch {}
+      }
+      const result = await api.aiAssist({
+        action: "estimate_effort",
+        topic: folderForAi.title || "",
+        project_folder: folderForAi,
+        stream_id: "",
+        context: ""
+      });
+      const taskCount = (folderForAi?.content?.streams || []).reduce(
+        (sum, stream) => sum + (Array.isArray(stream?.tasks) ? stream.tasks.length : 0),
+        0
+      );
+      const taskSignature = getProjectTaskSignature(folderForAi);
+      setEstimateCache((prev) => ({
+        ...prev,
+        [folder.id]: {
+          hours_min: Number(result?.hours_min || 0),
+          hours_max: Number(result?.hours_max || 0),
+          confidence: String(result?.confidence || "low"),
+          reasoning: String(result?.reasoning || ""),
+          breakdown: Array.isArray(result?.breakdown) ? result.breakdown.slice(0, 12).map((row) => ({
+            stream: String(row?.stream || row?.title || ""),
+            hours_min: Number(row?.hours_min || 0),
+            hours_max: Number(row?.hours_max || 0)
+          })) : [],
+          generated_at: Date.now(),
+          task_count: taskCount,
+          task_signature: taskSignature,
+          source: result?.usedFallback ? "fallback" : "ai"
+        }
+      }));
+    } catch (err) {
+      // silent fail; user can re-trigger
+    } finally {
+      setEstimatesPending((prev) => {
+        const next = { ...prev };
+        delete next[folder.id];
+        return next;
+      });
+    }
+  };
+
+  const isEstimateStale = (folder) => {
+    const cached = estimateCache[folder?.id];
+    if (!cached) return true;
+    const currentSignature = getProjectTaskSignature(folder);
+    if (currentSignature && !String(cached.task_signature || "")) return true;
+    if (currentSignature && String(cached.task_signature || "") && currentSignature !== String(cached.task_signature || "")) return true;
+    const currentTaskCount = Number(folder?.summary?.task_count || 0);
+    if (currentTaskCount > 0 && currentTaskCount !== Number(cached.task_count || 0)) return true;
+    return false;
+  };
+
+  const formatEstimateAge = (timestamp) => {
+    const ms = Date.now() - Number(timestamp || 0);
+    if (ms < 60_000) return "gerade eben";
+    const minutes = Math.floor(ms / 60_000);
+    if (minutes < 60) return `vor ${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `vor ${hours} h`;
+    const days = Math.floor(hours / 24);
+    return `vor ${days} Tag${days === 1 ? "" : "en"}`;
+  };
+
+  const [bulkEstimateState, setBulkEstimateState] = useState({ active: false, done: 0, total: 0 });
+
+  const estimateAllVisible = async (foldersToEstimate, { onlyMissing = true, concurrency = 3 } = {}) => {
+    const queue = foldersToEstimate.filter((f) => !onlyMissing || isEstimateStale(f));
+    if (!queue.length) return;
+    setBulkEstimateState({ active: true, done: 0, total: queue.length });
+    let cursor = 0;
+    let completed = 0;
+    const worker = async () => {
+      while (cursor < queue.length) {
+        const idx = cursor++;
+        const folder = queue[idx];
+        try { await requestEstimate(folder); } catch {}
+        completed += 1;
+        setBulkEstimateState((prev) => ({ ...prev, done: completed }));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, () => worker()));
+    setBulkEstimateState({ active: false, done: 0, total: 0 });
+  };
+
+  const clearAllEstimates = () => {
+    if (!window.confirm("Alle Aufwandsschätzungen löschen?")) return;
+    setEstimateCache({});
+    autoEstimateRunRef.current = new Set();
+    try { window.localStorage.removeItem(PROJECT_ESTIMATES_CACHE_KEY); } catch {}
+  };
+
+  const explorerFolders = useMemo(() => {
+    const active = folders.filter((folder) => !isFolderArchived(folder));
+    const needle = explorerSearch.trim().toLowerCase();
+    const favSet = new Set(favoriteFolderIds.map(String));
+    const filtered = active.filter((folder) => {
+      if (explorerFavoritesOnly && !favSet.has(String(folder.id))) return false;
+      if (explorerStatusFilter && folder.status !== explorerStatusFilter) return false;
+      if (needle) {
+        const inTitle = String(folder.title || "").toLowerCase().includes(needle);
+        const inCustomer = String(folder.customer || "").toLowerCase().includes(needle);
+        return inTitle || inCustomer;
+      }
+      return true;
+    });
+    const statusRank = { red: 0, yellow: 1, blue: 2, green: 3 };
+    const priorityRank = { critical: 0, high: 1, medium: 2, low: 3 };
+    const sorted = [...filtered];
+    sorted.sort((a, b) => {
+      const aFav = favSet.has(String(a.id)) ? 0 : 1;
+      const bFav = favSet.has(String(b.id)) ? 0 : 1;
+      if (aFav !== bFav) return aFav - bFav;
+      if (explorerSort === "name") {
+        return String(a.title || "").localeCompare(String(b.title || ""), "de", { sensitivity: "base" });
+      }
+      if (explorerSort === "progress") {
+        return Number(a.summary?.progress || 0) - Number(b.summary?.progress || 0);
+      }
+      if (explorerSort === "deadline") {
+        const aDate = parseDateInput(a.content?.overview?.project_deadline);
+        const bDate = parseDateInput(b.content?.overview?.project_deadline);
+        if (aDate && bDate) return aDate.getTime() - bDate.getTime();
+        if (aDate) return -1;
+        if (bDate) return 1;
+        return 0;
+      }
+      if (explorerSort === "status") {
+        const aRank = statusRank[a.status] ?? 9;
+        const bRank = statusRank[b.status] ?? 9;
+        if (aRank !== bRank) return aRank - bRank;
+        return (priorityRank[a.priority] ?? 9) - (priorityRank[b.priority] ?? 9);
+      }
+      return Number(b.updated_at || b.created_at || 0) - Number(a.updated_at || a.created_at || 0);
+    });
+    return sorted;
+  }, [folders, explorerSearch, explorerStatusFilter, explorerSort, favoriteFolderIds, explorerFavoritesOnly]);
   const archivedFolders = useMemo(() => folders.filter((folder) => isFolderArchived(folder)), [folders]);
+
+  useEffect(() => {
+    if (loading || bulkEstimateState.active) return undefined;
+    const queue = explorerFolders
+      .filter((folder) => !isFolderArchived(folder) && isEstimateStale(folder) && !estimatesPending[folder.id])
+      .map((folder) => {
+        const signature = getProjectTaskSignature(folder) || `updated:${folder.updated_at || ""}:tasks:${folder.summary?.task_count || 0}`;
+        return { folder, key: `${folder.id}:${signature}` };
+      })
+      .filter((entry) => !autoEstimateRunRef.current.has(entry.key))
+      .slice(0, 3);
+    if (!queue.length) return undefined;
+    const timers = queue.map((entry, index) => {
+      autoEstimateRunRef.current.add(entry.key);
+      return window.setTimeout(() => {
+        requestEstimate(entry.folder);
+      }, 700 + index * 1400);
+    });
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [loading, explorerFolders, estimateCache, estimatesPending, bulkEstimateState.active]);
+
   const timelineData = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -1266,6 +1694,8 @@ export default function ProjectFoldersView() {
   const queueSave = (nextFolder) => {
     if (!nextFolder?.id) return;
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveSequenceRef.current += 1;
+    const sequence = saveSequenceRef.current;
     setSavingState("pending");
     saveTimerRef.current = window.setTimeout(() => {
       setSavingState("saving");
@@ -1282,12 +1712,15 @@ export default function ProjectFoldersView() {
           content: nextFolder.content
         })
         .then((saved) => {
+          if (sequence !== saveSequenceRef.current) return;
           setActiveFolder((prev) => (prev?.id === saved.id ? saved : prev));
           setFolders((prev) => [saved, ...prev.filter((item) => item.id !== saved.id)]);
+          setSavedAt(new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }));
           setSavingState("saved");
           window.setTimeout(() => setSavingState((state) => (state === "saved" ? "idle" : state)), 1200);
         })
         .catch((saveError) => {
+          if (sequence !== saveSequenceRef.current) return;
           setSavingState("error");
           setError(String(saveError?.message || "Speichern fehlgeschlagen."));
         });
@@ -1606,6 +2039,24 @@ export default function ProjectFoldersView() {
     });
   };
 
+  const moveTaskToStream = (sourceStreamId, taskId, targetStreamId) => {
+    if (!sourceStreamId || !taskId || !targetStreamId || sourceStreamId === targetStreamId) return;
+    mutateFolder((folder) => {
+      folder.content = folder.content || { streams: [] };
+      const sourceStream = (folder.content.streams || []).find((s) => s.id === sourceStreamId);
+      const targetStream = (folder.content.streams || []).find((s) => s.id === targetStreamId);
+      if (!sourceStream || !targetStream) return folder;
+      const task = (sourceStream.tasks || []).find((t) => t.id === taskId);
+      if (!task) return folder;
+      sourceStream.tasks = (sourceStream.tasks || []).filter((t) => t.id !== taskId);
+      sourceStream.task_links = (sourceStream.task_links || []).filter(
+        (link) => link.fromTaskId !== taskId && link.toTaskId !== taskId
+      );
+      targetStream.tasks = [...(targetStream.tasks || []), task];
+      return appendActivity(folder, `Aufgabe „${task.title || "Aufgabe"}" verschoben → ${targetStream.title || "Baustein"}`);
+    });
+  };
+
   const appendActivity = (folder, text) => {
     folder.content.activities = Array.isArray(folder.content.activities) ? folder.content.activities : [];
     folder.content.activities.unshift({ id: uid(), text, at: Date.now() });
@@ -1661,13 +2112,13 @@ export default function ProjectFoldersView() {
       const fallbackIds = candidates.filter((item) => !item.invoicedAt).map((item) => item.id);
       const selectedIds = new Set((preferredIds.length ? preferredIds : fallbackIds).slice(0, 12));
       setInvoiceDialog({
+        ...INVOICE_DIALOG_INITIAL,
         open: true,
         folderId,
         folderTitle: folder.title || "Projektmappe",
+        folderCustomer: folder.customer || "",
+        customerNumber: folder?.content?.meta?.customer_number || "",
         invoiceTitle: `Rechnungsentwurf ${folder.title || "Projektmappe"}`,
-        note: "",
-        improveBusy: false,
-        saveBusy: false,
         positions: candidates.map((item) => ({
           taskId: item.id,
           streamId: item.streamId,
@@ -1676,7 +2127,9 @@ export default function ProjectFoldersView() {
           status: item.status,
           invoicedAt: item.invoicedAt,
           selected: selectedIds.has(item.id),
-          text: item.suggestedText
+          text: item.suggestedText,
+          hours: item.defaultHours,
+          price: hourlyRate
         }))
       });
     } catch (invoiceError) {
@@ -1735,7 +2188,9 @@ export default function ProjectFoldersView() {
           stream_id: item.streamId,
           stream_title: item.streamTitle,
           task_title: item.taskTitle,
-          text: String(item.text || item.taskTitle).trim() || item.taskTitle
+          text: String(item.text || item.taskTitle).trim() || item.taskTitle,
+          quantity: Number(item.hours) || 0,
+          price: Number(item.price) || 0
         }))
       });
       folder.content.streams = (folder.content.streams || []).map((stream) => ({
@@ -1765,19 +2220,42 @@ export default function ProjectFoldersView() {
         content: folder.content
       });
       updateFolderRow(saved);
-      setInvoiceDialog({
-        open: false,
-        folderId: null,
-        folderTitle: "",
-        invoiceTitle: "",
-        note: "",
-        positions: [],
-        improveBusy: false,
-        saveBusy: false
-      });
+      setInvoiceDialog(INVOICE_DIALOG_INITIAL);
     } catch (saveError) {
       setInvoiceDialog((prev) => ({ ...prev, saveBusy: false }));
       setError(String(saveError?.message || "Rechnungsentwurf konnte nicht gespeichert werden."));
+    }
+  };
+
+  const pushInvoiceToSevdesk = async () => {
+    const selectedPositions = invoiceDialog.positions.filter((item) => item.selected);
+    if (!invoiceDialog.folderId || !selectedPositions.length) return;
+    setInvoiceDialog((prev) => ({ ...prev, pushBusy: true, pushResult: null }));
+    try {
+      const result = await api.pushSevdeskDraft(invoiceDialog.folderId, {
+        customer_number: String(invoiceDialog.customerNumber || "").trim() || undefined,
+        invoice_title: String(invoiceDialog.invoiceTitle || "").trim() || undefined,
+        note: String(invoiceDialog.note || "").trim() || undefined,
+        mark_invoiced: true,
+        use_existing_draft: true,
+        positions: selectedPositions.map((item) => ({
+          task_id: item.taskId,
+          stream_id: item.streamId,
+          name: item.taskTitle,
+          text: String(item.text || item.taskTitle).trim() || item.taskTitle,
+          quantity: Number(item.hours) || 1,
+          price: Number(item.price) || 0
+        }))
+      });
+      if (result?.folder) updateFolderRow(result.folder);
+      setInvoiceDialog((prev) => ({
+        ...prev,
+        pushBusy: false,
+        pushResult: { ok: true, sevdeskInvoiceId: result?.sevdesk_invoice_id || null }
+      }));
+      setTimeout(() => setInvoiceDialog(INVOICE_DIALOG_INITIAL), 1500);
+    } catch (pushError) {
+      setInvoiceDialog((prev) => ({ ...prev, pushBusy: false, pushResult: { ok: false, message: String(pushError?.message || "sevDesk-Übergabe fehlgeschlagen.") } }));
     }
   };
 
@@ -1936,7 +2414,7 @@ export default function ProjectFoldersView() {
 
   const handleDeleteFolder = async () => {
     if (!activeFolder?.id) return;
-    if (!window.confirm(`Projektmappe "${activeFolder.title}" löschen?`)) return;
+    setDeleteConfirmOpen(false);
     try {
       await api.deleteFolder(activeFolder.id);
       const nextFolders = folders.filter((item) => item.id !== activeFolder.id);
@@ -2045,88 +2523,28 @@ export default function ProjectFoldersView() {
     setAiResult(null);
   };
 
-  const renderMarkdown = () => {
-    if (!activeFolder) return "";
-    const lines = [
-      `# ${activeFolder.title}`,
-      "",
-      `- Kunde: ${activeFolder.customer || "-"}`,
-      `- Status: ${statusMeta[activeFolder.status]?.label || activeFolder.status}`,
-      `- Priorität: ${priorityMeta[activeFolder.priority] || activeFolder.priority}`,
-      `- Verantwortlich: ${activeFolder.owner || "-"}`,
-      `- Aktueller Stand: ${activeFolder.current_state || "-"}`,
-      `- Nächster Schritt: ${activeFolder.next_step || "-"}`,
-      ""
-    ];
-    (activeFolder.content?.streams || []).forEach((stream) => {
-      lines.push(`## ${stream.title}`, "");
-      lines.push(`- Kurzlage: ${stream.short_status || "-"}`);
-      lines.push(`- Zuständig: ${stream.owner || "-"}`);
-      lines.push(`- Empfehlung: ${stream.recommendation || "-"}`);
-      lines.push(`- Kundenentscheidung: ${stream.customer_decision || "-"}`);
-      lines.push(`- Nächster Schritt: ${stream.next_step || "-"}`, "");
-      if (exportOptions.include_tasks && stream.tasks?.length) {
-        lines.push("### Aufgaben");
-        stream.tasks.forEach((task) => lines.push(`- [${task.status === "done" ? "x" : " "}] ${task.title}`));
-        lines.push("");
-      }
-      if (exportOptions.include_checklists && stream.checklists?.length) {
-        lines.push("### Checklisten");
-        stream.checklists.forEach((list) => {
-          lines.push(`- ${list.title}`);
-          (list.items || []).forEach((item) => lines.push(`  - [${item.done ? "x" : " "}] ${item.title}`));
-        });
-        lines.push("");
-      }
-      if (exportOptions.include_risks && stream.risks?.length) {
-        lines.push("### Risiken");
-        stream.risks.forEach((item) => lines.push(`- ${item.title} (${item.level || "mittel"})`));
-        lines.push("");
-      }
-    });
-    return lines.join("\n");
-  };
-
-  const renderHtml = () => {
-    if (!activeFolder) return "";
-    return `
-      <html><head><meta charset="utf-8"><title>${escapeHtml(activeFolder.title)}</title>
-      <style>
-        body { font-family: Arial, sans-serif; padding: 32px; color: #1c2733; }
-        h1, h2, h3 { color: #14324d; }
-        .card { border: 1px solid #d1dbe6; border-radius: 16px; padding: 16px; margin: 0 0 16px; }
-        .muted { color: #5b6b7c; }
-      </style></head><body>
-      <h1>${escapeHtml(activeFolder.title)}</h1>
-      <p class="muted">Kunde: ${escapeHtml(activeFolder.customer)} | Status: ${escapeHtml(statusMeta[activeFolder.status]?.label || activeFolder.status)}</p>
-      <p><strong>Aktueller Stand:</strong> ${escapeHtml(activeFolder.current_state || "-")}</p>
-      <p><strong>Nächster Schritt:</strong> ${escapeHtml(activeFolder.next_step || "-")}</p>
-      ${(activeFolder.content?.streams || [])
-        .map(
-          (stream) => `
-            <div class="card">
-              <h2>${escapeHtml(stream.title)}</h2>
-              <p><strong>Kurzlage:</strong> ${escapeHtml(stream.short_status || "-")}</p>
-              <p><strong>Verantwortlich:</strong> ${escapeHtml(stream.owner || "-")}</p>
-              <p><strong>Empfehlung:</strong> ${escapeHtml(stream.recommendation || "-")}</p>
-              ${exportOptions.include_tasks ? `<h3>Aufgaben</h3><ul>${(stream.tasks || []).map((task) => `<li>${escapeHtml(task.title)}</li>`).join("")}</ul>` : ""}
-              ${exportOptions.include_risks ? `<h3>Risiken</h3><ul>${(stream.risks || []).map((risk) => `<li>${escapeHtml(risk.title)}</li>`).join("")}</ul>` : ""}
-            </div>
-          `
-        )
-        .join("")}
-      </body></html>
-    `;
-  };
-
   const exportProjectPdf = async (baseName) => {
-    if (!exportRef.current) return;
-    const canvas = await html2canvas(exportRef.current, {
+    if (!activeFolder) return;
+    const html = exportOptions.operations_layout
+      ? buildProjectOperationalPlanHtml({ folder: activeFolder, options: exportOptions, statusMeta })
+      : buildProjectHtml({ folder: activeFolder, options: exportOptions, statusMeta });
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const page = doc.querySelector(".page");
+    const renderNode = document.createElement("div");
+    renderNode.style.position = "fixed";
+    renderNode.style.left = "-10000px";
+    renderNode.style.top = "0";
+    renderNode.style.width = "980px";
+    renderNode.style.background = "#eef2f7";
+    renderNode.innerHTML = page ? page.outerHTML : html;
+    document.body.appendChild(renderNode);
+    const canvas = await html2canvas(renderNode, {
       scale: 2,
       useCORS: true,
-      backgroundColor: "#f4f7fb",
+      backgroundColor: "#eef2f7",
       logging: false
     });
+    renderNode.remove();
     const imgData = canvas.toDataURL("image/jpeg", 0.95);
     const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
     const pageWidth = pdf.internal.pageSize.getWidth();
@@ -2147,41 +2565,37 @@ export default function ProjectFoldersView() {
 
   const handleExport = async () => {
     if (!activeFolder) return;
-    const baseName = `${activeFolder.title || "projektmappe"}`.replace(/[^\w\-]+/g, "_");
+    const baseName = `${getProjectExportBaseName(activeFolder)}${exportOptions.operations_layout ? "_Einsatzplan" : ""}`;
     if (exportFormat === "json") {
       downloadBlob(new Blob([JSON.stringify(activeFolder, null, 2)], { type: "application/json" }), `${baseName}.json`);
       return;
     }
     if (exportFormat === "md") {
-      downloadBlob(new Blob([renderMarkdown()], { type: "text/markdown;charset=utf-8" }), `${baseName}.md`);
+      downloadBlob(
+        new Blob([buildProjectMarkdown({ folder: activeFolder, options: exportOptions, statusMeta, priorityMeta })], {
+          type: "text/markdown;charset=utf-8"
+        }),
+        `${baseName}.md`
+      );
       return;
     }
     if (exportFormat === "html") {
-      downloadBlob(new Blob([renderHtml()], { type: "text/html;charset=utf-8" }), `${baseName}.html`);
+      const html = exportOptions.operations_layout
+        ? buildProjectOperationalPlanHtml({ folder: activeFolder, options: exportOptions, statusMeta })
+        : buildProjectHtml({ folder: activeFolder, options: exportOptions, statusMeta });
+      downloadBlob(new Blob([html], { type: "text/html;charset=utf-8" }), `${baseName}.html`);
       return;
     }
     if (exportFormat === "word") {
-      downloadBlob(new Blob([renderHtml()], { type: "application/msword" }), `${baseName}.doc`);
+      const html = exportOptions.operations_layout
+        ? buildProjectOperationalPlanHtml({ folder: activeFolder, options: exportOptions, statusMeta })
+        : buildProjectHtml({ folder: activeFolder, options: exportOptions, statusMeta });
+      downloadBlob(new Blob([html], { type: "application/msword" }), `${baseName}.doc`);
       return;
     }
     if (exportFormat === "excel") {
-      const rows = [["Arbeitsstrang", "Aufgabe", "Status", "Risiko", "Nächster Schritt"]];
-      (activeFolder.content?.streams || []).forEach((stream) => {
-        const tasks = stream.tasks?.length ? stream.tasks : [{ title: "", status: "" }];
-        tasks.forEach((task, index) => {
-          rows.push([
-            index === 0 ? stream.title : "",
-            task.title || "",
-            task.status || "",
-            index === 0 ? (stream.risks?.map((risk) => risk.title).join(" | ") || "") : "",
-            index === 0 ? (stream.next_step || "") : ""
-          ]);
-        });
-      });
-      const tableHtml = `<table>${rows
-        .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`)
-        .join("")}</table>`;
-      downloadBlob(new Blob([tableHtml], { type: "application/vnd.ms-excel" }), `${baseName}.xls`);
+      const html = exportOptions.operations_layout ? buildProjectOperationalMatrixHtml(activeFolder, exportOptions) : buildProjectExcelHtml(activeFolder);
+      downloadBlob(new Blob([html], { type: "application/vnd.ms-excel" }), `${baseName}.xls`);
       return;
     }
     if (exportFormat === "pdf") {
@@ -2190,7 +2604,7 @@ export default function ProjectFoldersView() {
   };
 
   const applyExportProfile = (profileKey) => {
-    const profile = (catalog.export_profiles || []).find((item) => item.key === profileKey);
+    const profile = exportProfiles.find((item) => item.key === profileKey);
     if (!profile) return;
     setExportProfile(profileKey);
     setExportOptions({
@@ -2198,6 +2612,62 @@ export default function ProjectFoldersView() {
       internal_view: !profile.defaults?.customer_view
     });
   };
+
+  const saveExportProfile = () => {
+    const label = String(exportProfileName || "").trim();
+    if (!label) {
+      setError("Bitte Namen für das Exportprofil eingeben.");
+      return;
+    }
+    const profile = {
+      key: `custom_${Date.now()}`,
+      label,
+      custom: true,
+      defaults: { ...exportOptions }
+    };
+    const nextProfiles = [profile, ...customExportProfiles].slice(0, 20);
+    setCustomExportProfiles(nextProfiles);
+    saveCustomExportProfiles(nextProfiles);
+    setExportProfile(profile.key);
+    setExportProfileName("");
+    setError("");
+  };
+
+  const deleteExportProfile = (profileKey) => {
+    const nextProfiles = customExportProfiles.filter((profile) => profile.key !== profileKey);
+    setCustomExportProfiles(nextProfiles);
+    saveCustomExportProfiles(nextProfiles);
+    if (exportProfile === profileKey) applyExportProfile("internal_status");
+  };
+
+  const updateExportOption = (key, checked) => {
+    setExportOptions((prev) => {
+      const next = { ...prev, [key]: checked };
+      if (key === "customer_view" && checked) next.internal_view = false;
+      if (key === "internal_view" && checked) next.customer_view = false;
+      if (key === "customer_view" && !checked && !prev.internal_view) next.internal_view = true;
+      if (key === "internal_view" && !checked && !prev.customer_view) next.customer_view = true;
+      return next;
+    });
+  };
+
+  const draftStreams = Array.isArray(draftFolder?.content?.streams) ? draftFolder.content.streams : [];
+  const draftSelectedStreams = draftStreams.filter((stream) => draftSelection[stream.id] !== false);
+  const draftStats = {
+    streams: draftSelectedStreams.length,
+    tasks: draftSelectedStreams.reduce((sum, stream) => sum + (Array.isArray(stream?.tasks) ? stream.tasks.length : 0), 0),
+    risks: draftSelectedStreams.reduce((sum, stream) => sum + (Array.isArray(stream?.risks) ? stream.risks.length : 0), 0),
+    checklist: draftSelectedStreams.reduce(
+      (sum, stream) =>
+        sum +
+        (Array.isArray(stream?.checklists)
+          ? stream.checklists.reduce((inner, checklist) => inner + (Array.isArray(checklist?.items) ? checklist.items.length : 0), 0)
+          : 0),
+      0
+    )
+  };
+  const canCreatePreview =
+    createForm.mode !== "ai" || String(createForm.description || "").trim().length >= 20;
 
   if (loading) {
     return <div className="p-8 text-sand-600">Projektmappen werden geladen…</div>;
@@ -2233,11 +2703,13 @@ export default function ProjectFoldersView() {
             {savingState === "saving" ? (
               <Tag className="border-sky-200 bg-sky-50 text-sky-700">Speichert…</Tag>
             ) : savingState === "saved" ? (
-              <Tag className="border-emerald-200 bg-emerald-50 text-emerald-700">Gespeichert</Tag>
+              <Tag className="border-emerald-200 bg-emerald-50 text-emerald-700">{savedAt ? `Gespeichert ${savedAt}` : "Gespeichert"}</Tag>
             ) : savingState === "error" ? (
               <Tag className="border-rose-200 bg-rose-50 text-rose-700">Speicherfehler</Tag>
             ) : savingState === "pending" ? (
               <Tag className="border-amber-200 bg-amber-50 text-amber-700">Ausstehend…</Tag>
+            ) : savedAt ? (
+              <Tag className="border-sand-200 bg-white text-sand-600">Gespeichert {savedAt}</Tag>
             ) : null}
             {error ? <Tag className="border-rose-200 bg-rose-50 text-rose-700">{error}</Tag> : null}
             <button
@@ -2256,7 +2728,7 @@ export default function ProjectFoldersView() {
               Export
             </button>
             <button
-              onClick={handleDeleteFolder}
+              onClick={() => setDeleteConfirmOpen(true)}
               disabled={!activeFolder}
               className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 hover:bg-rose-100 disabled:opacity-40"
             >
@@ -2310,29 +2782,297 @@ export default function ProjectFoldersView() {
 
           {overviewSection === "explorer" ? (
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-sand-900">Aktive Kundenprojekte</div>
-                  <div className="mt-0.5 text-xs text-sand-500">Kacheln mit Direktaktionen für Archivierung und Fakturierung.</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  value={explorerSearch}
+                  onChange={(e) => setExplorerSearch(e.target.value)}
+                  placeholder="Suche nach Projekt oder Kunde…"
+                  className="min-w-[200px] flex-1 rounded-xl border border-sand-200 bg-white px-3 py-1.5 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => setExplorerFavoritesOnly((v) => !v)}
+                  title={explorerFavoritesOnly ? "Alle anzeigen" : "Nur Favoriten"}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+                    explorerFavoritesOnly
+                      ? "border-amber-300 bg-amber-100 text-amber-800"
+                      : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                  }`}
+                >
+                  <Star size={12} className={explorerFavoritesOnly ? "fill-amber-400 text-amber-500" : ""} />
+                  Favoriten {favoriteFolderIds.length ? `(${favoriteFolderIds.length})` : ""}
+                </button>
+                <div className="flex items-center gap-1">
+                  {[
+                    { key: "", label: "Alle" },
+                    { key: "red", label: "Kritisch" },
+                    { key: "yellow", label: "Achtung" },
+                    { key: "green", label: "Stabil" },
+                    { key: "blue", label: "Wartet" }
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setExplorerStatusFilter(item.key)}
+                      className={`rounded-full border px-3 py-1 text-[11px] font-medium transition ${
+                        explorerStatusFilter === item.key
+                          ? item.key === "red" ? "border-rose-300 bg-rose-100 text-rose-700"
+                            : item.key === "yellow" ? "border-amber-300 bg-amber-100 text-amber-700"
+                            : item.key === "green" ? "border-emerald-300 bg-emerald-100 text-emerald-700"
+                            : item.key === "blue" ? "border-sky-300 bg-sky-100 text-sky-700"
+                            : "border-sand-900 bg-sand-900 text-white"
+                          : "border-sand-200 bg-white text-sand-600 hover:border-sand-300 hover:bg-sand-50"
+                      }`}
+                    >
+                      {item.key ? (
+                        <span className="flex items-center gap-1">
+                          <span className={`h-1.5 w-1.5 rounded-full ${statusMeta[item.key]?.dot || "bg-sand-400"}`} />
+                          {item.label}
+                        </span>
+                      ) : item.label}
+                    </button>
+                  ))}
+                </div>
+                <select
+                  value={explorerSort}
+                  onChange={(e) => setExplorerSort(e.target.value)}
+                  className="rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-xs text-sand-700 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="recent">Zuletzt geändert</option>
+                  <option value="deadline">Fälligkeit</option>
+                  <option value="status">Status</option>
+                  <option value="progress">Fortschritt</option>
+                  <option value="name">Name</option>
+                </select>
+                <div className="inline-flex rounded-xl border border-sand-200 bg-sand-50 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setExplorerLayout("cards")}
+                    className={`rounded-lg px-2 py-1 text-[11px] ${explorerLayout === "cards" ? "bg-white text-sand-900 shadow-sm" : "text-sand-500 hover:text-sand-700"}`}
+                    title="Kachelansicht"
+                  >
+                    Kacheln
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExplorerLayout("list")}
+                    className={`rounded-lg px-2 py-1 text-[11px] ${explorerLayout === "list" ? "bg-white text-sand-900 shadow-sm" : "text-sand-500 hover:text-sand-700"}`}
+                    title="Listenansicht"
+                  >
+                    Liste
+                  </button>
                 </div>
               </div>
-              <div className="grid gap-3 xl:grid-cols-4">
+              {(() => {
+                if (!explorerFolders.length) return null;
+                let hoursMin = 0;
+                let hoursMax = 0;
+                let estimateCount = 0;
+                let staleCount = 0;
+                let overdue = 0;
+                const today = new Date(); today.setHours(0, 0, 0, 0);
+                explorerFolders.forEach((folder) => {
+                  const cached = estimateCache[folder.id];
+                  if (cached) {
+                    hoursMin += Number(cached.hours_min || 0);
+                    hoursMax += Number(cached.hours_max || 0);
+                    estimateCount += 1;
+                    if (isEstimateStale(folder)) staleCount += 1;
+                  }
+                  const deadline = parseDateInput(folder?.content?.overview?.project_deadline);
+                  if (deadline && deadline.getTime() < today.getTime()) overdue += 1;
+                });
+                const missing = explorerFolders.length - estimateCount;
+                const fmtEur = (value) =>
+                  new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
+                const bulkActive = bulkEstimateState.active;
+                return (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-sand-200 bg-sand-50/70 px-3 py-2 text-xs text-sand-700">
+                    <span><b>{explorerFolders.length}</b> Mappen</span>
+                    {estimateCount > 0 ? (
+                      <>
+                        <span className="text-sand-300">·</span>
+                        <span title={staleCount ? `${staleCount} Schätzung(en) veraltet` : ""}>
+                          ≈ <b>{Math.round(hoursMin)}–{Math.round(hoursMax)} h</b> ({estimateCount}/{explorerFolders.length})
+                          {staleCount > 0 ? <span className="ml-1 text-amber-600">· {staleCount} veraltet</span> : null}
+                        </span>
+                        {hourlyRate > 0 ? (
+                          <span className="text-sand-500">{fmtEur(hoursMin * hourlyRate)} – {fmtEur(hoursMax * hourlyRate)}</span>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {overdue > 0 ? (
+                      <>
+                        <span className="text-sand-300">·</span>
+                        <span className="text-rose-700"><b>{overdue}</b> überfällig</span>
+                      </>
+                    ) : null}
+                    <span className="ml-auto flex items-center gap-1.5">
+                      {bulkActive ? (
+                        <span className="text-sand-500">{bulkEstimateState.done}/{bulkEstimateState.total} schätze…</span>
+                      ) : null}
+                      {missing + staleCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => estimateAllVisible(explorerFolders, { onlyMissing: true })}
+                          disabled={bulkActive}
+                          className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-800 hover:bg-sky-100 disabled:opacity-60"
+                          title="Fehlende & veraltete KI-Schätzungen nachholen"
+                        >
+                          ≈ Fehlende schätzen ({missing + staleCount})
+                        </button>
+                      ) : null}
+                      {explorerFolders.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => estimateAllVisible(explorerFolders, { onlyMissing: false })}
+                          disabled={bulkActive}
+                          className="rounded-lg border border-sand-200 bg-white px-2.5 py-1 text-[11px] text-sand-700 hover:bg-sand-100 disabled:opacity-60"
+                          title="Alle sichtbaren neu schätzen"
+                        >
+                          Alle neu
+                        </button>
+                      ) : null}
+                      {estimateCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={clearAllEstimates}
+                          disabled={bulkActive}
+                          className="rounded-lg border border-sand-200 bg-white px-2.5 py-1 text-[11px] text-sand-500 hover:bg-rose-50 hover:text-rose-700 disabled:opacity-60"
+                          title="Alle Schätzungen löschen"
+                        >
+                          Leeren
+                        </button>
+                      ) : null}
+                    </span>
+                  </div>
+                );
+              })()}
+              <div className={explorerLayout === "list"
+                ? "overflow-hidden rounded-2xl border border-sand-200 bg-white"
+                : "grid gap-3 xl:grid-cols-4"}>
                 {explorerFolders.map((folder) => {
                   const meta = statusMeta[folder.status] || statusMeta.yellow;
+                  const tagMeta = getProjectFolderTagMeta(folder.project_tag);
                   const folderProgress = Number(folder.summary?.progress ?? 0);
+                  const estimate = estimateCache[folder.id];
+                  const estimatePending = Boolean(estimatesPending[folder.id]);
+                  const fmtEur = (value) =>
+                    new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
+                  const renderEstimate = () => {
+                    if (estimatePending) {
+                      return <span className="text-[10px] italic text-sand-400">≈ schätze…</span>;
+                    }
+                    if (!estimate) {
+                      return (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); requestEstimate(folder); }}
+                          className="text-[10px] italic text-sand-400 hover:text-sand-600"
+                          title="KI-Aufwandsschätzung anfordern"
+                        >
+                          ≈ schätzen
+                        </button>
+                      );
+                    }
+                    const min = Math.round(Number(estimate.hours_min || 0));
+                    const max = Math.round(Number(estimate.hours_max || 0));
+                    const stale = isEstimateStale(folder);
+                    const conf = String(estimate.confidence || "low").toLowerCase();
+                    const confDot = conf === "high" ? "bg-emerald-500" : conf === "medium" ? "bg-sky-400" : "bg-sand-400";
+                    const isFallback = estimate.source === "fallback";
+                    const ageStr = formatEstimateAge(estimate.generated_at);
+                    const breakdownText = Array.isArray(estimate.breakdown) && estimate.breakdown.length
+                      ? "\n\nAufschlüsselung:\n" + estimate.breakdown
+                          .map((row) => `• ${row.stream}: ${Math.round(row.hours_min)}–${Math.round(row.hours_max)} h`)
+                          .join("\n")
+                      : "";
+                    const tooltip = [
+                      isFallback ? "Heuristik (keine KI)" : "KI-Schätzung",
+                      `Konfidenz: ${conf}`,
+                      ageStr,
+                      stale ? "veraltet — Klick = neu schätzen" : "Klick = neu schätzen",
+                      estimate.reasoning ? `\n${estimate.reasoning}` : ""
+                    ].filter(Boolean).join(" · ") + breakdownText;
+                    return (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); requestEstimate(folder); }}
+                        className={`inline-flex items-center gap-1 text-[10px] ${stale ? "text-amber-600" : "text-sand-500"} hover:text-sand-800`}
+                        title={tooltip}
+                      >
+                        <span className={`h-1.5 w-1.5 rounded-full ${confDot}`} />
+                        <span className="italic">{isFallback ? "≈" : "KI"} {min}–{max} h</span>
+                        {hourlyRate > 0 ? <span className="text-sand-400">· {fmtEur(min * hourlyRate)}–{fmtEur(max * hourlyRate)}</span> : null}
+                        {stale ? <span className="text-amber-500">·↻</span> : null}
+                      </button>
+                    );
+                  };
+                  if (explorerLayout === "list") {
+                    const fav = isFavorite(folder.id);
+                    return (
+                      <div
+                        key={folder.id}
+                        onClick={() => setSelectedFolderId(folder.id)}
+                        className="flex w-full cursor-pointer items-center gap-3 border-b border-sand-100 px-4 py-2.5 text-left last:border-b-0 hover:bg-sand-50"
+                      >
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); toggleFavorite(folder.id); }}
+                          className={`shrink-0 rounded p-1 transition ${fav ? "text-amber-500" : "text-sand-300 hover:text-amber-500"}`}
+                          title={fav ? "Favorit entfernen" : "Als Favorit markieren"}
+                          aria-label="Favorit"
+                        >
+                          <Star size={14} className={fav ? "fill-amber-400" : ""} />
+                        </button>
+                        <span className={`h-6 w-1 shrink-0 rounded-full ${tagMeta.dot}`} title={tagMeta.label} />
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} title={meta.label} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-sand-900">{folder.title}</div>
+                          <div className="truncate text-[11px] text-sand-500">{folder.customer || "Ohne Kunde"}</div>
+                        </div>
+                        <div className="hidden w-20 shrink-0 text-right text-[11px] tabular-nums text-sand-500 sm:block">
+                          {folderProgress}%
+                        </div>
+                        <div className="hidden w-20 shrink-0 text-right text-[11px] tabular-nums text-sand-500 sm:block">
+                          {folder.summary?.open_task_count || 0} offen
+                        </div>
+                        <div className="w-32 shrink-0 text-right" onClick={(e) => e.stopPropagation()}>
+                          {renderEstimate()}
+                        </div>
+                      </div>
+                    );
+                  }
+                  const fav = isFavorite(folder.id);
                   return (
                     <div
                       key={folder.id}
                       className="overflow-hidden rounded-[20px] border border-sand-200 bg-white/70 transition hover:border-sand-300 hover:bg-white hover:shadow-md"
                     >
-                      <div className={`h-1.5 w-full ${meta.dot}`} />
+                      <div className={`h-1.5 w-full ${tagMeta.dot}`} title={tagMeta.label} />
                       <div className="p-4">
                         <div className="mb-2 flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-sand-900">{folder.title}</div>
-                            <div className="mt-0.5 truncate text-xs text-sand-500">{folder.customer || "Ohne Kunde"}</div>
+                          <div className="min-w-0 flex items-start gap-2">
+                            <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${meta.dot}`} title={meta.label} />
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-sand-900">{folder.title}</div>
+                              <div className="mt-0.5 truncate text-xs text-sand-500">{folder.customer || "Ohne Kunde"}</div>
+                            </div>
                           </div>
                           <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleFavorite(folder.id)}
+                              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border ${
+                                fav
+                                  ? "border-amber-300 bg-amber-50 text-amber-600"
+                                  : "border-sand-200 bg-white text-sand-400 hover:bg-sand-50 hover:text-amber-500"
+                              }`}
+                              title={fav ? "Favorit entfernen" : "Als Favorit markieren"}
+                              aria-label="Favorit"
+                            >
+                              <Star size={14} className={fav ? "fill-amber-400" : ""} />
+                            </button>
                             <button
                               type="button"
                               onClick={() => handleArchiveFolder(folder.id, true)}
@@ -2354,29 +3094,21 @@ export default function ProjectFoldersView() {
                           </div>
                         </div>
                         <button type="button" onClick={() => setSelectedFolderId(folder.id)} className="block w-full text-left">
-                          <div className="flex flex-wrap gap-1">
-                            {folder.project_tag ? (
-                              <Tag className={getProjectFolderTagMeta(folder.project_tag).className}>
-                                {folder.project_tag_label || getProjectFolderTagMeta(folder.project_tag).label}
-                              </Tag>
-                            ) : null}
-                            {priorityMeta[folder.priority] ? (
-                              <Tag className="border-sand-200 bg-sand-50 text-sand-600">{priorityMeta[folder.priority]}</Tag>
-                            ) : null}
-                            {folder.summary?.stream_count ? (
-                              <Tag className="border-sand-200 bg-sand-50 text-sand-600">{folder.summary.stream_count} Bausteine</Tag>
-                            ) : null}
-                            {folder.invoice_draft_count ? (
+                          {folder.invoice_draft_count ? (
+                            <div className="flex flex-wrap gap-1">
                               <Tag className="border-sky-200 bg-sky-50 text-sky-700">{folder.invoice_draft_count} Rechnungen</Tag>
-                            ) : null}
-                          </div>
+                            </div>
+                          ) : null}
                           <div className="mt-3 flex items-center gap-2">
                             <div className="h-1.5 flex-1 rounded-full bg-sand-100">
-                              <div className={`h-1.5 rounded-full ${meta.dot}`} style={{ width: `${folderProgress}%` }} />
+                              <div className={`h-1.5 rounded-full ${tagMeta.dot}`} style={{ width: `${folderProgress}%` }} />
                             </div>
                             <span className="shrink-0 text-[11px] tabular-nums text-sand-500">{folderProgress}%</span>
                           </div>
-                          <div className="mt-1.5 text-[11px] text-sand-500">{folder.summary?.open_task_count || 0} offene Aufgaben</div>
+                          <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-sand-500">
+                            <span>{folder.summary?.open_task_count || 0} offene Aufgaben</span>
+                            <span onClick={(e) => e.stopPropagation()}>{renderEstimate()}</span>
+                          </div>
                         </button>
                       </div>
                     </div>
@@ -2384,7 +3116,9 @@ export default function ProjectFoldersView() {
                 })}
                 {!explorerFolders.length ? (
                   <div className="rounded-[24px] border border-dashed border-sand-300 p-6 text-sm text-sand-500">
-                    Noch keine aktive Projektmappe vorhanden.
+                    {explorerSearch || explorerStatusFilter
+                      ? "Kein Projekt passt zur aktuellen Filterauswahl."
+                      : "Noch keine aktive Projektmappe vorhanden."}
                   </div>
                 ) : null}
               </div>
@@ -2790,7 +3524,7 @@ export default function ProjectFoldersView() {
               const deadlineUrgent = deadlineDiff !== null && deadlineDiff <= 7;
               const deadlineOverdue = deadlineDiff !== null && deadlineDiff < 0;
               return (
-              <section className="overflow-hidden rounded-[22px] border border-white/70 bg-white/84 shadow-soft backdrop-blur">
+              <section className="sticky top-2 z-30 overflow-hidden rounded-[22px] border border-white/70 bg-white/90 shadow-soft backdrop-blur">
                 <div className={`h-[3px] w-full ${folderMeta.dot}`} />
                 <div className="space-y-3 px-4 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2857,43 +3591,131 @@ export default function ProjectFoldersView() {
                     </label>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 rounded-[14px] border border-sand-200 bg-sand-50/80 p-1.5">
-                    <button type="button" onClick={() => setChecklistOpen(true)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-700 hover:bg-emerald-100">
-                      <ListChecks size={12} /> Checkliste
-                    </button>
-                    <button type="button" onClick={() => setTimelineOpen(true)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1.5 text-xs text-sky-700 hover:bg-sky-100">
-                      <GitBranch size={12} /> Timeline
-                    </button>
-                    <button type="button" onClick={() => setCalculationOpen(true)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs text-violet-700 hover:bg-violet-100">
-                      <TrendingUp size={12} /> Kalkulation
-                    </button>
-                    <button type="button" onClick={() => setMaterialOpen(true)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700 hover:bg-amber-100">
-                      <FolderKanban size={12} /> Material
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                  <div className="grid grid-cols-3 gap-1.5">
                     <StatTile label="Fortschritt" value={`${activeSummary.progress || 0}%`}
                       accent={Number(activeSummary.progress || 0) >= 80 ? "emerald" : Number(activeSummary.progress || 0) >= 40 ? "sky" : "sand"}
                       icon={TrendingUp} compact />
-                    <StatTile label="Bausteine" value={activeSummary.stream_count || 0} accent="sand" icon={FolderKanban} compact />
                     <StatTile label="Aufgaben" value={taskCompletionLabel}
                       accent="sand" icon={ListChecks} compact />
-                    <StatTile label="Blocker" value={blockerCount}
-                      accent="rose" icon={ShieldAlert} compact />
-                    <StatTile label="Rückmeldungen" value={feedbackCount}
-                      accent="amber" icon={Zap} compact />
+                    <StatTile label="Überfällig" value={overdueTaskCount}
+                      accent={overdueTaskCount > 0 ? "rose" : "sand"} icon={AlertTriangle} compact />
                   </div>
+                  {(activeSummary.stream_count > 0 || blockerCount > 0 || feedbackCount > 0) ? (
+                    <details className="group">
+                      <summary className="flex cursor-pointer select-none list-none items-center gap-2 px-1 py-1 text-[10px] uppercase tracking-[0.2em] text-sand-400 hover:text-sand-600">
+                        <ChevronRight size={12} className="transition group-open:rotate-90" />
+                        Weitere Kennzahlen
+                      </summary>
+                      <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                        <StatTile label="Bausteine" value={activeSummary.stream_count || 0} accent="sand" icon={FolderKanban} compact />
+                        <StatTile label="Blocker" value={blockerCount} accent="rose" icon={ShieldAlert} compact />
+                        <StatTile label="Rückmeldungen" value={feedbackCount} accent="amber" icon={Zap} compact />
+                      </div>
+                    </details>
+                  ) : null}
+
+	                  <div className={`rounded-[14px] border px-3 py-2 ${projectHealthToneClass[projectHealth.tone] || projectHealthToneClass.sand}`}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-[0.16em]">{projectHealth.label}</span>
+                          <span className="text-xs opacity-70">{projectPulseLabel}</span>
+                        </div>
+                        <div className="mt-1 text-sm font-medium">
+                          {projectHealth.nextAction.label}
+                          {projectHealth.nextAction.detail ? <span className="font-normal opacity-75"> · {projectHealth.nextAction.detail}</span> : null}
+                        </div>
+                      </div>
+                      {projectHealth.nextAction.streamId ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedStreamId(projectHealth.nextAction.streamId);
+                            if (projectHealth.nextAction.taskId) setSelectedTaskId(projectHealth.nextAction.taskId);
+                          }}
+                          className="shrink-0 rounded-xl border border-current/20 bg-white/70 px-3 py-1.5 text-xs font-medium hover:bg-white"
+                        >
+                          Öffnen
+                        </button>
+                      ) : null}
+                    </div>
+	                    {projectHealth.reasons.length ? (
+	                      <details className="group mt-1">
+	                        <summary className="flex cursor-pointer select-none list-none items-center gap-1.5 text-[10px] uppercase tracking-[0.16em] opacity-70 hover:opacity-100">
+	                          <ChevronRight size={11} className="transition group-open:rotate-90" />
+	                          Details · {projectHealth.reasons.length}
+	                        </summary>
+	                        <div className="mt-2 flex flex-wrap gap-1.5">
+	                          {projectHealth.reasons.map((reason, index) => (
+	                            <button
+	                              key={`${reason.text}_${index}`}
+	                              type="button"
+	                              onClick={() => {
+	                                if (reason.streamId) setSelectedStreamId(reason.streamId);
+	                                if (reason.taskId) setSelectedTaskId(reason.taskId);
+	                              }}
+	                              className={`rounded-full border px-2.5 py-1 text-[11px] ${projectHealthToneClass[reason.tone] || projectHealthToneClass.sand} ${
+	                                reason.streamId ? "hover:brightness-95" : "cursor-default"
+	                              }`}
+	                            >
+	                              {reason.text}
+	                            </button>
+	                          ))}
+	                        </div>
+	                      </details>
+	                    ) : null}
+                  </div>
+
+                  {globalActivities.length > 0 ? (
+                    <details className="group">
+                      <summary className="flex cursor-pointer select-none list-none items-center gap-2 rounded-xl px-1 py-1 text-[10px] uppercase tracking-[0.2em] text-sand-400 hover:text-sand-600">
+                        <ChevronRight size={12} className="transition group-open:rotate-90" />
+                        Protokoll · {globalActivities.length} Einträge
+                      </summary>
+                      <div className="mt-1.5 space-y-px overflow-hidden rounded-[14px] border border-sand-100 bg-sand-50/60">
+                        {globalActivities.slice(0, 10).map((entry) => (
+                          <div key={entry.id} className="flex items-baseline justify-between gap-3 px-3 py-1.5">
+                            <span className="min-w-0 truncate text-[11px] text-sand-700">{entry.text}</span>
+                            <span className="shrink-0 text-[10px] tabular-nums text-sand-400">
+                              {entry.at ? new Date(entry.at).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
                 </div>
               </section>
               );
             })()}
 
-            {selectedStream ? (
+            <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-sand-200 bg-sand-50/70 p-1">
+              {[
+                { key: "bausteine", label: "Bausteine", icon: FolderKanban },
+                { key: "checkliste", label: "Checkliste", icon: ListChecks },
+                { key: "timeline", label: "Timeline", icon: GitBranch },
+                { key: "kalkulation", label: "Kalkulation", icon: TrendingUp },
+                { key: "material", label: "Material", icon: FileText }
+              ].map((tab) => {
+                const Icon = tab.icon;
+                const active = activeProjectTab === tab.key;
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setActiveProjectTab(tab.key)}
+                    className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition ${
+                      active ? "bg-white text-sand-900 shadow-sm" : "text-sand-500 hover:text-sand-900"
+                    }`}
+                  >
+                    <Icon size={13} />
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {activeProjectTab === "bausteine" ? (
               <div className="space-y-2">
                 <section className="rounded-[30px] border border-white/70 bg-white/84 p-4 shadow-soft">
                   <div className="mb-3 space-y-2">
@@ -2916,20 +3738,6 @@ export default function ProjectFoldersView() {
                           className={`rounded-lg px-2.5 py-1 text-[11px] ${streamLayoutMode === "flow" ? "bg-white text-sand-900 shadow-sm" : "text-sand-500 hover:text-sand-700"}`}
                         >
                           Flowchart
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setStreamLayoutMode("checklist")}
-                          className={`rounded-lg px-2.5 py-1 text-[11px] ${streamLayoutMode === "checklist" ? "bg-white text-sand-900 shadow-sm" : "text-sand-500 hover:text-sand-700"}`}
-                        >
-                          Checkliste
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setStreamLayoutMode("calendar")}
-                          className={`rounded-lg px-2.5 py-1 text-[11px] ${streamLayoutMode === "calendar" ? "bg-white text-sand-900 shadow-sm" : "text-sand-500 hover:text-sand-700"}`}
-                        >
-                          Kalender
                         </button>
                       </div>
                     </div>
@@ -2956,38 +3764,52 @@ export default function ProjectFoldersView() {
                       {activeStreams.map((stream) => {
                         const isSelected = stream.id === selectedStreamId;
                         const streamOpenTasks = getOpenTaskCount(stream);
-                        const streamProgress = getStreamProgress(stream);
                         const streamTasks = Array.isArray(stream.tasks) ? stream.tasks : [];
                         const workflowStatus = getWorkflowStatus(stream);
                         return (
                           <section
                             key={stream.id}
                             onClick={() => setSelectedStreamId(stream.id)}
-                            className={`overflow-visible rounded-[18px] border text-left transition ${
-                              isSelected
-                                ? "border-sky-200 bg-sky-50/80 shadow-soft"
-                                : "border-sand-200 bg-white hover:scale-[1.004] hover:border-sand-300 hover:shadow-md"
-                            }`}
+                            onDragOver={(e) => {
+                              if (e.dataTransfer.types.includes("application/x-task")) {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = "move";
+                              }
+                            }}
+                            onDrop={(e) => {
+                              const payload = e.dataTransfer.getData("application/x-task");
+                              if (!payload) return;
+                              e.preventDefault();
+                              try {
+                                const { sourceStreamId, taskId } = JSON.parse(payload);
+                                moveTaskToStream(sourceStreamId, taskId, stream.id);
+                              } catch {}
+                            }}
+	                            className={`overflow-visible rounded-[18px] border text-left transition ${
+	                              isSelected
+	                                ? "border-sky-200 bg-sky-50/80 shadow-soft"
+	                                : "border-sand-200 bg-white hover:border-sand-300 hover:shadow-sm"
+	                            }`}
                           >
                             <div className={`h-[3px] w-full ${(statusMeta[stream.status] || statusMeta.yellow).dot}`} />
                             <div className="p-3">
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2">
-                                  <input
-                                    value={stream.title || ""}
-                                    onFocus={() => setSelectedStreamId(stream.id)}
+	                                  <input
+	                                    value={stream.title || ""}
+	                                    onFocus={() => setSelectedStreamId(stream.id)}
                                     onChange={(e) =>
                                       mutateStreamById(stream.id, (current) => ({ ...current, title: e.target.value }))
                                     }
                                     className={`min-w-0 flex-1 border-0 bg-transparent p-0 text-[15px] font-semibold leading-5 outline-none ${
                                       isSelected ? "text-slate-900 placeholder:text-slate-400" : "text-sand-900 placeholder:text-sand-400"
                                     }`}
-                                    placeholder="Baustein"
-                                  />
-                                  <Tag className={workflowStatusMeta[workflowStatus]?.tone || workflowStatusMeta.open.tone}>
-                                    {workflowStatusMeta[workflowStatus]?.label || "offen"}
-                                  </Tag>
+	                                    placeholder="Baustein"
+	                                  />
+	                                  <Tag className={workflowStatusMeta[workflowStatus]?.tone || workflowStatusMeta.open.tone}>
+	                                    {workflowStatusMeta[workflowStatus]?.label || "offen"}
+	                                  </Tag>
                                   <button
                                     type="button"
                                     onClick={() => removeStream(stream.id)}
@@ -3001,26 +3823,51 @@ export default function ProjectFoldersView() {
                                     <X size={11} />
                                   </button>
                                 </div>
-                                <div className={`mt-0.5 text-[10px] leading-4 ${isSelected ? "text-slate-600" : "text-sand-600"}`}>
-                                  {stream.short_status || getPrimaryGap(stream) || "—"}
-                                </div>
+	                                <div className={`mt-0.5 text-[10px] leading-4 ${isSelected ? "text-slate-600" : "text-sand-600"}`}>
+	                                  {stream.short_status || getPrimaryGap(stream) || "—"}
+	                                </div>
+	                              </div>
+	                            </div>
+	                            {(streamOpenTasks > 0 || stream.owner) && !isSelected ? (
+	                              <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-sand-500">
+	                                <span>{streamOpenTasks > 0 ? `${streamOpenTasks} offen` : ""}</span>
+	                                {stream.owner ? <span className="truncate">{stream.owner}</span> : null}
+	                              </div>
+	                            ) : null}
+	                            {isSelected ? (
+	                            <div className="mt-2 flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center gap-1">
+                                {["red", "yellow", "green", "blue"].map((statusKey) => (
+                                  <button
+                                    key={statusKey}
+                                    type="button"
+                                    onClick={() =>
+                                      mutateStreamById(stream.id, (current) => ({ ...current, status: statusKey }))
+                                    }
+                                    title={statusMeta[statusKey].label}
+                                    aria-label={`Status ${statusMeta[statusKey].label}`}
+                                    className={`h-3 w-3 rounded-full ${statusMeta[statusKey].dot} transition ${
+                                      stream.status === statusKey
+                                        ? "ring-2 ring-offset-1 ring-sand-900/40 scale-110"
+                                        : "opacity-40 hover:opacity-100"
+                                    }`}
+                                  />
+                                ))}
                               </div>
+                              <input
+                                list="project-folder-employees"
+                                value={stream.owner || ""}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) =>
+                                  mutateStreamById(stream.id, (current) => ({ ...current, owner: e.target.value }))
+                                }
+                                placeholder="Zuständig"
+                                className="w-32 rounded-md border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-700 outline-none placeholder:text-sand-400 focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                              />
                             </div>
-                            <div className="mt-2 flex items-center gap-2">
-                              <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-sand-100">
-                                <div
-                                  className={`h-1.5 rounded-full transition-all ${(statusMeta[stream.status] || statusMeta.yellow).dot}`}
-                                  style={{ width: `${streamProgress}%` }}
-                                />
-                              </div>
-                              <span className="shrink-0 tabular-nums text-[10px] text-sand-500">{streamProgress}%</span>
-                              {streamOpenTasks > 0 ? (
-                                <Tag className="border-amber-200 bg-amber-50 text-amber-700">
-                                  {streamOpenTasks} offen
-                                </Tag>
-                              ) : null}
-                            </div>
-                            <div className={`mt-2.5 rounded-[14px] border p-1.5 ${isSelected ? "border-sky-100 bg-white/80" : "border-black/5 bg-black/5"}`}>
+                            ) : null}
+	                            {isSelected ? (
+	                            <div className="mt-2.5 rounded-[14px] border border-sky-100 bg-white/80 p-1.5">
                               <div className="flex items-center gap-1.5">
                                 <input
                                   value={taskDrafts[stream.id] || ""}
@@ -3051,7 +3898,7 @@ export default function ProjectFoldersView() {
                                   <Plus size={11} />
                                   Neu
                                 </button>
-                              </div>
+	                            </div>
                               <div className="mt-1.5 space-y-1">
                                 {streamTasks.length ? (() => {
                                   const openTasks = streamTasks.filter((t) => String(t.status || "open").trim().toLowerCase() !== "done");
@@ -3068,7 +3915,16 @@ export default function ProjectFoldersView() {
                                     return (
                                       <div
                                         key={task.id}
-                                        className={`relative rounded-lg border bg-white px-2.5 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] transition-colors ${accentClass} ${
+                                        draggable
+                                        onDragStart={(e) => {
+                                          e.stopPropagation();
+                                          e.dataTransfer.effectAllowed = "move";
+                                          e.dataTransfer.setData(
+                                            "application/x-task",
+                                            JSON.stringify({ sourceStreamId: stream.id, taskId: task.id })
+                                          );
+                                        }}
+                                        className={`relative cursor-grab rounded-lg border bg-white px-2.5 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] transition-colors active:cursor-grabbing ${accentClass} ${
                                           isTaskSelected ? "ring-2 ring-sky-200" : ""
                                         } ${isSelected ? "border-sky-200" : "border-sand-200"
                                         }`}
@@ -3242,8 +4098,8 @@ export default function ProjectFoldersView() {
                                                 >
                                                   <X size={11} />
                                                 </button>
-                                              </div>
-                                            </div>
+	                            </div>
+	                            </div>
                                           </div>
                                         </div>
                                       </div>
@@ -3273,10 +4129,11 @@ export default function ProjectFoldersView() {
                                     Noch keine Aufgaben
                                   </div>
                                 )}
-                              </div>
-                            </div>
-                            </div>
-                          </section>
+	                              </div>
+	                            </div>
+	                            ) : null}
+	                            </div>
+	                          </section>
                         );
                       })}
                     </div>
@@ -3626,6 +4483,49 @@ export default function ProjectFoldersView() {
                       </section>
                     </div>
                     ) : streamLayoutMode === "checklist" ? (
+                    <div className="space-y-2">
+                      {(() => {
+                        const selectedIds = Object.keys(checklistSelection).filter((id) => checklistSelection[id]);
+                        if (!selectedIds.length) return null;
+                        const applyBulk = (mutator) => {
+                          mutateFolder((folder) => {
+                            folder.content = folder.content || { streams: [] };
+                            folder.content.streams = (folder.content.streams || []).map((s) => ({
+                              ...s,
+                              tasks: (s.tasks || []).map((t) => (selectedIds.includes(t.id) ? mutator(t) : t))
+                            }));
+                            return appendActivity(folder, `${selectedIds.length} Aufgaben in Bulk geändert`);
+                          });
+                        };
+                        const deleteBulk = () => {
+                          mutateFolder((folder) => {
+                            folder.content = folder.content || { streams: [] };
+                            folder.content.streams = (folder.content.streams || []).map((s) => ({
+                              ...s,
+                              tasks: (s.tasks || []).filter((t) => !selectedIds.includes(t.id))
+                            }));
+                            return appendActivity(folder, `${selectedIds.length} Aufgaben gelöscht`);
+                          });
+                          setChecklistSelection({});
+                        };
+                        return (
+                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-[14px] border border-sky-200 bg-sky-50 px-3 py-2">
+                            <div className="text-xs font-medium text-sky-800">{selectedIds.length} ausgewählt</div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <button type="button" onClick={() => applyBulk((t) => ({ ...t, status: "done" }))}
+                                className="rounded-md border border-emerald-200 bg-white px-2 py-1 text-[11px] text-emerald-700 hover:bg-emerald-50">erledigt</button>
+                              <button type="button" onClick={() => applyBulk((t) => ({ ...t, status: "open" }))}
+                                className="rounded-md border border-sand-200 bg-white px-2 py-1 text-[11px] text-sand-700 hover:bg-sand-50">offen</button>
+                              <button type="button" onClick={() => applyBulk((t) => ({ ...t, status: "doing" }))}
+                                className="rounded-md border border-sky-200 bg-white px-2 py-1 text-[11px] text-sky-700 hover:bg-sky-50">läuft</button>
+                              <button type="button" onClick={deleteBulk}
+                                className="rounded-md border border-rose-200 bg-white px-2 py-1 text-[11px] text-rose-700 hover:bg-rose-50">löschen</button>
+                              <button type="button" onClick={() => setChecklistSelection({})}
+                                className="rounded-md border border-sand-200 bg-white px-2 py-1 text-[11px] text-sand-500 hover:bg-sand-50">Auswahl leeren</button>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     <div className="overflow-hidden rounded-[24px] border border-sand-200 bg-white">
                       {groupedChecklistTasks.length ? (
                         groupedChecklistTasks.map((group) => (
@@ -3645,8 +4545,22 @@ export default function ProjectFoldersView() {
                                 const meta = taskStatusMeta[statusKey] || taskStatusMeta.open;
                                 const taskDepth = getTaskDepth(task);
                                 return (
-                                  <div key={task.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                                    <div className="min-w-0 flex items-center gap-3" style={{ marginLeft: `${taskDepth * 18}px` }}>
+	                                  <div key={task.id} className={`px-4 py-3 ${checklistSelection[task.id] ? "bg-sky-50/60" : ""}`}>
+	                                    <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+	                                    <div className="min-w-0 flex flex-1 items-start gap-3" style={{ marginLeft: `${taskDepth * 18}px` }}>
+	                                      <input
+	                                        type="checkbox"
+	                                        checked={Boolean(checklistSelection[task.id])}
+                                        onChange={(e) =>
+                                          setChecklistSelection((prev) => {
+                                            const next = { ...prev };
+                                            if (e.target.checked) next[task.id] = true; else delete next[task.id];
+                                            return next;
+                                          })
+                                        }
+                                        className="h-3.5 w-3.5 cursor-pointer accent-sky-600"
+                                        aria-label="Auswählen"
+                                      />
                                       <span className="w-5 shrink-0 text-right text-xs tabular-nums text-sand-400">{index + 1}.</span>
                                       <button
                                         type="button"
@@ -3667,13 +4581,114 @@ export default function ProjectFoldersView() {
                                         }`}
                                         aria-label={statusKey === "done" ? "Als offen markieren" : "Als erledigt markieren"}
                                         title={statusKey === "done" ? "Als offen markieren" : "Als erledigt markieren"}
-                                      >
-                                        {statusKey === "done" ? "✓" : ""}
-                                      </button>
-                                      <span className={`text-sm text-sand-900 ${statusKey === "done" ? "line-through text-sand-400" : ""}`}>{task.title || "Aufgabe"}</span>
-                                    </div>
-                                    <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] font-medium ${meta.tone}`}>{meta.label}</span>
-                                  </div>
+	                                      >
+	                                        {statusKey === "done" ? "✓" : ""}
+	                                      </button>
+	                                      <div className="min-w-0 flex-1 space-y-2">
+	                                        <input
+	                                          value={task.title || ""}
+	                                          onFocus={() => {
+	                                            setSelectedStreamId(group.id);
+	                                            setSelectedTaskId(task.id);
+	                                          }}
+	                                          onKeyDown={(e) => handleTaskHierarchyKeyDown(group.id, task.id, group.tasks.map((item) => item.id), e)}
+	                                          onChange={(e) =>
+	                                            mutateStreamById(group.id, (current) => ({
+	                                              ...current,
+	                                              tasks: (current.tasks || []).map((item) =>
+	                                                item.id === task.id ? { ...item, title: e.target.value } : item
+	                                              )
+	                                            }))
+	                                          }
+	                                          className={`w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-sm font-medium outline-none focus:border-sky-200 focus:bg-white focus:ring-2 focus:ring-sky-100 ${
+	                                            statusKey === "done" ? "text-sand-400 line-through" : "text-sand-900"
+	                                          }`}
+	                                          placeholder="Aufgabe"
+	                                        />
+	                                        {String(task.note || "").trim() || taskNoteEditorId === `checklist_${group.id}_${task.id}` ? (
+	                                          <textarea
+	                                            rows={2}
+	                                            value={task.note || ""}
+	                                            onFocus={() => setTaskNoteEditorId(`checklist_${group.id}_${task.id}`)}
+	                                            onChange={(e) =>
+	                                              mutateStreamById(group.id, (current) => ({
+	                                                ...current,
+	                                                tasks: (current.tasks || []).map((item) =>
+	                                                  item.id === task.id ? { ...item, note: e.target.value } : item
+	                                                )
+	                                              }))
+	                                            }
+	                                            placeholder="Notiz zur Aufgabe"
+	                                            className="w-full resize-y rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs text-sand-800 outline-none placeholder:text-amber-500 focus:border-amber-300 focus:bg-white focus:ring-2 focus:ring-amber-100"
+	                                          />
+	                                        ) : null}
+	                                      </div>
+	                                    </div>
+	                                    <div className="flex shrink-0 flex-wrap items-center gap-1.5 pl-8 lg:pl-0">
+	                                      <select
+	                                        value={statusKey}
+	                                        onChange={(e) =>
+	                                          mutateStreamById(group.id, (current) => ({
+	                                            ...current,
+	                                            tasks: (current.tasks || []).map((item) =>
+	                                              item.id === task.id ? { ...item, status: e.target.value } : item
+	                                            )
+	                                          }))
+	                                        }
+	                                        className={`rounded-full border px-2 py-1 text-[11px] font-medium outline-none ${meta.tone}`}
+	                                        title="Status bearbeiten"
+	                                      >
+	                                        {taskStatusOrder.map((key) => (
+	                                          <option key={key} value={key}>
+	                                            {taskStatusMeta[key]?.label || key}
+	                                          </option>
+	                                        ))}
+	                                      </select>
+	                                      <input
+	                                        type="date"
+	                                        value={task.due_date || ""}
+	                                        onChange={(e) =>
+	                                          mutateStreamById(group.id, (current) => ({
+	                                            ...current,
+	                                            tasks: (current.tasks || []).map((item) =>
+	                                              item.id === task.id ? { ...item, due_date: e.target.value } : item
+	                                            )
+	                                          }))
+	                                        }
+	                                        className="rounded-full border border-sand-200 bg-white px-2 py-1 text-[11px] text-sand-700 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+	                                        title="Fälligkeit bearbeiten"
+	                                      />
+	                                      <button
+	                                        type="button"
+	                                        onClick={() => setTaskNoteEditorId((current) => (current === `checklist_${group.id}_${task.id}` ? "" : `checklist_${group.id}_${task.id}`))}
+	                                        className={`inline-flex h-7 w-7 items-center justify-center rounded-full border ${
+	                                          String(task.note || "").trim()
+	                                            ? "border-amber-300 bg-amber-100 text-amber-700"
+	                                            : "border-sand-200 bg-white text-sand-500 hover:bg-sand-50"
+	                                        }`}
+	                                        title="Notiz bearbeiten"
+	                                        aria-label="Notiz bearbeiten"
+	                                      >
+	                                        <StickyNote size={13} />
+	                                      </button>
+	                                      <button
+	                                        type="button"
+	                                        onClick={() =>
+	                                          mutateStreamById(group.id, (current) => ({
+	                                            ...current,
+	                                            tasks: (current.tasks || []).filter((item) => item.id !== task.id),
+	                                            task_links: (current.task_links || []).filter((link) => link.fromTaskId !== task.id && link.toTaskId !== task.id)
+	                                          }))
+	                                        }
+	                                        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
+	                                        title="Aufgabe löschen"
+	                                        aria-label="Aufgabe löschen"
+	                                      >
+	                                        <X size={12} />
+	                                      </button>
+	                                    </div>
+	                                    </div>
+	                                  </div>
                                 );
                               })}
                             </div>
@@ -3682,6 +4697,7 @@ export default function ProjectFoldersView() {
                       ) : (
                         <div className="p-8 text-center text-sm text-sand-500">Noch keine Aufgaben in den Bausteinen vorhanden.</div>
                       )}
+                    </div>
                     </div>
                     ) : (
                     <div className="space-y-4">
@@ -3836,106 +4852,168 @@ export default function ProjectFoldersView() {
         ))}
       </datalist>
 
-      {invoiceDialog.open ? (
+      {invoiceDialog.open ? (() => {
+        const selectedPositions = invoiceDialog.positions.filter((item) => item.selected);
+        const totalHours = selectedPositions.reduce((sum, item) => sum + (Number(item.hours) || 0), 0);
+        const totalNet = selectedPositions.reduce(
+          (sum, item) => sum + (Number(item.hours) || 0) * (Number(item.price) || 0),
+          0
+        );
+        const hasSelection = selectedPositions.length > 0;
+        const updatePosition = (taskId, patch) =>
+          setInvoiceDialog((prev) => ({
+            ...prev,
+            positions: prev.positions.map((entry) => (entry.taskId === taskId ? { ...entry, ...patch } : entry))
+          }));
+        const allSelected = invoiceDialog.positions.length > 0 && invoiceDialog.positions.every((p) => p.selected);
+        const toggleAll = (checked) =>
+          setInvoiceDialog((prev) => ({
+            ...prev,
+            positions: prev.positions.map((entry) => ({ ...entry, selected: checked }))
+          }));
+        return (
         <Modal
           title={`Fakturierung · ${invoiceDialog.folderTitle || "Projektmappe"}`}
-          onClose={() =>
-            setInvoiceDialog({
-              open: false,
-              folderId: null,
-              folderTitle: "",
-              invoiceTitle: "",
-              note: "",
-              positions: [],
-              improveBusy: false,
-              saveBusy: false
-            })
-          }
-          width="max-w-5xl"
+          onClose={() => setInvoiceDialog(INVOICE_DIALOG_INITIAL)}
+          width="max-w-6xl"
         >
-          <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
-              <label className="space-y-1">
-                <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Rechnungstitel</span>
-                <input
-                  className={inputClass}
-                  value={invoiceDialog.invoiceTitle}
-                  onChange={(e) => setInvoiceDialog((prev) => ({ ...prev, invoiceTitle: e.target.value }))}
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-sand-200 bg-white p-3">
+              <div className="grid gap-2 lg:grid-cols-[minmax(220px,1fr)_160px_110px_110px_130px_150px]">
+                <label className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-sand-500">Rechnungstitel</span>
+                  <input
+                    className={`${inputClass} h-9 py-1.5`}
+                    value={invoiceDialog.invoiceTitle}
+                    onChange={(e) => setInvoiceDialog((prev) => ({ ...prev, invoiceTitle: e.target.value }))}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-sand-500">Kunde · Nr.</span>
+                  <input
+                    className={`${inputClass} h-9 py-1.5`}
+                    placeholder="K-001"
+                    value={invoiceDialog.customerNumber}
+                    onChange={(e) => setInvoiceDialog((prev) => ({ ...prev, customerNumber: e.target.value }))}
+                  />
+                </label>
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-sand-500">Satz</span>
+                  <div className="h-9 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-right text-sm tabular-nums text-sand-800">
+                    {formatEur(hourlyRate)}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-sand-500">Pos.</span>
+                  <div className="h-9 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-right text-sm font-semibold tabular-nums text-sand-900">
+                    {selectedPositions.length}/{invoiceDialog.positions.length}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-sand-500">Stunden</span>
+                  <div className="h-9 rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-right text-sm font-semibold tabular-nums text-sand-900">
+                    {totalHours.toFixed(2)} h
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-[10px] uppercase tracking-[0.16em] text-emerald-700">Netto</span>
+                  <div className="h-9 rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-right text-sm font-semibold tabular-nums text-emerald-900">
+                    {formatEur(totalNet)}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-1 truncate text-[11px] text-sand-500">Kunde: {invoiceDialog.folderCustomer || "—"}</div>
+            </div>
+
+            <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
+              <label className="space-y-1 block">
+                <span className="text-[10px] uppercase tracking-[0.16em] text-sand-500">Hinweis intern</span>
+                <textarea
+                  className={`${textareaClass} min-h-[44px] py-1.5 text-xs`}
+                  rows={1}
+                  value={invoiceDialog.note}
+                  onChange={(e) => setInvoiceDialog((prev) => ({ ...prev, note: e.target.value }))}
+                  placeholder="Optionaler interner Hinweis"
                 />
               </label>
-              <div className="rounded-2xl border border-sand-200 bg-sand-50/70 px-4 py-3 text-sm text-sand-700">
-                {invoiceDialog.positions.filter((item) => item.selected).length} Positionen ausgewählt
+              <div className="flex items-end gap-2">
+                <label className="flex h-9 items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 text-xs text-sand-600">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={(e) => toggleAll(e.target.checked)}
+                  />
+                  Alle
+                </label>
+                <BtnAi onClick={improveInvoiceTexts} disabled={invoiceDialog.improveBusy || !hasSelection} icon={Sparkles}>
+                  {invoiceDialog.improveBusy ? "Verbessert…" : "KI-Texte"}
+                </BtnAi>
               </div>
             </div>
 
-            <label className="space-y-1">
-              <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Hinweis</span>
-              <textarea
-                className={textareaClass}
-                value={invoiceDialog.note}
-                onChange={(e) => setInvoiceDialog((prev) => ({ ...prev, note: e.target.value }))}
-                placeholder="Optionaler interner Hinweis oder Freitext zur Abrechnung"
-              />
-            </label>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-[20px] border border-sand-200 bg-sand-50/70 px-4 py-3">
-              <div className="text-sm text-sand-700">Aufgaben auswählen und Rechnungstexte bei Bedarf anpassen.</div>
-              <button
-                type="button"
-                onClick={improveInvoiceTexts}
-                disabled={invoiceDialog.improveBusy || !invoiceDialog.positions.some((item) => item.selected)}
-                className="inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-40"
-              >
-                <Sparkles size={14} />
-                {invoiceDialog.improveBusy ? "Verbessert…" : "KI-Textverbesserung"}
-              </button>
-            </div>
-
-            <div className="space-y-3">
+            <div className="space-y-1.5 max-h-[52vh] overflow-y-auto pr-1">
               {invoiceDialog.positions.length ? invoiceDialog.positions.map((item) => {
                 const statusTone = taskStatusMeta[item.status]?.tone || taskStatusMeta.open.tone;
+                const lineSum = (Number(item.hours) || 0) * (Number(item.price) || 0);
                 return (
-                  <label key={item.taskId} className="block rounded-[22px] border border-sand-200 bg-white p-4">
-                    <div className="flex items-start gap-3">
+                  <div
+                    key={item.taskId}
+                    className={`rounded-xl border px-2.5 py-2 transition ${
+                      item.selected ? "border-sky-200 bg-sky-50/40" : "border-sand-200 bg-white"
+                    }`}
+                  >
+                    <div className="grid gap-2 lg:grid-cols-[24px_minmax(180px,260px)_minmax(260px,1fr)_86px_92px_120px]">
                       <input
                         type="checkbox"
+                        className="mt-1"
                         checked={item.selected}
-                        onChange={(e) =>
-                          setInvoiceDialog((prev) => ({
-                            ...prev,
-                            positions: prev.positions.map((entry) =>
-                              entry.taskId === item.taskId ? { ...entry, selected: e.target.checked } : entry
-                            )
-                          }))
-                        }
+                        onChange={(e) => updatePosition(item.taskId, { selected: e.target.checked })}
                       />
-                      <div className="min-w-0 flex-1 space-y-2">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-sand-900">{item.taskTitle}</div>
-                            <div className="mt-0.5 text-xs text-sand-500">{item.streamTitle}</div>
-                          </div>
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <Tag className={statusTone}>{taskStatusMeta[item.status]?.label || item.status}</Tag>
-                            {item.invoicedAt ? <Tag className="border-amber-200 bg-amber-50 text-amber-700">bereits fakturiert</Tag> : null}
-                          </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold text-sand-900">{item.taskTitle}</div>
+                        <div className="mt-0.5 truncate text-[10px] text-sand-500">{item.streamTitle}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <Tag className={statusTone}>{taskStatusMeta[item.status]?.label || item.status}</Tag>
+                          {item.invoicedAt ? <Tag className="border-amber-200 bg-amber-50 text-amber-700">fakturiert</Tag> : null}
                         </div>
-                        <textarea
-                          className={textareaClass}
-                          value={item.text}
-                          onChange={(e) =>
-                            setInvoiceDialog((prev) => ({
-                              ...prev,
-                              positions: prev.positions.map((entry) =>
-                                entry.taskId === item.taskId ? { ...entry, text: e.target.value } : entry
-                              )
-                            }))
-                          }
-                          placeholder="Text für die Rechnungsposition"
+                      </div>
+                      <textarea
+                        className={`${textareaClass} min-h-[54px] py-1.5 text-xs`}
+                        rows={2}
+                        value={item.text}
+                        onChange={(e) => updatePosition(item.taskId, { text: e.target.value })}
+                        placeholder="Text für die Rechnungsposition"
+                      />
+                      <label className="space-y-0.5">
+                        <span className="text-[10px] uppercase tracking-[0.14em] text-sand-500">Std.</span>
+                        <input
+                          type="number"
+                          step="0.25"
+                          min="0"
+                          className={`${inputClass} h-8 px-2 py-1 text-right text-xs tabular-nums`}
+                          value={item.hours}
+                          onChange={(e) => updatePosition(item.taskId, { hours: e.target.value })}
                         />
+                      </label>
+                      <label className="space-y-0.5">
+                        <span className="text-[10px] uppercase tracking-[0.14em] text-sand-500">€ / h</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className={`${inputClass} h-8 px-2 py-1 text-right text-xs tabular-nums`}
+                          value={item.price}
+                          onChange={(e) => updatePosition(item.taskId, { price: e.target.value })}
+                        />
+                      </label>
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] uppercase tracking-[0.14em] text-sand-500">Summe</span>
+                        <div className="h-8 rounded-xl border border-sand-200 bg-sand-50 px-2 py-1.5 text-right text-xs tabular-nums text-sand-800">
+                          {formatEur(lineSum)}
+                        </div>
                       </div>
                     </div>
-                  </label>
+                  </div>
                 );
               }) : (
                 <div className="rounded-[24px] border border-dashed border-sand-300 p-6 text-sm text-sand-500">
@@ -3944,44 +5022,49 @@ export default function ProjectFoldersView() {
               )}
             </div>
 
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setInvoiceDialog({
-                    open: false,
-                    folderId: null,
-                    folderTitle: "",
-                    invoiceTitle: "",
-                    note: "",
-                    positions: [],
-                    improveBusy: false,
-                    saveBusy: false
-                  })
-                }
-                className="inline-flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-4 py-2.5 text-sm text-sand-800 hover:bg-sand-50"
-              >
+            {invoiceDialog.pushResult ? (
+              <div className={`rounded-xl border px-3 py-2 text-xs ${
+                invoiceDialog.pushResult.ok
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-rose-200 bg-rose-50 text-rose-700"
+              }`}>
+                {invoiceDialog.pushResult.ok
+                  ? `An sevDesk übergeben${invoiceDialog.pushResult.sevdeskInvoiceId ? ` (Entwurf #${invoiceDialog.pushResult.sevdeskInvoiceId})` : ""}.`
+                  : invoiceDialog.pushResult.message}
+              </div>
+            ) : null}
+
+            <ModalActions>
+              <BtnSecondary onClick={() => setInvoiceDialog(INVOICE_DIALOG_INITIAL)}>
                 Abbrechen
-              </button>
-              <button
-                type="button"
-                onClick={saveInvoiceDraft}
-                disabled={invoiceDialog.saveBusy || !invoiceDialog.positions.some((item) => item.selected)}
-                className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-40"
-              >
-                <Receipt size={16} />
-                {invoiceDialog.saveBusy ? "Speichert…" : "Rechnungsentwurf speichern"}
-              </button>
-            </div>
+              </BtnSecondary>
+              <BtnSecondary onClick={saveInvoiceDraft} disabled={invoiceDialog.saveBusy || !hasSelection} icon={Receipt}>
+                {invoiceDialog.saveBusy ? "Speichert…" : "Nur intern speichern"}
+              </BtnSecondary>
+              <BtnPrimary onClick={pushInvoiceToSevdesk} disabled={invoiceDialog.pushBusy || !hasSelection} icon={Receipt}>
+                {invoiceDialog.pushBusy ? "Übergibt an sevDesk…" : `An sevDesk übergeben · ${formatEur(totalNet)}`}
+              </BtnPrimary>
+            </ModalActions>
           </div>
         </Modal>
-      ) : null}
+        );
+      })() : null}
 
       {createOpen ? (
-        <Modal title="Projektmappe erstellen" onClose={() => setCreateOpen(false)}>
-          <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <Modal title="Neue Projektmappe anlegen" onClose={() => setCreateOpen(false)} width="max-w-7xl">
+          <div className="grid gap-6 xl:grid-cols-[390px_minmax(0,1fr)]">
             <div className="space-y-4">
-              <div className="grid gap-2">
+              <div className="rounded-[22px] border border-sand-200 bg-white/80 p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="rounded-xl bg-slate-900 p-2 text-white">
+                    <FolderKanban size={15} />
+                  </span>
+                  <div>
+                    <div className="text-sm font-semibold text-sand-900">Startart</div>
+                    <div className="text-xs text-sand-500">KI erzeugt Bausteine, Aufgaben und Risiken aus der Beschreibung.</div>
+                  </div>
+                </div>
+                <div className="grid gap-2">
                 {creationModes.map((mode) => (
                   <button
                     key={mode.key}
@@ -3989,47 +5072,79 @@ export default function ProjectFoldersView() {
                       setCreateForm((prev) => ({ ...prev, mode: mode.key }));
                       setDraftFolder(null);
                     }}
-                    className={`rounded-2xl border p-4 text-left ${createForm.mode === mode.key ? "border-sky-300 bg-sky-50" : "border-sand-200 bg-white"}`}
+                    className={`relative overflow-hidden rounded-2xl border p-4 text-left transition ${
+                      createForm.mode === mode.key
+                        ? "border-slate-800 bg-slate-900 text-white shadow-soft"
+                        : "border-sand-200 bg-white hover:border-sand-300 hover:bg-sand-50"
+                    }`}
                   >
-                    <div className="font-medium text-sand-900">{mode.label}</div>
-                    <div className="mt-1 text-sm text-sand-600">{mode.text}</div>
+                    {createForm.mode === mode.key && (
+                      <span className="absolute right-3 top-3 inline-flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-[10px] text-white">✓</span>
+                    )}
+                    <div className={`text-sm font-semibold ${createForm.mode === mode.key ? "text-white" : "text-sand-900"}`}>{mode.label}</div>
+                    <div className={`mt-0.5 text-xs ${createForm.mode === mode.key ? "text-white/70" : "text-sand-500"}`}>{mode.text}</div>
                   </button>
                 ))}
+                </div>
               </div>
-              <label className="space-y-1">
-                <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Titel</span>
-                <input className={inputClass} value={createForm.title} onChange={(e) => setCreateForm((prev) => ({ ...prev, title: e.target.value }))} />
-              </label>
-              <label className="space-y-1">
-                <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Kunde</span>
-                <input list="project-folder-customers" className={inputClass} value={createForm.customer} onChange={(e) => setCreateForm((prev) => ({ ...prev, customer: e.target.value }))} />
-              </label>
-              <label className="space-y-1">
-                <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Verantwortlich</span>
-                <input list="project-folder-employees" className={inputClass} value={createForm.owner} onChange={(e) => setCreateForm((prev) => ({ ...prev, owner: e.target.value }))} />
-              </label>
-              <label className="space-y-1">
-                <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Kennzeichen</span>
-                <select
-                  className={selectClass}
-                  value={createForm.project_tag}
-                  onChange={(e) => setCreateForm((prev) => ({ ...prev, project_tag: e.target.value }))}
-                >
-                  {projectFolderTagOrder.map((key) => {
-                    const option = projectFolderTagOptions[key];
-                    return (
-                      <option key={key} value={key}>
-                        {option?.label || key}
-                      </option>
-                    );
-                  })}
-                </select>
-              </label>
+              <div className="rounded-[22px] border border-sand-200 bg-white/80 p-4">
+                <div className="grid gap-3">
+                  <label className="space-y-1">
+                    <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Titel</span>
+                    <input autoFocus className={inputClass} placeholder="z.B. Servermigration Kunde XY" value={createForm.title} onChange={(e) => setCreateForm((prev) => ({ ...prev, title: e.target.value }))} />
+                  </label>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="space-y-1">
+                      <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Kunde</span>
+                      <input list="project-folder-customers" className={inputClass} placeholder="Kundenname" value={createForm.customer} onChange={(e) => setCreateForm((prev) => ({ ...prev, customer: e.target.value }))} />
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Verantwortlich</span>
+                      <input list="project-folder-employees" className={inputClass} placeholder="Owner" value={createForm.owner} onChange={(e) => setCreateForm((prev) => ({ ...prev, owner: e.target.value }))} />
+                    </label>
+                  </div>
+                  <label className="space-y-1">
+                    <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Kennzeichen</span>
+                    <select
+                      className={selectClass}
+                      value={createForm.project_tag}
+                      onChange={(e) => setCreateForm((prev) => ({ ...prev, project_tag: e.target.value }))}
+                    >
+                      {projectFolderTagOrder.map((key) => {
+                        const option = projectFolderTagOptions[key];
+                        return (
+                          <option key={key} value={key}>
+                            {option?.label || key}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                </div>
+              </div>
               {createForm.mode === "ai" ? (
-                <label className="space-y-1">
-                  <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Projektbeschreibung</span>
-                  <textarea className={textareaClass} value={createForm.description} onChange={(e) => setCreateForm((prev) => ({ ...prev, description: e.target.value }))} />
-                </label>
+                <div className="rounded-[22px] border border-sky-200 bg-sky-50/60 p-4">
+                  <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-sky-900">
+                    <Bot size={16} />
+                    KI-Briefing
+                  </div>
+                  <label className="space-y-1">
+                    <span className="text-xs uppercase tracking-[0.18em] text-sky-700">Projektbeschreibung</span>
+                    <textarea
+                      className={`${textareaClass} min-h-[180px] border-sky-200 focus:border-sky-300 focus:ring-sky-100`}
+                      placeholder={"Beschreibe Ziel, Ausgangslage, Systeme, Abhängigkeiten, Termine und offene Fragen.\n\nBeispiel: Kunde zieht von altem Windows Server auf neue Hyper-V Umgebung um, M365 ist vorhanden, Datenmigration File-Server, Backup neu, Firewall-Regeln prüfen, Übergabe und Doku nötig."}
+                      value={createForm.description}
+                      onChange={(e) => setCreateForm((prev) => ({ ...prev, description: e.target.value }))}
+                    />
+                  </label>
+                  <div className="mt-3 grid gap-2 text-xs text-sky-800 sm:grid-cols-2">
+                    <div className="rounded-xl border border-sky-200 bg-white/70 px-3 py-2">Erkennt passende Bausteine aus Inhalt und Katalog.</div>
+                    <div className="rounded-xl border border-sky-200 bg-white/70 px-3 py-2">Erzeugt konkrete Aufgaben, Risiken, Fragen und Zeitphasen.</div>
+                  </div>
+                  {!canCreatePreview ? (
+                    <div className="mt-2 text-xs text-sky-700">Für eine sinnvolle KI-Struktur bitte mindestens 20 Zeichen Beschreibung angeben.</div>
+                  ) : null}
+                </div>
               ) : null}
               {createForm.mode === "blocks" ? (
                 <div className="rounded-2xl border border-sand-200 bg-white p-4">
@@ -4074,58 +5189,86 @@ export default function ProjectFoldersView() {
                   </select>
                 </label>
               ) : null}
-              <button onClick={handleBootstrap} disabled={createBusy} className="inline-flex items-center gap-2 rounded-2xl bg-sky-700 px-4 py-2.5 text-sm font-medium text-white">
-                <Sparkles size={16} />
-                {createBusy ? "Erzeuge Vorschau…" : "Vorschau erzeugen"}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <BtnAi onClick={handleBootstrap} disabled={createBusy || !canCreatePreview} icon={Sparkles}>
+                  {createBusy ? "Erzeuge Vorschau…" : createForm.mode === "ai" ? "KI-Struktur erzeugen" : "Vorschau erzeugen"}
+                </BtnAi>
+                {draftFolder ? (
+                  <BtnSecondary onClick={() => { setDraftFolder(null); setDraftSelection({}); }} disabled={createBusy} icon={RotateCcw}>
+                    Vorschau verwerfen
+                  </BtnSecondary>
+                ) : null}
+              </div>
             </div>
-            <div className="rounded-[24px] border border-sand-200 bg-white p-5">
+            <div className="overflow-hidden rounded-[24px] border border-sand-200 bg-white">
               {!draftFolder ? (
-                <div className="flex h-full min-h-[360px] items-center justify-center text-sm text-sand-500">
-                  Vorschau erscheint hier.
+                <div className="flex h-full min-h-[360px] flex-col items-center justify-center gap-3 p-8 text-sand-400">
+                  <FolderKanban size={32} className="opacity-30" />
+                  <span className="text-sm">{createForm.mode === "ai" ? "KI-Vorschau mit Bausteinen und Aufgaben erscheint hier." : "Vorschau erscheint hier nach der Erzeugung."}</span>
                 </div>
               ) : (
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.18em] text-sand-500">Vorschau</div>
-                    <h3 className="mt-1 text-2xl font-semibold text-sand-900">{draftFolder.title}</h3>
-                    <p className="mt-1 text-sm text-sand-600">{draftFolder.customer || "Ohne Kunde"}</p>
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {draftFolder.project_tag ? (
-                        <Tag className={getProjectFolderTagMeta(draftFolder.project_tag).className}>
-                          {draftFolder.project_tag_label || getProjectFolderTagMeta(draftFolder.project_tag).label}
-                        </Tag>
-                      ) : null}
+                <div className="space-y-4 p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-sand-500">Vorschau</div>
+                      <h3 className="mt-0.5 font-display text-xl text-sand-900">{draftFolder.title}</h3>
+                      <p className="mt-0.5 text-sm text-sand-500">{draftFolder.customer || "Ohne Kunde"}</p>
                     </div>
+                    {draftFolder.project_tag ? (
+                      <Tag className={getProjectFolderTagMeta(draftFolder.project_tag).className}>
+                        {draftFolder.project_tag_label || getProjectFolderTagMeta(draftFolder.project_tag).label}
+                      </Tag>
+                    ) : null}
                   </div>
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <StatTile compact label="Bausteine" value={draftStats.streams} icon={FolderKanban} />
+                    <StatTile compact label="Aufgaben" value={draftStats.tasks} icon={ListChecks} />
+                    <StatTile compact label="Checkpunkte" value={draftStats.checklist} icon={CheckSquare} />
+                    <StatTile compact label="Risiken" value={draftStats.risks} icon={ShieldAlert} />
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-2">
                     {(draftFolder.content?.streams || []).map((stream) => (
-                      <label key={stream.id} className="rounded-2xl border border-sand-200 p-4">
-                        <div className="flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            checked={draftSelection[stream.id] !== false}
-                            onChange={(e) => setDraftSelection((prev) => ({ ...prev, [stream.id]: e.target.checked }))}
-                          />
-                          <div>
-                            <div className="font-medium text-sand-900">{stream.title}</div>
-                            <div className="mt-1 text-sm text-sand-600">{stream.short_status || "Kein Kurztext"}</div>
-                            <div className="mt-3 flex flex-wrap gap-1.5 text-xs text-sand-500">
-                              <span>{stream.tasks?.length || 0} Aufgaben</span>
-                              <span>{stream.checklists?.length || 0} Checklisten</span>
-                              <span>{stream.risks?.length || 0} Risiken</span>
-                            </div>
+                      <label key={stream.id} className={`flex cursor-pointer items-start gap-3 overflow-hidden rounded-2xl border p-3.5 transition ${
+                        draftSelection[stream.id] !== false ? "border-slate-300 bg-slate-50" : "border-sand-200 bg-white opacity-50"
+                      }`}>
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-slate-800"
+                          checked={draftSelection[stream.id] !== false}
+                          onChange={(e) => setDraftSelection((prev) => ({ ...prev, [stream.id]: e.target.checked }))}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-start gap-2">
+                            <div className="min-w-0 flex-1 truncate text-sm font-semibold text-sand-900">{stream.title}</div>
+                            <Tag className={(statusMeta[stream.status] || statusMeta.yellow).badge}>{(statusMeta[stream.status] || statusMeta.yellow).label}</Tag>
                           </div>
+                          <div className="mt-0.5 line-clamp-2 text-xs text-sand-500">{stream.short_status || "Kein Kurztext"}</div>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {stream.tasks?.length ? <Tag className="border-sand-200 bg-sand-50 text-sand-600">{stream.tasks.length} Aufg.</Tag> : null}
+                            {stream.checklists?.[0]?.items?.length ? <Tag className="border-emerald-200 bg-emerald-50 text-emerald-700">{stream.checklists[0].items.length} Checks</Tag> : null}
+                            {stream.risks?.length ? <Tag className="border-rose-200 bg-rose-50 text-rose-600">{stream.risks.length} Risiken</Tag> : null}
+                            {stream.gantt_phases?.length ? <Tag className="border-sky-200 bg-sky-50 text-sky-700">{stream.gantt_phases.length} Phasen</Tag> : null}
+                          </div>
+                          {stream.tasks?.length ? (
+                            <div className="mt-3 space-y-1">
+                              {stream.tasks.slice(0, 4).map((task) => (
+                                <div key={task.id} className="flex items-start gap-1.5 rounded-lg bg-white/70 px-2 py-1 text-[11px] text-sand-700">
+                                  <CheckSquare size={12} className="mt-0.5 shrink-0 text-sand-400" />
+                                  <span className="line-clamp-1">{task.title}</span>
+                                </div>
+                              ))}
+                              {stream.tasks.length > 4 ? <div className="text-[11px] text-sand-400">+ {stream.tasks.length - 4} weitere Aufgaben</div> : null}
+                            </div>
+                          ) : null}
                         </div>
                       </label>
                     ))}
                   </div>
-                  <div className="flex justify-end">
-                    <button onClick={handleCreateFolder} disabled={createBusy} className="inline-flex items-center gap-2 rounded-2xl bg-emerald-700 px-4 py-2.5 text-sm font-medium text-white">
-                      <ChevronRight size={16} />
+                  <ModalActions>
+                    <BtnPrimary onClick={handleCreateFolder} disabled={createBusy} icon={ChevronRight}>
                       Projektmappe anlegen
-                    </button>
-                  </div>
+                    </BtnPrimary>
+                  </ModalActions>
                 </div>
               )}
             </div>
@@ -4136,60 +5279,98 @@ export default function ProjectFoldersView() {
       {aiDialog.open ? (
         <Modal title="KI-Unterstützung" onClose={() => { setAiDialog({ open: false, action: "tasks", topic: "", target: null }); setAiResult(null); }} width="max-w-4xl">
           <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)_auto]">
+            <div className="grid gap-2 sm:grid-cols-[200px_minmax(0,1fr)_auto]">
               <select className={selectClass} value={aiDialog.action} onChange={(e) => setAiDialog((prev) => ({ ...prev, action: e.target.value }))}>
                 {aiActions.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.label}
-                  </option>
+                  <option key={item.key} value={item.key}>{item.label}</option>
                 ))}
               </select>
-              <input className={inputClass} value={aiDialog.topic} onChange={(e) => setAiDialog((prev) => ({ ...prev, topic: e.target.value }))} />
-              <button onClick={triggerAiAction} disabled={aiBusy} className="inline-flex items-center gap-2 rounded-2xl bg-sky-700 px-4 py-2.5 text-sm font-medium text-white">
-                <Wand2 size={16} />
-                {aiBusy ? "Lädt…" : "Vorschlag erzeugen"}
-              </button>
+              <input className={inputClass} placeholder="Thema / Kontext" value={aiDialog.topic} onChange={(e) => setAiDialog((prev) => ({ ...prev, topic: e.target.value }))} />
+              <BtnAi onClick={triggerAiAction} disabled={aiBusy} icon={Wand2}>
+                {aiBusy ? "Lädt…" : "Vorschlag"}
+              </BtnAi>
             </div>
             {aiDialog.target ? (
-              <div className="text-xs uppercase tracking-[0.18em] text-sand-500">
-                Ziel: {aiDialog.target.scope === "folder" ? "Projekt" : "Baustein"} / {aiDialog.target.field}
+              <div className="flex items-center gap-2 text-[11px] text-sand-500">
+                <span className="rounded-full border border-sand-200 bg-sand-50 px-2.5 py-1 font-medium uppercase tracking-wider">
+                  {aiDialog.target.scope === "folder" ? "Projekt" : "Baustein"}
+                </span>
+                <span className="text-sand-400">→</span>
+                <span>{aiDialog.target.field}</span>
               </div>
             ) : null}
-            <div className="rounded-[24px] border border-sand-200 bg-white p-5">
+            <div className="overflow-hidden rounded-[20px] border border-sand-200 bg-white">
               {!aiResult ? (
-                <div className="min-h-[220px] text-sm text-sand-500 flex items-center justify-center">
-                  KI-Vorschlag erscheint hier.
+                <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 p-8 text-sand-400">
+                  <Bot size={28} className="opacity-30" />
+                  <span className="text-sm">KI-Vorschlag erscheint hier.</span>
                 </div>
               ) : aiResult.mode === "text" ? (
-                <div>
-                  <div className="mb-2 flex items-center gap-2 text-sand-700">
-                    <Bot size={16} />
-                    <span className="font-medium">{aiResult.title || "KI-Ausgabe"}</span>
+                <div className="p-5">
+                  <div className="mb-3 flex items-center gap-2 border-b border-sand-100 pb-3">
+                    <span className="rounded-lg bg-sky-50 p-1.5 text-sky-700"><Bot size={14} /></span>
+                    <span className="text-sm font-semibold text-sand-900">{aiResult.title || "KI-Ausgabe"}</span>
+                    <span className="ml-auto text-[10px] text-sand-400">vor Übernahme bearbeitbar</span>
                   </div>
-                  <pre className="whitespace-pre-wrap rounded-2xl bg-sand-50 p-4 text-sm text-sand-800">{aiResult.text || ""}</pre>
+                  <textarea
+                    value={aiResult.text || ""}
+                    onChange={(e) => setAiResult((prev) => ({ ...prev, text: e.target.value }))}
+                    className="min-h-[180px] w-full resize-y rounded-xl border border-sand-200 bg-sand-50 p-4 text-sm leading-relaxed text-sand-800 outline-none focus:border-sky-300 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                  />
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <div className="mb-2 flex items-center gap-2 text-sand-700">
-                    <Bot size={16} />
-                    <span className="font-medium">{aiResult.title || "KI-Ausgabe"}</span>
+                <div className="p-5">
+                  <div className="mb-3 flex items-center gap-2 border-b border-sand-100 pb-3">
+                    <span className="rounded-lg bg-sky-50 p-1.5 text-sky-700"><Bot size={14} /></span>
+                    <span className="text-sm font-semibold text-sand-900">{aiResult.title || "KI-Ausgabe"}</span>
+                    <Tag className="ml-auto border-sand-200 bg-sand-50 text-sand-600">{aiResult.items?.length || 0} Einträge</Tag>
                   </div>
-                  {(aiResult.items || []).map((item, index) => (
-                    <div key={`${index}_${typeof item === "string" ? item : item?.title || index}`} className="rounded-2xl border border-sand-200 bg-sand-50/70 p-3 text-sm text-sand-800">
-                      {typeof item === "string" ? item : item?.title || JSON.stringify(item)}
-                      {typeof item === "object" && item?.mitigation ? <div className="mt-1 text-xs text-sand-600">Maßnahme: {item.mitigation}</div> : null}
-                    </div>
-                  ))}
+                  <div className="space-y-2">
+                    {(aiResult.items || []).map((item, index) => {
+                      const stringValue = typeof item === "string" ? item : item?.title || "";
+                      const updateItem = (next) =>
+                        setAiResult((prev) => ({
+                          ...prev,
+                          items: prev.items.map((entry, i) =>
+                            i === index
+                              ? typeof entry === "string"
+                                ? next
+                                : { ...entry, title: next }
+                              : entry
+                          )
+                        }));
+                      const removeItem = () =>
+                        setAiResult((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
+                      return (
+                        <div key={`ai_${index}`} className="flex items-start gap-2 rounded-xl border border-sand-100 bg-sand-50/60 px-3 py-2">
+                          <span className="mt-2 shrink-0 font-mono text-[10px] text-sand-400">{String(index + 1).padStart(2, "0")}</span>
+                          <input
+                            value={stringValue}
+                            onChange={(e) => updateItem(e.target.value)}
+                            className="flex-1 rounded-md border border-transparent bg-transparent px-2 py-1.5 text-sm text-sand-800 outline-none focus:border-sky-300 focus:bg-white focus:ring-2 focus:ring-sky-100"
+                          />
+                          <button
+                            type="button"
+                            onClick={removeItem}
+                            className="shrink-0 rounded-md border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50"
+                            title="Entfernen"
+                            aria-label="Entfernen"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
             {aiResult ? (
-              <div className="flex justify-end">
-                <button onClick={applyAiResult} className="inline-flex items-center gap-2 rounded-2xl bg-emerald-700 px-4 py-2.5 text-sm font-medium text-white">
-                  <Sparkles size={16} />
-                  In Arbeitsstrang übernehmen
-                </button>
-              </div>
+              <ModalActions>
+                <BtnPrimary onClick={applyAiResult} icon={Sparkles}>
+                  In Baustein übernehmen
+                </BtnPrimary>
+              </ModalActions>
             ) : null}
           </div>
         </Modal>
@@ -4198,35 +5379,143 @@ export default function ProjectFoldersView() {
       {overviewOpen && activeFolder ? (
         <Modal title="Projektübersicht" onClose={() => setOverviewOpen(false)} width="max-w-5xl">
           <div className="space-y-5">
-            <div className="grid gap-3 md:grid-cols-4">
-              <StatTile
-                label="Bausteine"
-                value={activeSummary.stream_count || 0}
-                accent="sand"
-                icon={FolderKanban}
-              />
-              <StatTile
-                label="Aufgaben"
-                value={taskCompletionLabel}
-                accent="sand"
-                icon={ListChecks}
-              />
-              <StatTile
-                label="Blocker"
-                value={blockerCount}
-                accent="rose"
-                icon={ShieldAlert}
-              />
-              <StatTile
-                label="Rückmeldungen"
-                value={feedbackCount}
-                accent={feedbackCount > 0 ? "amber" : "sand"}
-                icon={Zap}
-              />
+            <div className={`rounded-[22px] border p-4 ${projectHealthToneClass[projectHealth.tone] || projectHealthToneClass.sand}`}>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] opacity-70">Projektgesundheit</div>
+                  <div className="mt-1 text-xl font-semibold">{projectHealth.label}</div>
+                  <div className="mt-1 text-sm opacity-80">{projectPulseLabel}</div>
+                </div>
+                <div className="min-w-[240px] flex-1 rounded-2xl border border-current/15 bg-white/65 px-4 py-3">
+                  <div className="text-[10px] uppercase tracking-[0.16em] opacity-60">Nächste Aktion</div>
+                  <div className="mt-1 text-sm font-semibold">{projectHealth.nextAction.label}</div>
+                  {projectHealth.nextAction.detail ? <div className="mt-0.5 text-xs opacity-75">{projectHealth.nextAction.detail}</div> : null}
+                  {projectHealth.nextAction.streamId ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedStreamId(projectHealth.nextAction.streamId);
+                        if (projectHealth.nextAction.taskId) setSelectedTaskId(projectHealth.nextAction.taskId);
+                        setOverviewOpen(false);
+                      }}
+                      className="mt-2 rounded-xl border border-current/20 bg-white/80 px-3 py-1.5 text-xs font-medium hover:bg-white"
+                    >
+                      In Projektmappe öffnen
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              {projectHealth.reasons.length ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {projectHealth.reasons.map((reason, index) => (
+                    <button
+                      key={`${reason.text}_${index}`}
+                      type="button"
+                      onClick={() => {
+                        if (reason.streamId) {
+                          setSelectedStreamId(reason.streamId);
+                          if (reason.taskId) setSelectedTaskId(reason.taskId);
+                          setOverviewOpen(false);
+                        }
+                      }}
+                      className={`rounded-full border px-2.5 py-1 text-[11px] ${projectHealthToneClass[reason.tone] || projectHealthToneClass.sand}`}
+                    >
+                      {reason.text}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
-            <div className="rounded-[24px] border border-sand-200 bg-white p-5">
-              <div className="text-xs uppercase tracking-[0.18em] text-sand-500">Visualisierung</div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+
+            <div className="grid gap-3 sm:grid-cols-5">
+              <StatTile label="Fortschritt" value={`${activeSummary.progress || 0}%`} accent={Number(activeSummary.progress || 0) >= 80 ? "emerald" : Number(activeSummary.progress || 0) >= 40 ? "sky" : "sand"} icon={TrendingUp} />
+              <StatTile label="Bausteine" value={activeSummary.stream_count || 0} accent="sand" icon={FolderKanban} />
+              <StatTile label="Aufgaben" value={taskCompletionLabel} accent="sand" icon={ListChecks} />
+              <StatTile label="Blocker" value={blockerCount} accent={blockerCount > 0 ? "rose" : "emerald"} icon={ShieldAlert} />
+              <StatTile label="Rückmeldungen" value={feedbackCount} accent={feedbackCount > 0 ? "amber" : "sand"} icon={Zap} />
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+              <section className="overflow-hidden rounded-[22px] border border-sand-200 bg-white">
+                <div className="flex items-center justify-between gap-3 border-b border-sand-100 bg-sand-50/60 px-5 py-3">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Fokusaufgaben</div>
+                    <div className="mt-0.5 text-xs text-sand-500">Offene Aufgaben nach Fälligkeit priorisiert</div>
+                  </div>
+                  <Tag className="border-sand-200 bg-white text-sand-700">{focusTasks.length}</Tag>
+                </div>
+                <div className="divide-y divide-sand-100">
+                  {focusTasks.length ? focusTasks.slice(0, 6).map((task) => {
+                    const due = parseDateInput(task.due_date);
+                    const statusKey = getTaskStatusKey(task);
+                    const tone = taskStatusMeta[statusKey]?.tone || taskStatusMeta.open.tone;
+                    const stream = activeStreams.find((item) => (item.tasks || []).some((candidate) => candidate.id === task.id));
+                    return (
+                      <button
+                        key={task.id}
+                        type="button"
+                        onClick={() => {
+                          if (stream?.id) setSelectedStreamId(stream.id);
+                          setSelectedTaskId(task.id);
+                          setOverviewOpen(false);
+                        }}
+                        className="flex w-full items-start justify-between gap-3 px-5 py-3 text-left hover:bg-sand-50"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-sand-900">{task.title || "Aufgabe"}</div>
+                          <div className="mt-0.5 truncate text-xs text-sand-500">{task.stream_title || stream?.title || "Baustein"}</div>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${tone}`}>{taskStatusMeta[statusKey]?.label || statusKey}</span>
+                          <span className="text-[10px] text-sand-400">{due ? `Fällig ${formatDateLabel(task.due_date)}` : "Ohne Fälligkeit"}</span>
+                        </div>
+                      </button>
+                    );
+                  }) : (
+                    <div className="p-5 text-sm text-sand-500">Keine offenen Aufgaben.</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="overflow-hidden rounded-[22px] border border-sand-200 bg-white">
+                <div className="border-b border-sand-100 bg-sand-50/60 px-5 py-3">
+                  <div className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Aufmerksamkeit</div>
+                  <div className="mt-0.5 text-xs text-sand-500">Blockaden, Rückmeldungen oder fehlende Zuständigkeit</div>
+                </div>
+                <div className="divide-y divide-sand-100">
+                  {waitingStreams.length ? waitingStreams.slice(0, 6).map((stream) => {
+                    const workflowStatus = getWorkflowStatus(stream);
+                    return (
+                      <button
+                        key={stream.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedStreamId(stream.id);
+                          setOverviewOpen(false);
+                        }}
+                        className="flex w-full items-start justify-between gap-3 px-5 py-3 text-left hover:bg-sand-50"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-sand-900">{stream.title || "Baustein"}</div>
+                          <div className="mt-0.5 line-clamp-2 text-xs text-sand-500">{getPrimaryGap(stream)}</div>
+                        </div>
+                        <Tag className={workflowStatusMeta[workflowStatus]?.tone || workflowStatusMeta.open.tone}>
+                          {workflowStatusMeta[workflowStatus]?.label || "offen"}
+                        </Tag>
+                      </button>
+                    );
+                  }) : (
+                    <div className="p-5 text-sm text-sand-500">Keine kritischen Bausteine.</div>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            <div className="overflow-hidden rounded-[24px] border border-sand-200 bg-white">
+              <div className="border-b border-sand-100 bg-sand-50/60 px-5 py-3">
+                <div className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Baustein-Übersicht</div>
+              </div>
+              <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
                 {activeStreams.map((stream) => {
                   const meta = statusMeta[stream.status] || statusMeta.yellow;
                   const openTasks = getOpenTaskCount(stream);
@@ -4234,77 +5523,80 @@ export default function ProjectFoldersView() {
                   const marker = streamMarkerMeta[String(stream.marker || "").trim().toLowerCase()] || null;
                   const workflowStatus = getWorkflowStatus(stream);
                   return (
-                    <div key={stream.id} className="rounded-[22px] border border-sand-200 bg-sand-50/70 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold text-sand-900">{stream.title || "Baustein"}</div>
-                          <div className="mt-1 text-xs text-sand-600">{stream.short_status || getPrimaryGap(stream) || "—"}</div>
+                    <button
+                      key={stream.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedStreamId(stream.id);
+                        setOverviewOpen(false);
+                      }}
+                      className="overflow-hidden rounded-[18px] border border-sand-200 bg-sand-50/60 text-left transition hover:border-sand-300 hover:bg-white hover:shadow-sm"
+                    >
+                      <div className={`h-[3px] w-full ${meta.dot}`} />
+                      <div className="p-3.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-sand-900">{stream.title || "Baustein"}</div>
+                            <div className="mt-0.5 line-clamp-2 text-xs text-sand-500">{stream.short_status || getPrimaryGap(stream) || "—"}</div>
+                          </div>
+                          <Tag className={workflowStatusMeta[workflowStatus]?.tone || workflowStatusMeta.open.tone}>
+                            {workflowStatusMeta[workflowStatus]?.label || "offen"}
+                          </Tag>
                         </div>
-                        <span
-                          className={`mt-1 inline-flex h-2 w-2 shrink-0 rounded-full ring-1 ring-black/5 ${meta.dot}`}
-                          title={meta.label}
-                          aria-label={`Status: ${meta.label}`}
-                        />
+                        <div className="mt-2.5 flex items-center gap-2">
+                          <div className="flex-1 overflow-hidden rounded-full bg-sand-200 h-1.5">
+                            <div className={`h-1.5 rounded-full ${meta.dot}`} style={{ width: `${streamProgress}%` }} />
+                          </div>
+                          <span className="shrink-0 text-[10px] tabular-nums text-sand-500">{streamProgress}%</span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {marker ? <Tag className={marker.tone}>{marker.label}</Tag> : null}
+                          <Tag className={openTasks > 0 ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}>
+                            {openTasks} offen
+                          </Tag>
+                        </div>
                       </div>
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        <Tag className={workflowStatusMeta[workflowStatus]?.tone || workflowStatusMeta.open.tone}>
-                          {workflowStatusMeta[workflowStatus]?.label || "offen"}
-                        </Tag>
-                        <Tag className="border-sand-200 bg-white text-sand-700">{streamProgress}%</Tag>
-                        {marker ? <Tag className={marker.tone}>{marker.label}</Tag> : null}
-                        <Tag className={openTasks > 0 ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}>
-                          {openTasks} offen
-                        </Tag>
-                      </div>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
             </div>
-            <div className="flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={async () => {
-                  await exportProjectPdf(`${activeFolder.title || "projektmappe"}`.replace(/[^\w\-]+/g, "_"));
-                }}
-                className="inline-flex items-center gap-2 rounded-2xl bg-sky-700 px-4 py-2.5 text-sm font-medium text-white"
-              >
-                <Download size={16} />
-                PDF export
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setOverviewOpen(false);
-                  setExportOpen(true);
-                }}
-                className="inline-flex items-center gap-2 rounded-2xl border border-sand-200 bg-white px-4 py-2.5 text-sm text-sand-800 hover:bg-sand-50"
-              >
-                Weitere Exporte
-              </button>
-            </div>
+            <ModalActions>
+              <BtnSecondary onClick={() => { setOverviewOpen(false); setExportOpen(true); }}>Weitere Exporte</BtnSecondary>
+              <BtnPrimary icon={Download} onClick={async () => {
+                await exportProjectPdf(getProjectExportBaseName(activeFolder));
+              }}>PDF Export</BtnPrimary>
+            </ModalActions>
           </div>
         </Modal>
       ) : null}
 
       {checklistOpen && activeFolder ? (
-        <Modal title="Checkliste" onClose={() => setChecklistOpen(false)} width="max-w-4xl">
+        <InlineSection><h3 className="font-display text-xl text-sand-900 mb-4">Checkliste</h3>
           <div className="space-y-4">
-            <div className="rounded-[22px] border border-sand-200 bg-sand-50/70 px-4 py-3 text-sm text-sand-700">
-              Gruppierte Liste aller Aufgaben aus allen Bausteinen.
-            </div>
+            <ModalHint>Gruppierte Liste aller Aufgaben aus allen Bausteinen. Klick auf den Kreis markiert als erledigt.</ModalHint>
             {groupedChecklistTasks.length ? (
               <div className="overflow-hidden rounded-[24px] border border-sand-200 bg-white">
-                {groupedChecklistTasks.map((group) => (
+                {groupedChecklistTasks.map((group) => {
+                  const doneCount = group.tasks.length - group.openCount;
+                  const pct = group.tasks.length ? Math.round((doneCount / group.tasks.length) * 100) : 0;
+                  return (
                   <section key={group.id} className="border-b border-sand-200 last:border-b-0">
                     <div className="flex items-center justify-between gap-3 bg-sand-50/70 px-4 py-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-sand-900">{group.title}</div>
-                        <div className="mt-0.5 text-xs text-sand-500">{group.openCount} offen · {group.tasks.length} gesamt</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="text-sm font-semibold text-sand-900">{group.title}</div>
+                          <Tag className={workflowStatusMeta[getWorkflowStatus(activeStreams.find((stream) => stream.id === group.id) || {})]?.tone || workflowStatusMeta.open.tone}>
+                            {workflowStatusMeta[getWorkflowStatus(activeStreams.find((stream) => stream.id === group.id) || {})]?.label || "offen"}
+                          </Tag>
+                        </div>
+                        <div className="mt-1.5 flex items-center gap-2">
+                          <div className="flex-1 overflow-hidden rounded-full bg-sand-200 h-1">
+                            <div className="h-1 rounded-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="shrink-0 text-[10px] tabular-nums text-sand-500">{doneCount}/{group.tasks.length}</span>
+                        </div>
                       </div>
-                      <Tag className={workflowStatusMeta[getWorkflowStatus(activeStreams.find((stream) => stream.id === group.id) || {})]?.tone || workflowStatusMeta.open.tone}>
-                        {workflowStatusMeta[getWorkflowStatus(activeStreams.find((stream) => stream.id === group.id) || {})]?.label || "offen"}
-                      </Tag>
                     </div>
                     <div className="divide-y divide-sand-100">
                       {group.tasks.map((task, index) => {
@@ -4345,23 +5637,23 @@ export default function ProjectFoldersView() {
                       })}
                     </div>
                   </section>
-                ))}
+                  );
+                })}
               </div>
             ) : (
-              <div className="rounded-[24px] border border-dashed border-sand-300 p-8 text-center text-sm text-sand-500">
-                Noch keine Aufgaben in den Bausteinen vorhanden.
+              <div className="flex flex-col items-center gap-3 rounded-[24px] border border-dashed border-sand-300 p-10 text-center text-sand-400">
+                <ListChecks size={28} className="opacity-30" />
+                <span className="text-sm">Noch keine Aufgaben in den Bausteinen vorhanden.</span>
               </div>
             )}
           </div>
-        </Modal>
+        </InlineSection>
       ) : null}
 
       {calculationOpen && activeFolder ? (
-        <Modal title="Kalkulation" onClose={() => setCalculationOpen(false)} width="max-w-7xl">
+        <InlineSection><h3 className="font-display text-xl text-sand-900 mb-4">Kalkulation</h3>
           <div className="space-y-5">
-            <div className="rounded-[22px] border border-sand-200 bg-sand-50/70 px-4 py-3 text-sm text-sand-700">
-              Aufgaben stehen je Baustein zuerst, danach Material. `Regelwert` ist Vorschlag aus Baustein oder KI, `Eigenwert` der tatsächlich veranschlagte Preis. `Kosten` dient für die Gewinnschätzung.
-            </div>
+            <ModalHint>Regelwert = Vorschlag aus Baustein oder KI · Eigenwert = tatsächlicher Preis · Kosten = für Gewinnschätzung</ModalHint>
             <div className="grid gap-3 md:grid-cols-4">
               <StatTile label="Geschätzter Umsatz" value={formatCurrency(calculationTotals.revenue)} accent="sky" icon={TrendingUp} />
               <StatTile label="Geschätzter Gewinn" value={formatCurrency(calculationTotals.profit)} accent={calculationTotals.profit >= 0 ? "emerald" : "rose"} icon={TrendingUp} />
@@ -4740,22 +6032,15 @@ export default function ProjectFoldersView() {
               </div>
             )}
           </div>
-        </Modal>
+        </InlineSection>
       ) : null}
 
       {materialOpen && activeFolder ? (
-        <Modal title="Materialbedarf" onClose={() => setMaterialOpen(false)} width="max-w-6xl">
+        <InlineSection><h3 className="font-display text-xl text-sand-900 mb-4">Materialbedarf</h3>
           <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-[22px] border border-sand-200 bg-sand-50/70 px-4 py-3 text-sm text-sand-700">
-              <span>Projektweite Liste aller benötigten Materialien ohne Bausteinbezug.</span>
-              <button
-                type="button"
-                onClick={addProjectMaterial}
-                className="inline-flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-800 hover:bg-sand-50"
-              >
-                <Plus size={14} />
-                Material hinzufügen
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <ModalHint>Projektweite Liste aller benötigten Materialien ohne Bausteinbezug.</ModalHint>
+              <BtnSecondary onClick={addProjectMaterial} icon={Plus}>Material hinzufügen</BtnSecondary>
             </div>
             {materialInventory.length ? (
               <div className="overflow-hidden rounded-[24px] border border-sand-200 bg-white shadow-soft">
@@ -4906,15 +6191,13 @@ export default function ProjectFoldersView() {
               </div>
             )}
           </div>
-        </Modal>
+        </InlineSection>
       ) : null}
 
       {timelineOpen && activeFolder ? (
-        <Modal title="Timeline" onClose={() => setTimelineOpen(false)} width="max-w-6xl">
+        <InlineSection><h3 className="font-display text-xl text-sand-900 mb-4">Timeline</h3>
           <div className="space-y-4">
-            <div className="rounded-[22px] border border-sand-200 bg-sand-50/70 px-4 py-3 text-sm text-sand-700">
-              Visualisierung von Bausteinen, Aufgaben und Fertigstellungs-Deadlines. Undatierte Aufgaben bleiben je Baustein sichtbar; datierte Elemente werden zusätzlich auf der Zeitachse verankert.
-            </div>
+            <ModalHint>Bausteine, Aufgaben und Deadlines auf der Zeitachse. Undatierte Aufgaben bleiben je Baustein sichtbar.</ModalHint>
             {timelineData.lanes.some((lane) => lane.datedTasks.length || lane.phases.length || lane.undatedTasks.length) || timelineData.projectDeadline ? (
               <div className="overflow-x-auto rounded-[24px] border border-sand-200 bg-white p-4">
                 <div className="min-w-[1100px]">
@@ -5095,64 +6378,155 @@ export default function ProjectFoldersView() {
               </div>
             )}
           </div>
-        </Modal>
+        </InlineSection>
       ) : null}
 
       {exportOpen ? (
-        <Modal title="Export" onClose={() => setExportOpen(false)} width="max-w-3xl">
-          <div className="grid gap-5 md:grid-cols-2">
-            <div className="space-y-4">
-              <label className="space-y-1">
-                <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Exportprofil</span>
-                <select className={selectClass} value={exportProfile} onChange={(e) => applyExportProfile(e.target.value)}>
-                  {(catalog.export_profiles || []).map((profile) => (
-                    <option key={profile.key} value={profile.key}>
-                      {profile.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="space-y-1">
-                <span className="text-xs uppercase tracking-[0.18em] text-sand-500">Format</span>
-                <select className={selectClass} value={exportFormat} onChange={(e) => setExportFormat(e.target.value)}>
-                  <option value="pdf">PDF</option>
-                  <option value="word">Word</option>
-                  <option value="excel">Excel</option>
-                  <option value="html">HTML</option>
-                  <option value="md">Markdown</option>
-                  <option value="json">JSON</option>
-                </select>
-              </label>
-            </div>
-            <div className="grid gap-2 rounded-[24px] border border-sand-200 bg-white p-4">
-              {[
-                ["include_internal_notes", "Interne Notizen"],
-                ["include_risks", "Risiken"],
-                ["include_tasks", "Aufgaben"],
-                ["include_checklists", "Checklisten"],
-                ["include_gantt", "Gantt-Zeitplan"],
-                ["include_offer_positions", "Angebotspositionen"],
-                ["customer_view", "Kundenansicht"],
-                ["internal_view", "Interne Ansicht"]
-              ].map(([key, label]) => (
-                <label key={key} className="flex items-center gap-2 text-sm text-sand-700">
+        <Modal title="Projektmappe exportieren" onClose={() => setExportOpen(false)} width="max-w-5xl">
+          <div className="grid gap-5 lg:grid-cols-[1.05fr_0.95fr]">
+            <div className="space-y-5">
+              <section className="rounded-[20px] border border-sand-200 bg-white p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[0.18em] text-sand-500">Profil</div>
+                    <div className="mt-1 text-base font-semibold text-sand-900">{selectedExportProfile?.label || "Standard"}</div>
+                    <p className="mt-1 text-xs text-sand-500">
+                      {exportOptions.customer_view ? "Kundenversion ohne interne Bausteine" : "Interne Fassung mit vollständigem Kontext"}
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-600">
+                    {selectedExportProfile?.custom ? "Eigenes Profil" : "Vorlage"}
+                  </span>
+                </div>
+                <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                  {exportProfiles.map((profile) => {
+                    const active = profile.key === exportProfile;
+                    return (
+                      <button
+                        key={profile.key}
+                        type="button"
+                        onClick={() => applyExportProfile(profile.key)}
+                        className={`rounded-2xl border px-3 py-2.5 text-left transition ${
+                          active ? "border-slate-800 bg-slate-900 text-white" : "border-sand-200 bg-sand-50/70 text-sand-800 hover:border-sand-300 hover:bg-white"
+                        }`}
+                      >
+                        <span className="block text-sm font-semibold">{profile.label}</span>
+                        <span className={`mt-0.5 block text-xs ${active ? "text-slate-200" : "text-sand-500"}`}>
+                          {profile.defaults?.customer_view ? "Kundenexport" : "Interner Export"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="rounded-[20px] border border-sand-200 bg-white p-4">
+                <div className="mb-3 text-[10px] uppercase tracking-[0.18em] text-sand-500">Format</div>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {exportFormatOptions.map((item) => {
+                    const Icon = item.icon;
+                    const active = item.key === exportFormat;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => setExportFormat(item.key)}
+                        className={`flex min-h-[76px] items-start gap-3 rounded-2xl border p-3 text-left transition ${
+                          active ? "border-slate-800 bg-slate-900 text-white" : "border-sand-200 bg-sand-50/70 text-sand-800 hover:border-sand-300 hover:bg-white"
+                        }`}
+                      >
+                        <Icon size={17} className={active ? "mt-0.5 text-white" : "mt-0.5 text-sand-500"} />
+                        <span>
+                          <span className="block text-sm font-semibold">{item.label}</span>
+                          <span className={`mt-1 block text-xs ${active ? "text-slate-200" : "text-sand-500"}`}>{item.text}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="rounded-[20px] border border-sand-200 bg-white p-4">
+                <div className="mb-3 text-[10px] uppercase tracking-[0.18em] text-sand-500">Eigenes Profil speichern</div>
+                <div className="flex flex-col gap-2 sm:flex-row">
                   <input
-                    type="checkbox"
-                    checked={Boolean(exportOptions[key])}
-                    onChange={(e) => setExportOptions((prev) => ({ ...prev, [key]: e.target.checked }))}
+                    className={`${inputClass} min-w-0 flex-1`}
+                    value={exportProfileName}
+                    onChange={(e) => setExportProfileName(e.target.value)}
+                    placeholder="z. B. Kundenabschluss kurz"
                   />
-                  {label}
-                </label>
+                  <BtnSecondary onClick={saveExportProfile}>Speichern</BtnSecondary>
+                </div>
+                {selectedExportProfile?.custom ? (
+                  <button
+                    type="button"
+                    onClick={() => deleteExportProfile(exportProfile)}
+                    className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 transition hover:bg-rose-100"
+                  >
+                    Ausgewähltes eigenes Profil löschen
+                  </button>
+                ) : null}
+              </section>
+            </div>
+
+            <div className="space-y-4">
+              {exportOptionGroups.map((group) => (
+                <section key={group.title} className="overflow-hidden rounded-[20px] border border-sand-200 bg-white">
+                  <div className="border-b border-sand-100 bg-sand-50/70 px-4 py-2.5">
+                    <div className="text-[10px] uppercase tracking-[0.18em] text-sand-500">{group.title}</div>
+                  </div>
+                  <div className="divide-y divide-sand-100">
+                    {group.items.map(([key, label, text]) => (
+                      <label key={key} className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3 transition hover:bg-sand-50">
+                        <span>
+                          <span className="block text-sm font-medium text-sand-900">{label}</span>
+                          <span className="mt-0.5 block text-xs text-sand-500">{text}</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 shrink-0 accent-slate-800"
+                          checked={Boolean(exportOptions[key])}
+                          onChange={(e) => updateExportOption(key, e.target.checked)}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
           </div>
-          <div className="mt-5 flex justify-end">
-            <button onClick={handleExport} className="inline-flex items-center gap-2 rounded-2xl bg-sky-700 px-4 py-2.5 text-sm font-medium text-white">
-              <Download size={16} />
-              Export starten
-            </button>
+          <div className="mt-5 border-t border-sand-200 pt-4">
+            <ModalActions>
+              <BtnPrimary onClick={handleExport} icon={Download}>Export starten</BtnPrimary>
+            </ModalActions>
           </div>
         </Modal>
+      ) : null}
+
+      {deleteConfirmOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm overflow-hidden rounded-[24px] border border-white/60 bg-[#f5f2eb] shadow-[0_24px_64px_rgba(0,0,0,0.22)]">
+            <div className="flex items-center justify-between border-b border-sand-200/70 bg-white/80 px-5 py-4">
+              <h3 className="font-display text-lg text-sand-900">Projektmappe löschen</h3>
+              <button
+                onClick={() => setDeleteConfirmOpen(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-sand-200 bg-white text-sand-500 hover:bg-sand-50"
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-sm text-sand-700">
+                Soll <span className="font-semibold text-sand-900">„{activeFolder?.title}"</span> unwiderruflich gelöscht werden? Alle Bausteine, Aufgaben und Dokumente gehen verloren.
+              </p>
+              <ModalHint>Diese Aktion kann nicht rückgängig gemacht werden. Alternativ kann die Projektmappe archiviert werden.</ModalHint>
+              <ModalActions>
+                <BtnSecondary onClick={() => setDeleteConfirmOpen(false)}>Abbrechen</BtnSecondary>
+                <BtnDanger onClick={handleDeleteFolder} icon={Trash2}>Endgültig löschen</BtnDanger>
+              </ModalActions>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

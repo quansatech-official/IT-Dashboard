@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { PhoneMissed, PhoneCall } from "lucide-react";
 
 const formatDuration = (seconds) => {
   if (!seconds) return "0:00";
@@ -171,7 +172,10 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
     <div className="border border-sand-200 rounded-2xl p-3">
       <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500 mb-2">{title}</p>
       {rows.length === 0 ? (
-        <p className="text-xs text-sand-500">Keine Daten vorhanden.</p>
+        <div className="flex items-center gap-2 py-3 text-xs text-sand-400">
+          <PhoneCall size={14} />
+          <span>Keine Daten vorhanden.</span>
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -208,11 +212,40 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
           <p className="text-[10px] uppercase tracking-[0.3em] text-sand-500">Analytics</p>
           <h2 className="text-lg font-display">Call Statistik</h2>
         </div>
-        <div className="flex items-center gap-2 text-[10px] text-sand-500">
-          <span>Zeitraeume</span>
-          <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-amber-700">
-            Offene Rueckrufe: {unreturnedCount}
-          </span>
+      </div>
+
+      <div className="mb-4">
+        <div
+          className={`flex items-center gap-4 rounded-2xl border p-4 ${
+            unreturnedCount > 0
+              ? "border-amber-200 bg-amber-50"
+              : "border-sand-200 bg-sand-50"
+          }`}
+        >
+          <div
+            className={`flex h-10 w-10 items-center justify-center rounded-xl ${
+              unreturnedCount > 0 ? "bg-amber-100 text-amber-600" : "bg-sand-100 text-sand-400"
+            }`}
+          >
+            <PhoneMissed size={18} />
+          </div>
+          <div>
+            <p
+              className={`text-3xl font-bold leading-none ${
+                unreturnedCount > 0 ? "text-amber-700" : "text-sand-400"
+              }`}
+            >
+              {unreturnedCount}
+            </p>
+            <p className="mt-1 text-[10px] uppercase tracking-[0.25em] text-sand-500">
+              Offene Rückrufe
+            </p>
+          </div>
+          {unreturnedCount === 0 ? (
+            <p className="ml-2 text-xs text-sand-400">Alle eingehenden Anrufe beantwortet oder zurückgerufen.</p>
+          ) : (
+            <p className="ml-2 text-xs text-amber-700">Eingehend, nicht beantwortet, kein Rückruf erfasst.</p>
+          )}
         </div>
       </div>
 
@@ -245,7 +278,7 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
                   <p className="text-xl font-semibold text-rose-600">{data.missed}</p>
                 </div>
                 <div>
-                  <p className="text-[11px] text-sand-500">Ø Dauer</p>
+                  <p className="text-[11px] text-sand-500">Ø Gesprächsdauer</p>
                   <p className="text-xl font-semibold">
                     {formatDuration(data.avgDuration)}
                   </p>
@@ -269,13 +302,16 @@ export default function CallStatsView({ stats, calls = [], customers = [], pbxEn
             Top 5 Kunden / Rufnummern (letzte 100)
           </p>
           {topTargets.length === 0 ? (
-            <p className="text-xs text-sand-500">Keine Daten vorhanden.</p>
+            <div className="flex items-center gap-2 py-3 text-xs text-sand-400">
+              <PhoneCall size={14} />
+              <span>Keine Daten vorhanden.</span>
+            </div>
           ) : (
             <div className="space-y-2 text-xs">
               {topTargets.map((entry) => (
                 <div
                   key={entry.label}
-                  className="flex items-center justify-between rounded-xl border border-sand-200 bg-sand-50 px-3 py-2"
+                  className="flex items-center justify-between rounded-xl border border-sand-200 bg-sand-50 px-4 py-3"
                 >
                   <span className="text-sand-700">{entry.label}</span>
                   <span className="text-sand-500">

@@ -127,6 +127,7 @@ export default function CallListView({
   customers = [],
   pbxEntries = [],
   pbxApiActive = false,
+  loading = false,
   onCallback,
   onResolve,
   onResolveCallback,
@@ -463,6 +464,19 @@ export default function CallListView({
         </div>
       </div>
 
+      {loading ? (
+        <div className="space-y-2 py-2">
+          {Array.from({ length: 6 }).map((_, idx) => (
+            <div key={idx} className="flex gap-3 rounded-xl bg-sand-100/70 px-3 py-3 animate-pulse">
+              <div className="h-3 w-20 rounded-full bg-sand-200" />
+              <div className="h-3 w-14 rounded-full bg-sand-200" />
+              <div className="h-3 w-28 rounded-full bg-sand-200" />
+              <div className="h-3 w-16 rounded-full bg-sand-200" />
+              <div className="h-3 flex-1 rounded-full bg-sand-200" />
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-sand-500 border-b border-sand-200">
@@ -480,7 +494,7 @@ export default function CallListView({
             </tr>
           </thead>
           <tbody>
-            {filteredCalls.length === 0 ? (
+            {filteredCalls.length === 0 && !loading ? (
               <tr>
                 <td colSpan={10} className="py-6 text-center text-sand-500">
                   {onlyMissed

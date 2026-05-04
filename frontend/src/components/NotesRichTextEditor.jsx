@@ -9,6 +9,7 @@ import Highlight from "@tiptap/extension-highlight";
 import TextAlign from "@tiptap/extension-text-align";
 import Image from "@tiptap/extension-image";
 import { Bold, Italic, Link2, List, ListOrdered, Underline as UnderlineIcon } from "lucide-react";
+import AiTextAssistToolbar from "./AiTextAssistToolbar";
 
 const normalizeHtml = (value) => (typeof value === "string" ? value : "");
 
@@ -19,7 +20,10 @@ export default function NotesRichTextEditor({
   minHeight = "140px",
   disabled = false,
   fontFamily = "",
-  allowHtmlSource = false
+  allowHtmlSource = false,
+  enableAi = true,
+  aiModule = "notes",
+  aiContext = {}
 }) {
   const [isEmpty, setIsEmpty] = useState(true);
   const [headingLevel, setHeadingLevel] = useState(0);
@@ -111,9 +115,32 @@ export default function NotesRichTextEditor({
     }
   };
 
+  const applyAiText = (html) => {
+    const next = normalizeHtml(html);
+    lastValueRef.current = next;
+    setSourceValue(next);
+    onChange?.(next);
+    if (editor) {
+      editor.commands.setContent(next || "", false);
+      setIsEmpty(editor.isEmpty);
+      setHeadingLevel(editor.getAttributes("heading").level || 0);
+    }
+  };
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
+        {enableAi ? (
+          <AiTextAssistToolbar
+            value={showHtmlSource ? sourceValue : editor?.getHTML?.() || value}
+            onApply={applyAiText}
+            module={aiModule}
+            context={aiContext}
+            format="html"
+            disabled={disabled}
+            className="mr-2"
+          />
+        ) : null}
         {allowHtmlSource ? (
           <div className="mr-2 inline-flex rounded-full border border-sand-200 bg-white p-1">
             <button

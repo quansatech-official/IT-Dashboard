@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, FilePlus, Save, X } from "lucide-react";
+import { ArrowRight, FilePlus, Loader2, Save, X } from "lucide-react";
 import { telephonyService } from "./telephonyService";
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -231,9 +231,30 @@ export default function IncomingCallQuickTaskPopup() {
 
   useEffect(() => {
     if (!status) return;
-    const timer = setTimeout(() => setStatus(""), 1800);
+    const timer = setTimeout(() => setStatus(""), 3000);
     return () => clearTimeout(timer);
   }, [status]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      if (activeIncomingCall?.uuid) {
+        setDismissedCallUuid(activeIncomingCall.uuid);
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(DISMISSED_CALL_STORAGE_KEY, activeIncomingCall.uuid);
+        }
+      }
+      setOpen(false);
+      setTitle("");
+      setCallUuid("");
+      setContext({ customerName: "", customerNumber: "", phone: "", startedAt: 0 });
+      setStatus("");
+      setCreatedTask(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, activeIncomingCall]);
 
   useEffect(() => {
     const onResize = () => {
@@ -367,6 +388,26 @@ export default function IncomingCallQuickTaskPopup() {
               {context.customerName || context.phone || "Unbekannter Anrufer"}
             </p>
           </div>
+          <span
+            className={`ml-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
+              liveMode === "live"
+                ? "bg-emerald-100 text-emerald-700"
+                : liveMode === "polling"
+                  ? "bg-sky-100 text-sky-700"
+                  : "bg-sand-100 text-sand-500"
+            }`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                liveMode === "live"
+                  ? "bg-emerald-500"
+                  : liveMode === "polling"
+                    ? "bg-sky-500"
+                    : "bg-sand-400"
+              }`}
+            />
+            {liveMode === "live" ? "Live" : liveMode === "polling" ? "Polling" : "Verbinden…"}
+          </span>
         </div>
         <button
           type="button"
@@ -391,14 +432,7 @@ export default function IncomingCallQuickTaskPopup() {
       />
 
       <div className="mt-2 flex items-center justify-between gap-2">
-        <p className="text-xs text-sand-700">
-          {status ||
-            (liveMode === "live"
-              ? "Live-Erkennung aktiv."
-              : liveMode === "polling"
-                ? "Polling-Fallback aktiv."
-                : "Verbindung wird aufgebaut...")}
-        </p>
+        <p className="text-xs text-sand-700">{status || " "}</p>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -413,7 +447,7 @@ export default function IncomingCallQuickTaskPopup() {
             disabled={!title.trim() || saving}
             className="inline-flex items-center gap-1 rounded-full border border-sand-900 bg-sand-900 px-3 py-1.5 text-[10px] uppercase tracking-wide text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <Save size={12} /> Speichern
+            {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} Speichern
           </button>
         </div>
       </div>

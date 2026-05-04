@@ -1017,6 +1017,27 @@ const buildDeviceItemFromBlock = (block = {}) => ({
   optional: false
 });
 
+const buildLineItemFromAiPrefill = (item = {}) => ({
+  ...buildLineItemFromBlock({
+    ...item,
+    type: "Dienstleistung",
+    complexity: item.complexity || "mittel"
+  }),
+  title: item.title || "Leistung",
+  aiDraft: item.aiDraft || item.description || item.text || "",
+  optional: Boolean(item.optional)
+});
+
+const buildDeviceItemFromAiPrefill = (item = {}) => ({
+  ...buildDeviceItemFromBlock({
+    ...item,
+    title: item.product || item.title || "Material",
+    product: item.product || item.title || "Material"
+  }),
+  description: item.description || item.text || "",
+  optional: Boolean(item.optional)
+});
+
 const defaultOfferFormat = "AN-XXXX";
 const makeReference = (format, index) => {
   const template = (format || defaultOfferFormat).trim() || defaultOfferFormat;
@@ -1425,6 +1446,9 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
   const totalsGrossClass = isExport
     ? "flex items-center justify-between text-sm font-semibold text-sand-900"
     : "flex items-center justify-between text-base font-semibold text-sand-900";
+  const previewScaleStyle = isExport
+    ? { transform: "none", overflow: "hidden" }
+    : { zoom: scale, transform: "none" };
   const previewPositionsWithIndex = previewPositions.map((item, index) => ({
     ...item,
     _posIndex: index
@@ -1898,9 +1922,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               width: `${a4WidthPx}px`,
               height: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
                 minHeight: isExport ? `${exportPageSafeHeightPx}px` : `${a4HeightPx}px`,
-                transform: `scale(${scale})`,
                 transformOrigin: "top left",
-                ...(isExport ? { transform: "none", overflow: "hidden" } : {}),
+                ...previewScaleStyle,
                 pageBreakAfter:
                   isExport && hasPostCoverContent ? "always" : "auto"
               }}
@@ -1963,8 +1986,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               width: `${a4WidthPx}px`,
               height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
               minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-              transform: isExport ? "none" : `scale(${scale})`,
               transformOrigin: "top left",
+              ...previewScaleStyle,
               pageBreakAfter:
                   isExport &&
                   (pageIndex < pagedPositions.length - 1 ||
@@ -2225,8 +2248,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 width: `${a4WidthPx}px`,
                 height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-                transform: isExport ? "none" : `scale(${scale})`,
                 transformOrigin: "top left",
+                ...previewScaleStyle,
                 pageBreakAfter:
                   isExport && (hasPhotosPage || hasDetailsPage) ? "always" : "auto"
               }}
@@ -2274,9 +2297,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
               width: `${a4WidthPx}px`,
               height: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx}px`,
               minHeight: isExport ? `${exportPhotoSafeHeightPx}px` : `${a4HeightPx}px`,
-              transform: `scale(${scale})`,
               transformOrigin: "top left",
-              ...(isExport ? { overflow: "hidden" } : {})
+              ...previewScaleStyle
             }}
           >
             <div
@@ -2366,8 +2388,8 @@ function OfferPreview({ offer, scale = 1, containerRef, mode = "offer" }) {
                 width: `${a4WidthPx}px`,
                 height: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
                 minHeight: isExport ? `${exportPageHeightPx}px` : `${a4HeightPx}px`,
-                transform: `scale(${scale})`,
                 transformOrigin: "top left",
+                ...previewScaleStyle,
                 pageBreakAfter:
                   isExport && pageIndex < pages.length - 1 ? "always" : "auto"
               }}
@@ -2882,6 +2904,98 @@ function SelectField({ value, onChange, disabled, children }) {
         className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-sand-500"
         aria-hidden="true"
       />
+    </div>
+  );
+}
+
+function OfferAiPrefillModal({ open, values, onChange, onClose, onSubmit }) {
+  if (!open) return null;
+  const loading = values?.status === "loading";
+  const handleKeyDown = (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
+      <div
+        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-sand-200 bg-white shadow-soft"
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-sand-100 px-4 py-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-blue-200 bg-blue-50 text-blue-700">
+              <Sparkles size={18} />
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-sand-500">
+                KI Vorerfassung
+              </p>
+              <h2 className={modalTitleClass}>Angebot aus Beschreibung vorbereiten</h2>
+              <p className="mt-1 text-xs text-sand-600">
+                Die KI befüllt Kunde, Deckblatt, Texte und passende Positionen. Preise werden nur übernommen, wenn sie aus der Beschreibung hervorgehen.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 bg-white p-1 text-sand-500 hover:bg-sand-50"
+            aria-label="KI Vorerfassung schließen"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="space-y-3 px-4 py-3">
+          <Field label="Beschreibung">
+            <textarea
+              className={`${textareaClass} min-h-[180px] text-sm normal-case tracking-normal`}
+              value={values?.description || ""}
+              onChange={(event) => onChange({ description: event.target.value, error: "" })}
+              placeholder="Beispiel: Für Kunde Mustermann Angebot für Firewalltausch, Einrichtung VPN, 4 Stunden Arbeitszeit, optional WLAN-Access-Point, Deckblatt mit IT-Sicherheitsmodernisierung..."
+              autoFocus
+            />
+          </Field>
+          <label className="flex items-center gap-2 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-700">
+            <input
+              type="checkbox"
+              checked={Boolean(values?.replacePositions)}
+              onChange={(event) => onChange({ replacePositions: event.target.checked })}
+              className="h-4 w-4"
+            />
+            Bestehende Positionen ersetzen
+          </label>
+          {values?.error ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              {values.error}
+            </div>
+          ) : null}
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-sand-100 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-sand-200 px-3 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-50"
+          >
+            Abbrechen
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={loading || !String(values?.description || "").trim()}
+            className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading ? (
+              <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/70 border-t-transparent" />
+            ) : (
+              <Sparkles size={13} />
+            )}
+            {loading ? "Erstelle..." : "Felder vorbefüllen"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -4021,6 +4135,13 @@ export default function OffersView() {
   const [expandedOfferDetails, setExpandedOfferDetails] = useState({});
   const [confirmationMenuOfferId, setConfirmationMenuOfferId] = useState("");
   const [aiLoading, setAiLoading] = useState({});
+  const [aiPrefillModal, setAiPrefillModal] = useState({
+    open: false,
+    description: "",
+    status: "idle",
+    error: "",
+    replacePositions: false
+  });
   const previewWrapperRef = useRef(null);
   const previewSectionRef = useRef(null);
   const documentBuildRef = useRef(null);
@@ -5272,6 +5393,130 @@ export default function OffersView() {
     });
   };
 
+  const openAiPrefillModal = () => {
+    if (!activeOffer) return;
+    setAiPrefillModal((prev) => ({
+      ...prev,
+      open: true,
+      status: "idle",
+      error: "",
+      description:
+        prev.description ||
+        [
+          activeOffer.customer ? `Kunde: ${activeOffer.customer}` : "",
+          activeOffer.overviewText || "",
+          stripHtml(activeOffer.detailHtml || "")
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+    }));
+  };
+
+  const closeAiPrefillModal = () => {
+    setAiPrefillModal((prev) => ({
+      ...prev,
+      open: false,
+      status: "idle",
+      error: ""
+    }));
+  };
+
+  const applyOfferAiPrefill = (generatedOffer, options = {}) => {
+    if (!activeOffer || !generatedOffer) return;
+    const generatedLineItems = Array.isArray(generatedOffer.lineItems)
+      ? generatedOffer.lineItems.map(buildLineItemFromAiPrefill)
+      : [];
+    const generatedDeviceItems = Array.isArray(generatedOffer.deviceItems)
+      ? generatedOffer.deviceItems.map(buildDeviceItemFromAiPrefill)
+      : [];
+    const replacePositions = Boolean(options.replacePositions);
+    const nextDetailHtml = generatedOffer.detailHtml
+      ? ensureHtmlBody(generatedOffer.detailHtml)
+      : activeOffer.detailHtml || "";
+    updateOffer(activeOffer.id, (offer) => ({
+      ...offer,
+      customer: generatedOffer.customer || offer.customer,
+      recipientName: generatedOffer.recipientName || offer.recipientName,
+      recipientCompany: generatedOffer.recipientCompany || offer.recipientCompany,
+      salutation: generatedOffer.salutation || offer.salutation,
+      introText: generatedOffer.introText || offer.introText,
+      coverEnabled:
+        typeof generatedOffer.coverEnabled === "boolean"
+          ? generatedOffer.coverEnabled
+          : offer.coverEnabled,
+      coverHeadline: generatedOffer.coverHeadline || offer.coverHeadline,
+      coverIntro: generatedOffer.coverIntro || offer.coverIntro,
+      overviewText: generatedOffer.overviewText || offer.overviewText,
+      calculationText: generatedOffer.calculationText || offer.calculationText,
+      detailHtml: nextDetailHtml,
+      lineItems: replacePositions
+        ? generatedLineItems
+        : [...(offer.lineItems || []), ...generatedLineItems],
+      deviceItems: replacePositions
+        ? generatedDeviceItems
+        : [...(offer.deviceItems || []), ...generatedDeviceItems]
+    }));
+    setDetailDraft(nextDetailHtml);
+  };
+
+  const runOfferAiPrefill = async () => {
+    if (!activeOffer) return;
+    const description = String(aiPrefillModal.description || "").trim();
+    if (description.length < 10) {
+      setAiPrefillModal((prev) => ({
+        ...prev,
+        error: "Bitte eine aussagekräftige Beschreibung eingeben."
+      }));
+      return;
+    }
+    setAiPrefillModal((prev) => ({ ...prev, status: "loading", error: "" }));
+    try {
+      const res = await fetch("/api/offer_ai_prefill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description,
+          current_offer: sanitizeOfferForSave(activeOffer),
+          customers: customers.slice(0, 120).map((customer) => ({
+            name: customer.name || "",
+            email: customer.email || "",
+            street: customer.street || "",
+            postal_code: customer.postal_code || "",
+            city: customer.city || "",
+            country: customer.country || ""
+          }))
+        })
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.offer) {
+        throw new Error(typeof data?.detail === "string" ? data.detail : "ai_prefill_failed");
+      }
+      applyOfferAiPrefill(data.offer, {
+        replacePositions: aiPrefillModal.replacePositions
+      });
+      const hintCount = Array.isArray(data.offer.hints) ? data.offer.hints.length : 0;
+      setToast(
+        data.usedFallback
+          ? "KI Vorerfassung mit Fallback übernommen."
+          : hintCount
+            ? "KI Vorerfassung übernommen. Hinweise bitte prüfen."
+            : "KI Vorerfassung übernommen."
+      );
+      setAiPrefillModal((prev) => ({
+        ...prev,
+        open: false,
+        status: "idle",
+        error: ""
+      }));
+    } catch (error) {
+      setAiPrefillModal((prev) => ({
+        ...prev,
+        status: "error",
+        error: error?.message || "KI Vorerfassung fehlgeschlagen."
+      }));
+    }
+  };
+
   const editOfferFromArchive = (offerId) => {
     setActiveId(offerId);
     setMainTab("new");
@@ -6325,7 +6570,14 @@ export default function OffersView() {
           {toast}
         </div>
       ) : null}
-      <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
+      <OfferAiPrefillModal
+        open={aiPrefillModal.open}
+        values={aiPrefillModal}
+        onChange={(patch) => setAiPrefillModal((prev) => ({ ...prev, ...patch }))}
+        onClose={closeAiPrefillModal}
+        onSubmit={runOfferAiPrefill}
+      />
+      <header className="border-b border-sand-200 bg-white">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-2">
           <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)] shadow-soft">
             <Receipt size={18} />
@@ -6387,6 +6639,14 @@ export default function OffersView() {
               </button>
               <button
                 type="button"
+                onClick={openAiPrefillModal}
+                disabled={!activeOffer || aiPrefillModal.status === "loading"}
+                className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs uppercase tracking-wide text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Sparkles size={12} /> KI Vorerfassung
+              </button>
+              <button
+                type="button"
                 onClick={handleManualSave}
                 disabled={!activeOffer}
                 className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs uppercase tracking-wide ${
@@ -6423,11 +6683,11 @@ export default function OffersView() {
           activeOffer ? (
             <>
               <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_0.95fr] gap-4 items-start">
-                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/80 backdrop-blur p-4 shadow-soft animate-fade-in">
+                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
                   <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_0.95fr] gap-4 items-start">
                     <section
                       ref={offerHeaderRef}
-                      className="self-start rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4"
+                      className="self-start rounded-3xl border border-sand-200 bg-white p-4"
                     >
                       <SectionHeader
                         icon={Receipt}
@@ -6700,7 +6960,7 @@ export default function OffersView() {
                       className="space-y-3 xl:sticky xl:top-5 self-start"
                       ref={previewSectionRef}
                     >
-                      <div className="rounded-3xl border border-sand-200 bg-white/80 p-3 shadow-soft backdrop-blur">
+                      <div className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft">
                         <SectionHeader
                           icon={Eye}
                           kicker="Live Vorschau"
@@ -6739,7 +6999,7 @@ export default function OffersView() {
                   </div>
                 </section>
 
-                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
+                <section className="xl:col-span-2 rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
                   <SectionHeader
                     icon={ShoppingCart}
                     kicker="Positionen"
@@ -6906,7 +7166,7 @@ export default function OffersView() {
                 <div className="space-y-3 xl:col-span-2">
                   <section
                     ref={documentBuildRef}
-                    className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft animate-fade-in"
+                    className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft"
                   >
                   <SectionHeader
                     icon={FileText}
@@ -7116,7 +7376,7 @@ export default function OffersView() {
                   </div>
                 </section>
 
-                  <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
+                  <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
                     <SectionHeader
                       icon={MessageSquare}
                       kicker="Angebotsdetail"
@@ -7130,6 +7390,15 @@ export default function OffersView() {
                         placeholder="Projektablauf, Hintergrund, Vorgehen..."
                         minHeight="160px"
                         fontFamily={'"Roboto", "Helvetica Neue", Arial, sans-serif'}
+                        aiModule="offers"
+                        aiContext={{
+                          module: "Angebote",
+                          customer: activeOffer?.customer || "",
+                          offer: {
+                            title: activeOffer?.overviewText || activeOffer?.reference || "",
+                            number: activeOffer?.reference || activeOffer?.serverId || ""
+                          }
+                        }}
                       />
                     </div>
                     {!detailDraft ? (
@@ -7139,7 +7408,7 @@ export default function OffersView() {
                     ) : null}
                   </section>
 
-                  <section className="rounded-3xl border border-sand-200 bg-white/90 backdrop-blur p-4 shadow-soft animate-fade-in">
+                  <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="flex-1 min-w-[240px]">
                         <SectionHeader
@@ -7268,7 +7537,7 @@ export default function OffersView() {
             </section>
           )
         ) : mainTab === "status" ? (
-      <section className="rounded-3xl border border-sand-200 bg-white p-2 shadow-soft animate-fade-in">
+      <section className="rounded-3xl border border-sand-200 bg-white p-2 shadow-soft">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
@@ -7346,7 +7615,7 @@ export default function OffersView() {
         </div>
       </section>
     ) : (
-      <section className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft animate-fade-in">
+      <section className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">

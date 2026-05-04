@@ -252,11 +252,11 @@ const buildSentInfo = ({ sentAt, sentVia, openedAt, openedCount }) => {
   const openedAtText = openedAt ? new Date(openedAt).toLocaleString("de-DE") : "";
   const safeVia = sentVia && sentVia !== "manuell" ? sentVia : "";
   return [
-    safeVia ? `Versand: ${safeVia}` : "",
-    sentAtText ? `Am: ${sentAtText}` : "",
-    openedCount
-      ? `Gelesen: ${openedCount}x${openedAtText ? ` (zuletzt ${openedAtText})` : ""}`
-      : "Gelesen: nein"
+	    safeVia ? `Versand: ${safeVia}` : "",
+	    sentAtText ? `Am: ${sentAtText}` : "",
+	    openedCount
+	      ? `Geöffnet: ${openedCount}x${openedAtText ? ` (zuletzt ${openedAtText})` : ""}`
+	      : "Geöffnet: nein"
   ]
     .filter(Boolean)
     .join(" | ");

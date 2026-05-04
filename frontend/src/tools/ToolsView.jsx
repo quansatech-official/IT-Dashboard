@@ -61,6 +61,82 @@ const TOOL_CARDS = [
   }
 ];
 
+const TOOL_BY_ID = Object.fromEntries(TOOL_CARDS.map((tool) => [tool.id, tool]));
+
+const ToolHeader = ({ activeTool, setActiveTool, actions = null }) => {
+  const activeMeta = TOOL_BY_ID[activeTool] || null;
+  const Icon = activeMeta?.icon || Wrench;
+  const title = activeMeta?.label || "Tools";
+  return (
+    <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
+      <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 px-6 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-200)] bg-[var(--nav-active-bg)] text-[var(--nav-accent)]">
+            <Icon size={18} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
+            <h1 className="truncate text-xl font-display text-sand-900">{title}</h1>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {actions}
+          {activeTool !== "home" ? (
+            <button
+              type="button"
+              onClick={() => setActiveTool("home")}
+              className="inline-flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs font-medium text-sand-700 hover:bg-sand-50"
+            >
+              <ArrowLeft size={14} />
+              Übersicht
+            </button>
+          ) : (
+            <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
+              {TOOL_CARDS.length} Werkzeuge
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="border-t border-sand-100 bg-white/70">
+        <div className="mx-auto flex max-w-[1440px] gap-1 overflow-x-auto px-6 py-2">
+          <button
+            type="button"
+            onClick={() => setActiveTool("home")}
+            className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-medium ${
+              activeTool === "home" ? "bg-sand-900 text-white" : "text-sand-600 hover:bg-sand-100"
+            }`}
+          >
+            Übersicht
+          </button>
+          {TOOL_CARDS.map((tool) => {
+            const ToolIcon = tool.icon;
+            return (
+              <button
+                key={tool.id}
+                type="button"
+                onClick={() => setActiveTool(tool.id)}
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium ${
+                  activeTool === tool.id ? "bg-sand-900 text-white" : "text-sand-600 hover:bg-sand-100"
+                }`}
+              >
+                <ToolIcon size={13} />
+                {tool.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </header>
+  );
+};
+
+const ToolPanelShell = ({ activeTool, setActiveTool, children, actions = null }) => (
+  <div className="min-h-screen bg-sand-50">
+    <ToolHeader activeTool={activeTool} setActiveTool={setActiveTool} actions={actions} />
+    <main className="mx-auto max-w-[1440px] px-6 py-5">{children}</main>
+  </div>
+);
+
 export default function ToolsView() {
   const [activeTool, setActiveTool] = useState(() => {
     if (typeof window === "undefined") return "home";
@@ -86,187 +162,81 @@ export default function ToolsView() {
 
   if (activeTool === "yopass") {
     return (
-      <div className="min-h-screen bg-sand-50">
-        <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-          <div className="flex items-center justify-between gap-3 px-6 py-4">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
-                <KeyRound size={18} />
-              </div>
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
-                <h1 className="text-xl font-display text-sand-900">YoPass</h1>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <a
-                href={YOPASS_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-              >
-                <ExternalLink size={14} />
-                Neu öffnen
-              </a>
-              <button
-                type="button"
-                onClick={() => setActiveTool("home")}
-                className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-              >
-                <ArrowLeft size={14} />
-                Zurueck zu Tools
-              </button>
-            </div>
-          </div>
-        </header>
-
-        <main className="px-6 py-8">
-          <section className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
-            <iframe
-              title="YoPass Compact"
-              src={YOPASS_IFRAME_URL}
-              className="h-[calc(100vh-11rem)] min-h-[640px] w-full bg-white"
-              referrerPolicy="no-referrer"
-            />
-          </section>
-        </main>
-      </div>
+      <ToolPanelShell
+        activeTool={activeTool}
+        setActiveTool={setActiveTool}
+        actions={(
+          <a
+            href={YOPASS_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs font-medium text-sand-700 hover:bg-sand-50"
+          >
+            <ExternalLink size={14} />
+            Neu öffnen
+          </a>
+        )}
+      >
+        <section className="overflow-hidden rounded-[26px] border border-sand-200 bg-white shadow-soft">
+          <iframe
+            title="YoPass Compact"
+            src={YOPASS_IFRAME_URL}
+            className="h-[calc(100vh-10.5rem)] min-h-[640px] w-full bg-white"
+            referrerPolicy="no-referrer"
+          />
+        </section>
+      </ToolPanelShell>
     );
   }
 
   if (activeTool === "rmm-audits") {
     return (
-      <div className="min-h-screen bg-sand-50">
-        <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-          <div className="flex items-center justify-between gap-3 px-6 py-4">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
-                <ShieldCheck size={18} />
-              </div>
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
-                <h1 className="text-xl font-display text-sand-900">RMM Audits</h1>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveTool("home")}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-            >
-              <ArrowLeft size={14} />
-              Zurueck zu Tools
-            </button>
-          </div>
-        </header>
-
-        <main className="px-6 py-8">
-          <RmmAuditsPanel />
-        </main>
-      </div>
+      <ToolPanelShell activeTool={activeTool} setActiveTool={setActiveTool}>
+        <RmmAuditsPanel />
+      </ToolPanelShell>
     );
   }
 
   if (activeTool === "exports") {
     return (
-      <div className="min-h-screen bg-sand-50">
-        <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-          <div className="flex items-center justify-between gap-3 px-6 py-4">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
-                <FileSpreadsheet size={18} />
-              </div>
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
-                <h1 className="text-xl font-display text-sand-900">Export</h1>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveTool("home")}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-            >
-              <ArrowLeft size={14} />
-              Zurueck zu Tools
-            </button>
-          </div>
-        </header>
-
-        <main className="px-6 py-8">
-          <CustomerExportPanel />
-        </main>
-      </div>
+      <ToolPanelShell activeTool={activeTool} setActiveTool={setActiveTool}>
+        <CustomerExportPanel />
+      </ToolPanelShell>
     );
   }
 
   if (activeTool === "remote-deploy") {
     return (
-      <div className="min-h-screen bg-sand-50">
-        <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-          <div className="flex items-center justify-between gap-3 px-6 py-4">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
-                <MonitorDown size={18} />
-              </div>
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
-                <h1 className="text-xl font-display text-sand-900">Fernwartungslink-Generator</h1>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveTool("home")}
-              className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide text-sand-700 hover:bg-sand-100"
-            >
-              <ArrowLeft size={14} />
-              Zurueck zu Tools
-            </button>
-          </div>
-        </header>
-
-        <main className="px-6 py-8">
-          <RemoteDeployPanel />
-        </main>
-      </div>
+      <ToolPanelShell activeTool={activeTool} setActiveTool={setActiveTool}>
+        <RemoteDeployPanel />
+      </ToolPanelShell>
     );
   }
 
   return (
     <div className="min-h-screen bg-sand-50">
-      <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-5">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-[var(--nav-active-bg)] text-[var(--nav-accent)] flex items-center justify-center border border-[var(--border-200)]">
-              <Wrench size={18} />
-            </div>
-            <div>
-              <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
-              <h1 className="text-xl font-display text-sand-900">Tools</h1>
-            </div>
-          </div>
-          <div className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs uppercase tracking-wide text-sand-600">
-            {TOOL_CARDS.length} Werkzeuge
-          </div>
-        </div>
-      </header>
+      <ToolHeader activeTool={activeTool} setActiveTool={setActiveTool} />
 
-      <main className="mx-auto max-w-7xl space-y-6 px-6 py-8">
-        <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">
-          <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-            <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Werkzeugauswahl</p>
-            <h2 className="mt-2 text-xl font-display text-sand-900">Wähle das passende interne Werkzeug.</h2>
-            <p className="mt-2 max-w-3xl text-sm text-sand-600">
-              Deployment, Export, Audit und sichere Freigaben sind als eigene Arbeitsbereiche getrennt.
-            </p>
+      <main className="mx-auto max-w-[1440px] space-y-5 px-6 py-5">
+        <section className="rounded-[26px] border border-sand-200 bg-white p-4 shadow-soft">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.24em] font-medium text-sand-500">Werkzeugauswahl</p>
+              <h2 className="mt-1 text-xl font-display text-sand-900">Interne Werkzeuge schnell öffnen.</h2>
+              <p className="mt-1 max-w-3xl text-sm text-sand-600">
+                Die Tools sind nach Aufgabe gruppiert. Suche oder nutze den Strip oben für den direkten Wechsel.
+              </p>
+            </div>
+            <label className="relative flex items-center">
+              <Search className="absolute left-3 text-sand-400" size={16} />
+              <input
+                value={toolQuery}
+                onChange={(event) => setToolQuery(event.target.value)}
+                className="w-full rounded-xl border border-sand-200 bg-sand-50 py-2.5 pl-9 pr-4 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                placeholder="Tool suchen"
+              />
+            </label>
           </div>
-          <label className="relative flex items-center rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-            <Search className="absolute left-8 text-sand-400" size={17} />
-            <input
-              value={toolQuery}
-              onChange={(event) => setToolQuery(event.target.value)}
-              className="w-full rounded-2xl border border-sand-200 py-3 pl-10 pr-4 text-sm text-sand-900 outline-none focus:border-sand-400"
-              placeholder="Tool suchen"
-            />
-          </label>
         </section>
 
         {TOOL_GROUPS.map((group) => {
@@ -275,7 +245,7 @@ export default function ToolsView() {
             .filter((tool) => tool && filteredToolIds.has(tool.id));
           if (!tools.length) return null;
           return (
-            <section key={group.title} className="space-y-3">
+            <section key={group.title} className="rounded-[26px] border border-sand-200 bg-white p-4 shadow-soft">
               <div className="flex flex-wrap items-end justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-semibold uppercase tracking-[0.25em] text-sand-500">{group.title}</h3>
@@ -283,7 +253,7 @@ export default function ToolsView() {
                 </div>
                 <span className="text-xs text-sand-500">{tools.length} verfügbar</span>
               </div>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                 {tools.map((tool) => {
                   const Icon = tool.icon;
                   return (
@@ -291,11 +261,11 @@ export default function ToolsView() {
                       key={tool.id}
                       type="button"
                       onClick={() => setActiveTool(tool.id)}
-                      className="group flex min-h-[176px] flex-col justify-between rounded-3xl border border-sand-200 bg-white p-5 text-left shadow-soft transition hover:-translate-y-0.5 hover:border-sand-300 hover:bg-sand-50"
+                      className="group flex min-h-[128px] flex-col justify-between rounded-2xl border border-sand-200 bg-sand-50/60 p-4 text-left transition hover:border-sand-300 hover:bg-white hover:shadow-soft"
                     >
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex min-w-0 gap-3">
-                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-sand-900 text-white">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sand-900 text-white">
                             <Icon size={18} />
                           </div>
                           <div className="min-w-0">
@@ -305,13 +275,13 @@ export default function ToolsView() {
                                 {tool.status}
                               </span>
                             </div>
-                            <h4 className="mt-2 text-lg font-display text-sand-900">{tool.label}</h4>
+                            <h4 className="mt-1 text-base font-semibold text-sand-900">{tool.label}</h4>
                           </div>
                         </div>
                         <ArrowRight className="mt-1 shrink-0 text-sand-400 transition group-hover:translate-x-1 group-hover:text-sand-700" size={18} />
                       </div>
-                      <p className="mt-4 text-sm leading-6 text-sand-600">{tool.description}</p>
-                      <div className="mt-4 inline-flex w-fit items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white">
+                      <p className="mt-3 line-clamp-2 text-sm leading-5 text-sand-600">{tool.description}</p>
+                      <div className="mt-3 inline-flex w-fit items-center gap-2 rounded-full border border-sand-900 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white">
                         {tool.action}
                       </div>
                     </button>

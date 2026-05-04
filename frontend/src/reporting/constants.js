@@ -78,8 +78,9 @@ export const statusStyles = {
 };
 
 export const archiveStatusStyles = {
-  Gelesen: "bg-sky-100 text-sky-700 border-sky-200",
   Bestätigt: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  "Aufgabe erstellt": "bg-emerald-100 text-emerald-700 border-emerald-200",
+  Erledigt: "bg-sand-100 text-sand-700 border-sand-200",
   Abgelehnt: "bg-rose-100 text-rose-700 border-rose-200"
 };
 

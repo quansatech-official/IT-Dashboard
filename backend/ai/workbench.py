@@ -8,12 +8,14 @@ WORKBENCH_USE_CASE_IMPROVE_OFFER_TEXT = "ImproveOfferText"
 WORKBENCH_USE_CASE_GENERATE_CUSTOMER_TEXT_SUGGESTIONS = "GenerateCustomerTextSuggestions"
 WORKBENCH_USE_CASE_TRANSLATE_TECHNICAL_TO_CUSTOMER_LANGUAGE = "TranslateTechnicalToCustomerLanguage"
 WORKBENCH_USE_CASE_GENERATE_CUSTOMER_REPORT_ENTRY = "GenerateCustomerReportEntry"
+WORKBENCH_USE_CASE_GENERATE_CUSTOMER_CONTRACT_DRAFT = "GenerateCustomerContractDraft"
 
 WORKBENCH_USE_CASES = {
     WORKBENCH_USE_CASE_IMPROVE_OFFER_TEXT,
     WORKBENCH_USE_CASE_GENERATE_CUSTOMER_TEXT_SUGGESTIONS,
     WORKBENCH_USE_CASE_TRANSLATE_TECHNICAL_TO_CUSTOMER_LANGUAGE,
     WORKBENCH_USE_CASE_GENERATE_CUSTOMER_REPORT_ENTRY,
+    WORKBENCH_USE_CASE_GENERATE_CUSTOMER_CONTRACT_DRAFT,
 }
 
 
@@ -131,6 +133,33 @@ def default_workbench_prompts() -> Dict[str, str]:
             "Technischer Text:\n{technical_text}\n\n"
             "Zusaetzlicher Kontext:\n{context}"
         ),
+        "customer_contract_draft": (
+            "Extrahiere aus dem folgenden Freitext strukturierte Vertragsdaten fuer einen IT-Dienstleister.\n\n"
+            "Regeln:\n"
+            "- Antworte ausschliesslich als JSON-Objekt\n"
+            "- Vertragspreis ist immer ein fester individueller Monatswert, kein Tarifmodell\n"
+            "- Wenn ein Wert nicht eindeutig erkennbar ist, leer lassen oder sinnvollen Standard verwenden und in hints/missing_fields markieren\n"
+            "- Datumswerte als YYYY-MM-DD, falls eindeutig erkennbar\n"
+            "- doc_type ist einer von: wartung, monitoring, avv_dsgvo\n"
+            "- monthly_total_eur ist eine Zahl ohne Waehrungszeichen\n\n"
+            "JSON-Schema:\n"
+            "{\n"
+            "  \"title\": \"kurzer Vertragstitel\",\n"
+            "  \"doc_type\": \"wartung|monitoring|avv_dsgvo\",\n"
+            "  \"service_scope\": \"knapper Leistungsumfang\",\n"
+            "  \"monthly_total_eur\": 0,\n"
+            "  \"valid_from\": \"YYYY-MM-DD oder leer\",\n"
+            "  \"runtime_months\": 12,\n"
+            "  \"termination_notice_months\": 3,\n"
+            "  \"auto_extension_months\": 12,\n"
+            "  \"monthly_hours_included\": 0,\n"
+            "  \"billing_interval\": \"monatlich\",\n"
+            "  \"hints\": [\"kurze Hinweise\"],\n"
+            "  \"missing_fields\": [\"preis\", \"startdatum\"]\n"
+            "}\n\n"
+            "Kunde: {customer_name}\n"
+            "Freitext:\n{source_text}"
+        ),
     }
 
 
@@ -148,6 +177,8 @@ class WorkbenchAiService:
             return self.generate_customer_text_suggestions(data)
         if normalized == WORKBENCH_USE_CASE_TRANSLATE_TECHNICAL_TO_CUSTOMER_LANGUAGE:
             return self.translate_technical_to_customer_language(data)
+        if normalized == WORKBENCH_USE_CASE_GENERATE_CUSTOMER_CONTRACT_DRAFT:
+            return self.generate_customer_contract_draft(data)
         raise ValueError(f"Unsupported Workbench AI use case: {use_case}")
 
     def improve_offer_text(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -289,3 +320,47 @@ class WorkbenchAiService:
             text = technical_text[:520].rstrip(" ,;:-") + "."
             return {"text": text, "provider": "fallback", "model": "", "usedFallback": True}
         return {"text": text, "provider": provider, "model": model, "usedFallback": False}
+
+    def generate_customer_contract_draft(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        source_text = clean_text(data.get("source_text") or data.get("sourceText") or data.get("text"))
+        if not source_text:
+            raise ValueError("Text required")
+        prompts = self.runtime.load_prompts()
+        workbench_prompts = {
+            **default_workbench_prompts(),
+            **(prompts.get("workbench_use_case_prompts") or {}),
+        }
+        prompt = self.runtime.render_prompt(
+            workbench_prompts["customer_contract_draft"],
+            {
+                "customer_name": clean_text(data.get("customer_name") or data.get("customerName")) or "n/a",
+                "source_text": source_text,
+            },
+        )
+        payload, model, provider = self.runtime.generate(
+            prompt,
+            model_candidates=self.runtime.resolve_models(purpose="customer_development"),
+            response_format="json",
+            temperature=0.15,
+            max_tokens=min(900, self.runtime.tool_max_tokens),
+            timeout=self.runtime.tool_timeout_seconds,
+            system_prompt=self.runtime.system_prompt,
+        )
+        draft = extract_json_object((payload or {}).get("response")) or {}
+        if not draft:
+            draft = {
+                "title": "",
+                "doc_type": "wartung",
+                "service_scope": source_text[:700],
+                "monthly_total_eur": 0,
+                "valid_from": "",
+                "runtime_months": 12,
+                "termination_notice_months": 3,
+                "auto_extension_months": 12,
+                "monthly_hours_included": 0,
+                "billing_interval": "monatlich",
+                "hints": ["KI-Antwort konnte nicht strukturiert gelesen werden."],
+                "missing_fields": ["preis"],
+            }
+            return {"draft": draft, "provider": "fallback", "model": "", "usedFallback": True}
+        return {"draft": draft, "provider": provider, "model": model, "usedFallback": False}

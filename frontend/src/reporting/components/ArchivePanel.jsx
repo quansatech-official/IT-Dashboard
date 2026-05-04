@@ -20,18 +20,17 @@ const WORKFLOW_FILTERS = [
   { key: "all", label: "Alle" },
   { key: "open", label: "Offen" },
   { key: "unsent", label: "Nicht gesendet" },
-  { key: "unread", label: "Ungelesen" },
-  { key: "read", label: "Gelesen" },
   { key: "confirmed", label: "Bestätigt" },
+  { key: "done", label: "Erledigt" },
   { key: "rejected", label: "Abgelehnt" }
 ];
 
 const emptyStats = {
   total: 0,
+  open: 0,
   unsent: 0,
-  sentUnread: 0,
-  read: 0,
   confirmed: 0,
+  done: 0,
   rejected: 0
 };
 
@@ -39,24 +38,23 @@ const normalizeText = (value) => String(value || "").trim();
 const normalizeLower = (value) => normalizeText(value).toLowerCase();
 const isConfirmed = (item) => normalizeLower(item?.customerStatus) === "bestätigt";
 const isRejected = (item) => normalizeLower(item?.customerStatus) === "abgelehnt";
+const isDone = (item) => ["erledigt", "aufgabe erstellt"].includes(normalizeLower(item?.customerStatus));
+const isClosed = (item) => isConfirmed(item) || isRejected(item) || isDone(item);
+const isOpen = (item) => !isClosed(item);
 const isSent = (item) => Boolean(item?.sentAt);
-const isRead = (item) =>
-  Number(item?.openedCount || 0) > 0 ||
-  normalizeLower(item?.customerStatus) === "gelesen" ||
-  isConfirmed(item);
 
 const getNextAction = (item) => {
   if (!isSent(item)) {
     return { label: "Senden", tone: "border-amber-200 bg-amber-50 text-amber-700", icon: Send };
   }
   if (isRejected(item)) {
-    return { label: "Klären", tone: "border-rose-200 bg-rose-50 text-rose-700", icon: AlertTriangle };
+    return { label: "Abgeschlossen", tone: "border-rose-200 bg-rose-50 text-rose-700", icon: AlertTriangle };
   }
   if (isConfirmed(item)) {
     return { label: "Aufgabe", tone: "border-emerald-200 bg-emerald-50 text-emerald-700", icon: Plus };
   }
-  if (!isRead(item)) {
-    return { label: "Nachfassen", tone: "border-amber-200 bg-amber-50 text-amber-700", icon: Clock3 };
+  if (isDone(item)) {
+    return { label: "Erledigt", tone: "border-sand-200 bg-sand-50 text-sand-700", icon: CheckCircle2 };
   }
   return { label: "Rückmeldung offen", tone: "border-sky-200 bg-sky-50 text-sky-700", icon: Clock3 };
 };
@@ -64,10 +62,10 @@ const getNextAction = (item) => {
 const reportPriority = (item) => {
   const action = getNextAction(item).label;
   if (action === "Senden") return 0;
-  if (action === "Nachfassen") return 1;
-  if (action === "Klären") return 2;
-  if (action === "Rückmeldung offen") return 3;
-  if (action === "Aufgabe") return 4;
+  if (action === "Rückmeldung offen") return 1;
+  if (action === "Aufgabe") return 2;
+  if (action === "Abgeschlossen") return 3;
+  if (action === "Erledigt") return 4;
   return 5;
 };
 
@@ -75,8 +73,9 @@ const getGroupSummary = (reports) => {
   const summary = reports.reduce(
     (acc, item) => {
       if (!isSent(item)) acc.unsent += 1;
-      if (isSent(item) && !isRead(item)) acc.unread += 1;
+      if (isOpen(item)) acc.open += 1;
       if (isConfirmed(item)) acc.confirmed += 1;
+      if (isDone(item)) acc.done += 1;
       if (isRejected(item)) acc.rejected += 1;
       const status = normalizeText(item.status);
       if (status === "Rot") acc.critical = "Rot";
@@ -85,19 +84,17 @@ const getGroupSummary = (reports) => {
       if (!acc.latestPeriod && item.period) acc.latestPeriod = item.period;
       return acc;
     },
-    { unsent: 0, unread: 0, confirmed: 0, rejected: 0, critical: "", latestPeriod: "" }
+    { unsent: 0, open: 0, confirmed: 0, done: 0, rejected: 0, critical: "", latestPeriod: "" }
   );
-  summary.open = summary.unsent + summary.unread + summary.rejected;
   return summary;
 };
 
 const matchesWorkflow = (item, workflowFilter) => {
   if (workflowFilter === "unsent") return !isSent(item);
-  if (workflowFilter === "unread") return isSent(item) && !isRead(item);
-  if (workflowFilter === "read") return isRead(item);
+  if (workflowFilter === "open") return isOpen(item);
   if (workflowFilter === "confirmed") return isConfirmed(item);
+  if (workflowFilter === "done") return isDone(item);
   if (workflowFilter === "rejected") return isRejected(item);
-  if (workflowFilter === "open") return !isSent(item) || (isSent(item) && !isRead(item)) || isRejected(item);
   return true;
 };
 
@@ -143,16 +140,16 @@ export default function ArchivePanel({
   );
 
   const stats = useMemo(
-    () =>
-      flatReports.reduce((acc, item) => {
-        acc.total += 1;
-        if (!isSent(item)) acc.unsent += 1;
-        if (isSent(item) && !isRead(item)) acc.sentUnread += 1;
-        if (isRead(item)) acc.read += 1;
-        if (isConfirmed(item)) acc.confirmed += 1;
-        if (isRejected(item)) acc.rejected += 1;
-        return acc;
-      }, { ...emptyStats }),
+	    () =>
+	      flatReports.reduce((acc, item) => {
+	        acc.total += 1;
+	        if (!isSent(item)) acc.unsent += 1;
+	        if (isOpen(item)) acc.open += 1;
+	        if (isConfirmed(item)) acc.confirmed += 1;
+	        if (isDone(item)) acc.done += 1;
+	        if (isRejected(item)) acc.rejected += 1;
+	        return acc;
+	      }, { ...emptyStats }),
     [flatReports]
   );
 
@@ -161,7 +158,7 @@ export default function ArchivePanel({
     const periodNeedle = normalizeLower(periodFilter);
     const matchesStatus = (item) =>
       !statusFilter || normalizeLower(item.status) === normalizeLower(statusFilter);
-    const matchesConfirmed = (item) => !hideConfirmed || !isConfirmed(item);
+	      const matchesConfirmed = (item) => !hideConfirmed || !isClosed(item);
     const matchesPeriod = (item) => !periodNeedle || normalizeLower(item.period).includes(periodNeedle);
     const matchesQuery = (group, item) => {
       if (!needle) return true;
@@ -236,12 +233,12 @@ export default function ArchivePanel({
 
       <div className="mb-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
         {[
-          { label: "Gesamt", value: stats.total, tone: "border-sand-200 bg-sand-50 text-sand-900" },
-          { label: "Nicht gesendet", value: stats.unsent, tone: "border-amber-200 bg-amber-50 text-amber-800" },
-          { label: "Ungelesen", value: stats.sentUnread, tone: "border-amber-200 bg-white text-amber-800" },
-          { label: "Gelesen", value: stats.read, tone: "border-sky-200 bg-sky-50 text-sky-800" },
-          { label: "Bestätigt", value: stats.confirmed, tone: "border-emerald-200 bg-emerald-50 text-emerald-800" },
-          { label: "Abgelehnt", value: stats.rejected, tone: "border-rose-200 bg-rose-50 text-rose-800" }
+	          { label: "Gesamt", value: stats.total, tone: "border-sand-200 bg-sand-50 text-sand-900" },
+	          { label: "Offen", value: stats.open, tone: "border-sky-200 bg-sky-50 text-sky-800" },
+	          { label: "Nicht gesendet", value: stats.unsent, tone: "border-amber-200 bg-amber-50 text-amber-800" },
+	          { label: "Bestätigt", value: stats.confirmed, tone: "border-emerald-200 bg-emerald-50 text-emerald-800" },
+	          { label: "Erledigt", value: stats.done, tone: "border-sand-200 bg-white text-sand-800" },
+	          { label: "Abgelehnt", value: stats.rejected, tone: "border-rose-200 bg-rose-50 text-rose-800" }
         ].map((card) => (
           <div key={card.label} className={`rounded-xl border px-3 py-2 ${card.tone}`}>
             <p className="text-[11px] font-medium text-current opacity-75">{card.label}</p>
@@ -291,7 +288,7 @@ export default function ArchivePanel({
               onChange={(event) => setHideConfirmed(event.target.checked)}
               className="h-3.5 w-3.5 rounded border border-sand-300 text-sand-700"
             />
-            Bestätigte ausblenden
+	            Abgeschlossene ausblenden
           </label>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <button
@@ -344,21 +341,26 @@ export default function ArchivePanel({
                       {summary.unsent} nicht gesendet
                     </span>
                   ) : null}
-                  {summary.unread ? (
-                    <span className="rounded-full border border-amber-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-                      {summary.unread} ungelesen
-                    </span>
-                  ) : null}
+	                  {summary.open ? (
+	                    <span className="rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+	                      {summary.open} offen
+	                    </span>
+	                  ) : null}
                   {summary.rejected ? (
                     <span className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
                       {summary.rejected} abgelehnt
                     </span>
                   ) : null}
-                  {summary.confirmed ? (
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
-                      {summary.confirmed} bestätigt
-                    </span>
-                  ) : null}
+	                  {summary.confirmed ? (
+	                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+	                      {summary.confirmed} bestätigt
+	                    </span>
+	                  ) : null}
+	                  {summary.done ? (
+	                    <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-sand-700">
+	                      {summary.done} erledigt
+	                    </span>
+	                  ) : null}
                 </div>
               </button>
 
@@ -371,8 +373,7 @@ export default function ArchivePanel({
                         <th className="px-4 py-2 text-left">Bericht</th>
                         <th className="px-4 py-2 text-left">Ampel</th>
                         <th className="px-4 py-2 text-left">Versand</th>
-                        <th className="px-4 py-2 text-left">Gelesen</th>
-                        <th className="px-4 py-2 text-left">Kundenreaktion</th>
+	                        <th className="px-4 py-2 text-left">Kundenreaktion</th>
                         <th className="px-4 py-2 text-left">Nächste Aktion</th>
                         <th className="px-4 py-2 text-right">Aktionen</th>
                       </tr>
@@ -408,18 +409,7 @@ export default function ArchivePanel({
                                 </span>
                               )}
                             </td>
-                            <td className="px-4 py-3 align-top">
-                              {isRead(item) ? (
-                                <span className="text-sand-800">
-                                  {Number(item.openedCount || 0) ? `${item.openedCount}x` : "Gelesen"}
-                                </span>
-                              ) : isSent(item) ? (
-                                <span className="text-amber-700">Noch nicht geöffnet</span>
-                              ) : (
-                                <span className="text-sand-400">Nicht gesendet</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 align-top">
+	                            <td className="px-4 py-3 align-top">
                               <select
                                 value={item.customerStatus || ""}
                                 onChange={(event) => onUpdateStatus?.(item, event.target.value)}
@@ -428,12 +418,13 @@ export default function ArchivePanel({
                                     ? archiveStatusStyles[item.customerStatus] || "border-sand-200 bg-white text-sand-700"
                                     : "border-sand-200 bg-white text-sand-500"
                                 }`}
-                              >
-                                <option value="">Offen</option>
-                                <option value="Gelesen">Gelesen</option>
-                                <option value="Bestätigt">Bestätigt</option>
-                                <option value="Abgelehnt">Abgelehnt</option>
-                              </select>
+	                              >
+	                                <option value="">Offen</option>
+	                                <option value="Bestätigt">Bestätigt</option>
+	                                <option value="Aufgabe erstellt">Aufgabe erstellt</option>
+	                                <option value="Erledigt">Erledigt</option>
+	                                <option value="Abgelehnt">Abgelehnt</option>
+	                              </select>
                             </td>
                             <td className="px-4 py-3 align-top">
                               <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${nextAction.tone}`}>
@@ -473,10 +464,10 @@ export default function ArchivePanel({
                                         <span className="text-sand-500">Gesendet</span>
                                         <span className="text-right text-sand-800">{item.sentAtText || "Noch nicht gesendet"}</span>
                                       </div>
-                                      <div className="flex justify-between gap-4">
-                                        <span className="text-sand-500">Zuletzt gelesen</span>
-                                        <span className="text-right text-sand-800">{item.openedAtText || "Noch nicht geöffnet"}</span>
-                                      </div>
+	                                      <div className="flex justify-between gap-4">
+	                                        <span className="text-sand-500">Zuletzt geöffnet</span>
+	                                        <span className="text-right text-sand-800">{item.openedAtText || "Noch nicht geöffnet"}</span>
+	                                      </div>
                                       <div className="flex justify-between gap-4">
                                         <span className="text-sand-500">Öffnungen</span>
                                         <span className="text-right text-sand-800">{Number(item.openedCount || 0)}</span>

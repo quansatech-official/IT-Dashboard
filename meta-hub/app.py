@@ -2196,6 +2196,68 @@ def _fetch_rmm_snapshot() -> Dict[str, Any]:
     )
 
 
+def _fetch_sevdesk_snapshot() -> Dict[str, Any]:
+    if not INTERNAL_TOKEN:
+        raise RuntimeError("META_HUB_INTERNAL_TOKEN missing")
+    return _request_backend_json(
+        "/api/internal/customer_development/sevdesk_snapshot",
+        timeout_seconds=RMM_SNAPSHOT_TIMEOUT_SECONDS,
+        include_internal_token=True,
+    )
+
+
+def _enrich_payload_with_sevdesk(raw: Dict[str, Any], sevdesk_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(sevdesk_snapshot, dict) or not sevdesk_snapshot.get("enabled"):
+        return raw
+    customers_map = sevdesk_snapshot.get("customers")
+    if not isinstance(customers_map, dict):
+        customers_map = {}
+    by_id: Dict[int, Dict[str, Any]] = {}
+    for key, value in customers_map.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            by_id[int(key)] = value
+        except (TypeError, ValueError):
+            continue
+
+    payload = dict(raw) if isinstance(raw, dict) else {"contexts": []}
+    contexts = payload.get("contexts") if isinstance(payload.get("contexts"), list) else []
+    enriched_contexts: List[Dict[str, Any]] = []
+    matched = 0
+    for row in contexts:
+        if not isinstance(row, dict):
+            enriched_contexts.append(row)
+            continue
+        customer_id = _safe_int(row.get("customerId"))
+        finance = by_id.get(customer_id)
+        if finance:
+            row = dict(row)
+            row["sevdeskFinance"] = dict(finance)
+            source = row.get("source") if isinstance(row.get("source"), dict) else {}
+            source = dict(source)
+            source["sevdesk"] = True
+            row["source"] = source
+            matched += 1
+        enriched_contexts.append(row)
+    payload["contexts"] = enriched_contexts
+
+    payload_sources = payload.get("sources") if isinstance(payload.get("sources"), dict) else {}
+    payload_sources = dict(payload_sources)
+    payload_sources["metaHubSevdesk"] = bool(sevdesk_snapshot.get("connected"))
+    payload["sources"] = payload_sources
+    payload["metaHubSevdesk"] = {
+        "enabled": bool(sevdesk_snapshot.get("enabled")),
+        "connected": bool(sevdesk_snapshot.get("connected")),
+        "matchedCustomers": matched,
+        "totalCustomers": len(by_id),
+        "invoiceCount": int(sevdesk_snapshot.get("invoiceCount") or 0),
+        "generatedAt": int(sevdesk_snapshot.get("generatedAt") or 0),
+        "error": str(sevdesk_snapshot.get("error") or ""),
+    }
+    return payload
+
+
 def _fetch_from_backend(force_refresh: bool) -> Dict[str, Any]:
     data = _fetch_development_payload(force_refresh)
     try:
@@ -2204,6 +2266,12 @@ def _fetch_from_backend(force_refresh: bool) -> Dict[str, Any]:
         _apply_runtime_config(runtime_config)
         data = _enrich_payload_with_rmm(data, rmm_snapshot)
         data = _enrich_payload_with_emails(data, runtime_config)
+        if runtime_config.get("sevdesk_enabled"):
+            try:
+                sevdesk_snapshot = _fetch_sevdesk_snapshot()
+                data = _enrich_payload_with_sevdesk(data, sevdesk_snapshot)
+            except Exception as exc:
+                logger.warning("Meta-hub sevdesk enrichment failed: %s", exc)
     except Exception as exc:
         logger.warning("Meta-hub enrichment skipped: %s", exc)
     if not isinstance(data, dict):
@@ -2226,6 +2294,8 @@ def _prepare_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         prepared["metaHubRmm"] = raw.get("metaHubRmm")
     if isinstance(raw.get("metaHubEmail"), dict):
         prepared["metaHubEmail"] = raw.get("metaHubEmail")
+    if isinstance(raw.get("metaHubSevdesk"), dict):
+        prepared["metaHubSevdesk"] = raw.get("metaHubSevdesk")
     email_meta = raw.get("metaHubEmail") if isinstance(raw.get("metaHubEmail"), dict) else {}
     prepared["metaHub"] = {
         "preparedAt": now_ms,

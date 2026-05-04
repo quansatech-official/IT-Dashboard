@@ -13,7 +13,11 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   Check,
+  Download,
+  Eraser,
+  FilePlus,
   GitBranch,
+  Layers,
   Loader2,
   Minus,
   Paintbrush,
@@ -22,6 +26,11 @@ import {
   Pin,
   Plus,
   RefreshCw,
+  RotateCcw,
+  RotateCw,
+  Search,
+  SquareStack,
+  Target,
   Trash2
 } from "lucide-react";
 
@@ -44,13 +53,56 @@ const SAVE_DEBOUNCE_MS = 350;
 const MINDMAP_SAVE_DEBOUNCE_MS = 500;
 const WHITEBOARD_WIDTH = 2200;
 const WHITEBOARD_HEIGHT = 1400;
-const WHITEBOARD_COLORS = ["#1f2937", "#0f766e", "#1d4ed8", "#b45309", "#be123c", "#7c3aed"];
-const WHITEBOARD_STROKE_WIDTHS = [2, 4, 6, 10];
+const WHITEBOARD_COLORS = ["#111827", "#475569", "#0f766e", "#16a34a", "#1d4ed8", "#0284c7", "#b45309", "#dc2626", "#be123c", "#7c3aed"];
+const WHITEBOARD_STROKE_WIDTHS = [2, 4, 6, 10, 14, 20];
+const WHITEBOARD_ERASER_WIDTHS = [24, 40, 64];
+const WHITEBOARD_MIN_POINT_DISTANCE = 3;
+const WHITEBOARD_TOOL_TYPES = {
+  PEN: "pen",
+  ERASER: "eraser"
+};
 const VISION_TABS = [
   { id: "pinboard", label: "Pinboard", icon: Pin },
   { id: "mindmap", label: "Mindmap", icon: GitBranch },
   { id: "whiteboard", label: "Whiteboard", icon: Paintbrush }
 ];
+
+const MINDMAP_NODE_TYPES = [
+  { id: "goal", label: "Ziel", className: "border-emerald-200 bg-emerald-50 text-emerald-900", dot: "bg-emerald-500" },
+  { id: "idea", label: "Idee", className: "border-sky-200 bg-sky-50 text-sky-900", dot: "bg-sky-500" },
+  { id: "task", label: "Aufgabe", className: "border-amber-200 bg-amber-50 text-amber-900", dot: "bg-amber-500" },
+  { id: "risk", label: "Risiko", className: "border-rose-200 bg-rose-50 text-rose-900", dot: "bg-rose-500" },
+  { id: "note", label: "Notiz", className: "border-sand-200 bg-white text-sand-900", dot: "bg-sand-400" }
+];
+
+const MINDMAP_NODE_STATUSES = [
+  { id: "open", label: "Offen" },
+  { id: "active", label: "In Arbeit" },
+  { id: "decided", label: "Entschieden" },
+  { id: "discarded", label: "Verworfen" }
+];
+
+const documentLabelFromKey = (key, fallback = "Standard") => {
+  const raw = String(key || "").trim();
+  const label = raw.includes(":") ? raw.split(":").slice(1).join(":") : raw;
+  return label
+    ? label.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+    : fallback;
+};
+
+const createDocumentKey = (kind, label) => {
+  const slug = String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/ä/g, "ae")
+    .replace(/ö/g, "oe")
+    .replace(/ü/g, "ue")
+    .replace(/ß/g, "ss")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug ? `${kind}:${slug}` : kind;
+};
 
 const COLOR_OPTIONS = [
   {
@@ -127,6 +179,7 @@ const api = {
     clear: () => fetchEmpty(`${API}/vision_board/notes`, { method: "DELETE" })
   },
   documents: {
+    list: (kind) => fetchJson(`${API}/vision_board/documents?kind=${encodeURIComponent(kind)}`),
     get: (key) => fetchJson(`${API}/vision_board/documents/${encodeURIComponent(key)}`),
     save: (key, content) =>
       fetchJson(`${API}/vision_board/documents/${encodeURIComponent(key)}`, {
@@ -135,6 +188,12 @@ const api = {
         body: JSON.stringify({ content })
       })
   },
+  createTask: (payload) =>
+    fetchJson(`${API}/day_tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }),
   pushEvent: (payload) =>
     fetchJson(`${API}/vision_board/events`, {
       method: "POST",
@@ -176,7 +235,7 @@ const createMindmapNode = (label = "Neues Thema", position = { x: 0, y: 0 }, par
   id: uid(),
   type: "mindmap",
   position,
-  data: { label, parentId }
+  data: { label, parentId, kind: "idea", status: "open", details: "", collapsed: false }
 });
 
 const sanitizeMindmapNode = (node) => ({
@@ -188,7 +247,11 @@ const sanitizeMindmapNode = (node) => ({
   },
   data: {
     label: String(node?.data?.label || "Thema"),
-    parentId: String(node?.data?.parentId || "")
+    parentId: String(node?.data?.parentId || ""),
+    kind: MINDMAP_NODE_TYPES.some((item) => item.id === node?.data?.kind) ? node.data.kind : "idea",
+    status: MINDMAP_NODE_STATUSES.some((item) => item.id === node?.data?.status) ? node.data.status : "open",
+    details: String(node?.data?.details || ""),
+    collapsed: Boolean(node?.data?.collapsed)
   }
 });
 
@@ -207,7 +270,7 @@ const createDefaultMindmapDocument = () => ({
       id: "root",
       type: "mindmap",
       position: { x: 0, y: 0 },
-      data: { label: "Vision", parentId: "" }
+      data: { label: "Vision", parentId: "", kind: "goal", status: "open", details: "", collapsed: false }
     }
   ],
   edges: []
@@ -230,14 +293,19 @@ const normalizeMindmapDocument = (content) => {
 
 const createEmptyWhiteboardDocument = () => ({ strokes: [] });
 
+const normalizeWhiteboardColor = (color) => {
+  const value = String(color || "").trim();
+  return /^#[0-9a-f]{3,8}$/i.test(value) ? value : WHITEBOARD_COLORS[0];
+};
+
 const normalizeWhiteboardDocument = (content) => {
   const source = content && typeof content === "object" ? content : {};
   const strokes = Array.isArray(source.strokes)
     ? source.strokes
         .map((stroke) => ({
           id: String(stroke?.id || uid()),
-          color: String(stroke?.color || WHITEBOARD_COLORS[0]),
-          width: Number(stroke?.width || 4),
+          color: normalizeWhiteboardColor(stroke?.color),
+          width: clamp(Number(stroke?.width || 4), 1, 64),
           points: Array.isArray(stroke?.points)
             ? stroke.points
                 .map((point) => ({
@@ -250,6 +318,31 @@ const normalizeWhiteboardDocument = (content) => {
         .filter((stroke) => stroke.points.length > 1)
     : [];
   return { strokes };
+};
+
+const areWhiteboardDocumentsEqual = (left, right) => JSON.stringify(normalizeWhiteboardDocument(left)) === JSON.stringify(normalizeWhiteboardDocument(right));
+
+const getLastPoint = (points = []) => points[points.length - 1] || null;
+
+const shouldAppendWhiteboardPoint = (points = [], point) => {
+  const lastPoint = getLastPoint(points);
+  if (!lastPoint) return true;
+  return Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) >= WHITEBOARD_MIN_POINT_DISTANCE;
+};
+
+const distanceToSegment = (point, start, end) => {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (dx === 0 && dy === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy), 0, 1);
+  return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+};
+
+const strokeIntersectsCircle = (stroke, center, radius) => {
+  const points = stroke?.points || [];
+  if (!points.length) return false;
+  if (points.some((point) => Math.hypot(point.x - center.x, point.y - center.y) <= radius)) return true;
+  return points.some((point, index) => index > 0 && distanceToSegment(center, points[index - 1], point) <= radius + Number(stroke.width || 1) / 2);
 };
 
 const pathFromPoints = (points = []) => {
@@ -278,39 +371,131 @@ const BoardStatus = memo(function BoardStatus({ loaded, error, label, detail = "
 });
 
 const MindMapNode = memo(function MindMapNode({ id, data, selected }) {
+  const typeMeta = MINDMAP_NODE_TYPES.find((item) => item.id === data.kind) || MINDMAP_NODE_TYPES[0];
+  const statusMeta = MINDMAP_NODE_STATUSES.find((item) => item.id === data.status) || MINDMAP_NODE_STATUSES[0];
   return (
     <div
-      className={`min-w-[190px] rounded-2xl border px-3 py-3 shadow-[0_12px_28px_rgba(31,41,55,0.12)] ${
-        selected ? "border-sky-300 bg-sky-50" : "border-sand-200 bg-white"
-      }`}
+      className={`min-w-[210px] rounded-xl border px-3 py-3 shadow-[0_10px_24px_rgba(31,41,55,0.12)] ${
+        selected ? "ring-2 ring-sky-300" : ""
+      } ${typeMeta.className}`}
     >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-[10px] uppercase tracking-[0.16em]">
+          <span className={`h-2 w-2 rounded-full ${typeMeta.dot}`} />
+          {typeMeta.label}
+        </span>
+        <button
+          type="button"
+          onClick={() => data.onToggleCollapsed(id)}
+          className="rounded-md border border-black/10 bg-white/60 px-1.5 py-0.5 text-[10px] hover:bg-white"
+          title={data.collapsed ? "Unterpunkte anzeigen" : "Unterpunkte einklappen"}
+        >
+          {data.childCount ? (data.collapsed ? `+${data.childCount}` : "-") : "0"}
+        </button>
+      </div>
       <input
         value={data.label}
         onChange={(event) => data.onChangeLabel(id, event.target.value)}
-        className="w-full border-0 bg-transparent p-0 text-sm font-semibold text-sand-900 outline-none"
+        onFocus={() => data.onSelect(id)}
+        className="w-full border-0 bg-transparent p-0 text-sm font-semibold outline-none"
         placeholder="Thema"
       />
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <select
+          value={data.status}
+          onChange={(event) => data.onChangeNode(id, { status: event.target.value })}
+          className="min-w-0 rounded-md border border-black/10 bg-white/70 px-1.5 py-1 text-[10px] outline-none"
+          title="Status"
+        >
+          {MINDMAP_NODE_STATUSES.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={data.kind}
+          onChange={(event) => data.onChangeNode(id, { kind: event.target.value })}
+          className="min-w-0 rounded-md border border-black/10 bg-white/70 px-1.5 py-1 text-[10px] outline-none"
+          title="Typ"
+        >
+          {MINDMAP_NODE_TYPES.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="mt-3 flex items-center gap-2">
         <button
           type="button"
           onClick={() => data.onAddChild(id)}
-          className="rounded-xl border border-sand-200 bg-sand-50 px-2.5 py-1 text-[11px] text-sand-700 hover:bg-sand-100"
+          className="rounded-lg border border-black/10 bg-white/70 px-2 py-1 text-[11px] hover:bg-white"
         >
           Unterpunkt
+        </button>
+        <button
+          type="button"
+          onClick={() => data.onSelect(id)}
+          className="rounded-lg border border-black/10 bg-white/70 px-2 py-1 text-[11px] hover:bg-white"
+        >
+          Details
         </button>
         {id !== "root" ? (
           <button
             type="button"
             onClick={() => data.onDelete(id)}
-            className="rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] text-rose-700 hover:bg-rose-100"
+            className="ml-auto rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700 hover:bg-rose-100"
           >
-            Entfernen
+            <Trash2 size={12} />
           </button>
         ) : null}
       </div>
+      <div className="mt-2 text-[10px] text-black/45">{statusMeta.label}</div>
     </div>
   );
 });
+
+function DocumentExplorer({ kind, activeKey, documents, onRefresh, onSelect, onNew }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <select
+        value={activeKey}
+        onChange={(event) => onSelect(event.target.value)}
+        className="h-9 min-w-[190px] rounded-lg border border-sand-200 bg-white px-2 text-xs text-sand-700 outline-none hover:bg-sand-50"
+        title={`${kind} auswählen`}
+      >
+        {documents.length ? (
+          documents.map((document) => (
+            <option key={document.key} value={document.key}>
+              {document.label || documentLabelFromKey(document.key)}
+            </option>
+          ))
+        ) : (
+          <option value={kind}>Standard</option>
+        )}
+      </select>
+      <button
+        type="button"
+        onClick={onRefresh}
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+        title="Explorer aktualisieren"
+        aria-label="Explorer aktualisieren"
+      >
+        <SquareStack size={14} />
+      </button>
+      <button
+        type="button"
+        onClick={onNew}
+        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--nav-accent)] bg-[var(--nav-accent)] text-white hover:opacity-85"
+        title="Neu"
+        aria-label="Neu"
+      >
+        <FilePlus size={14} />
+      </button>
+    </div>
+  );
+}
 
 function PinboardBoard() {
   const boardRef = useRef(null);
@@ -859,75 +1044,161 @@ function PinboardBoard() {
   );
 }
 
+const getMindmapChildMap = (nodes = []) =>
+  nodes.reduce((acc, node) => {
+    const parentId = String(node?.data?.parentId || "");
+    if (!acc[parentId]) acc[parentId] = [];
+    acc[parentId].push(node);
+    return acc;
+  }, {});
+
+const getHiddenMindmapNodeIds = (nodes = []) => {
+  const childMap = getMindmapChildMap(nodes);
+  const hidden = new Set();
+  const hideChildren = (nodeId) => {
+    (childMap[nodeId] || []).forEach((child) => {
+      hidden.add(child.id);
+      hideChildren(child.id);
+    });
+  };
+  nodes.forEach((node) => {
+    if (node?.data?.collapsed) hideChildren(node.id);
+  });
+  return hidden;
+};
+
+const layoutMindmapNodes = (nodes = []) => {
+  const childMap = getMindmapChildMap(nodes);
+  const nextPositions = new Map();
+  let cursorY = 0;
+  const layoutNode = (nodeId, depth = 0) => {
+    const children = childMap[nodeId] || [];
+    if (!children.length) {
+      const y = cursorY * 110;
+      cursorY += 1;
+      nextPositions.set(nodeId, { x: depth * 280, y });
+      return y;
+    }
+    const childYs = children.map((child) => layoutNode(child.id, depth + 1));
+    const y = childYs.reduce((sum, value) => sum + value, 0) / childYs.length;
+    nextPositions.set(nodeId, { x: depth * 280, y });
+    return y;
+  };
+  const roots = nodes.filter((node) => !node?.data?.parentId);
+  (roots.length ? roots : nodes.slice(0, 1)).forEach((node) => layoutNode(node.id, 0));
+  return nodes.map((node) => ({
+    ...node,
+    position: nextPositions.get(node.id) || node.position
+  }));
+};
+
+const mindmapToMarkdown = (nodes = []) => {
+  const childMap = getMindmapChildMap(nodes);
+  const lines = [];
+  const visit = (node, depth = 0) => {
+    lines.push(`${"  ".repeat(depth)}- ${node?.data?.label || "Thema"}`);
+    (childMap[node.id] || []).forEach((child) => visit(child, depth + 1));
+  };
+  nodes.filter((node) => !node?.data?.parentId).forEach((node) => visit(node));
+  return lines.join("\n");
+};
+
 function MindmapBoard({ boardEvent }) {
   const saveTimerRef = useRef(null);
   const dirtyRef = useRef(false);
   const lastUpdatedAtRef = useRef(0);
   const selectedNodeIdRef = useRef("root");
+  const flowRef = useRef(null);
+  const [documentKey, setDocumentKey] = useState("mindmap");
+  const [documents, setDocuments] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [saveState, setSaveState] = useState("idle");
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const selectedNode = useMemo(
+    () => nodes.find((node) => node.id === selectedNodeIdRef.current) || nodes.find((node) => node.id === "root") || null,
+    [nodes]
+  );
 
   const markDirty = useCallback(() => {
     dirtyRef.current = true;
     setSaveState("saving");
   }, []);
 
-  const changeNodeLabel = useCallback((id, label) => {
+  const selectNode = useCallback((id) => {
+    selectedNodeIdRef.current = id || "root";
+    setNodes((current) => current.map((node) => ({ ...node, selected: node.id === selectedNodeIdRef.current })));
+  }, []);
+
+  const changeNode = useCallback((id, patch) => {
     selectedNodeIdRef.current = id;
     setNodes((current) =>
       current.map((node) =>
-        node.id === id
-          ? {
-              ...node,
-              data: { ...node.data, label }
-            }
-          : node
+        node.id === id ? { ...node, data: { ...node.data, ...patch } } : node
       )
     );
     markDirty();
   }, [markDirty]);
 
+  const changeNodeLabel = useCallback((id, label) => changeNode(id, { label }), [changeNode]);
+
   const deleteNode = useCallback((nodeId) => {
     if (nodeId === "root") return;
-    setNodes((current) => current.filter((node) => node.id !== nodeId));
-    setEdges((current) => current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
-    if (selectedNodeIdRef.current === nodeId) selectedNodeIdRef.current = "root";
-    markDirty();
-  }, [markDirty]);
-
-  const addChildNode = useCallback((parentId) => {
-    selectedNodeIdRef.current = parentId;
-    const nextNode = createMindmapNode("Neuer Unterpunkt", { x: 220, y: 120 }, parentId);
-    setNodes((current) => {
-      const parent = current.find((node) => node.id === parentId) || current.find((node) => node.id === "root");
-      nextNode.position = {
-        x: Number(parent?.position?.x || 0) + 220,
-        y: Number(parent?.position?.y || 0) + 120
-      };
-      return current.concat(nextNode);
+    const hidden = new Set([nodeId]);
+    const childMap = getMindmapChildMap(nodes);
+    const collect = (id) => (childMap[id] || []).forEach((child) => {
+      hidden.add(child.id);
+      collect(child.id);
     });
+    collect(nodeId);
+    setNodes((current) => current.filter((node) => !hidden.has(node.id)));
+    setEdges((current) => current.filter((edge) => !hidden.has(edge.source) && !hidden.has(edge.target)));
+    if (hidden.has(selectedNodeIdRef.current)) selectedNodeIdRef.current = "root";
+    markDirty();
+  }, [markDirty, nodes]);
+
+  const addChildNode = useCallback((parentId, label = "Neuer Unterpunkt") => {
+    selectedNodeIdRef.current = parentId;
+    const parent = nodes.find((node) => node.id === parentId) || nodes.find((node) => node.id === "root");
+    const nextNode = createMindmapNode(
+      label,
+      {
+        x: Number(parent?.position?.x || 0) + 260,
+        y: Number(parent?.position?.y || 0) + 120
+      },
+      parentId
+    );
+    selectedNodeIdRef.current = nextNode.id;
+    setNodes((current) => current.concat(nextNode));
     setEdges((current) => current.concat(sanitizeMindmapEdge({ id: uid(), source: parentId, target: nextNode.id })));
     markDirty();
-  }, [markDirty]);
+  }, [markDirty, nodes]);
 
   const attachNodeHandlers = useCallback(
-    (rawNodes) =>
-      rawNodes.map((node) => {
+    (rawNodes) => {
+      const childMap = getMindmapChildMap(rawNodes.map(sanitizeMindmapNode));
+      return rawNodes.map((node) => {
         const normalized = sanitizeMindmapNode(node);
         return {
           ...normalized,
+          selected: normalized.id === selectedNodeIdRef.current,
           data: {
             ...normalized.data,
+            childCount: (childMap[normalized.id] || []).length,
+            onSelect: selectNode,
             onChangeLabel: changeNodeLabel,
+            onChangeNode: changeNode,
             onAddChild: addChildNode,
-            onDelete: deleteNode
+            onDelete: deleteNode,
+            onToggleCollapsed: (id) => changeNode(id, { collapsed: !normalized.data.collapsed })
           }
         };
-      }),
-    [addChildNode, changeNodeLabel, deleteNode]
+      });
+    },
+    [addChildNode, changeNode, changeNodeLabel, deleteNode, selectNode]
   );
 
   const replaceDocument = useCallback((content) => {
@@ -941,41 +1212,52 @@ function MindmapBoard({ boardEvent }) {
     edges: edges.map((edge) => sanitizeMindmapEdge(edge))
   }), [nodes, edges]);
 
+  const refreshDocuments = useCallback(async () => {
+    const data = await api.documents.list("mindmap");
+    const list = Array.isArray(data?.documents) ? data.documents : [];
+    setDocuments(list.length ? list : [{ key: "mindmap", label: "Standard", updated_at: 0 }]);
+  }, []);
+
   const persistDocument = useCallback(
     async (nextDocument) => {
       try {
-        const saved = await api.documents.save("mindmap", nextDocument);
+        const saved = await api.documents.save(documentKey, nextDocument);
         lastUpdatedAtRef.current = Number(saved?.updated_at || Date.now());
         dirtyRef.current = false;
         setSaveState("saved");
         setError("");
+        refreshDocuments().catch(() => {});
       } catch (saveError) {
         setSaveState("error");
         setError("Mindmap konnte nicht gespeichert werden.");
       }
     },
-    []
+    [documentKey, refreshDocuments]
   );
 
+  const loadMindmap = useCallback(async (key = documentKey) => {
+    try {
+      const data = await api.documents.get(key);
+      lastUpdatedAtRef.current = Number(data?.updated_at || 0);
+      dirtyRef.current = false;
+      replaceDocument(data?.content);
+      setSaveState("saved");
+      setError("");
+    } catch (loadError) {
+      replaceDocument(createDefaultMindmapDocument());
+      setError("Mindmap konnte nicht geladen werden.");
+    } finally {
+      setLoaded(true);
+    }
+  }, [documentKey, replaceDocument]);
+
   useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await api.documents.get("mindmap");
-        lastUpdatedAtRef.current = Number(data?.updated_at || 0);
-        replaceDocument(data?.content);
-        setError("");
-      } catch (loadError) {
-        replaceDocument(createDefaultMindmapDocument());
-        setError("Mindmap konnte nicht geladen werden.");
-      } finally {
-        setLoaded(true);
-      }
-    };
-    load();
+    refreshDocuments().catch(() => {});
+    loadMindmap(documentKey);
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
-  }, [replaceDocument]);
+  }, [documentKey, loadMindmap, refreshDocuments]);
 
   useEffect(() => {
     if (!loaded || !dirtyRef.current) return;
@@ -987,20 +1269,35 @@ function MindmapBoard({ boardEvent }) {
   }, [nodes, edges, loaded, currentDocument, persistDocument]);
 
   useEffect(() => {
-    if (!boardEvent || boardEvent.board !== "mindmap" || boardEvent.event !== "state") return;
+    if (!boardEvent || boardEvent.board !== documentKey || boardEvent.event !== "state") return;
     const updatedAt = Number(boardEvent.updated_at || 0);
     if (!updatedAt || updatedAt <= lastUpdatedAtRef.current || dirtyRef.current) return;
     lastUpdatedAtRef.current = updatedAt;
     replaceDocument(boardEvent.content);
     setSaveState("saved");
-  }, [boardEvent, replaceDocument]);
+  }, [boardEvent, documentKey, replaceDocument]);
+
+  const hiddenNodeIds = useMemo(() => getHiddenMindmapNodeIds(nodes), [nodes]);
+  const visibleNodes = useMemo(() => attachNodeHandlers(nodes.filter((node) => !hiddenNodeIds.has(node.id))), [attachNodeHandlers, hiddenNodeIds, nodes]);
+  const visibleEdges = useMemo(
+    () => edges.filter((edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target)),
+    [edges, hiddenNodeIds]
+  );
 
   const onNodesChange = useCallback(
     (changes) => {
-      setNodes((current) => attachNodeHandlers(applyNodeChanges(changes, current).map(sanitizeMindmapNode)));
+      setNodes((current) => {
+        const changedIds = new Set(changes.map((change) => change.id).filter(Boolean));
+        const visibleCurrent = current.filter((node) => !hiddenNodeIds.has(node.id));
+        const changedVisible = applyNodeChanges(changes, visibleCurrent).map(sanitizeMindmapNode);
+        const changedById = new Map(changedVisible.map((node) => [node.id, node]));
+        return current
+          .filter((node) => !changedIds.has(node.id) || changedById.has(node.id))
+          .map((node) => changedById.get(node.id) || node);
+      });
       markDirty();
     },
-    [attachNodeHandlers, markDirty]
+    [hiddenNodeIds, markDirty]
   );
 
   const onEdgesChange = useCallback((changes) => {
@@ -1027,20 +1324,22 @@ function MindmapBoard({ boardEvent }) {
     [markDirty]
   );
 
-  const addRootBranch = () => {
-    const parentId = selectedNodeIdRef.current || "root";
-    const parent = nodes.find((node) => node.id === parentId) || nodes.find((node) => node.id === "root");
-    const nextNode = createMindmapNode(
-      "Neue Idee",
-      {
-        x: Number(parent?.position?.x || 0) + 220,
-        y: Number(parent?.position?.y || 0) + 140
-      },
-      parentId
-    );
-    setNodes((current) => attachNodeHandlers(current.concat(nextNode)));
-    setEdges((current) => current.concat(sanitizeMindmapEdge({ id: uid(), source: parentId, target: nextNode.id })));
+  const addRootBranch = () => addChildNode(selectedNodeIdRef.current || "root", "Neue Idee");
+
+  const autoLayout = () => {
+    setNodes((current) => attachNodeHandlers(layoutMindmapNodes(current.map(sanitizeMindmapNode))));
     markDirty();
+    window.setTimeout(() => flowRef.current?.fitView?.({ padding: 0.18 }), 50);
+  };
+
+  const createNewMindmap = async () => {
+    const label = window.prompt("Name der neuen Mindmap", "Neue Mindmap");
+    if (label === null) return;
+    const key = createDocumentKey("mindmap", label || `mindmap-${Date.now()}`);
+    const doc = createDefaultMindmapDocument();
+    await api.documents.save(key, doc);
+    await refreshDocuments();
+    setDocumentKey(key);
   };
 
   const clearMindmap = async () => {
@@ -1050,77 +1349,174 @@ function MindmapBoard({ boardEvent }) {
     await persistDocument(doc);
   };
 
-  const refreshMindmap = async () => {
+  const focusSearchResult = () => {
+    const needle = searchQuery.trim().toLowerCase();
+    if (!needle) return;
+    const match = nodes.find((node) => String(node.data?.label || "").toLowerCase().includes(needle));
+    if (!match) return;
+    selectNode(match.id);
+    flowRef.current?.setCenter?.(match.position.x + 110, match.position.y + 60, { zoom: 1.1, duration: 500 });
+  };
+
+  const exportMindmap = (format) => {
+    const text = format === "markdown" ? mindmapToMarkdown(nodes) : JSON.stringify(currentDocument(), null, 2);
+    const blob = new Blob([text], { type: format === "markdown" ? "text/markdown" : "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${documentKey.replace(/[^a-z0-9_-]+/gi, "-")}.${format === "markdown" ? "md" : "json"}`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const createTaskFromSelected = async () => {
+    if (!selectedNode) return;
     try {
-      const data = await api.documents.get("mindmap");
-      lastUpdatedAtRef.current = Number(data?.updated_at || 0);
-      dirtyRef.current = false;
-      replaceDocument(data?.content);
-      setSaveState("saved");
+      await api.createTask({
+        title: selectedNode.data?.label || "Mindmap-Aufgabe",
+        details: selectedNode.data?.details || "",
+        status: "todo"
+      });
+      changeNode(selectedNode.id, { kind: "task", status: "active" });
       setError("");
-    } catch (loadError) {
-      setError("Mindmap konnte nicht geladen werden.");
+    } catch (taskError) {
+      setError("Aufgabe konnte nicht erstellt werden.");
+    }
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) return;
+    if (event.key === "Tab") {
+      event.preventDefault();
+      addChildNode(selectedNodeIdRef.current || "root", "Neuer Unterpunkt");
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const selected = nodes.find((node) => node.id === selectedNodeIdRef.current);
+      addChildNode(selected?.data?.parentId || "root", "Neue Idee");
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      deleteNode(selectedNodeIdRef.current);
     }
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div
+      className="flex min-h-0 flex-1 flex-col outline-none"
+      onKeyDown={handleKeyDown}
+      onMouseDown={(event) => event.currentTarget.focus()}
+      tabIndex={-1}
+    >
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <BoardStatus loaded={loaded} error={error} label="Mindmap" detail={saveState === "saving" ? "Speichert..." : "Graph mit gemeinsamem Zustand"} />
+        <BoardStatus loaded={loaded} error={error} label="Mindmap" detail={saveState === "saving" ? "Speichert..." : documentLabelFromKey(documentKey)} />
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={refreshMindmap}
-            className="inline-flex items-center gap-2 rounded-lg border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-          >
-            <RefreshCw size={14} />
-            Laden
+          <DocumentExplorer kind="mindmap" activeKey={documentKey} documents={documents} onRefresh={refreshDocuments} onSelect={setDocumentKey} onNew={createNewMindmap} />
+          <div className="relative">
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") focusSearchResult();
+              }}
+              placeholder="Suchen"
+              className="h-9 w-36 rounded-lg border border-sand-200 bg-white px-2 pr-8 text-xs text-sand-700 outline-none"
+            />
+            <button type="button" onClick={focusSearchResult} className="absolute right-1 top-1 rounded-md p-1 text-sand-500 hover:bg-sand-100" title="Fokus">
+              <Search size={14} />
+            </button>
+          </div>
+          <button type="button" onClick={autoLayout} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-100" title="Auto-Layout">
+            <Layers size={14} />
           </button>
-          <button
-            type="button"
-            onClick={clearMindmap}
-            className="inline-flex items-center gap-2 rounded-lg border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-          >
+          <button type="button" onClick={() => exportMindmap("markdown")} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-100" title="Markdown exportieren">
+            <Download size={14} />
+          </button>
+          <button type="button" onClick={clearMindmap} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-100" title="Reset">
             <Trash2 size={14} />
-            Reset
           </button>
-          <button
-            type="button"
-            onClick={addRootBranch}
-            className="inline-flex items-center gap-2 rounded-lg border border-[var(--nav-accent)] bg-[var(--nav-accent)] px-3 py-2 text-xs uppercase tracking-wide text-white hover:opacity-85"
-          >
+          <button type="button" onClick={addRootBranch} className="inline-flex items-center gap-2 rounded-lg border border-[var(--nav-accent)] bg-[var(--nav-accent)] px-3 py-2 text-xs uppercase tracking-wide text-white hover:opacity-85">
             <Plus size={14} />
-            Ast anlegen
+            Ast
           </button>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden rounded-[26px] border border-sand-300 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.98),_rgba(241,245,249,0.94))] shadow-soft">
-        <ReactFlowProvider>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodeClick={(_, node) => {
-              selectedNodeIdRef.current = node.id;
-            }}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            nodeTypes={{ mindmap: MindMapNode }}
-            fitView
-            fitViewOptions={{ padding: 0.2 }}
-            proOptions={{ hideAttribution: true }}
-            defaultEdgeOptions={{
-              type: "smoothstep",
-              markerEnd: { type: MarkerType.ArrowClosed },
-              style: { strokeWidth: 2, stroke: "#64748b" }
-            }}
-          >
-            <MiniMap pannable zoomable nodeColor={() => "#dbeafe"} maskColor="rgba(241,245,249,0.6)" />
-            <Controls showInteractive={false} />
-            <Background gap={20} size={1} color="rgba(148,163,184,0.24)" />
-          </ReactFlow>
-        </ReactFlowProvider>
+      <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="min-h-0 overflow-hidden rounded-[18px] border border-sand-300 bg-white shadow-soft">
+          <ReactFlowProvider>
+            <ReactFlow
+              nodes={visibleNodes}
+              edges={visibleEdges}
+              onInit={(instance) => {
+                flowRef.current = instance;
+              }}
+              onNodeClick={(_, node) => selectNode(node.id)}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              nodeTypes={{ mindmap: MindMapNode }}
+              fitView
+              fitViewOptions={{ padding: 0.2 }}
+              proOptions={{ hideAttribution: true }}
+              defaultEdgeOptions={{
+                type: "smoothstep",
+                markerEnd: { type: MarkerType.ArrowClosed },
+                style: { strokeWidth: 2, stroke: "#64748b" }
+              }}
+            >
+              <MiniMap
+                pannable
+                zoomable
+                nodeColor={(node) =>
+                  node.data?.kind === "goal" ? "#10b981"
+                  : node.data?.kind === "task" ? "#f59e0b"
+                  : node.data?.kind === "risk" ? "#f43f5e"
+                  : node.data?.kind === "note" ? "#94a3b8"
+                  : "#0ea5e9"
+                }
+                maskColor="rgba(241,245,249,0.6)"
+              />
+              <Controls showInteractive={false} />
+              <Background gap={20} size={1} color="rgba(148,163,184,0.24)" />
+            </ReactFlow>
+          </ReactFlowProvider>
+        </div>
+        <aside className="min-h-0 overflow-auto rounded-[18px] border border-sand-200 bg-white p-3 shadow-soft">
+          <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-[0.2em] text-sand-500">
+            <Target size={14} />
+            Details
+          </div>
+          {selectedNode ? (
+            <div className="space-y-3">
+              <label className="block text-[11px] uppercase tracking-[0.16em] text-sand-500">
+                Titel
+                <input value={selectedNode.data?.label || ""} onChange={(event) => changeNode(selectedNode.id, { label: event.target.value })} className="mt-1 w-full rounded-lg border border-sand-200 px-2 py-1.5 text-sm normal-case tracking-normal text-sand-900 outline-none" />
+              </label>
+              <label className="block text-[11px] uppercase tracking-[0.16em] text-sand-500">
+                Details
+                <textarea value={selectedNode.data?.details || ""} onChange={(event) => changeNode(selectedNode.id, { details: event.target.value })} className="mt-1 min-h-[130px] w-full rounded-lg border border-sand-200 px-2 py-1.5 text-sm normal-case tracking-normal text-sand-900 outline-none" />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <select value={selectedNode.data?.kind || "idea"} onChange={(event) => changeNode(selectedNode.id, { kind: event.target.value })} className="rounded-lg border border-sand-200 px-2 py-1.5 text-xs">
+                  {MINDMAP_NODE_TYPES.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                </select>
+                <select value={selectedNode.data?.status || "open"} onChange={(event) => changeNode(selectedNode.id, { status: event.target.value })} className="rounded-lg border border-sand-200 px-2 py-1.5 text-xs">
+                  {MINDMAP_NODE_STATUSES.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                </select>
+              </div>
+              <button type="button" onClick={createTaskFromSelected} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--nav-accent)] bg-[var(--nav-accent)] px-3 py-2 text-xs uppercase tracking-wide text-white hover:opacity-85">
+                <Plus size={14} />
+                Aufgabe erstellen
+              </button>
+              <button type="button" onClick={() => exportMindmap("json")} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100">
+                <Download size={14} />
+                JSON exportieren
+              </button>
+            </div>
+          ) : (
+            <div className="text-xs text-sand-400">Kein Knoten ausgewählt.</div>
+          )}
+        </aside>
       </div>
     </div>
   );
@@ -1130,47 +1526,79 @@ function WhiteboardBoard({ boardEvent, clientId }) {
   const containerRef = useRef(null);
   const boardRef = useRef(null);
   const currentStrokeRef = useRef(null);
+  const documentStateRef = useRef(createEmptyWhiteboardDocument());
+  const undoStackRef = useRef([]);
+  const redoStackRef = useRef([]);
+  const eraseChangedRef = useRef(false);
   const previewFlushTimerRef = useRef(null);
   const lastSavedAtRef = useRef(0);
+  const [documentKey, setDocumentKey] = useState("whiteboard");
+  const [documents, setDocuments] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [saveState, setSaveState] = useState("idle");
   const [documentState, setDocumentState] = useState(createEmptyWhiteboardDocument());
+  const [activeTool, setActiveTool] = useState(WHITEBOARD_TOOL_TYPES.PEN);
   const [toolColor, setToolColor] = useState(WHITEBOARD_COLORS[0]);
   const [toolWidth, setToolWidth] = useState(WHITEBOARD_STROKE_WIDTHS[1]);
+  const [eraserWidth, setEraserWidth] = useState(WHITEBOARD_ERASER_WIDTHS[0]);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStroke, setCurrentStroke] = useState(null);
   const [remotePreviews, setRemotePreviews] = useState({});
 
-  const loadDocument = useCallback(async () => {
+  useEffect(() => {
+    documentStateRef.current = documentState;
+  }, [documentState]);
+
+  const refreshDocuments = useCallback(async () => {
+    const data = await api.documents.list("whiteboard");
+    const list = Array.isArray(data?.documents) ? data.documents : [];
+    setDocuments(list.length ? list : [{ key: "whiteboard", label: "Standard", updated_at: 0 }]);
+  }, []);
+
+  const loadDocument = useCallback(async (key = documentKey) => {
     try {
-      const data = await api.documents.get("whiteboard");
+      const data = await api.documents.get(key);
       const normalized = normalizeWhiteboardDocument(data?.content);
       lastSavedAtRef.current = Number(data?.updated_at || 0);
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      documentStateRef.current = normalized;
       setDocumentState(normalized);
       setError("");
     } catch (loadError) {
-      setDocumentState(createEmptyWhiteboardDocument());
+      const empty = createEmptyWhiteboardDocument();
+      documentStateRef.current = empty;
+      setDocumentState(empty);
       setError("Whiteboard konnte nicht geladen werden.");
     } finally {
       setLoaded(true);
     }
-  }, []);
+  }, [documentKey]);
 
   useEffect(() => {
-    loadDocument();
+    refreshDocuments().catch(() => {});
+    loadDocument(documentKey);
     return () => {
       if (previewFlushTimerRef.current) window.clearTimeout(previewFlushTimerRef.current);
     };
-  }, [loadDocument]);
+  }, [documentKey, loadDocument, refreshDocuments]);
 
   useEffect(() => {
-    if (!boardEvent || boardEvent.board !== "whiteboard") return;
+    if (!boardEvent || boardEvent.board !== documentKey) return;
     if (boardEvent.event === "state") {
       const updatedAt = Number(boardEvent.updated_at || 0);
       if (updatedAt > lastSavedAtRef.current) {
+        const normalized = normalizeWhiteboardDocument(boardEvent.content);
         lastSavedAtRef.current = updatedAt;
-        setDocumentState(normalizeWhiteboardDocument(boardEvent.content));
+        if (areWhiteboardDocumentsEqual(normalized, documentStateRef.current)) {
+          setSaveState("saved");
+          return;
+        }
+        documentStateRef.current = normalized;
+        undoStackRef.current = [];
+        redoStackRef.current = [];
+        setDocumentState(normalized);
         setSaveState("saved");
       }
       return;
@@ -1189,45 +1617,96 @@ function WhiteboardBoard({ boardEvent, clientId }) {
         return next;
       });
     }
-  }, [boardEvent, clientId]);
+  }, [boardEvent, clientId, documentKey]);
 
   const persistWhiteboard = useCallback(async (nextDocument) => {
     setSaveState("saving");
     try {
-      const saved = await api.documents.save("whiteboard", nextDocument);
+      const saved = await api.documents.save(documentKey, nextDocument);
       lastSavedAtRef.current = Number(saved?.updated_at || Date.now());
       setSaveState("saved");
       setError("");
+      refreshDocuments().catch(() => {});
     } catch (saveError) {
       setSaveState("error");
       setError("Whiteboard konnte nicht gespeichert werden.");
     }
-  }, []);
+  }, [documentKey, refreshDocuments]);
+
+  const commitDocument = useCallback(
+    async (nextDocument, { addHistory = true, persist = true } = {}) => {
+      const normalized = normalizeWhiteboardDocument(nextDocument);
+      if (addHistory) {
+        undoStackRef.current = undoStackRef.current.concat(documentStateRef.current).slice(-40);
+        redoStackRef.current = [];
+      }
+      documentStateRef.current = normalized;
+      setDocumentState(normalized);
+      if (persist) await persistWhiteboard(normalized);
+    },
+    [persistWhiteboard]
+  );
 
   const postPreview = useCallback(
     (stroke, eventName = "preview") => {
       api.pushEvent({
-        board: "whiteboard",
+        board: documentKey,
         event: eventName,
         client_id: clientId,
         payload: eventName === "preview" ? { stroke } : {}
       }).catch(() => {});
     },
-    [clientId]
+    [clientId, documentKey]
   );
+
+  const createNewWhiteboard = async () => {
+    const label = window.prompt("Name des neuen Whiteboards", "Neues Whiteboard");
+    if (label === null) return;
+    const key = createDocumentKey("whiteboard", label || `whiteboard-${Date.now()}`);
+    const empty = createEmptyWhiteboardDocument();
+    await api.documents.save(key, empty);
+    await refreshDocuments();
+    setDocumentKey(key);
+  };
 
   const getPointFromEvent = (event) => {
     const rect = boardRef.current?.getBoundingClientRect?.();
     if (!rect) return { x: 0, y: 0 };
+    const scale = Math.min(rect.width / WHITEBOARD_WIDTH, rect.height / WHITEBOARD_HEIGHT);
+    const renderedWidth = WHITEBOARD_WIDTH * scale;
+    const renderedHeight = WHITEBOARD_HEIGHT * scale;
+    const offsetX = (rect.width - renderedWidth) / 2;
+    const offsetY = (rect.height - renderedHeight) / 2;
     return {
-      x: clamp(event.clientX - rect.left, 0, WHITEBOARD_WIDTH),
-      y: clamp(event.clientY - rect.top, 0, WHITEBOARD_HEIGHT)
+      x: clamp((event.clientX - rect.left - offsetX) / scale, 0, WHITEBOARD_WIDTH),
+      y: clamp((event.clientY - rect.top - offsetY) / scale, 0, WHITEBOARD_HEIGHT)
     };
   };
+
+  const eraseAtPoint = useCallback(
+    (point) => {
+      const nextStrokes = documentStateRef.current.strokes.filter((stroke) => !strokeIntersectsCircle(stroke, point, eraserWidth / 2));
+      if (nextStrokes.length === documentStateRef.current.strokes.length) return;
+      eraseChangedRef.current = true;
+      const nextDocument = { strokes: nextStrokes };
+      documentStateRef.current = nextDocument;
+      setDocumentState(nextDocument);
+    },
+    [eraserWidth]
+  );
 
   const startStroke = (event) => {
     if (event.button !== 0) return;
     const point = getPointFromEvent(event);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setIsDrawing(true);
+    if (activeTool === WHITEBOARD_TOOL_TYPES.ERASER) {
+      undoStackRef.current = undoStackRef.current.concat(documentStateRef.current).slice(-40);
+      redoStackRef.current = [];
+      eraseChangedRef.current = false;
+      eraseAtPoint(point);
+      return;
+    }
     const stroke = {
       id: uid(),
       color: toolColor,
@@ -1236,12 +1715,16 @@ function WhiteboardBoard({ boardEvent, clientId }) {
     };
     currentStrokeRef.current = stroke;
     setCurrentStroke(stroke);
-    setIsDrawing(true);
   };
 
   const moveStroke = (event) => {
-    if (!isDrawing || !currentStrokeRef.current) return;
+    if (!isDrawing) return;
     const point = getPointFromEvent(event);
+    if (activeTool === WHITEBOARD_TOOL_TYPES.ERASER) {
+      eraseAtPoint(point);
+      return;
+    }
+    if (!currentStrokeRef.current || !shouldAppendWhiteboardPoint(currentStrokeRef.current.points, point)) return;
     const nextStroke = {
       ...currentStrokeRef.current,
       points: currentStrokeRef.current.points.concat(point)
@@ -1255,7 +1738,18 @@ function WhiteboardBoard({ boardEvent, clientId }) {
     }, 60);
   };
 
-  const endStroke = async () => {
+  const endStroke = async (event) => {
+    event?.currentTarget?.releasePointerCapture?.(event.pointerId);
+    if (activeTool === WHITEBOARD_TOOL_TYPES.ERASER) {
+      setIsDrawing(false);
+      if (eraseChangedRef.current) {
+        eraseChangedRef.current = false;
+        await persistWhiteboard(documentStateRef.current);
+      } else {
+        undoStackRef.current.pop();
+      }
+      return;
+    }
     if (!currentStrokeRef.current) return;
     const finished = currentStrokeRef.current;
     currentStrokeRef.current = null;
@@ -1266,44 +1760,108 @@ function WhiteboardBoard({ boardEvent, clientId }) {
       delete next[clientId];
       return next;
     });
-    const nextDocument = {
-      strokes: documentState.strokes.concat(finished)
-    };
-    setDocumentState(nextDocument);
+    const nextDocument = { strokes: documentStateRef.current.strokes.concat(finished) };
     postPreview(null, "preview_clear");
-    await persistWhiteboard(nextDocument);
+    await commitDocument(nextDocument);
   };
 
   const clearWhiteboard = async () => {
     if (!window.confirm("Whiteboard leeren?")) return;
-    const empty = createEmptyWhiteboardDocument();
-    setDocumentState(empty);
     setRemotePreviews({});
-    await persistWhiteboard(empty);
+    await commitDocument(createEmptyWhiteboardDocument());
+  };
+
+  const undoWhiteboard = async () => {
+    const previous = undoStackRef.current.pop();
+    if (!previous) return;
+    redoStackRef.current = redoStackRef.current.concat(documentStateRef.current).slice(-40);
+    documentStateRef.current = previous;
+    setDocumentState(previous);
+    await persistWhiteboard(previous);
+  };
+
+  const redoWhiteboard = async () => {
+    const next = redoStackRef.current.pop();
+    if (!next) return;
+    undoStackRef.current = undoStackRef.current.concat(documentStateRef.current).slice(-40);
+    documentStateRef.current = next;
+    setDocumentState(next);
+    await persistWhiteboard(next);
+  };
+
+  const exportWhiteboardPng = () => {
+    const svg = boardRef.current;
+    if (!svg) return;
+    const clone = svg.cloneNode(true);
+    clone.setAttribute("width", String(WHITEBOARD_WIDTH));
+    clone.setAttribute("height", String(WHITEBOARD_HEIGHT));
+    const blob = new Blob([new XMLSerializer().serializeToString(clone)], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = WHITEBOARD_WIDTH;
+      canvas.height = WHITEBOARD_HEIGHT;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0);
+      URL.revokeObjectURL(url);
+      const link = document.createElement("a");
+      link.href = canvas.toDataURL("image/png");
+      link.download = `whiteboard-${new Date().toISOString().slice(0, 10)}.png`;
+      link.click();
+    };
+    image.src = url;
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <BoardStatus loaded={loaded} error={error} label="Whiteboard" detail={saveState === "saving" ? "Speichert..." : "SSE-Live-Zeichnen"} />
+        <BoardStatus loaded={loaded} error={error} label="Whiteboard" detail={saveState === "saving" ? "Speichert..." : `${documentLabelFromKey(documentKey)} · ${documentState.strokes.length} Striche`} />
         <div className="flex flex-wrap items-center gap-2">
+          <DocumentExplorer kind="whiteboard" activeKey={documentKey} documents={documents} onRefresh={refreshDocuments} onSelect={setDocumentKey} onNew={createNewWhiteboard} />
+          <div className="inline-flex rounded-xl border border-sand-200 bg-white p-1">
+            <button
+              type="button"
+              onClick={() => setActiveTool(WHITEBOARD_TOOL_TYPES.PEN)}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg ${activeTool === WHITEBOARD_TOOL_TYPES.PEN ? "bg-sand-900 text-white" : "text-sand-600 hover:bg-sand-100"}`}
+              title="Stift"
+              aria-label="Stift"
+            >
+              <PenSquare size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTool(WHITEBOARD_TOOL_TYPES.ERASER)}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg ${activeTool === WHITEBOARD_TOOL_TYPES.ERASER ? "bg-sand-900 text-white" : "text-sand-600 hover:bg-sand-100"}`}
+              title="Radiergummi"
+              aria-label="Radiergummi"
+            >
+              <Eraser size={15} />
+            </button>
+          </div>
           {WHITEBOARD_COLORS.map((color) => (
             <button
               key={color}
               type="button"
-              onClick={() => setToolColor(color)}
-              className={`h-9 w-9 rounded-full border-2 ${toolColor === color ? "border-sand-900" : "border-white"}`}
+              onClick={() => {
+                setToolColor(color);
+                setActiveTool(WHITEBOARD_TOOL_TYPES.PEN);
+              }}
+              className={`h-8 w-8 rounded-full border-2 ${toolColor === color && activeTool === WHITEBOARD_TOOL_TYPES.PEN ? "border-sand-900" : "border-white"}`}
               style={{ backgroundColor: color }}
               title="Farbe wählen"
+              aria-label="Farbe wählen"
             />
           ))}
-          {WHITEBOARD_STROKE_WIDTHS.map((width) => (
+          {(activeTool === WHITEBOARD_TOOL_TYPES.ERASER ? WHITEBOARD_ERASER_WIDTHS : WHITEBOARD_STROKE_WIDTHS).map((width) => (
             <button
               key={width}
               type="button"
-              onClick={() => setToolWidth(width)}
+              onClick={() => (activeTool === WHITEBOARD_TOOL_TYPES.ERASER ? setEraserWidth(width) : setToolWidth(width))}
               className={`inline-flex items-center justify-center rounded-xl border px-2 py-1 text-xs ${
-                toolWidth === width ? "border-sand-900 bg-sand-900 text-white" : "border-sand-200 bg-white text-sand-700"
+                (activeTool === WHITEBOARD_TOOL_TYPES.ERASER ? eraserWidth : toolWidth) === width ? "border-sand-900 bg-sand-900 text-white" : "border-sand-200 bg-white text-sand-700"
               }`}
             >
               {width}px
@@ -1311,38 +1869,66 @@ function WhiteboardBoard({ boardEvent, clientId }) {
           ))}
           <button
             type="button"
-            onClick={loadDocument}
-            className="inline-flex items-center gap-2 rounded-lg border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+            onClick={undoWhiteboard}
+            disabled={!undoStackRef.current.length || saveState === "saving"}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Rückgängig"
+            aria-label="Rückgängig"
+          >
+            <RotateCcw size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={redoWhiteboard}
+            disabled={!redoStackRef.current.length || saveState === "saving"}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Wiederholen"
+            aria-label="Wiederholen"
+          >
+            <RotateCw size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => loadDocument(documentKey)}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+            title="Laden"
+            aria-label="Laden"
           >
             <RefreshCw size={14} />
-            Laden
+          </button>
+          <button
+            type="button"
+            onClick={exportWhiteboardPng}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+            title="PNG exportieren"
+            aria-label="PNG exportieren"
+          >
+            <Download size={14} />
           </button>
           <button
             type="button"
             onClick={clearWhiteboard}
-            className="inline-flex items-center gap-2 rounded-lg border border-sand-200 bg-white px-3 py-2 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+            title="Leeren"
+            aria-label="Leeren"
           >
             <Trash2 size={14} />
-            Leeren
           </button>
         </div>
       </div>
 
-      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto rounded-[26px] border border-sand-300 bg-slate-50 shadow-soft">
-        <div className="p-4">
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs text-sand-600">
-            <PenSquare size={14} />
-            Kolleg:innen sehen laufende Striche direkt, bevor sie gespeichert sind.
-          </div>
+      <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden rounded-[18px] border border-sand-300 bg-slate-100 p-3 shadow-soft">
+        <div className="h-full min-h-[420px] rounded-[14px] bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
           <svg
             ref={boardRef}
-            width={WHITEBOARD_WIDTH}
-            height={WHITEBOARD_HEIGHT}
-            className="touch-none rounded-[28px] border border-sand-200 bg-white shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]"
+            viewBox={`0 0 ${WHITEBOARD_WIDTH} ${WHITEBOARD_HEIGHT}`}
+            preserveAspectRatio="xMidYMid meet"
+            className="h-full w-full touch-none rounded-[14px] bg-white"
             style={{
               backgroundImage:
                 "linear-gradient(rgba(148,163,184,0.11) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,0.11) 1px, transparent 1px)",
-              backgroundSize: "32px 32px"
+              backgroundSize: "32px 32px",
+              cursor: activeTool === WHITEBOARD_TOOL_TYPES.ERASER ? "cell" : "crosshair"
             }}
             onPointerDown={startStroke}
             onPointerMove={moveStroke}

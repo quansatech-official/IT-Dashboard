@@ -12,6 +12,7 @@ import {
   Eye,
   FileDown,
   FileText,
+  Sparkles,
   Mail,
   Pencil,
   Phone,
@@ -63,6 +64,16 @@ const api = {
     fetch(`${API}/ai_prompts`).then(async (r) => {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.detail || "ai_prompts_load_failed");
+      return data;
+    }),
+  generateContractDraft: (payload) =>
+    fetch(`${API}/ai/use-cases/GenerateCustomerContractDraft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || "contract_ai_failed");
       return data;
     }),
   listContractTariffs: (activeOnly = true) =>
@@ -1084,8 +1095,9 @@ const buildPrepaidHoursPdfHtml = ({ customer, prepaidHoursSummary, logoSrc = "",
                 : ""
             }
             <div class="hero-meta-line">Stand ${escapeHtml(formatDateTime(generatedAt))}</div>
-          </div>
-        </div>
+		                                  </div>
+		                                </div>
+		                                ) : null}
         ${
           logoSrc
             ? `<div class="hero-logo"><img src="${escapeHtml(logoSrc)}" alt="Quansatech" /></div>`
@@ -1150,6 +1162,30 @@ const normalizeEmailDirection = (entry) => {
     if (/^(in|inbound|received|eingang|inbox)/.test(value)) return "incoming";
   }
   return "";
+};
+
+const extractSevdeskFinanceFromContext = (context) => {
+  if (!context || typeof context !== "object") return null;
+  const finance =
+    context?.sevdeskFinance ||
+    context?.sevdesk_finance ||
+    context?.metaHub?.sevdesk ||
+    context?.meta_hub?.sevdesk;
+  if (!finance || typeof finance !== "object") return null;
+  return {
+    openCount: Number(finance.openCount || 0),
+    openAmount: Number(finance.openAmount || 0),
+    overdueCount: Number(finance.overdueCount || 0),
+    overdueAmount: Number(finance.overdueAmount || 0),
+    draftCount: Number(finance.draftCount || 0),
+    paidCount: Number(finance.paidCount || 0),
+    paidAmount: Number(finance.paidAmount || 0),
+    totalCount: Number(finance.totalCount || 0),
+    totalAmount: Number(finance.totalAmount || 0),
+    lastInvoiceAt: Number(finance.lastInvoiceAt || 0),
+    lastInvoiceNumber: String(finance.lastInvoiceNumber || ""),
+    lastInvoiceAmount: Number(finance.lastInvoiceAmount || 0)
+  };
 };
 
 const extractMetaHubEmailsFromContext = (context) => {
@@ -1319,6 +1355,7 @@ const EMPTY_CUSTOMER_COMMUNICATION = {
   customerId: null,
   emails: [],
   calls: [],
+  sevdeskFinance: null,
   loadedAt: 0,
   metaHubAvailable: false,
   metaHubError: false,
@@ -1448,6 +1485,9 @@ export default function CustomerDirectoryView() {
   });
   const [contractPreviewStatus, setContractPreviewStatus] = useState("idle");
   const [contractSaveStatus, setContractSaveStatus] = useState("idle");
+  const [contractAiInput, setContractAiInput] = useState("");
+  const [contractAiStatus, setContractAiStatus] = useState("idle");
+  const [contractAiResult, setContractAiResult] = useState(null);
   const [generatedContract, setGeneratedContract] = useState(null);
   const [editingContractId, setEditingContractId] = useState(null);
   const [contractAdvancedOpen, setContractAdvancedOpen] = useState(false);
@@ -1468,6 +1508,7 @@ export default function CustomerDirectoryView() {
     terminationNoticeMonths: "3",
     autoExtensionMonths: "12",
     monthlyHoursIncluded: "0",
+    serviceScope: "",
     monthlyTotalOverride: "",
     yearlyTotalOverride: ""
   });
@@ -1771,8 +1812,8 @@ export default function CustomerDirectoryView() {
     );
   }, [contractTariffs, tariffCategoryForContractType]);
 
-  const tariffRequired = Boolean(tariffCategoryForContractType);
-  const tariffSelectionMissing = tariffRequired && !selectedTariff;
+  const tariffRequired = false;
+  const tariffSelectionMissing = false;
 
   useEffect(() => {
     setCalcInput((prev) => {
@@ -1808,7 +1849,6 @@ export default function CustomerDirectoryView() {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
   }, [contractDraft.autoExtensionMonths]);
   const contractRuntimeInvalid = terminationNoticeMonthsValue > runtimeMonthsValue;
-  const contractGenerationBlocked = tariffSelectionMissing || contractRuntimeInvalid;
   useEffect(() => {
     const variableKeys = extractContractTemplateVariables(activeContractTemplate?.body_template || "");
     const nextDefinitions = Object.fromEntries(
@@ -1904,6 +1944,8 @@ export default function CustomerDirectoryView() {
     contractPreview.hourlyPrice,
     monthlyHoursIncluded,
   ]);
+  const contractPriceMissing = Number(contractTotals.monthly || 0) <= 0 && activeContractBaseType !== "avv_dsgvo";
+  const contractGenerationBlocked = contractRuntimeInvalid || contractPriceMissing;
 
   useEffect(() => {
     const suggestedMonthlyInput = formatMoneyInputValue(contractTotals.monthlyAuto);
@@ -1943,6 +1985,7 @@ export default function CustomerDirectoryView() {
     contractDraft.terminationNoticeMonths,
     contractDraft.autoExtensionMonths,
     contractDraft.monthlyHoursIncluded,
+    contractDraft.serviceScope,
     contractDraft.monthlyTotalOverride,
     contractDraft.yearlyTotalOverride,
     selectedTariff?.id,
@@ -1988,22 +2031,22 @@ export default function CustomerDirectoryView() {
 
   const generateContractPreview = async (openModal = true) => {
     if (!activeId) return null;
-    if (tariffSelectionMissing) {
-      setToast("Für Wartung/Monitoring muss eine Preisvorlage gewählt werden.");
-      return null;
-    }
     if (contractRuntimeInvalid) {
       setToast("Kündigungsfrist darf die Laufzeit nicht überschreiten.");
       return null;
     }
-    const selectedTariffId = tariffRequired ? selectedTariff?.id || null : null;
+    if (contractPriceMissing) {
+      setToast("Bitte monatlichen Fixpreis erfassen.");
+      return null;
+    }
+    const selectedTariffId = null;
     setContractPreviewStatus("saving");
     try {
       const preview = await api.previewCustomerContract(activeId, {
         title: String(contractDraft.title || "").trim(),
         doc_type: String(activeContractBaseType || "wartung"),
         template_key: String(activeContractTemplate?.key || contractDraft.templateKey || "wartung"),
-        note: "",
+        note: String(contractDraft.serviceScope || "").trim(),
         valid_from: String(contractDraft.validFrom || ""),
         runtime_months: runtimeMonthsValue,
         termination_notice_months: terminationNoticeMonthsValue,
@@ -2072,12 +2115,12 @@ export default function CustomerDirectoryView() {
 
   const saveGeneratedContract = async () => {
     if (!activeId) return;
-    if (tariffSelectionMissing) {
-      setToast("Für Wartung/Monitoring muss eine Preisvorlage gewählt werden.");
-      return;
-    }
     if (contractRuntimeInvalid) {
       setToast("Kündigungsfrist darf die Laufzeit nicht überschreiten.");
+      return;
+    }
+    if (contractPriceMissing) {
+      setToast("Bitte monatlichen Fixpreis erfassen.");
       return;
     }
     setContractSaveStatus("saving");
@@ -2086,9 +2129,7 @@ export default function CustomerDirectoryView() {
       if (!source?.html) throw new Error("no_preview");
       const pdfBlob = await renderContractPdfBlob(source.html, source.file_name || "vertrag.pdf");
       const contentBase64 = await blobToBase64(pdfBlob);
-      const selectedTariffId = tariffRequired
-        ? Number(source?.meta?.tariff?.id || selectedTariff?.id || 0) || null
-        : null;
+      const selectedTariffId = null;
       const payload = {
         title: String(source.title || contractDraft.title || "Vertrag").trim(),
         doc_type: String(source.doc_type || activeContractBaseType || "wartung"),
@@ -2120,7 +2161,7 @@ export default function CustomerDirectoryView() {
           source?.meta?.suggested_yearly_total ?? contractTotals.yearlyAuto
         ),
         contract_variable_values: contractVariableValues,
-        note: "",
+        note: String(contractDraft.serviceScope || "").trim(),
         status: "proposal"
       };
       const saved = editingContractId
@@ -2203,6 +2244,9 @@ export default function CustomerDirectoryView() {
     setEditingContractId(null);
     setContractAdvancedOpen(false);
     setContractPriceTouched({ monthly: false, yearly: false });
+    setContractAiInput("");
+    setContractAiResult(null);
+    setContractAiStatus("idle");
     setContractTitleAuto(true);
   };
 
@@ -2245,6 +2289,7 @@ export default function CustomerDirectoryView() {
       terminationNoticeMonths: String(Number(item?.termination_notice_months || 3) || 3),
       autoExtensionMonths: String(Number(item?.auto_extension_months || 12) || 12),
       monthlyHoursIncluded: String(Number(item?.monthly_hours_included || 0)),
+      serviceScope: String(item?.note || "").trim(),
       monthlyTotalOverride: formatMoneyInputValue(savedPricing?.monthly_total),
       yearlyTotalOverride: formatMoneyInputValue(savedPricing?.yearly_total)
     });
@@ -2278,6 +2323,89 @@ export default function CustomerDirectoryView() {
     setContractCalcModalOpen(true);
   };
 
+  const applyContractAiDraft = (draftInput = {}) => {
+    const draft = draftInput && typeof draftInput === "object" ? draftInput : {};
+    const normalizedType = normalizeContractDocumentType(draft.doc_type || draft.docType || "wartung") || "wartung";
+    const nextTemplate =
+      contractTemplateOptions.find((item) => item.docType === normalizedType) ||
+      contractTemplateOptions.find((item) => item.docType === "wartung") ||
+      contractTemplateOptions[0] ||
+      null;
+    const monthlyTotal = parseOptionalMoneyInput(draft.monthly_total_eur ?? draft.monthlyTotalEur ?? draft.monthly_total);
+    const runtimeMonths = Number.parseInt(String(draft.runtime_months ?? draft.runtimeMonths ?? "12"), 10);
+    const terminationNoticeMonths = Number.parseInt(
+      String(draft.termination_notice_months ?? draft.terminationNoticeMonths ?? "3"),
+      10
+    );
+    const autoExtensionMonths = Number.parseInt(
+      String(draft.auto_extension_months ?? draft.autoExtensionMonths ?? "12"),
+      10
+    );
+    const monthlyHours = parseOptionalMoneyInput(
+      draft.monthly_hours_included ?? draft.monthlyHoursIncluded ?? 0
+    );
+    const title = String(draft.title || "").trim();
+    const serviceScope = String(draft.service_scope || draft.serviceScope || draft.note || "").trim();
+    const validFrom = String(draft.valid_from || draft.validFrom || "").trim();
+
+    setContractDraft((prev) => {
+      const nextMonthly = monthlyTotal !== null ? formatMoneyInputValue(monthlyTotal) : prev.monthlyTotalOverride;
+      return {
+        ...prev,
+        title:
+          title ||
+          buildDefaultContractTitle(nextTemplate?.title, activeCustomerLabel, nextTemplate?.docType || normalizedType),
+        docType: nextTemplate?.docType || normalizedType,
+        templateKey: nextTemplate?.key || normalizedType,
+        validFrom: /^\d{4}-\d{2}-\d{2}$/.test(validFrom) ? validFrom : prev.validFrom,
+        runtimeMonths: Number.isFinite(runtimeMonths) && runtimeMonths > 0 ? String(runtimeMonths) : prev.runtimeMonths,
+        terminationNoticeMonths:
+          Number.isFinite(terminationNoticeMonths) && terminationNoticeMonths >= 0
+            ? String(terminationNoticeMonths)
+            : prev.terminationNoticeMonths,
+        autoExtensionMonths:
+          Number.isFinite(autoExtensionMonths) && autoExtensionMonths > 0
+            ? String(autoExtensionMonths)
+            : prev.autoExtensionMonths,
+        monthlyHoursIncluded:
+          monthlyHours !== null && monthlyHours >= 0 ? formatMoneyInputValue(monthlyHours) : prev.monthlyHoursIncluded,
+        serviceScope: serviceScope || prev.serviceScope,
+        monthlyTotalOverride: nextMonthly,
+        yearlyTotalOverride:
+          monthlyTotal !== null ? formatMoneyInputValue(monthlyTotal * 12) : prev.yearlyTotalOverride
+      };
+    });
+    if (monthlyTotal !== null) {
+      setContractPriceTouched({ monthly: true, yearly: false });
+    }
+    setContractTitleAuto(!title);
+    setGeneratedContract(null);
+  };
+
+  const generateContractDraftWithAi = async () => {
+    const sourceText = String(contractAiInput || "").trim();
+    if (!sourceText) {
+      setToast("Bitte Vertragsinfo oder E-Mail-Text einfügen.");
+      return;
+    }
+    setContractAiStatus("loading");
+    try {
+      const result = await api.generateContractDraft({
+        customer_name: activeCustomerLabel,
+        source_text: sourceText
+      });
+      const draft = result?.draft && typeof result.draft === "object" ? result.draft : {};
+      applyContractAiDraft(draft);
+      setContractAiResult(result);
+      setContractAiStatus("ready");
+      setTimeout(() => setContractAiStatus("idle"), 2200);
+    } catch (error) {
+      setContractAiStatus("error");
+      setToast(error?.message ? String(error.message) : "KI-Vorerfassung fehlgeschlagen.");
+      setTimeout(() => setContractAiStatus("idle"), 2600);
+    }
+  };
+
   const openContractCreator = () => {
     if (!activeCustomer) return;
     const context = developmentByCustomerId[activeCustomer.id] || null;
@@ -2308,6 +2436,7 @@ export default function CustomerDirectoryView() {
       terminationNoticeMonths: "3",
       autoExtensionMonths: "12",
       monthlyHoursIncluded: "0",
+      serviceScope: "",
       monthlyTotalOverride: "",
       yearlyTotalOverride: ""
     });
@@ -2316,6 +2445,9 @@ export default function CustomerDirectoryView() {
     setContractVariableValues(buildEditableContractVariableValues(contractVariableDefinitions));
     setContractAdvancedOpen(false);
     setContractPriceTouched({ monthly: false, yearly: false });
+    setContractAiInput("");
+    setContractAiResult(null);
+    setContractAiStatus("idle");
     setContractTitleAuto(true);
     setContractCalcModalOpen(true);
   };
@@ -2520,6 +2652,24 @@ export default function CustomerDirectoryView() {
     typeof selectedPeriodStats?.otherRevenueEur === "undefined"
       ? selectedPeriodTotalRevenue - selectedPeriodWorkRevenue - selectedPeriodMaterialRevenue
       : Number(selectedPeriodStats.otherRevenueEur || 0);
+  const budgetEstimate =
+    selectedCustomerMetrics?.budgetEstimate && typeof selectedCustomerMetrics.budgetEstimate === "object"
+      ? selectedCustomerMetrics.budgetEstimate
+      : null;
+  const budgetEstimateHistory = Array.isArray(budgetEstimate?.history) ? budgetEstimate.history : [];
+  const budgetEstimateOutliers = Array.isArray(budgetEstimate?.outlierYears) ? budgetEstimate.outlierYears : [];
+  const budgetEstimateProgress =
+    Number(budgetEstimate?.suggestedBudgetEur || 0) > 0
+      ? Math.min(
+          100,
+          Math.max(
+            0,
+            (Number(budgetEstimate?.currentYearRevenueEur || 0) /
+              Number(budgetEstimate?.suggestedBudgetEur || 0)) *
+              100
+          )
+        )
+      : 0;
   const sevdeskRecurringTagsSummary =
     selectedCustomerMetrics?.sevdeskRecurringTags && typeof selectedCustomerMetrics.sevdeskRecurringTags === "object"
       ? selectedCustomerMetrics.sevdeskRecurringTags
@@ -2733,6 +2883,7 @@ export default function CustomerDirectoryView() {
         ? developmentResult.value
         : null;
     const emails = extractMetaHubEmailsFromContext(developmentPayload);
+    const sevdeskFinance = extractSevdeskFinanceFromContext(developmentPayload);
     const rawCalls =
       callsResult.status === "fulfilled" && Array.isArray(callsResult.value)
         ? callsResult.value
@@ -2742,6 +2893,7 @@ export default function CustomerDirectoryView() {
       customerId,
       emails,
       calls,
+      sevdeskFinance,
       loadedAt: Date.now(),
       metaHubAvailable: Boolean(developmentPayload),
       metaHubError: developmentResult.status === "rejected" || Boolean(developmentResult.value?.detail),
@@ -3903,14 +4055,110 @@ export default function CustomerDirectoryView() {
                       </p>
                     </div>
                   </div>
-                  <p className="mt-2 text-[11px] text-sand-600">
-                    {selectedPeriodStats?.invoiceCount
-                      ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum. Arbeitszeit + Material + Sonstiges = Gesamtumsatz.`
-                      : "Keine bezahlten sevdesk-Rechnungen im Zeitraum."}
-                  </p>
-                </div>
+                          <p className="mt-2 text-[11px] text-sand-600">
+                            {selectedPeriodStats?.invoiceCount
+                              ? `${selectedPeriodStats.invoiceCount} bezahlte sevdesk-Rechnungen im Zeitraum. Arbeitszeit + Material + Sonstiges = Gesamtumsatz.`
+                              : "Keine bezahlten sevdesk-Rechnungen im Zeitraum."}
+                          </p>
+                        </div>
 
-                <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+                        {budgetEstimate ? (
+                          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <p className="text-[10px] uppercase tracking-wide text-emerald-700">
+                                  Budget {budgetEstimate.year || new Date().getFullYear()} · Schätzung
+                                </p>
+                                <p className="mt-1 text-2xl font-bold leading-none text-emerald-950">
+                                  {formatEurPrecise(budgetEstimate.suggestedBudgetEur)}
+                                </p>
+                                <p className="mt-1 text-[11px] text-emerald-800">
+                                  Spanne Schätzung {formatEurPrecise(budgetEstimate.lowEur)} bis{" "}
+                                  {formatEurPrecise(budgetEstimate.highEur)}
+                                </p>
+                              </div>
+                              <span className="rounded-full border border-emerald-300 bg-white px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
+                                Vertrauen {budgetEstimate.confidence || "mittel"}
+                              </span>
+                            </div>
+                            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                              <div className="rounded-xl border border-emerald-200 bg-white p-3">
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">Normales Jahr</p>
+                                <p className="mt-1 text-sm font-semibold text-sand-900">
+                                  {formatEurPrecise(budgetEstimate.baselineEur)}
+                                </p>
+                                <p className="mt-1 text-[11px] text-sand-600">Schätzung geglättet</p>
+                              </div>
+                              <div className="rounded-xl border border-emerald-200 bg-white p-3">
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">Ist lfd. Jahr</p>
+                                <p className="mt-1 text-sm font-semibold text-sand-900">
+                                  {formatEurPrecise(budgetEstimate.currentYearRevenueEur)}
+                                </p>
+                                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-sand-200">
+                                  <div className="h-full bg-emerald-500" style={{ width: `${budgetEstimateProgress}%` }} />
+                                </div>
+                              </div>
+                              <div className="rounded-xl border border-emerald-200 bg-white p-3">
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">Restbudget</p>
+                                <p
+                                  className={`mt-1 text-sm font-semibold ${
+                                    Number(budgetEstimate.remainingBudgetEur || 0) < 0 ? "text-rose-700" : "text-sand-900"
+                                  }`}
+                                >
+                                  {formatEurPrecise(budgetEstimate.remainingBudgetEur)}
+                                </p>
+                                <p className="mt-1 text-[11px] text-sand-600">gegen Budget-Schätzung</p>
+                              </div>
+                            </div>
+	                            {budgetEstimateOutliers.length || budgetEstimateHistory.length ? (
+	                              <details className="group mt-3">
+	                                <summary className="flex cursor-pointer select-none list-none items-center gap-1.5 text-[10px] uppercase tracking-wide text-emerald-800 hover:text-emerald-950">
+	                                  <ChevronRight size={11} className="transition group-open:rotate-90" />
+	                                  Historie & Ausreißer
+	                                </summary>
+	                                {budgetEstimateOutliers.length ? (
+	                                  <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+	                                    <p className="text-[10px] uppercase tracking-wide text-amber-700">Ausreißer berücksichtigt</p>
+	                                    <div className="mt-1 flex flex-wrap gap-1.5">
+	                                      {budgetEstimateOutliers.map((entry) => (
+	                                        <span
+	                                          key={`${entry.year}-${entry.type || "outlier"}`}
+	                                          className="rounded-full border border-amber-300 bg-white px-2 py-0.5 text-[11px] text-amber-800"
+	                                        >
+	                                          {entry.year}: {formatEurPrecise(entry.amountEur)} zu{" "}
+	                                          {formatEurPrecise(entry.adjustedAmountEur)} geglättet
+	                                        </span>
+		                                      ))}
+		                                    </div>
+		                                  </div>
+		                                ) : null}
+		                                {budgetEstimateHistory.length ? (
+	                                  <div className="mt-2 grid gap-1.5">
+	                                    {budgetEstimateHistory.slice(-5).reverse().map((entry) => (
+	                                      <div
+	                                        key={entry.year}
+	                                        className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-white px-3 py-2"
+	                                      >
+	                                        <span className="text-xs font-semibold text-sand-800">{entry.year}</span>
+	                                        <span className="text-xs text-sand-600">
+	                                          {formatEurPrecise(entry.amountEur)}
+	                                          {entry.isOutlier
+	                                            ? ` · Schätzung ${formatEurPrecise(entry.adjustedAmountEur)}`
+	                                            : ""}
+	                                        </span>
+	                                      </div>
+	                                    ))}
+	                                  </div>
+	                                ) : null}
+	                              </details>
+	                            ) : null}
+                            <p className="mt-2 text-[11px] text-emerald-800">
+                              Schätzung aus bezahlten sevdesk-Umsätzen der Vorjahre; ungewöhnliche Jahre werden geglättet.
+                            </p>
+                          </div>
+                        ) : null}
+
+                        <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-[10px] uppercase tracking-wide text-sand-500">Wiederkehrende Rechnungen</p>
                     <p className="text-[11px] text-sand-500">
@@ -4832,7 +5080,7 @@ export default function CustomerDirectoryView() {
                 {editingContractId ? "Vertragsvorschlag aktualisieren" : "Vertrag in wenigen Angaben erstellen"}
               </h4>
               <p className="mt-1 text-sm text-sand-600">
-                Typ, Tarif und Bestand reichen für eine erste Vorschau. Details liegen unter Optionen.
+                Freitext einfügen, KI vorbefüllen lassen, Fixpreis prüfen und speichern.
               </p>
             </div>
             <button
@@ -4844,8 +5092,50 @@ export default function CustomerDirectoryView() {
             </button>
           </div>
 
-          <div className="mt-4 space-y-3">
-            <div className="grid gap-2 md:grid-cols-[1.1fr_1.1fr_0.8fr]">
+            <div className="mt-4 space-y-3">
+            <div className="rounded-2xl border border-sky-200 bg-white p-3.5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.28em] text-sky-700">KI-Vorerfassung</p>
+                  <p className="mt-1 text-sm text-sand-600">
+                    Angebot, E-Mail oder Stichworte einfügen. Die Felder bleiben danach normal bearbeitbar.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={generateContractDraftWithAi}
+                  disabled={contractAiStatus === "loading"}
+                  className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Sparkles size={12} />
+                  {contractAiStatus === "loading" ? "KI liest…" : "Vorschlag erstellen"}
+                </button>
+              </div>
+              <textarea
+                value={contractAiInput}
+                onChange={(event) => setContractAiInput(event.target.value)}
+                rows={4}
+                className="mt-3 w-full rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm"
+                placeholder="z.B. Managed Backup fuer 5 Geraete, 180 EUR monatlich, Start 01.06., Laufzeit 12 Monate, Kuendigung 3 Monate..."
+              />
+              {contractAiResult?.draft ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-sand-600">
+                  <span className="rounded-full border border-sky-100 bg-sky-50 px-2 py-0.5 text-sky-700">
+                    KI-Vorschlag übernommen
+                  </span>
+                  {(contractAiResult.draft.missing_fields || []).slice(0, 4).map((item) => (
+                    <span key={item} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-amber-700">
+                      Prüfen: {item}
+                    </span>
+                  ))}
+                  {(contractAiResult.draft.hints || []).slice(0, 2).map((item) => (
+                    <span key={item} className="text-sand-500">{item}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="grid gap-2 md:grid-cols-[1.1fr_0.8fr]">
               <label className="block">
                 <span className="text-[10px] uppercase tracking-wide text-sand-500 font-medium">Vertragstyp</span>
                 <select
@@ -4864,28 +5154,6 @@ export default function CustomerDirectoryView() {
                 ) : null}
               </label>
               <label className="block">
-                <span className="text-[10px] uppercase tracking-wide text-sand-500 font-medium">Preisvorlage</span>
-                <select
-                  value={calcInput.tariffId || ""}
-                  onChange={(event) =>
-                    setCalcInput((prev) => ({ ...prev, tariffId: Number(event.target.value) || null }))
-                  }
-                  disabled={!tariffRequired}
-                  className="mt-1 w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm"
-                >
-                  <option value="">
-                    {tariffRequired
-                      ? `Preisvorlage für ${contractTypeLabel(activeContractBaseType)} wählen`
-                      : "Für AVV / DSGVO nicht erforderlich"}
-                  </option>
-                  {filteredActiveTariffs.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} ({item.category})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
                 <span className="text-[10px] uppercase tracking-wide text-sand-500 font-medium">Gültig ab</span>
                 <input
                   type="date"
@@ -4898,10 +5166,10 @@ export default function CustomerDirectoryView() {
             <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_220px]">
               <div className="rounded-xl border border-sand-200 bg-white px-3 py-2">
                 <p className="text-[10px] uppercase tracking-wide text-sand-500">Aktuelle Auswahl</p>
-                <p className="mt-1 text-sm font-semibold text-sand-900">
-                  {contractTypeLabel(activeContractBaseType)}
-                  {selectedTariff ? ` · ${selectedTariff.name}` : tariffRequired ? " · Preisvorlage fehlt" : " · ohne Tarif"}
-                </p>
+	                <p className="mt-1 text-sm font-semibold text-sand-900">
+	                  {contractTypeLabel(activeContractBaseType)}
+	                  {" · individueller Fixpreis"}
+	                </p>
                 <p className="mt-1 text-[11px] text-sand-500">
                   Laufzeit {runtimeMonthsValue} Monate · Kündigungsfrist {terminationNoticeMonthsValue} Monate
                   {supportsHoursBudget ? ` · ${formatHours(monthlyHoursIncluded)} inkl./Monat` : ""}
@@ -4971,9 +5239,9 @@ export default function CustomerDirectoryView() {
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              {tariffSelectionMissing ? (
-                <span className="text-rose-600">Wartungs- und Monitoringverträge benötigen eine Preisvorlage.</span>
-              ) : null}
+	              {contractPriceMissing ? (
+	                <span className="text-rose-600">Bitte monatlichen Fixpreis erfassen.</span>
+	              ) : null}
               {contractRuntimeInvalid ? (
                 <span className="text-rose-600">Kündigungsfrist darf die Laufzeit nicht überschreiten.</span>
               ) : null}
@@ -4983,24 +5251,25 @@ export default function CustomerDirectoryView() {
               ) : null}
             </div>
           </div>
-        </div>
+	        </div>
 
-        <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Bestand</p>
-              <p className="mt-1 text-sm text-sand-600">
-                Geräteanzahl direkt aus Meta-Hub übernehmen oder manuell anpassen.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={importCalcValuesFromRmm}
-              className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
-            >
-              Aus RMM/Discovery übernehmen
-            </button>
-          </div>
+	        {contractAdvancedOpen ? (
+	          <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
+	            <div className="flex flex-wrap items-center justify-between gap-2">
+	              <div>
+	                <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Bestand</p>
+	                <p className="mt-1 text-sm text-sand-600">
+	                  Geräteanzahl direkt aus Meta-Hub übernehmen oder manuell anpassen.
+	                </p>
+	              </div>
+	              <button
+	                type="button"
+	                onClick={importCalcValuesFromRmm}
+	                className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[10px] uppercase tracking-wide hover:bg-sand-100"
+	              >
+	                Aus RMM/Discovery übernehmen
+	              </button>
+	            </div>
           <div className="mt-3 grid gap-2 md:grid-cols-4">
             <label className="block">
               <span className="text-[10px] uppercase tracking-wide text-sand-500">Server</span>
@@ -5045,13 +5314,14 @@ export default function CustomerDirectoryView() {
             {calcImportStatus === "empty" ? (
               <span className="text-xs text-amber-700">Keine Meta-Hub Infrastrukturdaten gefunden</span>
             ) : null}
-            {calcImportStatus === "error" ? (
-              <span className="text-xs text-rose-600">Meta-Hub Import fehlgeschlagen</span>
-            ) : null}
-          </div>
-        </div>
+	            {calcImportStatus === "error" ? (
+	              <span className="text-xs text-rose-600">Meta-Hub Import fehlgeschlagen</span>
+	            ) : null}
+	          </div>
+	        </div>
+	        ) : null}
 
-        {contractAdvancedOpen ? (
+	        {contractAdvancedOpen ? (
           <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -5060,9 +5330,7 @@ export default function CustomerDirectoryView() {
                   Laufzeit, Titel und individuelle Vertragsvariablen nur bei Bedarf anpassen.
                 </p>
               </div>
-              <span className="text-[11px] text-sand-500">
-                Grundlage: {selectedTariff ? selectedTariff.name : tariffRequired ? "Preisvorlage fehlt" : "Ohne Tarif"}
-              </span>
+	              <span className="text-[11px] text-sand-500">Fixpreisvertrag ohne Tarifmodell</span>
             </div>
             <div className="mt-3 grid gap-2 md:grid-cols-3">
               <label className="block">
@@ -5160,61 +5428,23 @@ export default function CustomerDirectoryView() {
         ) : null}
 
         <div className="rounded-2xl border border-sand-200 bg-white p-3.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Preis & Aktion</p>
-              <p className="mt-1 text-sm text-sand-600">
-                {tariffRequired
-                  ? "Der Tarif liefert den Vorschlag. Gespeichert wird immer dein individueller Preis."
-                  : "AVV / DSGVO wird ohne Tarif kalkuliert."}
-              </p>
-            </div>
-            <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[11px] text-sand-600">
-              {contractTypeLabel(activeContractBaseType)}
-            </span>
-          </div>
-          <div
-            className={`mt-3 grid gap-2 ${
-              supportsHoursBudget ? "md:grid-cols-3" : "md:grid-cols-2"
-            }`}
-          >
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Individualpreis pro Monat</p>
-              <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.monthly)}</p>
-              <p className="mt-1 text-[11px] text-emerald-800">
-                Vorschlag: {formatEurPrecise(contractTotals.monthlyAuto)}
-                {contractTotals.monthlyOverridden
-                  ? ` · Abweichung ${formatEurPrecise(Math.abs(contractTotals.monthlyDelta))}`
-                  : " · entspricht Vorschlag"}
-              </p>
-            </div>
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Individualpreis pro Jahr</p>
-              <p className="text-base font-semibold text-emerald-900">{formatEurPrecise(contractTotals.yearly)}</p>
-              <p className="mt-1 text-[11px] text-emerald-800">
-                Vorschlag: {formatEurPrecise(contractTotals.yearlyAuto)}
-                {contractTotals.yearlyOverridden
-                  ? ` · Abweichung ${formatEurPrecise(Math.abs(contractTotals.yearlyDelta))}`
-                  : " · entspricht Vorschlag"}
-              </p>
-            </div>
-            {supportsHoursBudget ? (
-              <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-sky-700">Stundenbudget / Monat</p>
-                <p className="text-base font-semibold text-sky-900">{formatHours(monthlyHoursIncluded)}</p>
-                <p className="mt-1 text-[11px] text-sky-800">
-                  Stundensatz {formatEurPrecise(contractTotals.hourlyRate)} · Anteil{" "}
-                  {formatEurPrecise(contractTotals.hourlyMonthly)}
-                </p>
-              </div>
-            ) : null}
-          </div>
-          <div className="mt-3 grid gap-2 md:grid-cols-2">
-            <label className="block">
-              <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                Individualpreis pro Monat
-              </span>
-              <input
+	          <div className="flex flex-wrap items-center justify-between gap-2">
+	            <div>
+	              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Preis & Aktion</p>
+	              <p className="mt-1 text-sm text-sand-600">
+	                Der Vertragspreis ist ein fester individueller Monatswert. Keine Tarifauswahl, keine Paketlogik.
+	              </p>
+	            </div>
+	            <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-[11px] text-sand-600">
+	              {contractTypeLabel(activeContractBaseType)}
+	            </span>
+	          </div>
+	          <div className="mt-3 grid gap-2 md:grid-cols-[220px_minmax(0,1fr)_180px]">
+	            <label className="block">
+	              <span className="text-[10px] uppercase tracking-wide text-sand-500">
+	                Fixpreis pro Monat
+	              </span>
+	              <input
                 type="number"
                 min="0"
                 step="0.01"
@@ -5224,51 +5454,39 @@ export default function CustomerDirectoryView() {
                   setContractPriceTouched((prev) => ({ ...prev, monthly: true }));
                 }}
                 placeholder={`Vorschlag: ${formatEurPrecise(contractTotals.monthlyAuto)}`}
-                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-              />
-            </label>
-            <label className="block">
-              <span className="text-[10px] uppercase tracking-wide text-sand-500">
-                Individualpreis pro Jahr
-              </span>
-              <input
-                type="number"
+	                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+	              />
+	            </label>
+	            <label className="block">
+	              <span className="text-[10px] uppercase tracking-wide text-sand-500">Leistungsumfang</span>
+	              <input
+	                value={contractDraft.serviceScope}
+	                onChange={(event) => setContractDraft((prev) => ({ ...prev, serviceScope: event.target.value }))}
+	                placeholder="z.B. Managed Backup, Monitoring, Wartung nach Vereinbarung"
+	                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+	              />
+	            </label>
+	            <label className="block">
+	              <span className="text-[10px] uppercase tracking-wide text-sand-500">
+	                Jahr automatisch
+	              </span>
+	              <input
+	                type="number"
                 min="0"
                 step="0.01"
-                value={contractDraft.yearlyTotalOverride}
-                onChange={(event) => {
-                  setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }));
-                  setContractPriceTouched((prev) => ({ ...prev, yearly: true }));
-                }}
-                placeholder={`Vorschlag: ${formatEurPrecise(contractTotals.yearlyAuto)}`}
-                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
-              />
-            </label>
-          </div>
-          <p className="mt-2 text-[11px] text-sand-500">
-            {tariffRequired
-              ? `Gesamtpreis = Grund-/Gerätepreise (${formatEurPrecise(contractTotals.tariffMonthly)}) + Stundenbudget (${formatHours(
-                  monthlyHoursIncluded
-                )}) x Stundensatz (${formatEurPrecise(contractTotals.hourlyRate)}).`
-              : "AVV/DSGVO: kein Tarif erforderlich."}
-          </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setContractPriceTouched({ monthly: false, yearly: false });
-                setContractDraft((prev) => ({
-                  ...prev,
-                  monthlyTotalOverride: "",
-                  yearlyTotalOverride: ""
-                }));
-              }}
-              disabled={!contractPriceTouched.monthly && !contractPriceTouched.yearly}
-              className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Preisvorschlag übernehmen
-            </button>
-          </div>
+	                value={contractDraft.yearlyTotalOverride}
+	                onChange={(event) => {
+	                  setContractDraft((prev) => ({ ...prev, yearlyTotalOverride: event.target.value }));
+	                  setContractPriceTouched((prev) => ({ ...prev, yearly: true }));
+	                }}
+	                placeholder="wird aus Monat berechnet"
+	                className="mt-1 w-full rounded-xl border border-sand-200 px-3 py-2 text-sm"
+	              />
+	            </label>
+	          </div>
+	          <p className="mt-2 text-[11px] text-sand-500">
+	            Gespeichert wird {formatEurPrecise(contractTotals.monthly)} pro Monat bzw. {formatEurPrecise(contractTotals.yearly)} pro Jahr.
+	          </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -5836,6 +6054,49 @@ export default function CustomerDirectoryView() {
                           Telefonie-API konnte nicht erreicht werden.
                         </p>
                       ) : null}
+                      {communicationDataForEditCustomer.sevdeskFinance ? (() => {
+                        const finance = communicationDataForEditCustomer.sevdeskFinance;
+                        const fmtEur = (value) =>
+                          new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 })
+                            .format(Number(value || 0));
+                        return (
+                          <div className="rounded-xl border border-sand-200 bg-white p-3">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <p className="text-[11px] uppercase tracking-wide text-sand-500">Finanzen (sevDesk)</p>
+                              {finance.lastInvoiceAt ? (
+                                <span className="text-[10px] text-sand-400">
+                                  Letzte: {finance.lastInvoiceNumber || "—"} · {formatDateTime(finance.lastInvoiceAt)}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="grid grid-cols-3 gap-2">
+                              <div className={`rounded-lg border px-2.5 py-1.5 ${
+                                finance.openCount > 0 ? "border-sky-200 bg-sky-50" : "border-sand-200 bg-sand-50"
+                              }`}>
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">Offen</p>
+                                <p className={`text-sm font-semibold ${finance.openCount > 0 ? "text-sky-700" : "text-sand-400"}`}>
+                                  {finance.openCount}
+                                </p>
+                                <p className="text-[10px] text-sand-500">{fmtEur(finance.openAmount)}</p>
+                              </div>
+                              <div className={`rounded-lg border px-2.5 py-1.5 ${
+                                finance.overdueCount > 0 ? "border-rose-200 bg-rose-50" : "border-sand-200 bg-sand-50"
+                              }`}>
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">Überfällig</p>
+                                <p className={`text-sm font-semibold ${finance.overdueCount > 0 ? "text-rose-700" : "text-sand-400"}`}>
+                                  {finance.overdueCount}
+                                </p>
+                                <p className="text-[10px] text-sand-500">{fmtEur(finance.overdueAmount)}</p>
+                              </div>
+                              <div className="rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5">
+                                <p className="text-[10px] uppercase tracking-wide text-sand-500">Gesamt</p>
+                                <p className="text-sm font-semibold text-sand-900">{finance.totalCount}</p>
+                                <p className="text-[10px] text-sand-500">{fmtEur(finance.totalAmount)}</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })() : null}
                       <div className="grid gap-3 md:grid-cols-2">
                         <div className="rounded-xl border border-sand-200 bg-sand-50 p-2.5">
                           <div className="mb-2 flex items-center gap-1.5 text-sand-700">

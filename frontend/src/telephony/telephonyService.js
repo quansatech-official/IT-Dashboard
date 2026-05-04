@@ -214,5 +214,17 @@ export const telephonyService = {
     } catch (error) {
       return false;
     }
+  },
+  fetchNfonControl: async (key) => {
+    const response = await fetch(`/api/nfon_controls/${encodeURIComponent(key)}`);
+    return await safeJson(response);
+  },
+  mutateNfonControl: async (key, payload) => {
+    const response = await fetch(`/api/nfon_controls/${encodeURIComponent(key)}/mutate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return await safeJson(response);
   }
 };

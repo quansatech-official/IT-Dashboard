@@ -52,6 +52,7 @@ import KnowledgeBaseView from "./knowledge/KnowledgeBaseView";
 import IncomingCallQuickTaskPopup from "./telephony/IncomingCallQuickTaskPopup";
 import VisionBoardView from "./vision-board/VisionBoardView";
 import ProjectFoldersView from "./project-folders/ProjectFoldersView";
+import { trackTelemetry } from "./telemetry/telemetry";
 
 const detectDeviceClass = () => {
   if (typeof window === "undefined" || typeof navigator === "undefined") return "desktop";
@@ -86,6 +87,16 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("qt_theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    trackTelemetry({
+      event_type: "view",
+      module: activeView,
+      component: "App",
+      action: "open_view",
+      meta: { path: typeof window !== "undefined" ? window.location.pathname : "" }
+    });
+  }, [activeView]);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
