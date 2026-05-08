@@ -887,6 +887,9 @@ export default function DayPlanView() {
   const updateSevdeskDraftForm = (field, value) => {
     setSevdeskDraftForm((prev) => {
       if (!prev) return prev;
+      if (field && typeof field === "object") {
+        return { ...prev, ...field };
+      }
       return { ...prev, [field]: value };
     });
   };
@@ -952,9 +955,11 @@ export default function DayPlanView() {
     setSevdeskDraftEstimateStatus({ state: "idle", error: "" });
   };
 
-  const submitSevdeskDraft = async () => {
-    if (!sevdeskDraftTask || !sevdeskDraftForm) return;
-    const customerNumber = String(sevdeskDraftForm.customer_number || "").trim();
+  const submitSevdeskDraft = async (formOverride) => {
+    const draftForm = formOverride || sevdeskDraftForm;
+    if (!sevdeskDraftTask || !draftForm) return;
+    updateSevdeskDraftForm(draftForm);
+    const customerNumber = String(draftForm.customer_number || "").trim();
     if (!customerNumber) {
       setSevdeskDraftStatus({ state: "error", error: "Bitte Kundennummer angeben." });
       return;
@@ -962,18 +967,18 @@ export default function DayPlanView() {
     setSevdeskDraftStatus({ state: "saving", error: "" });
     const payload = {
       customer_number: customerNumber,
-      header: String(sevdeskDraftForm.header || "").trim() || undefined,
-      name: String(sevdeskDraftForm.name || "").trim() || undefined,
-      text: String(sevdeskDraftForm.text || "").trim() || undefined,
-      use_existing_draft: sevdeskDraftForm.use_existing_draft !== false
+      header: String(draftForm.header || "").trim() || undefined,
+      name: String(draftForm.name || "").trim() || undefined,
+      text: String(draftForm.text || "").trim() || undefined,
+      use_existing_draft: draftForm.use_existing_draft !== false
     };
-    const quantity = roundUpToQuarterHours(Number(sevdeskDraftForm.quantity));
+    const quantity = roundUpToQuarterHours(Number(draftForm.quantity));
     if (Number.isFinite(quantity) && quantity > 0) payload.quantity = quantity;
-    const price = Number(sevdeskDraftForm.price);
+    const price = Number(draftForm.price);
     if (Number.isFinite(price)) payload.price = price;
-    const taxRate = Number(sevdeskDraftForm.tax_rate);
+    const taxRate = Number(draftForm.tax_rate);
     if (Number.isFinite(taxRate)) payload.tax_rate = taxRate;
-    const unityId = Number(sevdeskDraftForm.unity_id);
+    const unityId = Number(draftForm.unity_id);
     if (Number.isFinite(unityId) && unityId > 0) payload.unity_id = unityId;
     const mileageEur = Number(sevdeskDraftMetrics?.mileageEur || 0);
     const roundTripKm = Number(
@@ -982,7 +987,7 @@ export default function DayPlanView() {
           ? Number(sevdeskDraftMetrics.distanceKm) * 2
           : 0)
     );
-    if (sevdeskDraftForm.include_mileage && Number.isFinite(mileageEur) && mileageEur > 0) {
+    if (draftForm.include_mileage && Number.isFinite(mileageEur) && mileageEur > 0) {
       payload.add_mileage = true;
       payload.mileage_name = "Anfahrt";
       payload.mileage_price = mileageEur;
@@ -1017,12 +1022,14 @@ export default function DayPlanView() {
     }
   };
 
-  const generateSevdeskDraftText = async () => {
-    if (!sevdeskDraftTask || !sevdeskDraftForm) return;
+  const generateSevdeskDraftText = async (formOverride) => {
+    const draftForm = formOverride || sevdeskDraftForm;
+    if (!sevdeskDraftTask || !draftForm) return "";
+    updateSevdeskDraftForm(draftForm);
     setSevdeskDraftAiLoading(true);
     setSevdeskDraftStatus((prev) => ({ state: prev?.state === "saved" ? "saved" : "idle", error: "" }));
     try {
-      const quantity = roundUpToQuarterHours(Number(sevdeskDraftForm.quantity));
+      const quantity = roundUpToQuarterHours(Number(draftForm.quantity));
       const contextParts = [
         sevdeskDraftTask.customer ? `Kunde: ${sevdeskDraftTask.customer}` : "",
         sevdeskDraftTask.title ? `Aufgabentitel: ${sevdeskDraftTask.title}` : "",
@@ -1031,9 +1038,9 @@ export default function DayPlanView() {
           ? `Einsatzzeit vor Ort: ${sevdeskDraftTask.arrival_time || "?"} bis ${sevdeskDraftTask.departure_time || "?"}`
           : "",
         Number.isFinite(quantity) && quantity > 0 ? `Abzurechnende Stunden: ${quantity} h` : "",
-        sevdeskDraftForm.name ? `Geplanter Positionsname: ${sevdeskDraftForm.name}` : "",
-        sevdeskDraftForm.billing_note ? `Interner Abrechnungsvermerk: ${sevdeskDraftForm.billing_note}` : "",
-        sevdeskDraftForm.include_mileage ? "Hinweis: Anfahrtskosten werden als separate Position abgerechnet." : "",
+        draftForm.name ? `Geplanter Positionsname: ${draftForm.name}` : "",
+        draftForm.billing_note ? `Interner Abrechnungsvermerk: ${draftForm.billing_note}` : "",
+        draftForm.include_mileage ? "Hinweis: Anfahrtskosten werden als separate Position abgerechnet." : "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -1042,7 +1049,7 @@ export default function DayPlanView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode: "invoice_position_text",
-          current_text: sevdeskDraftForm.text || "",
+          current_text: draftForm.text || "",
           context: contextParts || "n/a"
         })
       });
@@ -1056,11 +1063,13 @@ export default function DayPlanView() {
       }
       updateSevdeskDraftForm("text", nextText);
       setSevdeskDraftStatus({ state: "idle", error: "" });
+      return nextText;
     } catch (error) {
       setSevdeskDraftStatus({
         state: "error",
         error: error?.message ? String(error.message) : "KI-Verbesserung fehlgeschlagen."
       });
+      return "";
     } finally {
       setSevdeskDraftAiLoading(false);
     }
@@ -1684,9 +1693,11 @@ export default function DayPlanView() {
     setEmailTaskSaving(false);
   };
 
-  const submitEmailTaskDraft = async () => {
-    if (!emailTaskDraft) return;
-    const title = shortenTaskTitle(emailTaskDraft.title);
+  const submitEmailTaskDraft = async (draftOverride) => {
+    const draft = draftOverride || emailTaskDraft;
+    if (!draft) return;
+    setEmailTaskDraft(draft);
+    const title = shortenTaskTitle(draft.title);
     if (!title) {
       setEmailTaskError("Bitte einen Titel angeben.");
       return;
@@ -1697,18 +1708,18 @@ export default function DayPlanView() {
       const selectedCustomer = customers.find(
         (item) =>
           String(item?.name || "").trim().toLowerCase() ===
-          String(emailTaskDraft.customer || "").trim().toLowerCase()
+          String(draft.customer || "").trim().toLowerCase()
       );
-      const customerName = String(emailTaskDraft.customer || "").trim();
+      const customerName = String(draft.customer || "").trim();
       const payload = {
         title,
-        details: String(emailTaskDraft.details || "").trim(),
+        details: String(draft.details || "").trim(),
         customer: customerName,
         customer_number: String(
-          selectedCustomer?.creditor_number || emailTaskDraft.customer_number || ""
+          selectedCustomer?.creditor_number || draft.customer_number || ""
         ).trim(),
         status: "todo",
-        group_id: emailTaskDraft.group_id ?? null
+        group_id: draft.group_id ?? null
       };
       const created = await api.create(payload);
       if (created?.id) {
@@ -3149,7 +3160,7 @@ export default function DayPlanView() {
         onClose={closeSevdeskDraft}
         onSubmit={submitSevdeskDraft}
         onGenerateAi={generateSevdeskDraftText}
-        onRefreshScopeEstimate={() => refreshSevdeskDraftEstimate()}
+        onRefreshScopeEstimate={refreshSevdeskDraftEstimate}
         onApplyScopeEstimate={() => {
           if (!sevdeskDraftEstimate?.estimated_hours) return;
           updateSevdeskDraftForm("quantity", String(sevdeskDraftEstimate.estimated_hours));
@@ -3184,7 +3195,11 @@ export default function DayPlanView() {
         onClose={closeEmailTaskModal}
         onSubmit={submitEmailTaskDraft}
         onChange={(field, value) =>
-          setEmailTaskDraft((prev) => (prev ? { ...prev, [field]: value } : prev))
+          setEmailTaskDraft((prev) => {
+            if (!prev) return prev;
+            if (field && typeof field === "object") return { ...prev, ...field };
+            return { ...prev, [field]: value };
+          })
         }
       />
     </div>
@@ -3192,7 +3207,28 @@ export default function DayPlanView() {
 }
 
 function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubmit, onChange }) {
+  const [localDraft, setLocalDraft] = useState(draft || null);
+
+  useEffect(() => {
+    if (open && draft) {
+      setLocalDraft(draft);
+    }
+  }, [open, draft]);
+
   if (!open || !draft) return null;
+  const currentDraft = localDraft || draft;
+  const updateLocalDraft = (field, value, options = {}) => {
+    const nextDraft = { ...(localDraft || draft || {}), [field]: value };
+    setLocalDraft(nextDraft);
+    if (options.commit) onChange(nextDraft);
+    return nextDraft;
+  };
+  const commitLocalDraft = () => {
+    onChange(currentDraft);
+    return currentDraft;
+  };
+  const handleSubmit = () => onSubmit(commitLocalDraft());
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
       <div className="w-full max-w-xl overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
@@ -3219,8 +3255,9 @@ function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubm
           <label className="flex flex-col gap-1">
             <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Titel</span>
             <input
-              value={draft.title || ""}
-              onChange={(event) => onChange("title", event.target.value)}
+              value={currentDraft.title || ""}
+              onChange={(event) => updateLocalDraft("title", event.target.value)}
+              onBlur={(event) => updateLocalDraft("title", event.target.value, { commit: true })}
               disabled={analyzing}
               className="w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
             />
@@ -3228,8 +3265,9 @@ function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubm
           <label className="flex flex-col gap-1">
             <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Kunde</span>
             <input
-              value={draft.customer || ""}
-              onChange={(event) => onChange("customer", event.target.value)}
+              value={currentDraft.customer || ""}
+              onChange={(event) => updateLocalDraft("customer", event.target.value)}
+              onBlur={(event) => updateLocalDraft("customer", event.target.value, { commit: true })}
               list="dayplan-customers"
               disabled={analyzing}
               placeholder="Kundenvorschlag aus E-Mail"
@@ -3239,16 +3277,17 @@ function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubm
           <label className="flex flex-col gap-1">
             <span className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">Notiz</span>
             <textarea
-              value={draft.details || ""}
-              onChange={(event) => onChange("details", event.target.value)}
+              value={currentDraft.details || ""}
+              onChange={(event) => updateLocalDraft("details", event.target.value)}
+              onBlur={(event) => updateLocalDraft("details", event.target.value, { commit: true })}
               disabled={analyzing}
               className="min-h-[130px] w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 focus:outline-none focus:ring-2 focus:ring-amber-200"
             />
           </label>
-          {draft.subject || draft.from_email ? (
+          {currentDraft.subject || currentDraft.from_email ? (
             <div className="rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-[11px] text-sand-500">
-              {draft.subject ? <div>Betreff: {draft.subject}</div> : null}
-              {draft.from_email ? <div>Absender: {draft.from_email}</div> : null}
+              {currentDraft.subject ? <div>Betreff: {currentDraft.subject}</div> : null}
+              {currentDraft.from_email ? <div>Absender: {currentDraft.from_email}</div> : null}
             </div>
           ) : null}
           {error ? (
@@ -3267,8 +3306,8 @@ function EmailTaskModal({ open, draft, analyzing, error, saving, onClose, onSubm
           </button>
           <button
             type="button"
-            onClick={onSubmit}
-            disabled={saving || analyzing || !String(draft.title || "").trim()}
+            onClick={handleSubmit}
+            disabled={saving || analyzing || !String(currentDraft.title || "").trim()}
             className="inline-flex items-center justify-center rounded-lg bg-[var(--nav-accent)] px-4 py-2 text-xs font-medium uppercase tracking-wide text-white hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50 transition-opacity duration-150"
           >
             {analyzing ? "Analysiere..." : saving ? "Erstelle..." : "Aufgabe anlegen"}
@@ -3305,12 +3344,21 @@ function FakturaTaskModal({
   onToggleAdvanced,
   onChange
 }) {
+  const [localForm, setLocalForm] = useState(form || null);
+
+  useEffect(() => {
+    if (open && form) {
+      setLocalForm(form);
+    }
+  }, [open, form]);
+
   if (!open || !task || !form) return null;
+  const draftForm = localForm || form;
   const isSaving = status?.state === "saving";
   const isScopeEstimateLoading = scopeEstimateStatus?.state === "loading";
   const hasScopeEstimateError = scopeEstimateStatus?.state === "error";
   const hasScopeEstimate = Boolean(scopeEstimate);
-  const hasCustomerNumber = String(form.customer_number || "").trim().length > 0;
+  const hasCustomerNumber = String(draftForm.customer_number || "").trim().length > 0;
   const hasDraft = Boolean(draftCheck?.hasDraft);
   const contactFound = draftCheck?.contactFound !== false;
   const hasMissingInvoiceFields = Array.isArray(missingInvoiceFields) && missingInvoiceFields.length > 0;
@@ -3321,6 +3369,31 @@ function FakturaTaskModal({
   );
   const hasMileageSuggestion = Number.isFinite(mileageEur) && mileageEur > 0;
   const canSubmit = hasToken && hasCustomerNumber && !isSaving && !hasMissingInvoiceFields;
+  const commitLocalForm = (nextForm = draftForm) => {
+    if (nextForm) onChange(nextForm);
+    return nextForm;
+  };
+  const setLocalField = (field, value, options = {}) => {
+    const nextForm = { ...(localForm || form || {}), [field]: value };
+    setLocalForm(nextForm);
+    if (options.commit) onChange(nextForm);
+    return nextForm;
+  };
+  const handleSubmit = () => {
+    const nextForm = commitLocalForm();
+    onSubmit(nextForm);
+  };
+  const handleGenerateAi = async () => {
+    const nextForm = commitLocalForm();
+    const nextText = await onGenerateAi(nextForm);
+    if (typeof nextText === "string" && nextText.trim()) {
+      setLocalField("text", nextText, { commit: true });
+    }
+  };
+  const handleRefreshScopeEstimate = () => {
+    const nextForm = commitLocalForm();
+    onRefreshScopeEstimate(nextForm?.text || "");
+  };
 
   const formatHourValue = (value) => {
     const numeric = Number(value || 0);
@@ -3335,10 +3408,10 @@ function FakturaTaskModal({
     if (!Number.isFinite(numeric) || numeric <= 0) return 0;
     return Math.ceil(numeric * 4) / 4;
   };
-  const actualHours = Number(form.actual_hours || 0);
-  const actualRoundedHours = roundHourValue(Number(form.actual_rounded_hours || actualHours || 0));
-  const minimumBillableHours = roundHourValue(Number(form.minimum_billable_hours || 0));
-  const invoiceQuantity = roundHourValue(Number(form.quantity || 0));
+  const actualHours = Number(draftForm.actual_hours || 0);
+  const actualRoundedHours = roundHourValue(Number(draftForm.actual_rounded_hours || actualHours || 0));
+  const minimumBillableHours = roundHourValue(Number(draftForm.minimum_billable_hours || 0));
+  const invoiceQuantity = roundHourValue(Number(draftForm.quantity || 0));
   const documentedMaximum = Math.max(actualRoundedHours, minimumBillableHours);
   const confidenceLabel =
     scopeEstimate?.confidence === "high" ? "Hohe Sicherheit"
@@ -3409,9 +3482,9 @@ function FakturaTaskModal({
                   <button
                     key={label}
                     type="button"
-                    onClick={() => onChange("use_existing_draft", value)}
+                    onClick={() => setLocalField("use_existing_draft", value, { commit: true })}
                     className={`rounded-full border px-3 py-1 text-[11px] font-medium transition-colors ${
-                      form.use_existing_draft !== false === value
+                      draftForm.use_existing_draft !== false === value
                         ? "border-emerald-400 bg-emerald-600 text-white"
                         : "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-100"
                     }`}
@@ -3444,14 +3517,14 @@ function FakturaTaskModal({
               </div>
               <button
                 type="button"
-                onClick={() => onChange("include_mileage", !form.include_mileage)}
+                onClick={() => setLocalField("include_mileage", !draftForm.include_mileage, { commit: true })}
                 className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors ${
-                  form.include_mileage
+                  draftForm.include_mileage
                     ? "border-sand-400 bg-sand-900 text-white"
                     : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
                 }`}
               >
-                {form.include_mileage ? "Aktiv" : "Hinzufügen"}
+                {draftForm.include_mileage ? "Aktiv" : "Hinzufügen"}
               </button>
             </div>
           )}
@@ -3462,7 +3535,7 @@ function FakturaTaskModal({
               <p className="text-[10px] font-medium uppercase tracking-[0.25em] text-sand-500">Aufwand</p>
               <button
                 type="button"
-                onClick={onRefreshScopeEstimate}
+                onClick={handleRefreshScopeEstimate}
                 className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
               >
                 <Sparkles size={11} />
@@ -3478,7 +3551,12 @@ function FakturaTaskModal({
                   {actualHours > 0 ? `${formatHourValue(actualHours)} h` : "—"}
                 </p>
                 <p className="text-[10px] text-sand-400">Gerundet: {formatHourValue(actualRoundedHours)} h</p>
-                <button type="button" onClick={onApplyActualHours} disabled={!actualRoundedHours} className={applyBtnClass}>
+                <button
+                  type="button"
+                  onClick={() => setLocalField("quantity", String(actualRoundedHours), { commit: true })}
+                  disabled={!actualRoundedHours}
+                  className={applyBtnClass}
+                >
                   Übernehmen
                 </button>
               </div>
@@ -3492,7 +3570,12 @@ function FakturaTaskModal({
                 <p className="text-[10px] text-sand-400">
                   Max dok.: {documentedMaximum > 0 ? `${formatHourValue(documentedMaximum)} h` : "—"}
                 </p>
-                <button type="button" onClick={onApplyDocumentedMaximum} disabled={!documentedMaximum} className={applyBtnClass}>
+                <button
+                  type="button"
+                  onClick={() => setLocalField("quantity", String(documentedMaximum), { commit: true })}
+                  disabled={!documentedMaximum}
+                  className={applyBtnClass}
+                >
                   Max übernehmen
                 </button>
               </div>
@@ -3502,13 +3585,21 @@ function FakturaTaskModal({
                 <p className="text-[10px] uppercase tracking-[0.2em] text-sand-400">Mindestwert (h)</p>
                 <input
                   type="number" min="0" step="0.25"
-                  value={form.minimum_billable_hours || ""}
-                  onChange={(e) => onChange("minimum_billable_hours", e.target.value)}
-                  onBlur={() => onPersistDocumentation({ billing_min_hours: roundHourValue(Number(form.minimum_billable_hours || 0)) })}
+                  value={draftForm.minimum_billable_hours || ""}
+                  onChange={(e) => setLocalField("minimum_billable_hours", e.target.value)}
+                  onBlur={(e) => {
+                    const nextForm = setLocalField("minimum_billable_hours", e.target.value, { commit: true });
+                    onPersistDocumentation({ billing_min_hours: roundHourValue(Number(nextForm.minimum_billable_hours || 0)) });
+                  }}
                   className="w-full rounded-lg border border-sand-200 bg-white px-2 py-1 text-sm text-sand-900 focus:outline-none focus:ring-1 focus:ring-[var(--border-300)]"
                   placeholder="0,75"
                 />
-                <button type="button" onClick={onApplyMinimumHours} disabled={!minimumBillableHours} className={applyBtnClass}>
+                <button
+                  type="button"
+                  onClick={() => setLocalField("quantity", String(minimumBillableHours), { commit: true })}
+                  disabled={!minimumBillableHours}
+                  className={applyBtnClass}
+                >
                   Übernehmen
                 </button>
               </div>
@@ -3533,7 +3624,11 @@ function FakturaTaskModal({
                     <p className="text-[10px] text-sand-400">
                       {formatHourValue(scopeEstimate.estimated_min_hours)}–{formatHourValue(scopeEstimate.estimated_max_hours)} h · {confidenceLabel}
                     </p>
-                    <button type="button" onClick={onApplyScopeEstimate} className={applyBtnClass}>
+                    <button
+                      type="button"
+                      onClick={() => setLocalField("quantity", String(scopeEstimate.estimated_hours), { commit: true })}
+                      className={applyBtnClass}
+                    >
                       <Sparkles size={10} /> Übernehmen
                     </button>
                   </>
@@ -3550,9 +3645,12 @@ function FakturaTaskModal({
             <div>
               <p className="mb-1 text-[10px] uppercase tracking-[0.25em] text-sand-400">Interner Abrechnungsvermerk</p>
               <textarea
-                value={form.billing_note || ""}
-                onChange={(e) => onChange("billing_note", e.target.value)}
-                onBlur={() => onPersistDocumentation({ billing_note: String(form.billing_note || "") })}
+                value={draftForm.billing_note || ""}
+                onChange={(e) => setLocalField("billing_note", e.target.value)}
+                onBlur={(e) => {
+                  setLocalField("billing_note", e.target.value, { commit: true });
+                  onPersistDocumentation({ billing_note: String(e.target.value || "") });
+                }}
                 rows={2}
                 className={`${fieldClass} resize-none`}
                 placeholder="z. B. Eskalation vor Ort, mehrere Unterbrechungen…"
@@ -3564,23 +3662,23 @@ function FakturaTaskModal({
           <div className="grid gap-2.5 grid-cols-2">
             <label className="flex flex-col gap-1 col-span-2">
               <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Positionsname</span>
-              <input value={form.name} onChange={(e) => onChange("name", e.target.value)} className={fieldClass} placeholder="Erledigte Aufgabe" />
+              <input value={draftForm.name} onChange={(e) => setLocalField("name", e.target.value)} onBlur={(e) => setLocalField("name", e.target.value, { commit: true })} className={fieldClass} placeholder="Erledigte Aufgabe" />
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Menge (h)</span>
-              <input type="number" min="0" step="0.25" value={form.quantity} onChange={(e) => onChange("quantity", e.target.value)} className={fieldClass} />
+              <input type="number" min="0" step="0.25" value={draftForm.quantity} onChange={(e) => setLocalField("quantity", e.target.value)} onBlur={(e) => setLocalField("quantity", e.target.value, { commit: true })} className={fieldClass} />
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Preis (EUR/h)</span>
-              <input type="number" min="0" step="0.01" value={form.price} onChange={(e) => onChange("price", e.target.value)} className={fieldClass} />
+              <input type="number" min="0" step="0.01" value={draftForm.price} onChange={(e) => setLocalField("price", e.target.value)} onBlur={(e) => setLocalField("price", e.target.value, { commit: true })} className={fieldClass} />
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Rechnungsheader</span>
-              <input value={form.header} onChange={(e) => onChange("header", e.target.value)} className={fieldClass} placeholder="Leistungsnachweis" />
+              <input value={draftForm.header} onChange={(e) => setLocalField("header", e.target.value)} onBlur={(e) => setLocalField("header", e.target.value, { commit: true })} className={fieldClass} placeholder="Leistungsnachweis" />
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Kundennummer</span>
-              <input value={form.customer_number} disabled className={fieldDisabledClass} placeholder="Keine Kundennummer" />
+              <input value={draftForm.customer_number} disabled className={fieldDisabledClass} placeholder="Keine Kundennummer" />
             </label>
           </div>
 
@@ -3590,7 +3688,7 @@ function FakturaTaskModal({
               <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Positionstext</span>
               <button
                 type="button"
-                onClick={onGenerateAi}
+                onClick={handleGenerateAi}
                 disabled={aiLoading}
                 className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-wait transition-colors"
               >
@@ -3599,8 +3697,9 @@ function FakturaTaskModal({
               </button>
             </div>
             <textarea
-              value={form.text}
-              onChange={(e) => onChange("text", e.target.value)}
+              value={draftForm.text}
+              onChange={(e) => setLocalField("text", e.target.value)}
+              onBlur={(e) => setLocalField("text", e.target.value, { commit: true })}
               rows={4}
               className={`${fieldClass} resize-none`}
               placeholder="Leistung, Ergebnis oder Hinweise"
@@ -3621,11 +3720,11 @@ function FakturaTaskModal({
               <div className="mt-2.5 grid grid-cols-2 gap-2.5">
                 <label className="flex flex-col gap-1">
                   <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Steuer (Rate)</span>
-                  <input type="number" min="0" step="0.1" value={form.tax_rate} onChange={(e) => onChange("tax_rate", e.target.value)} className={fieldClass} />
+                  <input type="number" min="0" step="0.1" value={draftForm.tax_rate} onChange={(e) => setLocalField("tax_rate", e.target.value)} onBlur={(e) => setLocalField("tax_rate", e.target.value, { commit: true })} className={fieldClass} />
                 </label>
                 <label className="flex flex-col gap-1">
                   <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Unity ID</span>
-                  <input type="number" min="0" step="1" value={form.unity_id} onChange={(e) => onChange("unity_id", e.target.value)} className={fieldClass} />
+                  <input type="number" min="0" step="1" value={draftForm.unity_id} onChange={(e) => setLocalField("unity_id", e.target.value)} onBlur={(e) => setLocalField("unity_id", e.target.value, { commit: true })} className={fieldClass} />
                 </label>
               </div>
             )}
@@ -3647,13 +3746,13 @@ function FakturaTaskModal({
           </button>
           <button
             type="button"
-            onClick={onSubmit}
+            onClick={handleSubmit}
             disabled={!canSubmit}
             className="inline-flex items-center gap-2 rounded-full bg-sand-900 px-4 py-2 text-xs font-medium uppercase tracking-wide text-white hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40 transition-opacity"
           >
             {isSaving ? (
               <><Loader2 size={12} className="animate-spin" /> Läuft…</>
-            ) : hasDraft && form.use_existing_draft !== false ? (
+            ) : hasDraft && draftForm.use_existing_draft !== false ? (
               <>Position hinzufügen <ArrowRight size={12} /></>
             ) : (
               <>Entwurf erstellen <ArrowRight size={12} /></>

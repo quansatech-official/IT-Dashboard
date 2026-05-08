@@ -114,25 +114,37 @@ export default function App() {
   useEffect(() => {
     if (typeof document === "undefined") return;
     const selector = "input, textarea, select, form";
-    const applyPasswordManagerIgnore = (root = document) => {
-      root.querySelectorAll(selector).forEach((el) => {
-        if (!(el instanceof HTMLElement)) return;
-        if (el.dataset.allowPasswordManager === "true") return;
+    const applyPasswordManagerIgnoreToElement = (el) => {
+      if (!(el instanceof HTMLElement)) return;
+      if (el.dataset.allowPasswordManager === "true") return;
+      if (el.getAttribute("data-bwignore") !== "true") {
         el.setAttribute("data-bwignore", "true");
+      }
+      if (el.getAttribute("data-lpignore") !== "true") {
         el.setAttribute("data-lpignore", "true");
+      }
+      if (el.getAttribute("data-1p-ignore") !== "true") {
         el.setAttribute("data-1p-ignore", "true");
-        if ((el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "FORM") && !el.getAttribute("autocomplete")) {
-          el.setAttribute("autocomplete", "off");
-        }
-      });
+      }
+      if (
+        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "FORM") &&
+        !el.getAttribute("autocomplete")
+      ) {
+        el.setAttribute("autocomplete", "off");
+      }
+    };
+    const applyPasswordManagerIgnore = (root = document) => {
+      if (root instanceof HTMLElement && root.matches?.(selector)) {
+        applyPasswordManagerIgnoreToElement(root);
+      }
+      root.querySelectorAll?.(selector).forEach(applyPasswordManagerIgnoreToElement);
     };
     applyPasswordManagerIgnore(document);
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         mutation.addedNodes.forEach((node) => {
           if (!(node instanceof HTMLElement)) return;
-          if (node.matches?.(selector)) applyPasswordManagerIgnore(node.parentElement || document);
-          else applyPasswordManagerIgnore(node);
+          applyPasswordManagerIgnore(node);
         });
       });
     });

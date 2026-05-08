@@ -65,6 +65,8 @@ export function nextActionFromKpi(kpi) {
   return "forecast_focus";
 }
 
+const isFallbackContactName = (value) => /^Kontakt\s*#\s*\d+$/i.test(String(value || "").trim());
+
 /**
  * Build the customer-steering "discussion list" from raw payment stats and
  * recurring rows. Pure function so it can be tested without React.
@@ -88,6 +90,12 @@ export function buildCustomerControlRows(customerPaymentStats, recurringCustomer
         recurringByKey.get(normalizeKey(row?.customerNumber)) ||
         recurringByKey.get(normalizeKey(row?.name)) ||
         null;
+      const paymentName = String(row?.name || "").trim();
+      const recurringName = String(recurring?.customerName || "").trim();
+      const resolvedName =
+        isFallbackContactName(paymentName) && recurringName && !isFallbackContactName(recurringName)
+          ? recurringName
+          : paymentName || recurringName || "Unbekannt";
       const budget = row?.budgetEstimate && typeof row.budgetEstimate === "object" ? row.budgetEstimate : null;
       const currentYearRevenue = Number(row?.revenueCurrentYearEur || 0);
       const lastYearRevenue = Number(row?.revenueLastYearEur || 0);
@@ -96,7 +104,7 @@ export function buildCustomerControlRows(customerPaymentStats, recurringCustomer
       const budgetValue = Number(budget?.suggestedBudgetEur || 0);
       const budgetProgress = budgetValue > 0 ? Math.round((currentYearRevenue / budgetValue) * 100) : null;
       return {
-        name: row?.name || recurring?.customerName || "Unbekannt",
+        name: resolvedName,
         customerNumber: row?.customerNumber || recurring?.customerNumber || "",
         grade: row?.grade || "-",
         currentYearRevenue,

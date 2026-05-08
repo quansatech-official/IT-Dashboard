@@ -128,6 +128,15 @@ describe("buildCustomerControlRows", () => {
     expect(rows[0].recurringYearly).toBe(1200);
   });
 
+  it("uses recurring customer name when payment row only has sevdesk contact fallback", () => {
+    const rows = buildCustomerControlRows(
+      [{ name: "Kontakt #51231575", contactId: "51231575", revenueCurrentYearEur: 500 }],
+      [{ contactId: "51231575", customerName: "Example GmbH", customerNumber: "K-512", monthlyTotalEur: 100 }]
+    );
+    expect(rows[0].name).toBe("Example GmbH");
+    expect(rows[0].customerNumber).toBe("K-512");
+  });
+
   it("computes budget progress in percent", () => {
     const rows = buildCustomerControlRows(
       [{ name: "ACME", revenueCurrentYearEur: 4500, budgetEstimate: { suggestedBudgetEur: 9000 } }],

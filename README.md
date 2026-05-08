@@ -8,16 +8,16 @@ Produktivdeploy läuft über den Portainer-Stack `it-dashboard` auf `root@192.16
 Wichtig:
 - Nicht `/opt/it-dashboard` verwenden. Das ist auf dem Zielsystem nicht der aktuelle Stack-Stand.
 - Der aktive Portainer-Stackinhalt liegt unter:
-  `/var/lib/docker/volumes/portainer_data/_data/compose/23/76e80823478a017a7188f036ffa3ee90249573ad`
+  `/var/lib/docker/volumes/portainer_data/_data/compose/23/7fe03fb76692630bf863460ca40b5309ad165e69`
 - Der Compose-Projektname muss `it_dashboard` sein, sonst versucht Docker parallele Hash-Container anzulegen und läuft in Namenskonflikte.
 
 Bewährter Ablauf:
 
 ```bash
 tar --exclude='.git' --exclude='node_modules' --exclude='dist' --exclude='frontend/dist' --exclude='mobile-frontend/dist' -czf - . \
-  | ssh root@192.168.100.4 "cd /var/lib/docker/volumes/portainer_data/_data/compose/23/76e80823478a017a7188f036ffa3ee90249573ad && tar -xzf -"
+  | ssh root@192.168.100.4 "cd /var/lib/docker/volumes/portainer_data/_data/compose/23/7fe03fb76692630bf863460ca40b5309ad165e69 && tar -xzf -"
 
-ssh root@192.168.100.4 "cd /var/lib/docker/volumes/portainer_data/_data/compose/23/76e80823478a017a7188f036ffa3ee90249573ad && docker compose -p it_dashboard --env-file stack.env up -d --build frontend"
+ssh root@192.168.100.4 "cd /var/lib/docker/volumes/portainer_data/_data/compose/23/7fe03fb76692630bf863460ca40b5309ad165e69 && docker compose -p it_dashboard --env-file stack.env up -d --build frontend"
 ```
 
 Verifikation:

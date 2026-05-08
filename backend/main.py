@@ -4147,6 +4147,10 @@ def _build_project_stream(block_key: str, owner: str = "") -> Dict[str, Any]:
 def _empty_project_content(owner: str = "") -> Dict[str, Any]:
     return {
         "overview": {
+            "project_description": "",
+            "target_state": "",
+            "scope_notes": "",
+            "ai_guidance": "",
             "current_status": "",
             "next_step": "",
             "team_note": "",
@@ -4162,6 +4166,9 @@ def _empty_project_content(owner: str = "") -> Dict[str, Any]:
 
 def _ensure_project_content_meta(content: Dict[str, Any], owner: str = "", project_tag: str = "") -> Dict[str, Any]:
     payload = content if isinstance(content, dict) else _empty_project_content(owner=owner)
+    payload["overview"] = payload.get("overview") if isinstance(payload.get("overview"), dict) else {}
+    for key in ("project_description", "target_state", "scope_notes", "ai_guidance", "current_status", "next_step", "team_note"):
+        payload["overview"][key] = str(payload["overview"].get(key) or "").strip()
     payload["meta"] = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
     payload["meta"]["owner"] = str(payload["meta"].get("owner") or owner or "").strip()
     normalized_tag = _normalize_project_folder_tag(project_tag or payload["meta"].get("project_tag"))
@@ -4340,7 +4347,7 @@ def _try_project_folder_ai_bootstrap(data: ProjectFolderBootstrapRequest) -> Opt
         "Du bist Senior IT-Projektleiter. Erzeuge aus der Beschreibung eine konkrete Projektmappe.\n"
         "Erkenne sinnvolle Bausteine auch dann, wenn sie nicht exakt im Katalog stehen. Nutze vorhandene block_key, wenn passend.\n"
         "Aufgaben muessen umsetzbar, fachlich sortiert und nicht generisch sein.\n"
-        "Antworte nur als JSON-Objekt mit: title, current_state, next_step, priority, streams[].\n"
+        "Antworte nur als JSON-Objekt mit: title, project_description, target_state, current_state, next_step, priority, streams[].\n"
         "Jeder stream: title, block_key, short_status, priority, status, tasks[], checklist[], risks[], questions[], gantt[], offer_positions[].\n"
         "Task: title, status(open|doing|waiting_customer|blocked|done), due_offset_days optional, notes optional.\n"
         "Risk: title, level(niedrig|mittel|hoch|kritisch), mitigation.\n"
@@ -4376,6 +4383,8 @@ def _try_project_folder_ai_bootstrap(data: ProjectFolderBootstrapRequest) -> Opt
             return None
         return {
             "title": str(parsed.get("title") or data.title or "").strip(),
+            "project_description": str(parsed.get("project_description") or description).strip(),
+            "target_state": str(parsed.get("target_state") or parsed.get("goal") or "").strip(),
             "current_state": str(parsed.get("current_state") or "KI-Struktur aus Projektbeschreibung erzeugt.").strip(),
             "next_step": str(parsed.get("next_step") or "Vorschau prüfen, Bausteine abwählen und Projektmappe anlegen.").strip(),
             "priority": _normalize_project_priority(parsed.get("priority") or "medium"),
@@ -4403,6 +4412,8 @@ def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, 
     ai_bootstrap = _try_project_folder_ai_bootstrap(data) if mode == "ai" else None
     if ai_bootstrap:
         content["streams"] = ai_bootstrap["streams"]
+        content["overview"]["project_description"] = ai_bootstrap.get("project_description") or description
+        content["overview"]["target_state"] = ai_bootstrap.get("target_state") or ai_bootstrap["next_step"]
         content["overview"]["current_status"] = ai_bootstrap["current_state"]
         content["overview"]["next_step"] = ai_bootstrap["next_step"]
         content["open_customer_questions"] = [
@@ -4436,6 +4447,8 @@ def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, 
     if not ai_bootstrap:
         content["streams"] = [_build_project_stream(block_key, owner=owner) for block_key in selected_blocks]
     if mode == "ai" and not ai_bootstrap:
+        content["overview"]["project_description"] = description
+        content["overview"]["target_state"] = "Ausgangslage prüfen, Zielbild schärfen und Projektstruktur finalisieren."
         content["overview"]["current_status"] = "KI-Vorschlag erstellt, fachliche Prüfung ausstehend."
         content["overview"]["next_step"] = "Vorschau prüfen, irrelevante Punkte abwählen und Projektmappe anlegen."
         content["open_customer_questions"] = [
@@ -4713,11 +4726,16 @@ def serialize_project_folder(folder: ProjectFolder, include_content: bool = True
 
 def _compact_project_folder_context(folder: Dict[str, Any], stream_id: str = "") -> str:
     content = folder.get("content") if isinstance(folder.get("content"), dict) else {}
+    overview = content.get("overview") if isinstance(content.get("overview"), dict) else {}
     streams = content.get("streams") if isinstance(content.get("streams"), list) else []
     selected_stream = next((stream for stream in streams if str(stream.get("id") or "") == str(stream_id or "")), None)
     parts = [
         f"Projektmappe: {str(folder.get('title') or '').strip()}",
         f"Kunde: {str(folder.get('customer') or '').strip()}",
+        f"Projektbeschreibung: {str(overview.get('project_description') or '').strip()}",
+        f"Zielbild: {str(overview.get('target_state') or '').strip()}",
+        f"Rahmen/Abgrenzung: {str(overview.get('scope_notes') or '').strip()}",
+        f"KI-Fokus: {str(overview.get('ai_guidance') or '').strip()}",
         f"Aktueller Stand: {str(folder.get('current_state') or '').strip()}",
         f"Nächster Schritt: {str(folder.get('next_step') or '').strip()}",
     ]
@@ -4906,6 +4924,10 @@ def _build_estimate_context(folder: Dict[str, Any]) -> str:
         f"Priorität: {str(folder.get('priority') or '').strip()}",
         f"Status: {str(folder.get('status') or '').strip()}",
         f"Deadline: {str(overview.get('project_deadline') or '').strip()}",
+        f"Projektbeschreibung: {str(overview.get('project_description') or '').strip()[:800]}",
+        f"Zielbild: {str(overview.get('target_state') or '').strip()[:500]}",
+        f"Rahmen/Abgrenzung: {str(overview.get('scope_notes') or '').strip()[:500]}",
+        f"KI-Fokus: {str(overview.get('ai_guidance') or '').strip()[:400]}",
         f"Aktuell: {str(folder.get('current_state') or '').strip()[:200]}",
         f"Nächster Schritt: {str(folder.get('next_step') or '').strip()[:200]}",
     ]
@@ -7184,20 +7206,7 @@ def _extract_sevdesk_contact(invoice: Dict[str, Any]) -> Tuple[str, str]:
     contact_name = ""
     if isinstance(contact, dict):
         contact_id = str(contact.get("id") or "").strip()
-        primary_name = str(
-            contact.get("name")
-            or contact.get("customerName")
-            or contact.get("name2")
-            or contact.get("firstName")
-            or ""
-        ).strip()
-        if primary_name:
-            contact_name = primary_name
-        else:
-            first = str(contact.get("firstName") or "").strip()
-            family = str(contact.get("familyName") or contact.get("lastName") or "").strip()
-            combined = " ".join(part for part in (first, family) if part).strip()
-            contact_name = combined
+        contact_name = _format_contact_name(contact)
     if not contact_name:
         contact_name = str(
             invoice.get("contactName")
@@ -7292,18 +7301,88 @@ def _resolve_sevdesk_contact_names_batch(
 def _format_contact_name(contact: Dict[str, Any]) -> str:
     if not isinstance(contact, dict):
         return ""
-    name = str(
-        contact.get("name")
-        or contact.get("customerName")
-        or contact.get("name2")
+    for key in (
+        "name",
+        "customerName",
+        "contactName",
+        "companyName",
+        "company",
+        "organizationName",
+        "organisationName",
+        "tradeName",
+        "name2",
+    ):
+        name = str(contact.get(key) or "").strip()
+        if name:
+            return name
+    title = str(contact.get("titel") or contact.get("title") or contact.get("academicTitle") or "").strip()
+    first = str(
+        contact.get("firstName")
+        or contact.get("first_name")
+        or contact.get("givenName")
+        or contact.get("given_name")
+        or contact.get("forename")
+        or contact.get("surename")
         or ""
     ).strip()
-    if name:
-        return name
-    first = str(contact.get("firstName") or contact.get("first_name") or "").strip()
-    last = str(contact.get("familyName") or contact.get("lastName") or "").strip()
-    combo = " ".join(part for part in (first, last) if part)
+    last = str(
+        contact.get("familyName")
+        or contact.get("familyname")
+        or contact.get("lastName")
+        or contact.get("last_name")
+        or contact.get("surname")
+        or ""
+    ).strip()
+    combo = " ".join(part for part in (title, first, last) if part)
     return combo.strip()
+
+
+def _is_sevdesk_contact_fallback_name(value: Any) -> bool:
+    return bool(re.match(r"^\s*Kontakt\s*#\s*\d+\s*$", str(value or ""), re.IGNORECASE))
+
+
+def _apply_local_customer_names_to_sevdesk_stats(db: Session, sevdesk_stats: Dict[str, Any]) -> None:
+    if not isinstance(sevdesk_stats, dict):
+        return
+    contact_lookup: Dict[str, Dict[str, str]] = {}
+    for customer in db.query(Customer).all():
+        contact_id = str(customer.sevdesk_contact_id or "").strip()
+        if not contact_id:
+            continue
+        name = str(customer.name or "").strip()
+        number = str(customer.creditor_number or customer.short_code or "").strip()
+        if not name and not number:
+            continue
+        contact_lookup[contact_id] = {"name": name, "customerNumber": number}
+    if not contact_lookup:
+        return
+
+    def apply_customer_meta(row: Dict[str, Any], name_key: str) -> None:
+        contact_id = str(row.get("contactId") or "").strip()
+        if not contact_id:
+            return
+        local = contact_lookup.get(contact_id)
+        if not local:
+            return
+        local_name = local.get("name") or ""
+        local_number = local.get("customerNumber") or ""
+        if local_name and _is_sevdesk_contact_fallback_name(row.get(name_key)):
+            row[name_key] = local_name
+        if local_number and not str(row.get("customerNumber") or "").strip():
+            row["customerNumber"] = local_number
+
+    for row in sevdesk_stats.get("customerPaymentStats") or []:
+        if isinstance(row, dict):
+            apply_customer_meta(row, "name")
+    for bucket in (sevdesk_stats.get("topCustomers") or {}).values():
+        for row in bucket or []:
+            if isinstance(row, dict):
+                apply_customer_meta(row, "name")
+    recurring = sevdesk_stats.get("recurringTagOverview")
+    recurring_rows = recurring.get("customerRows") if isinstance(recurring, dict) else []
+    for row in recurring_rows or []:
+        if isinstance(row, dict):
+            apply_customer_meta(row, "customerName")
 
 
 def _invoice_is_due(invoice: Dict[str, Any], today: datetime) -> bool:
@@ -29448,6 +29527,8 @@ def get_company_stats(days: int = 30, section: Optional[str] = None):
                 )
         except SevdeskError as exc:
             sevdesk_stats = {"connected": False, "error": str(exc)}
+    if load_sevdesk and isinstance(sevdesk_stats, dict):
+        _apply_local_customer_names_to_sevdesk_stats(db, sevdesk_stats)
     if (load_customers or load_contracts) and isinstance(sevdesk_stats, dict):
         customer_rows = sevdesk_stats.get("customerPaymentStats")
         if isinstance(customer_rows, list):

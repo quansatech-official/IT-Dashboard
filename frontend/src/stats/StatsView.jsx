@@ -386,49 +386,10 @@ export default function StatsView() {
     return list;
   }, [customerPaymentStats, customerSort]);
   const topRecurringTags = useMemo(() => recurringTagTotals.slice(0, 8), [recurringTagTotals]);
-  const customerControlRows = useMemo(() => {
-    const recurringByKey = new Map();
-    recurringCustomerRows.forEach((row) => {
-      const keys = [
-        normalizeKey(row?.contactId),
-        normalizeKey(row?.customerNumber),
-        normalizeKey(row?.customerName)
-      ].filter(Boolean);
-      keys.forEach((key) => recurringByKey.set(key, row));
-    });
-    return customerPaymentStats
-      .map((row) => {
-        const recurring =
-          recurringByKey.get(normalizeKey(row?.contactId)) ||
-          recurringByKey.get(normalizeKey(row?.customerNumber)) ||
-          recurringByKey.get(normalizeKey(row?.name)) ||
-          null;
-        const budget = row?.budgetEstimate && typeof row.budgetEstimate === "object" ? row.budgetEstimate : null;
-        const currentYearRevenue = Number(row?.revenueCurrentYearEur || 0);
-        const lastYearRevenue = Number(row?.revenueLastYearEur || 0);
-        const recurringMonthly = Number(recurring?.monthlyTotalEur || 0);
-        const recurringYearly = recurringMonthly * 12;
-        const budgetValue = Number(budget?.suggestedBudgetEur || 0);
-        const budgetProgress = budgetValue > 0 ? Math.round((currentYearRevenue / budgetValue) * 100) : null;
-        return {
-          name: row?.name || recurring?.customerName || "Unbekannt",
-          customerNumber: row?.customerNumber || recurring?.customerNumber || "",
-          grade: row?.grade || "-",
-          currentYearRevenue,
-          lastYearRevenue,
-          totalAmount: Number(row?.totalAmountEur || 0),
-          recurringMonthly,
-          recurringYearly,
-          budget,
-          budgetProgress,
-          discussionValue: Math.max(currentYearRevenue, lastYearRevenue, recurringYearly, budgetValue),
-          openOverdueAmount: Number(row?.openOverdueAmountEur || row?.openAmountEur || 0),
-          businessWeight: Number(row?.businessWeight || 0)
-        };
-      })
-      .sort((a, b) => b.discussionValue - a.discussionValue || b.businessWeight - a.businessWeight)
-      .slice(0, 8);
-  }, [customerPaymentStats, recurringCustomerRows]);
+  const customerControlRows = useMemo(
+    () => buildCustomerControlRows(customerPaymentStats, recurringCustomerRows, { limit: STEERING_ROWS_LIMIT }),
+    [customerPaymentStats, recurringCustomerRows]
+  );
   const projectValue = stats?.projectValue && typeof stats.projectValue === "object" ? stats.projectValue : {};
   const steeringKpis = useMemo(() => {
     const budgetRows = customerPaymentStats.filter((row) => row?.budgetEstimate?.suggestedBudgetEur);

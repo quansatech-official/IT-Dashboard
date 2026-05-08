@@ -18,6 +18,7 @@ export const escapeHtml = (value) =>
 
 export const buildProjectMarkdown = ({ folder, options, statusMeta, priorityMeta }) => {
   if (!folder) return "";
+  const overview = folder.content?.overview || {};
   const lines = [
     `# ${folder.title}`,
     "",
@@ -29,6 +30,14 @@ export const buildProjectMarkdown = ({ folder, options, statusMeta, priorityMeta
     `- Nächster Schritt: ${folder.next_step || "-"}`,
     ""
   ];
+  if (overview.project_description || overview.target_state || overview.scope_notes || overview.ai_guidance) {
+    lines.push("## Projektbriefing", "");
+    if (overview.project_description) lines.push(`- Beschreibung: ${overview.project_description}`);
+    if (overview.target_state) lines.push(`- Zielbild: ${overview.target_state}`);
+    if (overview.scope_notes) lines.push(`- Rahmen/Abgrenzung: ${overview.scope_notes}`);
+    if (overview.ai_guidance) lines.push(`- KI-Fokus: ${overview.ai_guidance}`);
+    lines.push("");
+  }
   (folder.content?.streams || []).forEach((stream) => {
     lines.push(`## ${stream.title}`, "");
     lines.push(`- Kurzlage: ${stream.short_status || "-"}`);
@@ -61,6 +70,7 @@ export const buildProjectMarkdown = ({ folder, options, statusMeta, priorityMeta
 export const buildProjectHtml = ({ folder, options, statusMeta }) => {
   if (!folder) return "";
   const streams = folder.content?.streams || [];
+  const overview = folder.content?.overview || {};
   const visibleStreams = streams.filter((stream) => !options.customer_view || !stream.internal_only);
   const statusLabel = statusMeta[folder.status]?.label || folder.status || "-";
   const generatedAt = new Date().toLocaleDateString("de-DE", {
@@ -170,6 +180,16 @@ export const buildProjectHtml = ({ folder, options, statusMeta }) => {
         <div class="summary-card"><strong>Aktueller Stand</strong><p>${escapeHtml(folder.current_state || "-")}</p></div>
         <div class="summary-card"><strong>Nächster Schritt</strong><p>${escapeHtml(folder.next_step || "-")}</p></div>
       </section>
+      ${
+        overview.project_description || overview.target_state || overview.scope_notes || overview.ai_guidance
+          ? `<section class="summary">
+              <div class="summary-card"><strong>Beschreibung</strong><p>${escapeHtml(overview.project_description || "-")}</p></div>
+              <div class="summary-card"><strong>Zielbild</strong><p>${escapeHtml(overview.target_state || "-")}</p></div>
+              <div class="summary-card"><strong>Rahmen / Abgrenzung</strong><p>${escapeHtml(overview.scope_notes || "-")}</p></div>
+              <div class="summary-card"><strong>KI-Fokus</strong><p>${escapeHtml(overview.ai_guidance || "-")}</p></div>
+            </section>`
+          : ""
+      }
       <main class="content">
         ${visibleStreams
           .map(

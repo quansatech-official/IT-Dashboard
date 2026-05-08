@@ -6,48 +6,45 @@ import {
   BookPlus,
   Users,
   Phone,
-  Cloud
+  Cloud,
+  PhoneMissed,
+  PhoneIncoming,
+  ChevronLeft,
+  ChevronRight as ChevronRightIcon
 } from "lucide-react";
 
 const formatTime = (timestamp) => {
   if (!timestamp) return "-";
-  return new Date(timestamp).toLocaleTimeString("de-DE", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
+  return new Date(timestamp).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 };
 
 const formatDate = (timestamp) => {
   if (!timestamp) return "-";
-  return new Date(timestamp).toLocaleDateString("de-DE");
+  const d = new Date(timestamp);
+  const today = new Date();
+  const isToday = d.toDateString() === today.toDateString();
+  if (isToday) return "Heute";
+  return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" });
 };
 
 const formatDuration = (seconds) => {
-  if (!seconds) return "0:00";
+  if (!seconds) return "—";
   const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60)
-    .toString()
-    .padStart(2, "0");
+  const secs = Math.floor(seconds % 60).toString().padStart(2, "0");
   return `${mins}:${secs}`;
 };
 
 const normalizeDigits = (value) => String(value || "").replace(/\D/g, "");
 const PBX_NAME_LIMIT = 40;
 
-const normalizePbxName = (value) =>
-  String(value || "")
-    .replace(/\s+/g, " ")
-    .trim();
+const normalizePbxName = (value) => String(value || "").replace(/\s+/g, " ").trim();
 
 const shortenPbxName = (value, limit = PBX_NAME_LIMIT) => {
   const cleaned = normalizePbxName(value);
   if (!cleaned) return "";
   if (cleaned.length <= limit) return cleaned;
   const stripped = cleaned
-    .replace(
-      /\b(gmbh\s*&\s*co\.?\s*kg|gmbh\s*&\s*co\.?|gmbh|ag|kg|mbh|inc\.?|ltd\.?|llc|e\.?u\.?|og|e\.?k\.?)\b/gi,
-      ""
-    )
+    .replace(/\b(gmbh\s*&\s*co\.?\s*kg|gmbh\s*&\s*co\.?|gmbh|ag|kg|mbh|inc\.?|ltd\.?|llc|e\.?u\.?|og|e\.?k\.?)\b/gi, "")
     .replace(/\s+/g, " ")
     .replace(/\s+&\s+/g, " und ")
     .trim();
@@ -55,44 +52,11 @@ const shortenPbxName = (value, limit = PBX_NAME_LIMIT) => {
   return cleaned.slice(0, limit).trim();
 };
 
-const directionLabel = (direction) => {
-  if (!direction) return "-";
-  const value = direction.toLowerCase();
-  if (value.includes("in")) return "Eingehend";
-  if (value.includes("out")) return "Ausgehend";
-  return direction;
-};
-
-const directionMeta = (direction) => {
-  const value = direction?.toLowerCase() || "";
-  if (value.includes("in")) {
-    return {
-      label: "Eingehend",
-      icon: ArrowDownLeft,
-      className: "text-emerald-600"
-    };
-  }
-  if (value.includes("out")) {
-    return {
-      label: "Ausgehend",
-      icon: ArrowUpRight,
-      className: "text-rose-600"
-    };
-  }
-  return {
-    label: directionLabel(direction),
-    icon: null,
-    className: "text-sand-600"
-  };
-};
-
 const normalizeDuration = (value) => {
   if (value === undefined || value === null) return 0;
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) return 0;
-  if (numeric > 86400) {
-    return Math.floor(numeric / 1000);
-  }
+  if (numeric > 86400) return Math.floor(numeric / 1000);
   return Math.floor(numeric);
 };
 
@@ -103,7 +67,6 @@ const shouldUseLiveDuration = (call) => {
   if (end && end >= start) return false;
   if (normalizeDuration(call?.duration) > 0) return false;
   const ageMs = Date.now() - start;
-  // Treat as active only for fresh calls; stale records should not keep growing forever.
   return ageMs >= 0 && ageMs <= 4 * 60 * 60 * 1000;
 };
 
@@ -112,12 +75,8 @@ const durationSeconds = (call) => {
   if (duration) return duration;
   const start = Number(call?.startTime || 0);
   const end = Number(call?.endTime || 0);
-  if (start && end && end >= start) {
-    return Math.floor((end - start) / 1000);
-  }
-  if (shouldUseLiveDuration(call)) {
-    return Math.floor((Date.now() - start) / 1000);
-  }
+  if (start && end && end >= start) return Math.floor((end - start) / 1000);
+  if (shouldUseLiveDuration(call)) return Math.floor((Date.now() - start) / 1000);
   return 0;
 };
 
@@ -134,9 +93,8 @@ export default function CallListView({
   onAssignNumber,
   onAddToPbx
 }) {
-  const pageSize = 10;
+  const pageSize = 15;
   const [page, setPage] = useState(1);
-  const totalPages = Math.min(3, Math.max(1, Math.ceil(calls.length / pageSize)));
   const [callbackTarget, setCallbackTarget] = useState(null);
   const [selectedExtension, setSelectedExtension] = useState("");
   const [callbackStatus, setCallbackStatus] = useState("");
@@ -152,12 +110,8 @@ export default function CallListView({
   const [toast, setToast] = useState("");
 
   useEffect(() => {
-    if (page > totalPages) setPage(1);
-  }, [page, totalPages]);
-
-  useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(""), 1800);
+    const timer = setTimeout(() => setToast(""), 2000);
     return () => clearTimeout(timer);
   }, [toast]);
 
@@ -165,6 +119,12 @@ export default function CallListView({
     if (!onlyMissed) return calls;
     return calls.filter((call) => !call.answered);
   }, [calls, onlyMissed]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredCalls.length / pageSize));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
 
   const pagedCalls = useMemo(() => {
     const start = (page - 1) * pageSize;
@@ -201,36 +161,26 @@ export default function CallListView({
   };
 
   const extensionOptions = Array.isArray(extensions) ? extensions : [];
-  const visibleTotalPages = Math.min(
-    3,
-    Math.max(1, Math.ceil(filteredCalls.length / pageSize))
-  );
 
   const assignCandidates = useMemo(() => {
     const needle = assignQuery.trim().toLowerCase();
     const list = Array.isArray(customers) ? customers : [];
     if (!needle) return list.slice(0, 12);
-    return list
-      .filter((customer) => {
-        const name = String(customer?.name || "").toLowerCase();
-        const code = String(customer?.short_code || "").toLowerCase();
-        const creditor = String(customer?.creditor_number || "").toLowerCase();
-        return name.includes(needle) || code.includes(needle) || creditor.includes(needle);
-      })
-      .slice(0, 12);
+    return list.filter((customer) => {
+      const name = String(customer?.name || "").toLowerCase();
+      const code = String(customer?.short_code || "").toLowerCase();
+      const creditor = String(customer?.creditor_number || "").toLowerCase();
+      return name.includes(needle) || code.includes(needle) || creditor.includes(needle);
+    }).slice(0, 12);
   }, [customers, assignQuery]);
 
   const customerMatches = useMemo(() => {
     const map = new Map();
-    const list = Array.isArray(customers) ? customers : [];
-    list.forEach((customer) => {
+    (Array.isArray(customers) ? customers : []).forEach((customer) => {
       const name = customer?.name || "";
-      const phones = Array.isArray(customer?.phones) ? customer.phones : [];
-      phones.forEach((phone) => {
+      (Array.isArray(customer?.phones) ? customer.phones : []).forEach((phone) => {
         const number = normalizeDigits(phone?.number || "");
-        if (number && name) {
-          map.set(number, name);
-        }
+        if (number && name) map.set(number, name);
       });
     });
     return map;
@@ -240,9 +190,7 @@ export default function CallListView({
     const map = new Map();
     pbxEntries.forEach((entry) => {
       const number = normalizeDigits(entry?.number || "");
-      if (number) {
-        map.set(number, entry);
-      }
+      if (number) map.set(number, entry);
     });
     return map;
   }, [pbxEntries]);
@@ -257,16 +205,8 @@ export default function CallListView({
   useEffect(() => {
     if (!pbxEditTarget) return;
     setPbxEditName(pbxEditTarget?.suggestedName || pbxEditTarget?.name || "");
-    if (pbxEditTarget?.reason === "length") {
-      setPbxEditError(`Name zu lang (max. ${PBX_NAME_LIMIT} Zeichen).`);
-    } else {
-      setPbxEditError("");
-    }
+    setPbxEditError(pbxEditTarget?.reason === "length" ? `Name zu lang (max. ${PBX_NAME_LIMIT} Zeichen).` : "");
   }, [pbxEditTarget]);
-
-  useEffect(() => {
-    if (page > visibleTotalPages) setPage(1);
-  }, [page, visibleTotalPages]);
 
   useEffect(() => {
     let active = true;
@@ -282,40 +222,19 @@ export default function CallListView({
       }
       if (!pending.size) return;
       const entries = Array.from(pending.entries());
-      const results = await Promise.allSettled(
-        entries.map(([, number]) => onResolve(number))
-      );
+      const results = await Promise.allSettled(entries.map(([, number]) => onResolve(number)));
       if (!active) return;
       const next = {};
       results.forEach((result, index) => {
         if (result.status !== "fulfilled") return;
         const name = result.value?.name || "";
-        if (name) {
-          const key = entries[index][0];
-          next[key] = name;
-        }
+        if (name) next[entries[index][0]] = name;
       });
-      if (Object.keys(next).length) {
-        setResolvedNames((prev) => ({ ...prev, ...next }));
-      }
+      if (Object.keys(next).length) setResolvedNames((prev) => ({ ...prev, ...next }));
     };
     lookup();
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [pagedCalls, resolvedNames, onResolve]);
-
-  const customerHasNumber = (customer, number) => {
-    const target = normalizeDigits(number);
-    if (!target) return false;
-    const phones = Array.isArray(customer?.phones) ? customer.phones : [];
-    return phones.some((phone) => normalizeDigits(phone?.number) === target);
-  };
-
-  const pbxEntryForCall = (call) => {
-    const key = resolveKey(call);
-    return key ? pbxMatches.get(key) : null;
-  };
 
   const outboundByNumber = useMemo(() => {
     const map = new Map();
@@ -325,24 +244,19 @@ export default function CallListView({
       const number = normalizeDigits(call.to || call.from || "");
       if (!number) return;
       const ts = call.startTime || 0;
-      const current = map.get(number) || 0;
-      if (ts > current) {
-        map.set(number, ts);
-      }
+      if (ts > (map.get(number) || 0)) map.set(number, ts);
     });
     return map;
   }, [calls]);
 
   const isUnreturned = (call) => {
-    if (call.answered) return false;
+    if (call.answered || call.callbackResolved) return false;
     const direction = call.direction?.toLowerCase() || "";
     if (direction.includes("out")) return false;
     const number = normalizeDigits(call.from || call.to || "");
     if (!number) return false;
     const lastOut = outboundByNumber.get(number) || 0;
-    const ts = call.startTime || 0;
-    if (call.callbackResolved) return false;
-    return !lastOut || lastOut < ts;
+    return !lastOut || lastOut < (call.startTime || 0);
   };
 
   const customerNameForCall = (call) => {
@@ -350,378 +264,342 @@ export default function CallListView({
     return key ? customerMatches.get(key) : "";
   };
 
-  const nameSourceForCall = (call) => {
-    if (call.customerName || customerNameForCall(call)) {
-      return { label: "Kundenstamm", Icon: Users };
-    }
-    if (resolvedNames[resolveKey(call)]) {
-      return { label: "API", Icon: Cloud };
-    }
-    if (pbxEntryForCall(call)?.name) {
-      return { label: "Anlagentelefonbuch", Icon: Phone };
-    }
-    return null;
+  const pbxEntryForCall = (call) => {
+    const key = resolveKey(call);
+    return key ? pbxMatches.get(key) : null;
   };
 
-  const renderNameSource = (call) => {
-    const source = nameSourceForCall(call);
-    if (!source) return null;
-    const Icon = source.Icon;
-    return (
-      <span
-        className="inline-flex items-center justify-center rounded-full border border-sand-200 bg-white p-1 text-sand-500"
-        title={`Name aus ${source.label}`}
-      >
-        <Icon size={12} />
-      </span>
-    );
+  const resolvedNameForCall = (call) => {
+    const key = resolveKey(call);
+    return key ? resolvedNames[key] : "";
+  };
+
+  const callerName = (call) =>
+    call.customerName || customerNameForCall(call) || resolvedNameForCall(call) || pbxEntryForCall(call)?.name || "";
+
+  const nameSourceForCall = (call) => {
+    if (call.customerName || customerNameForCall(call)) return { label: "Kundenstamm", Icon: Users };
+    if (resolvedNameForCall(call)) return { label: "API", Icon: Cloud };
+    if (pbxEntryForCall(call)?.name) return { label: "Telefonbuch", Icon: Phone };
+    return null;
   };
 
   const handleAddToPbx = async (payload) => {
     if (!onAddToPbx) return;
     const rawName = normalizePbxName(payload?.name || "");
     const number = String(payload?.number || "").trim();
-    const nextPayload = {
-      ...payload,
-      name: rawName,
-      number
-    };
     if (rawName && rawName.length > PBX_NAME_LIMIT) {
       const suggestion = shortenPbxName(rawName, PBX_NAME_LIMIT);
-      setPbxEditTarget({
-        name: suggestion,
-        suggestedName: suggestion,
-        originalName: rawName,
-        number,
-        reason: "length"
-      });
+      setPbxEditTarget({ name: suggestion, suggestedName: suggestion, originalName: rawName, number, reason: "length" });
       return;
     }
     try {
-      await Promise.resolve(onAddToPbx(nextPayload));
-      setToast("Telefonbuch uebernommen.");
-    } catch (error) {
-      setToast("Telefonbuch-Uebernahme fehlgeschlagen.");
-      setPbxEditTarget({
-        name: rawName || "",
-        suggestedName: shortenPbxName(rawName || "", PBX_NAME_LIMIT),
-        originalName: rawName || "",
-        number,
-        reason: "error"
-      });
+      await Promise.resolve(onAddToPbx({ ...payload, name: rawName, number }));
+      setToast("Im Telefonbuch gespeichert.");
+    } catch {
+      setToast("Telefonbuch-Übernahme fehlgeschlagen.");
+      setPbxEditTarget({ name: rawName || "", suggestedName: shortenPbxName(rawName || "", PBX_NAME_LIMIT), originalName: rawName || "", number, reason: "error" });
     }
   };
 
   const handlePbxManualSave = async () => {
     if (!onAddToPbx || !pbxEditTarget?.number) return;
     const trimmed = pbxEditName.trim();
-    if (!trimmed) {
-      setPbxEditError("Name fehlt.");
-      return;
-    }
-    if (trimmed.length > PBX_NAME_LIMIT) {
-      setPbxEditError(`Name zu lang (max. ${PBX_NAME_LIMIT} Zeichen).`);
-      return;
-    }
+    if (!trimmed) { setPbxEditError("Name fehlt."); return; }
+    if (trimmed.length > PBX_NAME_LIMIT) { setPbxEditError(`Name zu lang (max. ${PBX_NAME_LIMIT} Zeichen).`); return; }
     setPbxEditError("");
     try {
-      await Promise.resolve(
-        onAddToPbx({
-          name: trimmed,
-          number: pbxEditTarget.number
-        })
-      );
-      setToast("Telefonbuch uebernommen.");
+      await Promise.resolve(onAddToPbx({ name: trimmed, number: pbxEditTarget.number }));
+      setToast("Im Telefonbuch gespeichert.");
       setPbxEditTarget(null);
-    } catch (error) {
-      setPbxEditError("Speichern fehlgeschlagen. Bitte Namen kuerzen.");
+    } catch {
+      setPbxEditError("Speichern fehlgeschlagen. Bitte Namen kürzen.");
     }
+  };
+
+  const customerHasNumber = (customer, number) => {
+    const target = normalizeDigits(number);
+    if (!target) return false;
+    return (Array.isArray(customer?.phones) ? customer.phones : []).some(
+      (phone) => normalizeDigits(phone?.number) === target
+    );
   };
 
   return (
     <>
       {toast ? (
-        <div className="fixed top-5 right-6 z-50 bg-sand-900 text-white text-xs uppercase tracking-wide px-4 py-2 rounded-full shadow-soft">
+        <div className="fixed top-5 right-6 z-50 rounded-full border border-sand-700 bg-sand-900 px-4 py-2 text-xs font-medium uppercase tracking-wide text-white shadow-soft">
           {toast}
         </div>
       ) : null}
-      <div className="bg-white border border-sand-200 rounded-3xl p-6 shadow-soft">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Live Calls</p>
-          <h2 className="text-xl font-display">Call Monitoring</h2>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-sand-500">
-          <label className="inline-flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={onlyMissed}
-              onChange={(event) => setOnlyMissed(event.target.checked)}
-            />
-            Nur verpasste
-          </label>
-          <span>letzte 100 Events</span>
-        </div>
-      </div>
 
-      {loading ? (
-        <div className="space-y-2 py-2">
-          {Array.from({ length: 6 }).map((_, idx) => (
-            <div key={idx} className="flex gap-3 rounded-xl bg-sand-100/70 px-3 py-3 animate-pulse">
-              <div className="h-3 w-20 rounded-full bg-sand-200" />
-              <div className="h-3 w-14 rounded-full bg-sand-200" />
-              <div className="h-3 w-28 rounded-full bg-sand-200" />
-              <div className="h-3 w-16 rounded-full bg-sand-200" />
-              <div className="h-3 flex-1 rounded-full bg-sand-200" />
+      <div className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+        {/* Header */}
+        <div className="border-b border-sand-100 bg-sand-50/60 px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-sand-500">Live</p>
+              <h2 className="text-xl font-display text-sand-900">Anrufliste</h2>
             </div>
-          ))}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => { setOnlyMissed(false); setPage(1); }}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition ${
+                  !onlyMissed
+                    ? "border-sand-900 bg-sand-900 text-white"
+                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                }`}
+              >
+                <PhoneIncoming size={12} />
+                Alle
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${!onlyMissed ? "bg-white/20" : "bg-sand-100 text-sand-500"}`}>
+                  {calls.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setOnlyMissed(true); setPage(1); }}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition ${
+                  onlyMissed
+                    ? "border-rose-600 bg-rose-600 text-white"
+                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                }`}
+              >
+                <PhoneMissed size={12} />
+                Verpasst
+                <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${onlyMissed ? "bg-white/20" : "bg-rose-50 text-rose-600"}`}>
+                  {calls.filter((c) => !c.answered).length}
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
-      ) : null}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="text-sand-500 border-b border-sand-200">
-            <tr>
-              <th className="text-left py-2">Datum</th>
-              <th className="text-left py-2">Zeit</th>
-              <th className="text-left py-2">Rufnummer</th>
-              <th className="text-left py-2">NS</th>
-              <th className="text-left py-2">Richtung</th>
-              <th className="text-left py-2">Dauer</th>
-              <th className="text-left py-2">Status</th>
-              <th className="text-left py-2">Name</th>
-              <th className="text-left py-2">Quelle</th>
-              <th className="text-right py-2">Aktion</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filteredCalls.length === 0 && !loading ? (
-              <tr>
-                <td colSpan={10} className="py-6 text-center text-sand-500">
-                  {onlyMissed
-                    ? "Keine verpassten Anrufe vorhanden."
-                    : "Noch keine Telefonie-Events geladen."}
-                </td>
-              </tr>
-            ) : (
-              pagedCalls.map((call) => {
-                const unreturned = isUnreturned(call);
-                return (
-                <tr
+
+        {/* Loading skeleton */}
+        {loading ? (
+          <div className="space-y-px p-3">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <div key={idx} className="flex gap-3 rounded-xl bg-sand-50 px-4 py-3 animate-pulse">
+                <div className="h-3 w-16 rounded-full bg-sand-200" />
+                <div className="h-3 w-24 rounded-full bg-sand-200" />
+                <div className="h-3 w-28 rounded-full bg-sand-200" />
+                <div className="h-3 flex-1 rounded-full bg-sand-200" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {/* Call rows */}
+        <div className="divide-y divide-sand-100">
+          {filteredCalls.length === 0 && !loading ? (
+            <div className="flex flex-col items-center gap-2 py-12 text-sm text-sand-400">
+              <PhoneIncoming size={24} className="text-sand-300" />
+              {onlyMissed ? "Keine verpassten Anrufe." : "Noch keine Telefonie-Events geladen."}
+            </div>
+          ) : (
+            pagedCalls.map((call) => {
+              const unreturned = isUnreturned(call);
+              const name = callerName(call);
+              const source = nameSourceForCall(call);
+              const direction = call.direction?.toLowerCase() || "";
+              const isInbound = direction.includes("in");
+              const isOutbound = direction.includes("out");
+              const dur = durationSeconds(call);
+
+              return (
+                <div
                   key={call.uuid}
-                  className={`border-b border-sand-100 ${unreturned ? "bg-amber-50/70" : ""}`}
+                  className={`flex items-center gap-3 px-5 py-3 transition hover:bg-sand-50 ${unreturned ? "bg-amber-50/60" : ""}`}
                 >
-                  <td className="py-3">{formatDate(call.startTime)}</td>
-                  <td className="py-3">{formatTime(call.startTime)}</td>
-                  <td className="py-3">
-                    <div className="flex items-center gap-2">
-                      <span className={unreturned ? "font-semibold text-amber-800" : ""}>
+                  {/* Direction icon */}
+                  <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+                    call.answered
+                      ? isInbound ? "bg-emerald-50 text-emerald-600" : "bg-sand-100 text-sand-500"
+                      : "bg-rose-50 text-rose-500"
+                  }`}>
+                    {isInbound ? <ArrowDownLeft size={15} /> : isOutbound ? <ArrowUpRight size={15} /> : <Phone size={15} />}
+                  </div>
+
+                  {/* Date/time */}
+                  <div className="w-24 shrink-0">
+                    <p className="text-[11px] font-medium text-sand-700">{formatDate(call.startTime)}</p>
+                    <p className="text-[10px] text-sand-400">{formatTime(call.startTime)}</p>
+                  </div>
+
+                  {/* Number + name */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-sm font-medium ${unreturned ? "text-amber-800" : "text-sand-900"}`}>
                         {displayNumber(call)}
                       </span>
+                      {source ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-1.5 py-0.5 text-[10px] text-sand-500" title={`Name aus ${source.label}`}>
+                          <source.Icon size={10} />
+                        </span>
+                      ) : null}
                       {unreturned ? (
                         <button
                           type="button"
                           onClick={async () => {
                             if (!onResolveCallback) return;
                             const updated = await onResolveCallback(call);
-                            if (updated) {
-                              setToast("Rückruf erledigt.");
-                            } else {
-                              setToast("Status konnte nicht gespeichert werden.");
-                            }
+                            setToast(updated ? "Rückruf erledigt." : "Status konnte nicht gespeichert werden.");
                           }}
-                          className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700 hover:bg-amber-200"
-                          title="Als erledigt markieren"
+                          className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 hover:bg-amber-200"
                         >
-                          Rueckruf offen
+                          Rückruf offen
                         </button>
                       ) : null}
                     </div>
-                  </td>
-                  <td className="py-3">{call.extension || "-"}</td>
-                  <td className="py-3">
-                    {(() => {
-                      const meta = directionMeta(call.direction);
-                      const Icon = meta.icon;
-                      return (
-                        <span className={`inline-flex items-center gap-1 ${meta.className}`}>
-                          {Icon ? <Icon size={14} /> : null}
-                          {meta.label}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td className="py-3">{formatDuration(durationSeconds(call))}</td>
-                  <td className="py-3">
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                        call.answered
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-rose-100 text-rose-700"
-                      }`}
-                    >
-                      {call.answered ? "Beantwortet" : "Verpasst"}
+                    {name ? <p className="truncate text-[11px] text-sand-500">{name}</p> : null}
+                  </div>
+
+                  {/* Extension */}
+                  {call.extension ? (
+                    <span className="hidden shrink-0 rounded-lg border border-sand-200 bg-sand-50 px-2 py-0.5 text-[11px] text-sand-600 sm:block">
+                      NS {call.extension}
                     </span>
-                  </td>
-                  <td className="py-3">
-                    <span className="flex items-center gap-2">
-                      {call.customerName ||
-                      customerNameForCall(call) ||
-                      resolvedNames[resolveKey(call)] ||
-                      pbxEntryForCall(call)?.name ||
-                      "-"}
-                    </span>
-                  </td>
-                  <td className="py-3">{renderNameSource(call)}</td>
-                  <td className="py-3 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      {assignNumber(call) && !pbxEntryForCall(call) && onAddToPbx ? (
-                        <button
-                          onClick={() =>
-                            handleAddToPbx({
-                              name:
-                                call.customerName ||
-                                customerNameForCall(call) ||
-                                resolvedNames[resolveKey(call)] ||
-                                "",
-                              number: assignNumber(call)
-                            })
-                          }
-                          disabled={!pbxApiActive}
-                          className={`rounded-full border p-1 text-sand-600 ${
-                            pbxApiActive
-                              ? "border-sand-300 bg-white hover:bg-sand-100"
-                              : "border-sand-200 bg-sand-100 opacity-50 cursor-not-allowed"
-                          }`}
-                          title="In Anlagen-Telefonbuch übernehmen"
-                        >
-                          <BookPlus size={14} />
-                        </button>
-                      ) : null}
-                      {assignNumber(call) && !call.customerName && !customerNameForCall(call) ? (
-                        <button
-                          onClick={() => setAssignTarget(call)}
-                          className="rounded-full border border-amber-200 bg-amber-50 p-1 text-amber-700 hover:bg-amber-100"
-                          title="In Kundenstamm übernehmen"
-                        >
-                          <ArrowDownLeft size={14} />
-                        </button>
-                      ) : null}
-                      {callbackNumber(call) ? (
-                        <button
-                          onClick={() => {
-                            setCallbackTarget(call);
-                            setSelectedExtension(extensionOptions[0]?.extension_number || "");
-                            setCallbackStatus("");
-                          }}
-                          className="rounded-full border border-sand-300 bg-white p-1 text-sand-600 hover:bg-sand-100"
-                          title="Rückruf"
-                        >
-                          <PhoneOutgoing size={14} />
-                        </button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
+                  ) : null}
+
+                  {/* Duration */}
+                  <span className="hidden w-12 shrink-0 text-right text-[11px] text-sand-400 sm:block">
+                    {formatDuration(dur)}
+                  </span>
+
+                  {/* Status badge */}
+                  <span className={`hidden shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold sm:block ${
+                    call.answered
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-rose-200 bg-rose-50 text-rose-700"
+                  }`}>
+                    {call.answered ? "Beantwortet" : "Verpasst"}
+                  </span>
+
+                  {/* Actions */}
+                  <div className="flex shrink-0 items-center gap-1">
+                    {assignNumber(call) && !pbxEntryForCall(call) && onAddToPbx ? (
+                      <button
+                        onClick={() => handleAddToPbx({ name: name || "", number: assignNumber(call) })}
+                        disabled={!pbxApiActive}
+                        className={`rounded-lg border p-1.5 text-sand-600 ${
+                          pbxApiActive ? "border-sand-200 bg-white hover:bg-sand-100" : "cursor-not-allowed border-sand-100 bg-sand-50 opacity-40"
+                        }`}
+                        title="In Telefonbuch übernehmen"
+                      >
+                        <BookPlus size={13} />
+                      </button>
+                    ) : null}
+                    {assignNumber(call) && !call.customerName && !customerNameForCall(call) ? (
+                      <button
+                        onClick={() => setAssignTarget(call)}
+                        className="rounded-lg border border-amber-200 bg-amber-50 p-1.5 text-amber-700 hover:bg-amber-100"
+                        title="Kunde zuweisen"
+                      >
+                        <ArrowDownLeft size={13} />
+                      </button>
+                    ) : null}
+                    {callbackNumber(call) ? (
+                      <button
+                        onClick={() => {
+                          setCallbackTarget(call);
+                          setSelectedExtension(extensionOptions[0]?.extension_number || "");
+                          setCallbackStatus("");
+                        }}
+                        className="rounded-lg border border-sand-200 bg-white p-1.5 text-sand-600 hover:bg-sand-100"
+                        title="Rückruf starten"
+                      >
+                        <PhoneOutgoing size={13} />
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
               );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-      {filteredCalls.length > pageSize && (
-        <div className="mt-4 flex items-center justify-between text-xs text-sand-600">
-          <span>
-            Seite {page} von {visibleTotalPages}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
-              className="rounded-full border border-sand-200 px-3 py-1 hover:bg-sand-100"
-            >
-              Zurück
-            </button>
-            {Array.from({ length: visibleTotalPages }, (_, idx) => (
-              <button
-                key={idx + 1}
-                onClick={() => setPage(idx + 1)}
-                className={`rounded-full border px-3 py-1 ${
-                  page === idx + 1
-                    ? "border-sand-900 bg-sand-900 text-white"
-                    : "border-sand-200 hover:bg-sand-100"
-                }`}
-              >
-                {idx + 1}
-              </button>
-            ))}
-            <button
-              onClick={() => setPage((current) => Math.min(visibleTotalPages, current + 1))}
-              className="rounded-full border border-sand-200 px-3 py-1 hover:bg-sand-100"
-            >
-              Weiter
-            </button>
-          </div>
+            })
+          )}
         </div>
-      )}
-      {callbackTarget ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-sand-900/40 px-4 py-8">
-          <div className="w-full max-w-md rounded-3xl border border-sand-200 bg-white shadow-soft">
-            <div className="border-b border-sand-200 px-5 py-4">
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">Rückruf starten</p>
-              <h3 className="text-lg font-display text-sand-900">
-                {callbackNumber(callbackTarget) || "Nummer unbekannt"}
-              </h3>
+
+        {/* Pagination */}
+        {totalPages > 1 ? (
+          <div className="flex items-center justify-between border-t border-sand-100 px-5 py-3 text-xs text-sand-500">
+            <span>{filteredCalls.length} Einträge · Seite {page} von {totalPages}</span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="rounded-lg border border-sand-200 p-1.5 hover:bg-sand-50 disabled:opacity-40"
+              >
+                <ChevronLeft size={13} />
+              </button>
+              {Array.from({ length: Math.min(totalPages, 5) }, (_, idx) => {
+                const pageNum = idx + 1;
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setPage(pageNum)}
+                    className={`rounded-lg border px-2.5 py-1 ${
+                      page === pageNum ? "border-sand-900 bg-sand-900 text-white" : "border-sand-200 hover:bg-sand-50"
+                    }`}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page === totalPages}
+                className="rounded-lg border border-sand-200 p-1.5 hover:bg-sand-50 disabled:opacity-40"
+              >
+                <ChevronRightIcon size={13} />
+              </button>
             </div>
-            <div className="p-5 space-y-4">
-              <label className="text-xs uppercase tracking-wide text-sand-600">
-                Nebenstelle auswählen
+          </div>
+        ) : null}
+      </div>
+
+      {/* Callback modal */}
+      {callbackTarget ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-sand-900/40 px-4">
+          <div className="w-full max-w-sm overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="border-b border-sand-100 px-5 py-4">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Rückruf starten</p>
+              <h3 className="text-lg font-display text-sand-900">{callbackNumber(callbackTarget) || "Nummer unbekannt"}</h3>
+            </div>
+            <div className="space-y-4 p-5">
+              <div>
+                <label className="mb-1.5 block text-[10px] uppercase tracking-[0.2em] text-sand-500">Nebenstelle</label>
                 <select
                   value={selectedExtension}
-                  onChange={(event) => setSelectedExtension(event.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                  onChange={(e) => setSelectedExtension(e.target.value)}
+                  className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                 >
                   {extensionOptions.length ? (
                     extensionOptions.map((item) => (
                       <option key={item.uuid || item.extension_number} value={item.extension_number}>
-                        {item.extension_number} {item.name ? `– ${item.name}` : ""}
+                        {item.extension_number}{item.name ? ` – ${item.name}` : ""}
                       </option>
                     ))
                   ) : (
                     <option value="">Keine Nebenstellen</option>
                   )}
                 </select>
-              </label>
-              {callbackStatus ? (
-                <p className="text-xs text-sand-500">{callbackStatus}</p>
-              ) : null}
+              </div>
+              {callbackStatus ? <p className="text-xs text-sand-500">{callbackStatus}</p> : null}
               <div className="flex items-center justify-between">
-                <button
-                  onClick={() => setCallbackTarget(null)}
-                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                >
-                  Abbrechen
-                </button>
+                <button onClick={() => setCallbackTarget(null)} className="rounded-xl border border-sand-200 px-4 py-2 text-xs text-sand-600 hover:bg-sand-50">Abbrechen</button>
                 <button
                   onClick={async () => {
-                    if (!selectedExtension) {
-                      setCallbackStatus("Bitte Nebenstelle wählen.");
-                      return;
-                    }
+                    if (!selectedExtension) { setCallbackStatus("Bitte Nebenstelle wählen."); return; }
                     const number = callbackNumber(callbackTarget);
-                    if (!number) {
-                      setCallbackStatus("Keine Rufnummer gefunden.");
-                      return;
-                    }
-                    setCallbackStatus("Rückruf wird gestartet...");
+                    if (!number) { setCallbackStatus("Keine Rufnummer gefunden."); return; }
+                    setCallbackStatus("Rückruf wird gestartet…");
                     const result = await onCallback?.(selectedExtension, number);
-                    if (result) {
-                      setCallbackStatus("Rückruf gestartet.");
-                      setTimeout(() => setCallbackTarget(null), 900);
-                    } else {
-                      setCallbackStatus("Rückruf fehlgeschlagen.");
-                    }
+                    if (result) { setCallbackStatus("Rückruf gestartet."); setTimeout(() => setCallbackTarget(null), 900); }
+                    else setCallbackStatus("Rückruf fehlgeschlagen.");
                   }}
-                  className="rounded-full bg-sand-900 text-white px-4 py-2 text-xs uppercase tracking-wide"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-sand-900 px-4 py-2 text-xs font-medium text-white hover:bg-sand-800"
                 >
+                  <PhoneOutgoing size={13} />
                   Jetzt anrufen
                 </button>
               </div>
@@ -729,166 +607,107 @@ export default function CallListView({
           </div>
         </div>
       ) : null}
+
+      {/* Assign customer modal */}
       {assignTarget ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-sand-900/40 px-4 py-8">
-          <div className="w-full max-w-md rounded-3xl border border-sand-200 bg-white shadow-soft">
-            <div className="border-b border-sand-200 px-5 py-4">
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                Rufnummer übernehmen
-              </p>
-              <h3 className="text-lg font-display text-sand-900">
-                {assignNumber(assignTarget) || "Nummer unbekannt"}
-              </h3>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-sand-900/40 px-4">
+          <div className="w-full max-w-sm overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="border-b border-sand-100 px-5 py-4">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Kunde zuweisen</p>
+              <h3 className="text-lg font-display text-sand-900">{assignNumber(assignTarget) || "Nummer unbekannt"}</h3>
             </div>
-            <div className="p-5 space-y-4">
-              <label className="text-xs uppercase tracking-wide text-sand-600">
-                Kunde suchen
-                <input
-                  value={assignQuery}
-                  onChange={(event) => setAssignQuery(event.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm"
-                  placeholder="Name, Kürzel, Kundennummer..."
-                />
-              </label>
-              <div className="space-y-2 max-h-60 overflow-auto">
-                {assignCandidates.length ? (
-                  assignCandidates.map((customer) => {
-                    const hasNumber = customerHasNumber(customer, assignNumber(assignTarget));
-                    return (
-                      <div
-                        key={customer.id}
-                        className="flex items-center justify-between rounded-2xl border border-sand-200 bg-white px-3 py-2"
-                      >
-                        <div>
-                          <p className="text-sm text-sand-900">{customer.name}</p>
-                          <p className="text-[11px] text-sand-500">
-                            {customer.short_code || customer.creditor_number || "—"}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          disabled={assignBusy || hasNumber}
-                          onClick={async () => {
-                            const number = assignNumber(assignTarget);
-                            if (!number) {
-                              setAssignStatus("Keine Rufnummer gefunden.");
-                              return;
-                            }
-                            if (!onAssignNumber) {
-                              setAssignStatus("Aktion nicht verfügbar.");
-                              return;
-                            }
-                            setAssignBusy(true);
-                            setAssignStatus("Speichere...");
-                            const result = await onAssignNumber(customer.id, number);
-                            if (result?.ok) {
-                              setResolvedNames((prev) => ({
-                                ...prev,
-                                [number]: result.customer?.name || customer.name
-                              }));
-                              setAssignStatus("Rufnummer übernommen.");
-                              setTimeout(() => setAssignTarget(null), 900);
-                            } else {
-                              setAssignStatus(result?.error || "Übernahme fehlgeschlagen.");
-                            }
-                            setAssignBusy(false);
-                          }}
-                          className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-wide ${
-                            hasNumber
-                              ? "border-sand-200 text-sand-400 cursor-not-allowed"
-                              : "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                          }`}
-                        >
-                          {hasNumber ? "Schon vorhanden" : "Übernehmen"}
-                        </button>
+            <div className="space-y-4 p-5">
+              <input
+                value={assignQuery}
+                onChange={(e) => setAssignQuery(e.target.value)}
+                className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                placeholder="Name, Kürzel, Kundennummer…"
+              />
+              <div className="max-h-56 space-y-1.5 overflow-auto">
+                {assignCandidates.length ? assignCandidates.map((customer) => {
+                  const hasNumber = customerHasNumber(customer, assignNumber(assignTarget));
+                  return (
+                    <div key={customer.id} className="flex items-center justify-between rounded-xl border border-sand-200 bg-white px-3 py-2">
+                      <div>
+                        <p className="text-sm font-medium text-sand-900">{customer.name}</p>
+                        <p className="text-[10px] text-sand-400">{customer.short_code || customer.creditor_number || "—"}</p>
                       </div>
-                    );
-                  })
-                ) : (
-                  <div className="text-xs text-sand-500">Kein Kunde gefunden.</div>
+                      <button
+                        type="button"
+                        disabled={assignBusy || hasNumber}
+                        onClick={async () => {
+                          const number = assignNumber(assignTarget);
+                          if (!number || !onAssignNumber) { setAssignStatus("Aktion nicht verfügbar."); return; }
+                          setAssignBusy(true);
+                          setAssignStatus("Speichere…");
+                          const result = await onAssignNumber(customer.id, number);
+                          if (result?.ok) {
+                            setResolvedNames((prev) => ({ ...prev, [number]: result.customer?.name || customer.name }));
+                            setAssignStatus("Rufnummer übernommen.");
+                            setTimeout(() => setAssignTarget(null), 900);
+                          } else {
+                            setAssignStatus(result?.error || "Übernahme fehlgeschlagen.");
+                          }
+                          setAssignBusy(false);
+                        }}
+                        className={`rounded-xl border px-3 py-1 text-[11px] font-medium ${
+                          hasNumber
+                            ? "cursor-not-allowed border-sand-200 text-sand-400"
+                            : "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                        }`}
+                      >
+                        {hasNumber ? "Vorhanden" : "Übernehmen"}
+                      </button>
+                    </div>
+                  );
+                }) : (
+                  <p className="py-3 text-center text-xs text-sand-400">Kein Kunde gefunden.</p>
                 )}
               </div>
-              {assignStatus ? (
-                <p className="text-xs text-sand-500">{assignStatus}</p>
-              ) : null}
-              <div className="flex items-center justify-between">
-                <button
-                  onClick={() => setAssignTarget(null)}
-                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                >
-                  Schließen
-                </button>
-              </div>
+              {assignStatus ? <p className="text-xs text-sand-500">{assignStatus}</p> : null}
+              <button onClick={() => setAssignTarget(null)} className="w-full rounded-xl border border-sand-200 py-2 text-xs text-sand-600 hover:bg-sand-50">Schließen</button>
             </div>
           </div>
         </div>
       ) : null}
+
+      {/* PBX name edit modal */}
       {pbxEditTarget ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-sand-900/40 px-4 py-8">
-          <div className="w-full max-w-md rounded-3xl border border-sand-200 bg-white shadow-soft">
-            <div className="border-b border-sand-200 px-5 py-4">
-              <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                Anlagentelefonbuch
-              </p>
-              <h3 className="text-lg font-display text-sand-900">Name kuerzen</h3>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-sand-900/40 px-4">
+          <div className="w-full max-w-sm overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
+            <div className="border-b border-sand-100 px-5 py-4">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Anlagentelefonbuch</p>
+              <h3 className="text-lg font-display text-sand-900">Name kürzen</h3>
             </div>
-            <div className="p-5 space-y-4">
-              <label className="text-xs uppercase tracking-wide text-sand-600">
-                Rufnummer
-                <input
-                  value={pbxEditTarget.number}
-                  readOnly
-                  className="mt-2 w-full rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm"
-                />
-              </label>
-              <label className="text-xs uppercase tracking-wide text-sand-600">
-                Name (bitte kuerzen)
+            <div className="space-y-4 p-5">
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-[0.2em] text-sand-500">Rufnummer</label>
+                <input value={pbxEditTarget.number} readOnly className="w-full rounded-xl border border-sand-100 bg-sand-50 px-3 py-2 text-sm text-sand-600" />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-[0.2em] text-sand-500">Name</label>
                 <input
                   value={pbxEditName}
-                  onChange={(event) => setPbxEditName(event.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-sand-200 bg-white px-3 py-2 text-sm"
+                  onChange={(e) => setPbxEditName(e.target.value)}
+                  className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                 />
-              </label>
-              {pbxEditTarget?.originalName &&
-              pbxEditTarget?.suggestedName &&
-              pbxEditTarget.originalName !== pbxEditTarget.suggestedName ? (
-                <p className="text-xs text-sand-500">
-                  Vorschlag:{" "}
-                  <span className="font-semibold">{pbxEditTarget.suggestedName}</span>
-                </p>
-              ) : null}
-              {pbxEditTarget?.originalName ? (
-                <p className="text-xs text-sand-400">
-                  Original: {pbxEditTarget.originalName} ({pbxEditTarget.originalName.length}{" "}
-                  Zeichen)
-                </p>
+              </div>
+              {pbxEditTarget?.originalName && pbxEditTarget?.suggestedName && pbxEditTarget.originalName !== pbxEditTarget.suggestedName ? (
+                <p className="text-xs text-sand-500">Vorschlag: <span className="font-medium">{pbxEditTarget.suggestedName}</span></p>
               ) : null}
               {pbxEditError ? (
                 <p className="text-xs text-rose-600">{pbxEditError}</p>
               ) : (
-                <p className="text-xs text-sand-500">
-                  Maximal {PBX_NAME_LIMIT} Zeichen im Anlagentelefonbuch.
-                </p>
+                <p className="text-xs text-sand-400">Max. {PBX_NAME_LIMIT} Zeichen.</p>
               )}
               <div className="flex items-center justify-between">
-                <button
-                  onClick={() => setPbxEditTarget(null)}
-                  className="rounded-full border border-sand-300 px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100"
-                >
-                  Abbrechen
-                </button>
-                <button
-                  onClick={handlePbxManualSave}
-                  className="rounded-full bg-sand-900 px-4 py-1 text-xs uppercase tracking-wide text-white hover:opacity-90"
-                >
-                  Speichern
-                </button>
+                <button onClick={() => setPbxEditTarget(null)} className="rounded-xl border border-sand-200 px-4 py-2 text-xs text-sand-600 hover:bg-sand-50">Abbrechen</button>
+                <button onClick={handlePbxManualSave} className="rounded-xl bg-sand-900 px-4 py-2 text-xs font-medium text-white hover:bg-sand-800">Speichern</button>
               </div>
             </div>
           </div>
         </div>
       ) : null}
-      </div>
     </>
   );
 }

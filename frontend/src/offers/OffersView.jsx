@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowRight,
@@ -23,6 +23,7 @@ import {
   Paperclip,
   Receipt,
   Save,
+  Search,
   Send,
   ShoppingCart,
   Sparkles,
@@ -52,6 +53,76 @@ const sectionTitleClass = "text-base font-semibold tracking-tight text-sand-900"
 const modalTitleClass = "text-lg font-semibold tracking-tight text-sand-900";
 
 const statusOptions = ["Entwurf", "gesendet", "angenommen", "abgelehnt"];
+const OFFER_BUCKET_INITIAL_LIMIT = 8;
+const createEmptyOfferBuckets = () => ({ open: [], accepted: [], invoiced: [], declined: [] });
+const offerStatusSections = [
+  {
+    key: "open",
+    label: "Offen",
+    description: "Entwürfe und versendete Angebote",
+    emptyText: "Keine offenen Angebote.",
+    accent: "sand",
+    icon: FileText
+  },
+  {
+    key: "accepted",
+    label: "Akzeptiert",
+    description: "Angenommen, noch nicht fakturiert",
+    emptyText: "Keine akzeptierten Angebote.",
+    accent: "emerald",
+    icon: Check
+  },
+  {
+    key: "invoiced",
+    label: "Fakturiert",
+    description: "An Faktura übergebene Angebote",
+    emptyText: "Keine fakturierten Angebote.",
+    accent: "sky",
+    icon: Receipt
+  },
+  {
+    key: "declined",
+    label: "Abgelehnt",
+    description: "Abgelehnte oder abgelaufene Angebote",
+    emptyText: "Keine abgelehnten Angebote.",
+    accent: "rose",
+    icon: X
+  }
+];
+const offerStatusSectionStyles = {
+  sand: {
+    wrapper: "border-sand-200 bg-sand-50",
+    icon: "border-sand-200 bg-white text-sand-600",
+    label: "text-sand-600",
+    count: "border-sand-200 bg-white text-sand-700",
+    button: "border-sand-200 bg-white text-sand-600 hover:bg-sand-100",
+    empty: "text-sand-500"
+  },
+  emerald: {
+    wrapper: "border-emerald-200 bg-emerald-50/40",
+    icon: "border-emerald-200 bg-white text-emerald-700",
+    label: "text-emerald-700",
+    count: "border-emerald-200 bg-white text-emerald-700",
+    button: "border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50",
+    empty: "text-emerald-700"
+  },
+  sky: {
+    wrapper: "border-sky-200 bg-sky-50/40",
+    icon: "border-sky-200 bg-white text-sky-700",
+    label: "text-sky-700",
+    count: "border-sky-200 bg-white text-sky-700",
+    button: "border-sky-200 bg-white text-sky-700 hover:bg-sky-50",
+    empty: "text-sky-700"
+  },
+  rose: {
+    wrapper: "border-rose-200 bg-rose-50/40",
+    icon: "border-rose-200 bg-white text-rose-700",
+    label: "text-rose-700",
+    count: "border-rose-200 bg-white text-rose-700",
+    button: "border-rose-200 bg-white text-rose-700 hover:bg-rose-50",
+    empty: "text-rose-700"
+  }
+};
 const complexityOptions = ["niedrig", "mittel", "hoch"];
 const positionTypes = [
   { value: "Dienstleistung", label: "Leistung" },
@@ -503,6 +574,51 @@ const getOfferSentAt = (offer) => offer?.sentAt || offer?.sent_at || "";
 const getOfferOpenedAt = (offer) => offer?.openedAt || offer?.opened_at || "";
 const getOfferOpenedCount = (offer) =>
   Number(offer?.openedCount ?? offer?.opened_count ?? 0);
+const getOfferCreatedAt = (offer) => offer?.createdAt || offer?.created_at || "";
+const getOfferActivityTime = (offer) => {
+  const candidates = [
+    offer?.updatedAt,
+    offer?.updated_at,
+    getOfferSentAt(offer),
+    getOfferCreatedAt(offer)
+  ];
+  for (const value of candidates) {
+    const time = value ? new Date(value).getTime() : NaN;
+    if (Number.isFinite(time)) return time;
+  }
+  return 0;
+};
+const sortOffersByRecentActivity = (a, b) =>
+  getOfferActivityTime(b) - getOfferActivityTime(a);
+const getOfferItemCount = (offer) =>
+  (offer?.lineItems || []).length + (offer?.deviceItems || []).length;
+const getOfferPrimaryTitle = (offer) =>
+  String(offer?.coverHeadline || offer?.overviewText || offer?.calculationText || "").trim();
+const formatOfferStatusLabel = (value) => {
+  const normalized = String(value || "Entwurf").trim().toLowerCase();
+  if (normalized === "angenommen") return "Akzeptiert";
+  if (normalized === "abgelehnt") return "Abgelehnt";
+  if (normalized === "gesendet") return "Gesendet";
+  if (normalized === "entwurf") return "Entwurf";
+  return String(value || "Entwurf").trim() || "Entwurf";
+};
+const getOfferSearchText = (offer) =>
+  [
+    offer?.reference,
+    offer?.customer,
+    offer?.recipientName,
+    offer?.recipientCompany,
+    offer?.customerNumber,
+    offer?.orderNumber,
+    offer?.status,
+    offer?.coverHeadline,
+    offer?.overviewText,
+    offer?.calculationText,
+    ...(offer?.lineItems || []).map((item) => `${item?.title || ""} ${item?.description || ""}`),
+    ...(offer?.deviceItems || []).map((item) => `${item?.title || ""} ${item?.product || ""} ${item?.description || ""}`)
+  ]
+    .join(" ")
+    .toLowerCase();
 
 const renderOfferReadBadge = (offer) => {
   const openedCount = getOfferOpenedCount(offer);
@@ -3837,6 +3953,7 @@ function DeviceCard({
 
 function OfferBucketRow({
   offer,
+  groupKey,
   accentColor,
   expandedOffers,
   expandedOfferDetails,
@@ -3882,64 +3999,114 @@ function OfferBucketRow({
     ? showDetails ? detailText : shorten(detailText, 220)
     : "";
   const hasMoreDetails = detailText.length > 220 || overviewText || calculationText;
+  const itemCount = getOfferItemCount(offer);
+  const primaryTitle = getOfferPrimaryTitle(offer);
+  const statusLabel = groupKey === "invoiced" ? "Fakturiert" : formatOfferStatusLabel(offer.status);
+  const createdAt = getOfferCreatedAt(offer);
+  const sentAt = getOfferSentAt(offer);
+  const isOpenGroup = groupKey === "open";
+  const isAcceptedGroup = groupKey === "accepted";
+  const isInvoicedGroup = groupKey === "invoiced";
+  const isDeclinedGroup = groupKey === "declined";
 
   const c = {
     sand: {
       border: "border-sand-200", bg: "bg-sand-50", text: "text-sand-600",
       btnBorder: "border-sand-200", btnBg: "bg-white", btnHover: "hover:bg-sand-100",
       refText: "text-sand-400", expandBg: "bg-sand-50", expandText: "text-sand-600",
+      badge: "border-sand-200 bg-sand-50 text-sand-600",
     },
     emerald: {
       border: "border-emerald-200", bg: "bg-emerald-50/60", text: "text-emerald-700",
       btnBorder: "border-emerald-200", btnBg: "bg-white", btnHover: "hover:bg-emerald-50",
       refText: "text-emerald-400", expandBg: "bg-emerald-50/60", expandText: "text-emerald-700",
+      badge: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    },
+    sky: {
+      border: "border-sky-200", bg: "bg-sky-50/60", text: "text-sky-700",
+      btnBorder: "border-sky-200", btnBg: "bg-white", btnHover: "hover:bg-sky-50",
+      refText: "text-sky-500", expandBg: "bg-sky-50/60", expandText: "text-sky-700",
+      badge: "border-sky-200 bg-sky-50 text-sky-700",
     },
     rose: {
       border: "border-rose-200", bg: "bg-rose-50/60", text: "text-rose-700",
       btnBorder: "border-rose-200", btnBg: "bg-white", btnHover: "hover:bg-rose-50",
       refText: "text-rose-400", expandBg: "bg-rose-50/60", expandText: "text-rose-700",
+      badge: "border-rose-200 bg-rose-50 text-rose-700",
     },
   }[accentColor] || {};
 
-  const btnClass = `rounded-full border ${c.btnBorder} ${c.btnBg} p-1 ${c.text} ${c.btnHover}`;
-  const rowBorderClass = `border ${c.border}`;
+  const btnClass = `inline-flex h-8 w-8 items-center justify-center rounded-full border ${c.btnBorder} ${c.btnBg} ${c.text} ${c.btnHover}`;
+  const textBtnClass = `inline-flex items-center gap-1.5 rounded-full border ${c.border} bg-white px-3 py-1 text-[10px] uppercase tracking-wide ${c.text} ${c.btnHover}`;
+  const statusBadgeClass = `rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${c.badge}`;
 
   return (
-    <div>
-      <div className={`w-full rounded-xl ${rowBorderClass} bg-white px-3 py-2 text-left text-xs text-sand-700 flex items-center justify-between`}>
-        <button type="button" onClick={() => setActiveId(offer.id)} className="flex-1 text-left">
-          <p className={`text-[10px] uppercase tracking-[0.3em] ${c.refText}`}>
-            {getOfferReferenceLabel(offer)}
-          </p>
-          <p className="text-sm font-semibold">{offer.customer || "Angebot"}</p>
-        </button>
-        <div className="flex items-center gap-2">
-          {getOfferSentAt(offer) ? (
-            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-700">
-              Versendet
+    <div className={`rounded-2xl border ${c.border} bg-white shadow-sm`}>
+      <div className="grid gap-3 px-3 py-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(245px,0.85fr)_auto] lg:items-center">
+        <button type="button" onClick={() => setActiveId(offer.id)} className="min-w-0 text-left">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`text-[10px] uppercase tracking-[0.25em] ${c.refText}`}>
+              {getOfferReferenceLabel(offer)}
             </span>
-          ) : null}
-          {renderOfferReadBadge(offer)}
+            <span className={statusBadgeClass}>{statusLabel}</span>
+            {sentAt ? (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700">
+                Versendet
+              </span>
+            ) : null}
+            {renderOfferReadBadge(offer)}
+          </div>
+          <p className="mt-1 truncate text-sm font-semibold text-sand-900">
+            {offer.customer || "Kunde offen"}
+          </p>
+          <p className="mt-0.5 truncate text-[11px] text-sand-500">
+            {primaryTitle ? shorten(primaryTitle, 100) : "Kein kurzer Angebotstitel hinterlegt"}
+          </p>
+        </button>
+        <div className="grid grid-cols-3 gap-2 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-[11px] text-sand-500">
+          <div className="min-w-0">
+            <p className="uppercase tracking-[0.2em] text-sand-400">Netto</p>
+            <p className="mt-0.5 truncate font-metrics font-semibold text-sand-900">{formatMoney(netTotal)}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="uppercase tracking-[0.2em] text-sand-400">Pos.</p>
+            <p className="mt-0.5 font-metrics font-semibold text-sand-900">{itemCount}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="uppercase tracking-[0.2em] text-sand-400">Datum</p>
+            <p className="mt-0.5 truncate font-semibold text-sand-900">{formatDate(createdAt) || "-"}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-start gap-1.5 lg:justify-end">
           <button type="button" onClick={() => toggleOfferExpanded(offer.id)} className={btnClass} title="Details">
             {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
-          {accentColor === "sand" && (
+          <button type="button" onClick={() => { setPreviewMode("offer"); setPreviewOfferId(offer.id); }} className={btnClass} title="Vorschau">
+            <Eye size={14} />
+          </button>
+          <button type="button" onClick={() => exportOfferPdf(offer)} className={btnClass} title="PDF exportieren">
+            <FileDown size={14} />
+          </button>
+          {isOpenGroup && (
             <>
-              <button type="button" onClick={() => updateOfferStatus(offer.id, "angenommen")} className="rounded-full border border-emerald-200 bg-white p-1 text-emerald-600 hover:bg-emerald-50" title="Akzeptieren">
+              <button type="button" onClick={() => updateOfferStatus(offer.id, "angenommen")} className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-emerald-200 bg-white text-emerald-600 hover:bg-emerald-50" title="Akzeptieren">
                 <Check size={14} />
               </button>
-              <button type="button" onClick={() => updateOfferStatus(offer.id, "abgelehnt")} className="rounded-full border border-rose-200 bg-white p-1 text-rose-600 hover:bg-rose-50" title="Ablehnen">
+              <button type="button" onClick={() => updateOfferStatus(offer.id, "abgelehnt")} className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-rose-200 bg-white text-rose-600 hover:bg-rose-50" title="Ablehnen">
                 <X size={14} />
-              </button>
-              <button type="button" onClick={() => deleteArchivedOffer(offer)} className={btnClass} title="Löschen">
-                <Trash2 size={14} />
               </button>
               <button type="button" onClick={() => editOfferFromArchive(offer.id)} className={btnClass} title="Bearbeiten">
                 <Pencil size={14} />
               </button>
+              <button type="button" onClick={() => openOfferEmailComposerForOffer(offer)} disabled={!offer.serverId} className={`${btnClass} disabled:opacity-50 disabled:cursor-not-allowed`} title={offer.serverId ? "Angebot per E-Mail senden" : "Bitte zuerst speichern"}>
+                <Send size={14} />
+              </button>
+              <button type="button" onClick={() => deleteArchivedOffer(offer)} className={btnClass} title="Löschen">
+                <Trash2 size={14} />
+              </button>
             </>
           )}
-          {accentColor === "emerald" && (
+          {isAcceptedGroup && (
             <>
               <button type="button" onClick={() => openHandoverModal(offer)} disabled={sevdeskStatus[offer.serverId || offer.id]?.status === "sending"} className={`${btnClass} disabled:opacity-50`} title="Rechnungsentwurf in sevdesk">
                 <FilePlus size={14} />
@@ -3964,7 +4131,7 @@ function OfferBucketRow({
               </button>
             </>
           )}
-          {accentColor === "rose" && (
+          {(isInvoicedGroup || isDeclinedGroup) && (
             <>
               <button type="button" onClick={() => duplicateOffer(offer)} className={btnClass} title="Duplizieren">
                 <Copy size={14} />
@@ -3974,27 +4141,16 @@ function OfferBucketRow({
               </button>
             </>
           )}
-          <button type="button" onClick={() => { setPreviewMode("offer"); setPreviewOfferId(offer.id); }} className={btnClass} title="Vorschau">
-            <Eye size={14} />
-          </button>
-          <button type="button" onClick={() => exportOfferPdf(offer)} className={btnClass} title="PDF exportieren">
-            <FileDown size={14} />
-          </button>
-          {accentColor === "sand" && (
-            <button type="button" onClick={() => openOfferEmailComposerForOffer(offer)} disabled={!offer.serverId} className={`${btnClass} disabled:opacity-50 disabled:cursor-not-allowed`} title={offer.serverId ? "Angebot per E-Mail senden" : "Bitte zuerst speichern"}>
-              <Send size={14} />
-            </button>
-          )}
         </div>
       </div>
       {expandedOffers[offer.id] ? (
-        <div className={`mt-2 rounded-xl border ${c.border} ${c.expandBg} p-3 text-xs ${c.expandText}`}>
+        <div className={`border-t ${c.border} ${c.expandBg} px-3 py-3 text-xs ${c.expandText}`}>
           <div className="flex flex-wrap items-center gap-3">
             <span>Summe netto: {formatMoney(netTotal)}</span>
             <span>{formatVatLabel(offer)}: {formatMoney(vatTotal)}</span>
             <span>Summe brutto: {formatMoney(grossTotal)}</span>
-            <span>Datum: {formatDate(offer.createdAt)}</span>
-            {getOfferSentAt(offer) ? <span>Versendet: {formatDate(getOfferSentAt(offer))}</span> : null}
+            <span>Datum: {formatDate(createdAt)}</span>
+            {sentAt ? <span>Versendet: {formatDate(sentAt)}</span> : null}
           </div>
           {keywords.length ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -4033,14 +4189,14 @@ function OfferBucketRow({
               </button>
             </div>
           ) : null}
-          {accentColor === "sand" && !getOfferSentAt(offer) ? (
+          {isOpenGroup && !sentAt ? (
             <div className="mt-2">
-              <button type="button" onClick={() => markOfferSent(offer.id)} className={`rounded-full border ${c.border} bg-white px-3 py-1 text-[10px] uppercase tracking-wide ${c.text} ${c.btnHover}`}>
+              <button type="button" onClick={() => markOfferSent(offer.id)} className={textBtnClass}>
                 Als gesendet markieren
               </button>
             </div>
           ) : null}
-          {accentColor === "emerald" ? (
+          {isAcceptedGroup || isInvoicedGroup ? (
             <>
               {sevdeskStatus[offer.serverId || offer.id] ? (
                 <div className="mt-2 text-xs">
@@ -4050,16 +4206,18 @@ function OfferBucketRow({
                 </div>
               ) : null}
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button type="button" onClick={() => updateOfferStatus(offer.id, "Entwurf")} disabled={offer.handoverLocked} className={`rounded-full border ${c.border} bg-white px-3 py-1 text-[10px] uppercase tracking-wide ${c.text} ${c.btnHover} disabled:opacity-50 disabled:cursor-not-allowed`}>
-                  Wieder öffnen
-                </button>
+                {isAcceptedGroup ? (
+                  <button type="button" onClick={() => updateOfferStatus(offer.id, "Entwurf")} disabled={offer.handoverLocked} className={`${textBtnClass} disabled:opacity-50 disabled:cursor-not-allowed`}>
+                    Wieder öffnen
+                  </button>
+                ) : null}
                 {offer.handoverLocked ? <span className="text-[10px] uppercase tracking-wide text-sand-500">an Faktura übergeben</span> : null}
               </div>
             </>
           ) : null}
-          {accentColor === "rose" ? (
+          {isDeclinedGroup ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button type="button" onClick={() => updateOfferStatus(offer.id, "Entwurf")} className={`rounded-full border ${c.border} bg-white px-3 py-1 text-[10px] uppercase tracking-wide ${c.text} ${c.btnHover}`}>
+              <button type="button" onClick={() => updateOfferStatus(offer.id, "Entwurf")} className={textBtnClass}>
                 Wieder öffnen
               </button>
             </div>
@@ -4084,6 +4242,12 @@ export default function OffersView() {
   const [devicePick, setDevicePick] = useState(initialDeviceBlocks[0]?.id || "");
   const [calcPick, setCalcPick] = useState(initialCalcBlocks[0]?.id || "");
   const [mainTab, setMainTab] = useState("new");
+  const [offerListQuery, setOfferListQuery] = useState("");
+  const deferredOfferListQuery = useDeferredValue(offerListQuery);
+  const normalizedOfferListQuery = offerListQuery.trim();
+  const normalizedDeferredOfferListQuery = deferredOfferListQuery.trim().toLowerCase();
+  const effectiveOfferListQuery = normalizedOfferListQuery ? normalizedDeferredOfferListQuery : "";
+  const [expandedStatusBuckets, setExpandedStatusBuckets] = useState({});
   const [saveStatus, setSaveStatus] = useState("idle");
   const [imageDrafts, setImageDrafts] = useState({});
   const [importingItemId, setImportingItemId] = useState("");
@@ -4967,26 +5131,44 @@ export default function OffersView() {
     return { total: totalNet, count };
   }, [activeOffer, totalNet]);
 
-  const offerBuckets = useMemo(() => {
-    const open = [];
-    const accepted = [];
-    const invoiced = [];
-    const declined = [];
+  const offerSearchIndex = useMemo(() => {
+    if (mainTab !== "status" || !effectiveOfferListQuery) return null;
+    const index = new Map();
     offers.forEach((offer) => {
-      if (offer.status === "angenommen") {
+      index.set(offer.id, getOfferSearchText(offer));
+    });
+    return index;
+  }, [mainTab, effectiveOfferListQuery, offers]);
+
+  const offerBuckets = useMemo(() => {
+    const buckets = createEmptyOfferBuckets();
+    if (mainTab !== "status") return buckets;
+    offers.forEach((offer) => {
+      if (
+        effectiveOfferListQuery &&
+        !offerSearchIndex?.get(offer.id)?.includes(effectiveOfferListQuery)
+      ) {
+        return;
+      }
+      const status = String(offer.status || "").trim().toLowerCase();
+      if (status === "angenommen") {
         if (offer.handoverLocked) {
-          invoiced.push(offer);
+          buckets.invoiced.push(offer);
         } else {
-          accepted.push(offer);
+          buckets.accepted.push(offer);
         }
-      } else if (offer.status === "abgelehnt") {
-        declined.push(offer);
+      } else if (status === "abgelehnt") {
+        buckets.declined.push(offer);
       } else {
-        open.push(offer);
+        buckets.open.push(offer);
       }
     });
-    return { open, accepted, invoiced, declined };
-  }, [offers]);
+    buckets.open.sort(sortOffersByRecentActivity);
+    buckets.accepted.sort(sortOffersByRecentActivity);
+    buckets.invoiced.sort(sortOffersByRecentActivity);
+    buckets.declined.sort(sortOffersByRecentActivity);
+    return buckets;
+  }, [mainTab, effectiveOfferListQuery, offerSearchIndex, offers]);
 
   const cloneOffer = (offer) => JSON.parse(JSON.stringify(offer));
 
@@ -5657,6 +5839,32 @@ export default function OffersView() {
     );
     const subtotal = serviceTotal + deviceTotal;
     return subtotal - calculateOfferDiscount(offer, subtotal);
+  };
+
+  const offerBucketSummaries = useMemo(() => {
+    if (mainTab !== "status") return {};
+    return offerStatusSections.reduce((acc, section) => {
+      const bucket = offerBuckets[section.key] || [];
+      acc[section.key] = {
+        count: bucket.length,
+        total: bucket.reduce((sum, offer) => sum + getOfferTotal(offer), 0),
+        positions: bucket.reduce((sum, offer) => sum + getOfferItemCount(offer), 0)
+      };
+      return acc;
+    }, {});
+  }, [mainTab, offerBuckets]);
+  const visibleOfferCount = useMemo(() => {
+    if (mainTab !== "status") return 0;
+    return offerStatusSections.reduce(
+      (sum, section) => sum + (offerBucketSummaries[section.key]?.count || 0),
+      0
+    );
+  }, [mainTab, offerBucketSummaries]);
+  const toggleStatusBucketExpanded = (key) => {
+    setExpandedStatusBuckets((prev) => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
   };
 
   const persistOfferForCustomer = async (offer) => {
@@ -7537,42 +7745,114 @@ export default function OffersView() {
             </section>
           )
         ) : mainTab === "status" ? (
-      <section className="rounded-3xl border border-sand-200 bg-white p-2 shadow-soft">
-        <div className="flex items-center justify-between">
-          <div>
+      <section className="rounded-3xl border border-sand-200 bg-white p-4 shadow-soft">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-[220px]">
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
               Angebotsstatus
             </p>
             <h2 className={modalTitleClass}>
               Offene & abgeschlossene Angebote
             </h2>
+            <p className="mt-1 text-xs text-sand-500">
+              {visibleOfferCount} Angebote sichtbar{normalizedOfferListQuery ? " nach Filter" : ""}.
+            </p>
           </div>
-          <button
-            type="button"
-            onClick={loadOffersFromServer}
-            className="rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
-          >
-            Aktualisieren
-          </button>
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+            <label className="relative w-full sm:w-80">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sand-400" />
+              <input
+                className="w-full rounded-full border border-sand-200 bg-sand-50 py-1.5 pl-9 pr-3 text-xs text-sand-900 placeholder:text-sand-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                value={offerListQuery}
+                onChange={(event) => setOfferListQuery(event.target.value)}
+                placeholder="Kunde, Nummer oder Position suchen"
+              />
+            </label>
+            {normalizedOfferListQuery ? (
+              <button
+                type="button"
+                onClick={() => setOfferListQuery("")}
+                className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+              >
+                Filter löschen
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={loadOffersFromServer}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+            >
+              Aktualisieren
+            </button>
+          </div>
         </div>
-        <div className="mt-3 space-y-3">
-          {[
-            { key: "open", label: "Offen", accent: "sand", emptyText: "Keine offenen Angebote.", wrapperClass: "rounded-2xl border border-sand-200 bg-sand-50 p-3" },
-            { key: "accepted", label: "Akzeptiert", accent: "emerald", emptyText: "Keine akzeptierten Angebote.", wrapperClass: "rounded-2xl border border-emerald-200 bg-emerald-50/40 p-3" },
-            { key: "invoiced", label: "Archiv (fakturiert)", accent: "sand", emptyText: "Keine fakturierten Angebote.", wrapperClass: "rounded-2xl border border-sand-200 bg-sand-50/60 p-3" },
-            { key: "declined", label: "Abgelehnt / Abgelaufen", accent: "rose", emptyText: "Keine abgelehnten Angebote.", wrapperClass: "rounded-2xl border border-rose-200 bg-rose-50/40 p-3" },
-          ].map(({ key, label, accent, emptyText, wrapperClass }) => (
-            <div key={key} className={wrapperClass}>
-              <p className={`text-[10px] uppercase tracking-[0.3em] ${accent === "emerald" ? "text-emerald-600" : accent === "rose" ? "text-rose-500" : "text-sand-500"}`}>
-                {label}
-              </p>
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {offerStatusSections.map((section) => {
+            const styles = offerStatusSectionStyles[section.accent] || offerStatusSectionStyles.sand;
+            const summary = offerBucketSummaries[section.key] || { count: 0, total: 0, positions: 0 };
+            const Icon = section.icon;
+            return (
+              <div key={section.key} className={`rounded-2xl border ${styles.wrapper} p-3`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className={`flex h-9 w-9 items-center justify-center rounded-xl border ${styles.icon}`}>
+                    <Icon size={15} />
+                  </div>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${styles.count}`}>
+                    {summary.count}
+                  </span>
+                </div>
+                <p className={`mt-2 text-[10px] uppercase tracking-[0.25em] ${styles.label}`}>
+                  {section.label}
+                </p>
+                <p className="mt-1 truncate font-metrics text-sm font-semibold text-sand-900">
+                  {formatMoney(summary.total)}
+                </p>
+                <p className="text-[11px] text-sand-500">
+                  {summary.positions} Positionen
+                </p>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 grid gap-3 xl:grid-cols-2">
+          {offerStatusSections.map((section) => {
+            const bucket = offerBuckets[section.key] || [];
+            const styles = offerStatusSectionStyles[section.accent] || offerStatusSectionStyles.sand;
+            const Icon = section.icon;
+            const isExpanded = Boolean(expandedStatusBuckets[section.key]);
+            const shouldShowAll = normalizedOfferListQuery || isExpanded;
+            const visibleOffers = shouldShowAll
+              ? bucket
+              : bucket.slice(0, OFFER_BUCKET_INITIAL_LIMIT);
+            const hiddenCount = Math.max(0, bucket.length - OFFER_BUCKET_INITIAL_LIMIT);
+            return (
+              <div key={section.key} className={`rounded-2xl border ${styles.wrapper} p-3`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <div className={`mt-0.5 flex h-8 w-8 items-center justify-center rounded-xl border ${styles.icon}`}>
+                      <Icon size={14} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`text-[10px] uppercase tracking-[0.25em] ${styles.label}`}>
+                        {section.label}
+                      </p>
+                      <p className="mt-0.5 text-xs text-sand-500">{section.description}</p>
+                    </div>
+                  </div>
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${styles.count}`}>
+                    {bucket.length}
+                  </span>
+                </div>
               <div className="mt-3 space-y-2">
-                {offerBuckets[key].length ? (
-                  offerBuckets[key].map((offer) => (
+                {visibleOffers.length ? (
+                  visibleOffers.map((offer) => (
                     <OfferBucketRow
                       key={offer.id}
                       offer={offer}
-                      accentColor={accent}
+                      groupKey={section.key}
+                      accentColor={section.accent}
                       expandedOffers={expandedOffers}
                       expandedOfferDetails={expandedOfferDetails}
                       toggleOfferExpanded={toggleOfferExpanded}
@@ -7607,11 +7887,23 @@ export default function OffersView() {
                     />
                   ))
                 ) : (
-                  <p className={`text-xs ${accent === "emerald" ? "text-emerald-600" : accent === "rose" ? "text-rose-500" : "text-sand-500"}`}>{emptyText}</p>
+                  <p className={`rounded-xl border border-dashed border-white/70 bg-white/60 p-3 text-xs ${styles.empty}`}>
+                    {normalizedOfferListQuery ? "Keine Treffer in diesem Status." : section.emptyText}
+                  </p>
                 )}
               </div>
-            </div>
-          ))}
+                {!normalizedOfferListQuery && bucket.length > OFFER_BUCKET_INITIAL_LIMIT ? (
+                  <button
+                    type="button"
+                    onClick={() => toggleStatusBucketExpanded(section.key)}
+                    className={`mt-3 w-full rounded-full border px-3 py-1.5 text-[10px] uppercase tracking-wide ${styles.button}`}
+                  >
+                    {isExpanded ? "Weniger anzeigen" : `${hiddenCount} weitere anzeigen`}
+                  </button>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
       </section>
     ) : (
