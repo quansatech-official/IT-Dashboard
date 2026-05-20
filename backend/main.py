@@ -7689,6 +7689,227 @@ def _is_material_invoice_position(
     return any(keyword in text for keyword in material_keywords)
 
 
+def _classify_sevdesk_material_kind(row: Optional[Dict[str, Any]]) -> str:
+    text = _sevdesk_invoice_position_text(row)
+    if not text:
+        return "unclassified"
+    software_keywords = (
+        "software",
+        "lizenz",
+        "license",
+        "subscription",
+        "abo",
+        "microsoft",
+        "office",
+        "m365",
+        "365",
+        "azure",
+        "windows",
+        "exchange",
+        "cloud",
+        "backup",
+        "antivirus",
+        "endpoint",
+        "edr",
+        "ssl",
+        "zertifikat",
+        "domain",
+        "mailbox",
+        "tenant",
+        "saas",
+    )
+    hardware_keywords = (
+        "hardware",
+        "gerät",
+        "geraet",
+        "firewall",
+        "switch",
+        "access point",
+        "router",
+        "server",
+        "notebook",
+        "laptop",
+        "desktop",
+        "workstation",
+        "pc",
+        "ssd",
+        "hdd",
+        "ram",
+        "monitor",
+        "drucker",
+        "scanner",
+        "nas",
+        "usv",
+        "kabel",
+        "patchpanel",
+        "telefon",
+        "headset",
+    )
+    if any(keyword in text for keyword in software_keywords):
+        return "software"
+    if any(keyword in text for keyword in hardware_keywords):
+        return "hardware"
+    return "unclassified"
+
+
+def _list_sevdesk_invoice_positions(client: SevdeskClient, invoice_id: int) -> List[Dict[str, Any]]:
+    if invoice_id <= 0:
+        return []
+    payload = client.request(
+        "GET",
+        "/InvoicePos",
+        params={
+            "invoice[id]": invoice_id,
+            "invoice[objectName]": "Invoice",
+            "limit": 250,
+            "offset": 0,
+        },
+    )
+    objects = payload.get("objects")
+    if isinstance(objects, list):
+        return [row for row in objects if isinstance(row, dict)]
+    if isinstance(objects, dict):
+        return [objects]
+    return []
+
+
+def _empty_sevdesk_material_effort_period(key: str, year: int, label: str) -> Dict[str, Any]:
+    return {
+        "key": key,
+        "year": int(year),
+        "label": label,
+        "invoiceCount": 0,
+        "positionCount": 0,
+        "invoicesWithPositions": 0,
+        "positionFetchErrors": 0,
+        "totalRevenueEur": 0.0,
+        "workRevenueEur": 0.0,
+        "workHours": 0.0,
+        "materialRevenueEur": 0.0,
+        "hardwareRevenueEur": 0.0,
+        "softwareRevenueEur": 0.0,
+        "materialUnclassifiedRevenueEur": 0.0,
+        "otherRevenueEur": 0.0,
+        "classifiedRevenueEur": 0.0,
+    }
+
+
+def _build_sevdesk_material_effort_stats(
+    client: SevdeskClient,
+    paid_invoices: List[Dict[str, Any]],
+    now_dt: datetime,
+) -> Dict[str, Any]:
+    periods: Dict[str, Dict[str, Any]] = {
+        "currentYear": _empty_sevdesk_material_effort_period(
+            "currentYear", now_dt.year, f"Lfd. Jahr {now_dt.year}"
+        ),
+        "lastYear": _empty_sevdesk_material_effort_period(
+            "lastYear", now_dt.year - 1, f"Vorjahr {now_dt.year - 1}"
+        ),
+    }
+    ranges = {
+        "currentYear": (datetime(now_dt.year, 1, 1), now_dt),
+        "lastYear": (
+            datetime(now_dt.year - 1, 1, 1),
+            datetime(now_dt.year - 1, 12, 31, 23, 59, 59),
+        ),
+    }
+    config = getattr(client, "config", None)
+
+    for invoice in paid_invoices:
+        paid_date = _invoice_date_for_paid(invoice)
+        if not paid_date:
+            continue
+        period_key = None
+        for key, (start_dt, end_dt) in ranges.items():
+            if start_dt <= paid_date <= end_dt:
+                period_key = key
+                break
+        if not period_key:
+            continue
+        bucket = periods[period_key]
+        invoice_amount = round(float(_invoice_paid_amount(invoice) or 0.0), 2)
+        if invoice_amount <= 0:
+            continue
+        bucket["invoiceCount"] += 1
+        bucket["totalRevenueEur"] += invoice_amount
+        invoice_id = _parse_int(invoice.get("id"))
+        if invoice_id <= 0:
+            bucket["otherRevenueEur"] += invoice_amount
+            continue
+        try:
+            position_rows = _list_sevdesk_invoice_positions(client, invoice_id)
+        except SevdeskError:
+            bucket["positionFetchErrors"] += 1
+            bucket["otherRevenueEur"] += invoice_amount
+            continue
+        if not position_rows:
+            bucket["otherRevenueEur"] += invoice_amount
+            continue
+        bucket["invoicesWithPositions"] += 1
+        for row in position_rows:
+            amount = round(float(_parse_sevdesk_amount(row) or 0.0), 2)
+            if not amount:
+                continue
+            bucket["positionCount"] += 1
+            quantity = _parse_float(row.get("quantity"), default=0.0)
+            if amount < 0:
+                bucket["otherRevenueEur"] += amount
+                continue
+            if _is_worktime_invoice_position(row, config=config):
+                bucket["workRevenueEur"] += amount
+                if quantity > 0:
+                    bucket["workHours"] += quantity
+                continue
+            if _is_travel_invoice_position(row) or _is_service_invoice_position(row, config=config):
+                bucket["otherRevenueEur"] += amount
+                continue
+            material_kind = _classify_sevdesk_material_kind(row)
+            if material_kind == "software":
+                bucket["softwareRevenueEur"] += amount
+            elif material_kind == "hardware":
+                bucket["hardwareRevenueEur"] += amount
+            else:
+                bucket["materialUnclassifiedRevenueEur"] += amount
+
+    for bucket in periods.values():
+        material_total = (
+            float(bucket["hardwareRevenueEur"] or 0.0)
+            + float(bucket["softwareRevenueEur"] or 0.0)
+            + float(bucket["materialUnclassifiedRevenueEur"] or 0.0)
+        )
+        total = float(bucket["totalRevenueEur"] or 0.0)
+        work = float(bucket["workRevenueEur"] or 0.0)
+        other = float(bucket["otherRevenueEur"] or 0.0)
+        residual = round(total - work - material_total - other, 2)
+        if residual > 0.01:
+            # Sevdesk invoice totals can include invoice-level discounts, tax or rounding
+            # that is not present in position sums. Keep this visible as "Sonstiges".
+            other += residual
+        bucket["materialRevenueEur"] = round(material_total, 2)
+        bucket["hardwareRevenueEur"] = round(float(bucket["hardwareRevenueEur"] or 0.0), 2)
+        bucket["softwareRevenueEur"] = round(float(bucket["softwareRevenueEur"] or 0.0), 2)
+        bucket["materialUnclassifiedRevenueEur"] = round(
+            float(bucket["materialUnclassifiedRevenueEur"] or 0.0), 2
+        )
+        bucket["workRevenueEur"] = round(work, 2)
+        bucket["workHours"] = round(float(bucket["workHours"] or 0.0), 2)
+        bucket["otherRevenueEur"] = round(other, 2)
+        bucket["totalRevenueEur"] = round(total, 2)
+        bucket["classifiedRevenueEur"] = round(
+            float(bucket["workRevenueEur"] or 0.0)
+            + float(bucket["materialRevenueEur"] or 0.0)
+            + float(bucket["otherRevenueEur"] or 0.0),
+            2,
+        )
+
+    return {
+        "method": "paid_invoices_by_paid_date",
+        "classification": "Arbeitszeit = Position mit Name 'Arbeitszeit'; Hardware/Software automatisch anhand Positionstext; übrige Nicht-Arbeitszeit als Material, Anfahrt/Service/Abweichungen als Sonstiges.",
+        "periods": periods,
+    }
+
+
 def _extract_sevdesk_contact(invoice: Dict[str, Any]) -> Tuple[str, str]:
     contact = invoice.get("contact")
     contact_id = ""
@@ -8621,6 +8842,18 @@ def _build_sevdesk_stats(
     overdue_invoices: List[Dict[str, Any]] = []
     overdue_sum = 0.0
     paid_avg = 0.0
+    material_effort: Dict[str, Any] = {
+        "method": "paid_invoices_by_paid_date",
+        "classification": "Arbeitszeit = Position mit Name 'Arbeitszeit'; übrige Positionen werden aus InvoicePos klassifiziert.",
+        "periods": {
+            "currentYear": _empty_sevdesk_material_effort_period(
+                "currentYear", now_dt.year, f"Lfd. Jahr {now_dt.year}"
+            ),
+            "lastYear": _empty_sevdesk_material_effort_period(
+                "lastYear", now_dt.year - 1, f"Vorjahr {now_dt.year - 1}"
+            ),
+        },
+    }
     recurring_tag_overview: Dict[str, Any] = {
         "monthlyTotalEur": 0.0,
         "customersCount": 0,
@@ -8719,6 +8952,7 @@ def _build_sevdesk_stats(
                 overdue_invoices.append(item)
         overdue_sum = round(sum(_parse_sevdesk_amount(item) for item in overdue_invoices), 2)
         paid_avg = round(paid_sum_total / len(paid_invoices), 2) if paid_invoices else 0.0
+        material_effort = _build_sevdesk_material_effort_stats(client, paid_invoices, now_dt)
 
     top_customers = {
         "thisMonth": _top_customers_for_period(all_invoices, start_month, now_dt),
@@ -8782,6 +9016,7 @@ def _build_sevdesk_stats(
         "customerPaymentStats": customer_payment_stats,
         "customerPaymentSummary": customer_payment_summary,
         "recurringTagOverview": recurring_tag_overview,
+        "materialEffort": material_effort,
     }
 
 

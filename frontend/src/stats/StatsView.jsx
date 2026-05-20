@@ -38,6 +38,81 @@ const customerTabs = [
   { key: "customers", label: "Kunden", icon: Users }
 ];
 
+const materialPercent = (part, total) => {
+  const totalValue = Number(total || 0);
+  if (!totalValue) return "0%";
+  return `${Math.round((Number(part || 0) / totalValue) * 100)}%`;
+};
+
+function MaterialEffortLine({ label, value, detail, valueClassName = "text-sand-900" }) {
+  return (
+    <div className="flex items-start justify-between gap-3 border-t border-sand-100 py-2 first:border-t-0">
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-sand-700">{label}</p>
+        {detail ? <p className="mt-0.5 text-[11px] text-sand-400">{detail}</p> : null}
+      </div>
+      <span className={`shrink-0 text-right font-metrics text-sm font-semibold ${valueClassName}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function MaterialEffortPeriodCard({ period }) {
+  const total = Number(period?.totalRevenueEur || 0);
+  const material = Number(period?.materialRevenueEur || 0);
+  const work = Number(period?.workRevenueEur || 0);
+  const other = Number(period?.otherRevenueEur || 0);
+  const hardware = Number(period?.hardwareRevenueEur || 0);
+  const software = Number(period?.softwareRevenueEur || 0);
+  const unclassified = Number(period?.materialUnclassifiedRevenueEur || 0);
+  return (
+    <div className="rounded-2xl border border-sand-200 bg-white p-3 shadow-soft">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.24em] text-sand-500">
+            {period?.label || "Zeitraum"}
+          </p>
+          <p className="mt-1 text-xl font-metrics text-sand-900">{formatEur(material)}</p>
+        </div>
+        <span className="rounded-full border border-sand-200 bg-sand-50 px-2 py-1 text-[10px] uppercase tracking-wide text-sand-500">
+          {materialPercent(material, total)} Material
+        </span>
+      </div>
+      <div className="mt-3">
+        <MaterialEffortLine
+          label="Material gesamt"
+          value={formatEur(material)}
+          detail={`${formatEur(hardware)} Hardware · ${formatEur(software)} Software · ${formatEur(unclassified)} offen`}
+          valueClassName="text-emerald-700"
+        />
+        <MaterialEffortLine
+          label="Arbeitszeit"
+          value={formatEur(work)}
+          detail={`${formatHours(period?.workHours || 0)} aus Position Arbeitszeit`}
+          valueClassName="text-sky-700"
+        />
+        <MaterialEffortLine
+          label="Sonstiges"
+          value={formatEur(other)}
+          detail="Anfahrt, Servicepauschalen, Rundung oder nicht zuordenbare Beträge"
+          valueClassName={other ? "text-amber-700" : "text-sand-400"}
+        />
+        <MaterialEffortLine
+          label="Gesamt"
+          value={formatEur(total)}
+          detail={`${formatNumber(period?.invoiceCount || 0)} Rechnungen · ${formatNumber(period?.positionCount || 0)} Positionen`}
+        />
+      </div>
+      {Number(period?.positionFetchErrors || 0) > 0 ? (
+        <p className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+          {formatNumber(period.positionFetchErrors)} Rechnung(en) konnten nicht bis auf Positionsebene gelesen werden.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export default function StatsView() {
   const exportRef = useRef(null);
   const [activeTab, setActiveTab] = useState("general");
@@ -85,6 +160,16 @@ export default function StatsView() {
       : {};
   const recurringTagTotals = Array.isArray(recurringTags?.tagTotals) ? recurringTags.tagTotals : [];
   const recurringCustomerRows = Array.isArray(recurringTags?.customerRows) ? recurringTags.customerRows : [];
+  const materialEffort =
+    stats?.sevdesk?.materialEffort && typeof stats.sevdesk.materialEffort === "object"
+      ? stats.sevdesk.materialEffort
+      : {};
+  const materialEffortRows = useMemo(() => {
+    const periods = materialEffort?.periods && typeof materialEffort.periods === "object"
+      ? materialEffort.periods
+      : {};
+    return ["currentYear", "lastYear"].map((key) => periods[key]).filter(Boolean);
+  }, [materialEffort]);
   const taskPerformance =
     stats?.taskPerformance && typeof stats.taskPerformance === "object" ? stats.taskPerformance : {};
   const taskPerformanceToday =
@@ -961,6 +1046,38 @@ export default function StatsView() {
                           </div>
                         </div>
                       </div>
+                    </div>
+                    <div className="mt-6 rounded-2xl border border-sand-200 bg-sand-50/70 p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] uppercase tracking-[0.28em] text-sand-500">
+                            Material & Arbeitszeit
+                          </p>
+                          <p className="mt-1 max-w-3xl text-[11px] text-sand-600">
+                            Bezahlte sevdesk-Rechnungen nach Zahlungsdatum. Arbeitszeit wird über die Position
+                            Arbeitszeit erkannt; Hardware/Software wird automatisch aus dem Positionstext abgeleitet.
+                          </p>
+                        </div>
+                        <span className="rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-500">
+                          Lfd. Jahr / Vorjahr
+                        </span>
+                      </div>
+                      {materialEffortRows.length ? (
+                        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                          {materialEffortRows.map((period) => (
+                            <MaterialEffortPeriodCard key={period.key || period.label} period={period} />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mt-3 rounded-2xl border border-dashed border-sand-200 bg-white px-4 py-4 text-sm text-sand-500">
+                          Keine Positionsauswertung aus sevdesk vorhanden.
+                        </div>
+                      )}
+                      {materialEffort?.classification ? (
+                        <p className="mt-3 text-[11px] text-sand-500">
+                          Methode: {materialEffort.classification}
+                        </p>
+                      ) : null}
                     </div>
                   </>
                 )}
