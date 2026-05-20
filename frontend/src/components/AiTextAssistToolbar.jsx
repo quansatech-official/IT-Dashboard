@@ -27,7 +27,7 @@ export default function AiTextAssistToolbar({
   context = {},
   format = "html",
   disabled = false,
-  variant = "buttons",
+  variant = "combo",
   className = ""
 }) {
   const [running, setRunning] = useState("");
@@ -113,10 +113,10 @@ export default function AiTextAssistToolbar({
         setUndoState(null);
       }}
       disabled={disabled || Boolean(running)}
-      className="ai-action inline-flex min-h-8 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+      className="ai-action inline-flex min-h-7 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
       title="KI-Änderung rückgängig machen"
     >
-      <RotateCcw size={12} />
+      <RotateCcw size={11} />
       <span>Rückgängig</span>
     </button>
   ) : null;
@@ -126,35 +126,35 @@ export default function AiTextAssistToolbar({
     const activeAction = ACTIONS.find((action) => action.key === running);
 
     return (
-      <div ref={rootRef} className={`ai-panel relative inline-flex flex-wrap items-center gap-1 rounded-2xl border border-sky-100 bg-sky-50/70 p-1.5 ${className}`}>
+      <div ref={rootRef} className={`ai-panel relative inline-flex items-center gap-1 rounded-xl border border-sky-100 bg-sky-50/70 p-1 ${className}`}>
         <div className="inline-flex overflow-hidden rounded-full border border-sky-200 bg-sky-50 shadow-sm">
           <button
             type="button"
             onClick={() => run(primaryAction.key)}
             disabled={disabled || Boolean(running)}
-            className="ai-action inline-flex min-h-8 items-center gap-1.5 px-3 py-1 text-[11px] font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+            className="ai-action inline-flex min-h-7 items-center gap-1 px-2.5 py-0.5 text-[10px] font-medium leading-none text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
             title={primaryAction.label}
           >
-            <PrimaryIcon size={12} className={running ? "animate-spin" : ""} />
-            <span>{running ? `${activeAction?.label || primaryAction.label}...` : primaryAction.label}</span>
+            <PrimaryIcon size={11} className={running ? "animate-spin" : ""} />
+            <span className="whitespace-nowrap">{running ? `${activeAction?.label || primaryAction.label}...` : primaryAction.label}</span>
           </button>
           <button
             type="button"
             onClick={() => setDropdownOpen((open) => !open)}
             disabled={disabled || Boolean(running)}
-            className="ai-action inline-flex min-h-8 items-center justify-center border-l border-sky-200 px-2 text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+            className="ai-action inline-flex min-h-7 items-center justify-center border-l border-sky-200 px-1.5 text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
             title="Spezial-KI auswählen"
             aria-label="Spezial-KI auswählen"
             aria-haspopup="menu"
             aria-expanded={dropdownOpen}
           >
-            <ChevronDown size={13} className={`transition ${dropdownOpen ? "rotate-180" : ""}`} />
+            <ChevronDown size={12} className={`transition ${dropdownOpen ? "rotate-180" : ""}`} />
           </button>
         </div>
 
         {dropdownOpen ? (
-          <div className="absolute right-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-xl border border-sky-100 bg-white py-1 text-xs shadow-xl" role="menu">
-            <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-sand-400">
+          <div className="absolute right-0 top-full z-50 mt-1 w-48 overflow-hidden rounded-lg border border-sky-100 bg-white py-0.5 text-[11px] shadow-xl" role="menu">
+            <div className="px-2.5 py-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-sand-400">
               Spezial KI
             </div>
             {specialActions.map((action) => {
@@ -164,10 +164,10 @@ export default function AiTextAssistToolbar({
                   key={action.key}
                   type="button"
                   onClick={() => run(action.key)}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sand-700 hover:bg-sky-50 hover:text-sky-800"
+                  className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-sand-700 hover:bg-sky-50 hover:text-sky-800"
                   role="menuitem"
                 >
-                  <Icon size={13} className="text-sky-600" />
+                  <Icon size={12} className="text-sky-600" />
                   <span>{action.label}</span>
                 </button>
               );
@@ -176,13 +176,13 @@ export default function AiTextAssistToolbar({
         ) : null}
 
         {undoButton}
-        {error ? <span className="ml-1 text-[11px] text-rose-600">{error}</span> : null}
+        {error ? <span className="ml-1 text-[10px] text-rose-600">{error}</span> : null}
       </div>
     );
   }
 
   return (
-    <div className={`ai-panel flex flex-wrap items-center gap-1 rounded-2xl border border-sky-100 bg-sky-50/70 p-1.5 ${className}`}>
+    <div className={`ai-panel flex flex-wrap items-center gap-1 rounded-xl border border-sky-100 bg-sky-50/70 p-1 ${className}`}>
       {ACTIONS.map((action) => {
         const Icon = action.icon;
         const active = running === action.key;
@@ -192,16 +192,16 @@ export default function AiTextAssistToolbar({
             type="button"
             onClick={() => run(action.key)}
             disabled={disabled || Boolean(running)}
-            className="ai-action inline-flex min-h-8 items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+            className="ai-action inline-flex min-h-7 items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
             title={action.label}
           >
-            {active ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+            {active ? <Loader2 size={11} className="animate-spin" /> : <Icon size={11} />}
             <span>{action.label}</span>
           </button>
         );
       })}
       {undoButton}
-      {error ? <span className="ml-1 text-[11px] text-rose-600">{error}</span> : null}
+      {error ? <span className="ml-1 text-[10px] text-rose-600">{error}</span> : null}
     </div>
   );
 }

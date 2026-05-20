@@ -95,7 +95,7 @@ export default function RichTextEditor({
               context={aiContext}
               format="html"
               disabled={disabled}
-              className="mr-1"
+              className="mr-0.5"
             />
           ) : null}
           <button

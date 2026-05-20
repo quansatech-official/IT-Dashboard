@@ -129,7 +129,7 @@ export default function NotesRichTextEditor({
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1">
         {enableAi ? (
           <AiTextAssistToolbar
             value={showHtmlSource ? sourceValue : editor?.getHTML?.() || value}
@@ -138,7 +138,7 @@ export default function NotesRichTextEditor({
             context={aiContext}
             format="html"
             disabled={disabled}
-            className="mr-2"
+            className="mr-0.5"
           />
         ) : null}
         {allowHtmlSource ? (
