@@ -5093,7 +5093,7 @@ export default function CustomerDirectoryView() {
           </div>
 
             <div className="mt-4 space-y-3">
-            <div className="rounded-2xl border border-sky-200 bg-white p-3.5">
+            <div className="ai-panel rounded-2xl border border-sky-200 bg-white p-3.5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.28em] text-sky-700">KI-Vorerfassung</p>
@@ -5105,7 +5105,7 @@ export default function CustomerDirectoryView() {
                   type="button"
                   onClick={generateContractDraftWithAi}
                   disabled={contractAiStatus === "loading"}
-                  className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-900 px-3 py-1.5 text-[11px] uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="ai-action inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-[11px] uppercase tracking-wide text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Sparkles size={12} />
                   {contractAiStatus === "loading" ? "KI liest…" : "Vorschlag erstellen"}
@@ -5115,7 +5115,7 @@ export default function CustomerDirectoryView() {
                 value={contractAiInput}
                 onChange={(event) => setContractAiInput(event.target.value)}
                 rows={4}
-                className="mt-3 w-full rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm"
+                className="ai-field mt-3 w-full rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm"
                 placeholder="z.B. Managed Backup fuer 5 Geraete, 180 EUR monatlich, Start 01.06., Laufzeit 12 Monate, Kuendigung 3 Monate..."
               />
               {contractAiResult?.draft ? (

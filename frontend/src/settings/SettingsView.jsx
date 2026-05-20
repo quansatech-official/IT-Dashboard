@@ -214,6 +214,7 @@ const defaultSevdesk = {
 
 const defaultAiConnection = {
   ai_provider: "ollama",
+  ai_default_enabled: true,
   ai_base_url: "http://ollama:11434",
   ai_api_key: "",
   has_ai_api_key: false,
@@ -228,6 +229,7 @@ const defaultAiConnection = {
   ai_newsletter_model: "",
   ai_meta_hub_model: "",
   ai_project_folder_model: "",
+  ai_codex_model: "",
   ai_endpoints: [],
   ai_purpose_routes: {},
   ai_purpose_labels: {}
@@ -241,9 +243,16 @@ const defaultAiEndpoint = () => ({
   api_key: "",
   has_api_key: false,
   default_model: "",
+  codex_model: "",
   enabled: true,
   notes: ""
 });
+
+const isCodexBridgeEndpoint = (endpoint = {}) => {
+  const baseUrl = String(endpoint?.base_url || endpoint?.baseUrl || "").toLowerCase();
+  const model = String(endpoint?.default_model || endpoint?.defaultModel || "").toLowerCase();
+  return baseUrl.includes("codex-bridge") || baseUrl.includes("codex_bridge") || model === "codex-cli";
+};
 
 const normalizeAiConnectionFromSettings = (data, previous = defaultAiConnection) => {
   const provider = data?.ai_provider || defaultAiConnection.ai_provider;
@@ -258,14 +267,16 @@ const normalizeAiConnectionFromSettings = (data, previous = defaultAiConnection)
             data?.ai_base_url ||
             (provider === "openai_compatible" ? "" : defaultAiConnection.ai_base_url),
           default_model: data?.ai_default_model || "",
+          codex_model: data?.ai_codex_model || "",
           has_api_key: Boolean(data?.has_ai_api_key),
-          enabled: true,
+          enabled: data?.ai_default_enabled !== false,
           notes: ""
         }
       ];
   return {
     ...previous,
     ai_provider: provider,
+    ai_default_enabled: data?.ai_default_enabled !== false,
     ai_base_url:
       data?.ai_base_url ||
       (provider === "openai_compatible" ? "" : defaultAiConnection.ai_base_url),
@@ -282,6 +293,7 @@ const normalizeAiConnectionFromSettings = (data, previous = defaultAiConnection)
     ai_newsletter_model: data?.ai_newsletter_model || "",
     ai_meta_hub_model: data?.ai_meta_hub_model || "",
     ai_project_folder_model: data?.ai_project_folder_model || "",
+    ai_codex_model: data?.ai_codex_model || "",
     ai_endpoints: endpoints.map((endpoint) => ({
       id: String(endpoint?.id || ""),
       name: String(endpoint?.name || endpoint?.id || "KI Endpoint"),
@@ -290,6 +302,7 @@ const normalizeAiConnectionFromSettings = (data, previous = defaultAiConnection)
       api_key: "",
       has_api_key: Boolean(endpoint?.has_api_key),
       default_model: String(endpoint?.default_model || ""),
+      codex_model: String(endpoint?.codex_model || ""),
       enabled: endpoint?.enabled !== false,
       notes: String(endpoint?.notes || "")
     })),
@@ -2149,6 +2162,7 @@ export default function SettingsView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ai_provider: aiConnection.ai_provider,
+          ai_default_enabled: aiConnection.ai_default_enabled,
           ai_base_url: aiConnection.ai_base_url,
           ai_api_key: aiConnection.ai_api_key,
           ai_default_model: aiConnection.ai_default_model,
@@ -2162,6 +2176,7 @@ export default function SettingsView() {
           ai_newsletter_model: aiConnection.ai_newsletter_model,
           ai_meta_hub_model: aiConnection.ai_meta_hub_model,
           ai_project_folder_model: aiConnection.ai_project_folder_model,
+          ai_codex_model: aiConnection.ai_codex_model,
           ai_endpoints: aiConnection.ai_endpoints,
           ai_purpose_routes: aiConnection.ai_purpose_routes
         })
@@ -2237,6 +2252,11 @@ export default function SettingsView() {
       (aiConnection.ai_endpoints || []).find((endpoint) => endpoint.id === targetId) ||
       (aiConnection.ai_endpoints || [])[0] ||
       null;
+    const endpointCodexModel = String(
+      selectedEndpoint?.id && selectedEndpoint.id !== "default"
+        ? selectedEndpoint?.codex_model || ""
+        : aiConnection.ai_codex_model || ""
+    ).trim();
     try {
       const res = await fetch(`${API}/integrations/ai_models`, {
         method: "POST",
@@ -2257,6 +2277,7 @@ export default function SettingsView() {
           ai_newsletter_model: aiConnection.ai_newsletter_model,
           ai_meta_hub_model: aiConnection.ai_meta_hub_model,
           ai_project_folder_model: aiConnection.ai_project_folder_model,
+          ai_codex_model: endpointCodexModel,
           ai_endpoints: aiConnection.ai_endpoints,
           ai_purpose_routes: aiConnection.ai_purpose_routes
         })
@@ -2305,6 +2326,11 @@ export default function SettingsView() {
     const endpointProvider = String(selectedEndpoint?.provider || aiConnection.ai_provider || "");
     const endpointBaseUrl = String(selectedEndpoint?.base_url || aiConnection.ai_base_url || "").trim();
     const endpointModel = String(selectedEndpoint?.default_model || aiConnection.ai_default_model || "").trim();
+    const endpointCodexModel = String(
+      selectedEndpoint?.id && selectedEndpoint.id !== "default"
+        ? selectedEndpoint?.codex_model || ""
+        : aiConnection.ai_codex_model || ""
+    ).trim();
     if (!endpointBaseUrl) {
       setAiConnectionModelsInfo({
         endpointId: String(selectedEndpoint?.id || "default"),
@@ -2339,6 +2365,7 @@ export default function SettingsView() {
           ai_newsletter_model: aiConnection.ai_newsletter_model,
           ai_meta_hub_model: aiConnection.ai_meta_hub_model,
           ai_project_folder_model: aiConnection.ai_project_folder_model,
+          ai_codex_model: endpointCodexModel,
           ai_endpoints: aiConnection.ai_endpoints,
           ai_purpose_routes: aiConnection.ai_purpose_routes
         })
@@ -3070,7 +3097,9 @@ export default function SettingsView() {
         aiConnection.ai_newsletter_model,
         aiConnection.ai_meta_hub_model,
         aiConnection.ai_project_folder_model,
+        aiConnection.ai_codex_model,
         ...(aiConnection.ai_endpoints || []).map((endpoint) => endpoint?.default_model)
+          .concat((aiConnection.ai_endpoints || []).map((endpoint) => endpoint?.codex_model))
       ]
         .map((value) => String(value || "").trim())
         .filter(Boolean)
@@ -3097,6 +3126,7 @@ export default function SettingsView() {
   const telemetryAiRequests = telemetrySummary?.ai_requests || {};
   const telemetryAiEndpoints = Array.isArray(telemetryAiRequests?.endpoints) ? telemetryAiRequests.endpoints : [];
   const telemetryAiModels = Array.isArray(telemetryAiRequests?.models) ? telemetryAiRequests.models : [];
+  const telemetryAiErrorGroups = Array.isArray(telemetryAiRequests?.error_groups) ? telemetryAiRequests.error_groups : [];
   const telemetryAiRecent = Array.isArray(telemetryAiRequests?.recent) ? telemetryAiRequests.recent : [];
   const aiEndpoints = Array.isArray(aiConnection.ai_endpoints) ? aiConnection.ai_endpoints : [];
   const selectedAiEndpoint = aiEndpoints.find((endpoint) => endpoint.id === selectedAiEndpointId) || aiEndpoints[0] || null;
@@ -3373,7 +3403,7 @@ export default function SettingsView() {
           </div>
         </aside>
       <main ref={mainRef} className="min-w-0 space-y-4">
-        <div className="rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
+        <div className="ai-panel rounded-3xl border border-sand-200 bg-white shadow-soft p-6">
           <button
             type="button"
             onClick={() => setTelemetryOpen((current) => !current)}
@@ -3558,6 +3588,54 @@ export default function SettingsView() {
                   </div>
                 </div>
                 <div className="border-t border-sand-200 bg-sand-50 px-3 py-2 text-[11px] uppercase tracking-wide text-sand-500">
+                  KI-Fehler nach Zweck, Endpoint und Modell
+                </div>
+                <div className="max-h-56 overflow-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-white text-sand-500">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">Zweck</th>
+                        <th className="px-3 py-2 font-medium">Endpoint</th>
+                        <th className="px-3 py-2 font-medium">Modell</th>
+                        <th className="px-3 py-2 font-medium">Fehler</th>
+                        <th className="px-3 py-2 font-medium">Anzahl</th>
+                        <th className="px-3 py-2 font-medium">Zuletzt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {telemetryAiErrorGroups.length ? (
+                        telemetryAiErrorGroups.slice(0, 12).map((group, index) => (
+                          <tr key={`${group.purpose}-${group.endpoint_id}-${group.model}-${group.error_type}-${index}`} className="border-t border-sand-100">
+                            <td className="px-3 py-2 text-sand-700">{group.purpose || "unspecified"}</td>
+                            <td className="px-3 py-2 text-sand-600">{group.endpoint_name || group.endpoint_id || "Standard"}</td>
+                            <td className="px-3 py-2 text-sand-600">
+                              <span className="inline-block max-w-[180px] truncate align-bottom" title={group.model || ""}>
+                                {group.model || "unbekannt"}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-rose-700">
+                              <div>{group.error_type || "error"}{group.http_status ? ` · HTTP ${group.http_status}` : ""}</div>
+                              {group.error_detail ? (
+                                <div className="max-w-[320px] truncate text-[10px] text-rose-500" title={group.error_detail}>
+                                  {group.error_detail}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="px-3 py-2 text-sand-600">{group.count || 0}</td>
+                            <td className="px-3 py-2 text-sand-600">{formatTelemetryTime(group.last_seen_at)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td className="px-3 py-4 text-sand-500" colSpan={6}>
+                            Keine gruppierten KI-Fehler im gewählten Zeitraum.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="border-t border-sand-200 bg-sand-50 px-3 py-2 text-[11px] uppercase tracking-wide text-sand-500">
                   Letzte KI-Anfragen
                 </div>
                 <div className="max-h-64 overflow-auto">
@@ -3571,6 +3649,7 @@ export default function SettingsView() {
                         <th className="px-3 py-2 font-medium">Dauer</th>
                         <th className="px-3 py-2 font-medium">Prompt/Antwort</th>
                         <th className="px-3 py-2 font-medium">Status</th>
+                        <th className="px-3 py-2 font-medium">Fehlerdetails</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3592,11 +3671,32 @@ export default function SettingsView() {
                             <td className={`px-3 py-2 ${entry.success ? "text-emerald-700" : "text-rose-700"}`}>
                               {entry.success ? "ok" : "Fehler"}
                             </td>
+                            <td className="px-3 py-2 text-sand-500">
+                              {!entry.success ? (
+                                <div>
+                                  <div className="text-rose-700">
+                                    {entry.error_type || "error"}{entry.http_status ? ` · HTTP ${entry.http_status}` : ""}
+                                  </div>
+                                  {entry.error_detail ? (
+                                    <div className="max-w-[260px] truncate text-[10px] text-rose-500" title={entry.error_detail}>
+                                      {entry.error_detail}
+                                    </div>
+                                  ) : null}
+                                  {(entry.candidate_models || []).length ? (
+                                    <div className="max-w-[260px] truncate font-mono text-[10px] text-sand-400" title={(entry.candidate_models || []).join(", ")}>
+                                      Kandidaten: {(entry.candidate_models || []).slice(0, 3).join(", ")}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : (
+                                "–"
+                              )}
+                            </td>
                           </tr>
                         ))
                       ) : (
                         <tr>
-                          <td className="px-3 py-4 text-sand-500" colSpan={7}>
+                          <td className="px-3 py-4 text-sand-500" colSpan={8}>
                             Noch keine KI-Anfragen im gewählten Zeitraum.
                           </td>
                         </tr>
@@ -4579,14 +4679,16 @@ export default function SettingsView() {
                   { key: "anthropic", label: "Anthropic Claude", provider: "openai_compatible", base_url: "https://api.anthropic.com/v1", model: "claude-haiku-4-5-20251001" },
                   { key: "azure", label: "Azure AI", provider: "openai_compatible", base_url: "https://<resource>.openai.azure.com/openai/v1", model: "" },
                   { key: "vllm", label: "vLLM lokal", provider: "openai_compatible", base_url: "http://vllm:8000/v1", model: "" },
-                  { key: "codex-bridge", label: "Codex Bridge", provider: "openai_compatible", base_url: "http://codex-bridge:8020/v1", model: "codex-cli" }
+                  { key: "codex-bridge", label: "Codex Bridge", provider: "openai_compatible", base_url: "http://codex-bridge:8020/v1", model: "codex-cli", codex_model: "" }
                 ];
                 const applyPreset = (preset) =>
                   setAiConnection((prev) => ({
                     ...prev,
                     ai_provider: preset.provider,
+                    ai_default_enabled: true,
                     ai_base_url: preset.base_url,
-                    ai_default_model: preset.model || prev.ai_default_model
+                    ai_default_model: preset.model || prev.ai_default_model,
+                    ai_codex_model: preset.key === "codex-bridge" ? (prev.ai_codex_model || preset.codex_model || "") : prev.ai_codex_model
                   }));
                 const aiSubTabs = [
                   { key: "endpoints", label: "Endpunkte" },
@@ -4616,16 +4718,30 @@ export default function SettingsView() {
 
                 {aiSubTab === "endpoints" ? (
                   <div className="mt-4 space-y-4">
-                    <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                    <div className="ai-panel rounded-2xl border border-sand-200 bg-white p-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Standard-Endpunkt</p>
-                        <button
-                          type="button"
-                          onClick={() => testAiEndpoint("default")}
-                          className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] text-sand-700 hover:bg-sand-50"
-                        >
-                          Endpoint testen
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] text-sand-700">
+                            <input
+                              type="checkbox"
+                              checked={aiConnection.ai_default_enabled !== false}
+                              onChange={(event) =>
+                                setAiConnection((prev) => ({ ...prev, ai_default_enabled: event.target.checked }))
+                              }
+                              className="h-3.5 w-3.5"
+                            />
+                            Aktiv
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => testAiEndpoint("default")}
+                            disabled={aiConnection.ai_default_enabled === false}
+                            className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-[11px] text-sand-700 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Endpoint testen
+                          </button>
+                        </div>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {aiPresets.map((preset) => (
@@ -4708,10 +4824,30 @@ export default function SettingsView() {
                             placeholder="leer = automatisch erstes Provider-Modell"
                           />
                         </div>
+                        {isCodexBridgeEndpoint({
+                          base_url: aiConnection.ai_base_url,
+                          default_model: aiConnection.ai_default_model
+                        }) ? (
+                          <div className="md:col-span-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2">
+                            <label className="text-xs text-sky-800">Codex-CLI Modell fixieren</label>
+                            <input
+                              list={aiKnownModels.length ? aiModelDatalistId : undefined}
+                              value={aiConnection.ai_codex_model}
+                              onChange={(event) =>
+                                setAiConnection((prev) => ({ ...prev, ai_codex_model: event.target.value }))
+                              }
+                              className="mt-1 w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm"
+                              placeholder="z. B. gpt-5.2, gpt-5.3-codex oder leer = Bridge-Default"
+                            />
+                            <p className="mt-1 text-[11px] text-sky-700">
+                              Wird bei Codex Bridge als Request-Modell gesendet und damit an `codex exec --model` weitergereicht.
+                            </p>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-sand-200 bg-white p-4">
+                    <div className="ai-panel rounded-2xl border border-sand-200 bg-white p-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Zusätzliche Endpunkte</p>
@@ -4727,7 +4863,7 @@ export default function SettingsView() {
                       </div>
                       <div className="mt-3 space-y-2">
                         {aiEndpoints.filter((e) => e.id !== "default").map((endpoint) => (
-                          <div key={endpoint.id} className="rounded-xl border border-sand-200 bg-sand-50/40 p-3">
+                          <div key={endpoint.id} className="ai-panel rounded-xl border border-sand-200 bg-sand-50/40 p-3">
                             <div className="grid grid-cols-1 gap-2 lg:grid-cols-[1.1fr_0.9fr_1.4fr_1fr]">
                               <input
                                 value={endpoint.name}
@@ -4756,6 +4892,17 @@ export default function SettingsView() {
                                 placeholder="Standard/Fallback Modell"
                               />
                             </div>
+                            {isCodexBridgeEndpoint(endpoint) ? (
+                              <div className="mt-2">
+                                <input
+                                  list={aiKnownModels.length ? aiModelDatalistId : undefined}
+                                  value={endpoint.codex_model || ""}
+                                  onChange={(event) => updateAiEndpoint(endpoint.id, { codex_model: event.target.value })}
+                                  className="w-full rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900"
+                                  placeholder="Codex-CLI Modell fixieren, z. B. gpt-5.3-codex"
+                                />
+                              </div>
+                            ) : null}
                             <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-[1fr_auto_auto]">
                               <input
                                 type="password"
@@ -4792,7 +4939,7 @@ export default function SettingsView() {
                 ) : null}
 
                 {aiSubTab === "routing" ? (
-                  <div className="mt-4 rounded-2xl border border-sand-200 bg-white p-4">
+                  <div className="ai-panel mt-4 rounded-2xl border border-sand-200 bg-white p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="text-[11px] uppercase tracking-[0.22em] text-sand-500">Zuordnung pro Bereich</p>

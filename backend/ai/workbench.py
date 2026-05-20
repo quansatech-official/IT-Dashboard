@@ -38,6 +38,14 @@ def clean_text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
 
 
+def clean_multiline_text(value: Any) -> str:
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return ""
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def normalize_tone(value: Any) -> str:
     tone = clean_text(value).lower().replace(" ", "_")
     allowed = {
@@ -183,10 +191,12 @@ class WorkbenchAiService:
 
     def improve_offer_text(self, data: Dict[str, Any]) -> Dict[str, Any]:
         mode = clean_text(data.get("mode")).lower()
-        current_text = clean_text(data.get("current_text") or data.get("currentText"))
-        context = clean_text(data.get("context"))
         if not mode:
             raise ValueError("Mode required")
+        preserve_lines = mode == "invoice_position_text"
+        cleaner = clean_multiline_text if preserve_lines else clean_text
+        current_text = cleaner(data.get("current_text") or data.get("currentText"))
+        context = cleaner(data.get("context"))
         purpose = "invoice_summary" if mode == "invoice_position_text" else "offer_text"
 
         prompts = self.runtime.load_prompts()
@@ -204,12 +214,13 @@ class WorkbenchAiService:
         payload, model, provider = self.runtime.generate(
             prompt,
             model_candidates=self.runtime.resolve_models(purpose=purpose),
+            purpose=purpose,
             temperature=0.2,
             max_tokens=self.runtime.tool_max_tokens,
             timeout=self.runtime.tool_timeout_seconds,
             system_prompt=self.runtime.system_prompt,
         )
-        text = clean_text((payload or {}).get("response"))
+        text = cleaner((payload or {}).get("response"))
         if mode == "invoice_position_text":
             text = self.runtime.sanitize_invoice_text(text)
         if not text:
@@ -235,6 +246,7 @@ class WorkbenchAiService:
         payload, model, provider = self.runtime.generate(
             prompt,
             model_candidates=self.runtime.resolve_models(purpose="action"),
+            purpose="action",
             response_format="json",
             temperature=0.2,
             max_tokens=self.runtime.tool_max_tokens,
@@ -270,6 +282,7 @@ class WorkbenchAiService:
         payload, model, provider = self.runtime.generate(
             prompt,
             model_candidates=self.runtime.resolve_models(purpose="customer_development"),
+            purpose="customer_development",
             response_format="json",
             temperature=0.35,
             max_tokens=min(900, self.runtime.tool_max_tokens),
@@ -310,6 +323,7 @@ class WorkbenchAiService:
         payload, model, provider = self.runtime.generate(
             prompt,
             model_candidates=self.runtime.resolve_models(purpose="customer_development"),
+            purpose="customer_development",
             temperature=0.25,
             max_tokens=min(800, self.runtime.tool_max_tokens),
             timeout=self.runtime.tool_timeout_seconds,
@@ -340,6 +354,7 @@ class WorkbenchAiService:
         payload, model, provider = self.runtime.generate(
             prompt,
             model_candidates=self.runtime.resolve_models(purpose="customer_development"),
+            purpose="customer_development",
             response_format="json",
             temperature=0.15,
             max_tokens=min(900, self.runtime.tool_max_tokens),

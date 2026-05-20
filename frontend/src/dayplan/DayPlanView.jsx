@@ -26,6 +26,7 @@ import {
   Undo2,
   X
 } from "lucide-react";
+import AiTextAssistToolbar from "../components/AiTextAssistToolbar";
 
 const API = "/api";
 
@@ -1028,22 +1029,34 @@ export default function DayPlanView() {
     updateSevdeskDraftForm(draftForm);
     setSevdeskDraftAiLoading(true);
     setSevdeskDraftStatus((prev) => ({ state: prev?.state === "saved" ? "saved" : "idle", error: "" }));
-    try {
-      const quantity = roundUpToQuarterHours(Number(draftForm.quantity));
-      const contextParts = [
-        sevdeskDraftTask.customer ? `Kunde: ${sevdeskDraftTask.customer}` : "",
-        sevdeskDraftTask.title ? `Aufgabentitel: ${sevdeskDraftTask.title}` : "",
-        sevdeskDraftTask.details ? `Details/Notizen: ${sevdeskDraftTask.details}` : "",
-        sevdeskDraftTask.arrival_time || sevdeskDraftTask.departure_time
-          ? `Einsatzzeit vor Ort: ${sevdeskDraftTask.arrival_time || "?"} bis ${sevdeskDraftTask.departure_time || "?"}`
-          : "",
-        Number.isFinite(quantity) && quantity > 0 ? `Abzurechnende Stunden: ${quantity} h` : "",
-        draftForm.name ? `Geplanter Positionsname: ${draftForm.name}` : "",
-        draftForm.billing_note ? `Interner Abrechnungsvermerk: ${draftForm.billing_note}` : "",
-        draftForm.include_mileage ? "Hinweis: Anfahrtskosten werden als separate Position abgerechnet." : "",
+    const quantity = roundUpToQuarterHours(Number(draftForm.quantity));
+    const contextParts = [
+      sevdeskDraftTask.customer ? `Kunde: ${sevdeskDraftTask.customer}` : "",
+      sevdeskDraftTask.title ? `Aufgabentitel: ${sevdeskDraftTask.title}` : "",
+      sevdeskDraftTask.details ? `Details/Notizen: ${sevdeskDraftTask.details}` : "",
+      sevdeskDraftTask.arrival_time || sevdeskDraftTask.departure_time
+        ? `Einsatzzeit vor Ort: ${sevdeskDraftTask.arrival_time || "?"} bis ${sevdeskDraftTask.departure_time || "?"}`
+        : "",
+      Number.isFinite(quantity) && quantity > 0 ? `Abzurechnende Stunden: ${quantity} h` : "",
+      draftForm.name ? `Geplanter Positionsname: ${draftForm.name}` : "",
+      draftForm.billing_note ? `Interner Abrechnungsvermerk: ${draftForm.billing_note}` : "",
+      draftForm.include_mileage ? "Hinweis: Anfahrtskosten werden als separate Position abgerechnet." : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const localFallbackText = () => {
+      const source = [
+        String(draftForm.text || "").trim(),
+        String(sevdeskDraftTask.details || "").trim(),
+        String(sevdeskDraftTask.title || "").trim(),
       ]
         .filter(Boolean)
-        .join("\n");
+        .join("\n")
+        .replace(/\s+/g, " ")
+        .trim();
+      return source || "Durchgeführte IT-Dienstleistung gemäß Aufgabenbeschreibung.";
+    };
+    try {
       const res = await fetch(`${API}/offer_ai_text`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1065,11 +1078,41 @@ export default function DayPlanView() {
       setSevdeskDraftStatus({ state: "idle", error: "" });
       return nextText;
     } catch (error) {
+      try {
+        const fallbackRes = await fetch(`${API}/ai/text_assist`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "customer_friendly",
+            text: String(draftForm.text || contextParts || localFallbackText()),
+            module: "tasks",
+            format: "text",
+            context: {
+              use_case: "sevdesk_invoice_position",
+              customer: sevdeskDraftTask.customer || "",
+              task_title: sevdeskDraftTask.title || "",
+              position_name: draftForm.name || "",
+              quantity
+            }
+          })
+        });
+        const fallbackData = await fallbackRes.json().catch(() => ({}));
+        if (fallbackRes.ok && typeof fallbackData?.text === "string" && fallbackData.text.trim()) {
+          const nextText = fallbackData.text.trim();
+          updateSevdeskDraftForm("text", nextText);
+          setSevdeskDraftStatus({ state: "idle", error: "" });
+          return nextText;
+        }
+      } catch (_fallbackError) {
+        // Keep the local fallback below; the button should still produce a visible position text.
+      }
+      const nextText = localFallbackText();
+      updateSevdeskDraftForm("text", nextText);
       setSevdeskDraftStatus({
         state: "error",
-        error: error?.message ? String(error.message) : "KI-Verbesserung fehlgeschlagen."
+        error: `${error?.message ? String(error.message) : "KI-Verbesserung fehlgeschlagen."} Lokaler Text wurde eingesetzt.`
       });
-      return "";
+      return nextText;
     } finally {
       setSevdeskDraftAiLoading(false);
     }
@@ -2687,9 +2730,28 @@ export default function DayPlanView() {
                   </label>
                 </div>
                 <div>
-                  <label className="text-[10px] uppercase tracking-wide text-sand-500">
-                    Notiz
-                  </label>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="text-[10px] uppercase tracking-wide text-sand-500">
+                      Notiz
+                    </label>
+                    <AiTextAssistToolbar
+                      value={getDetailValue(task, "details") || task.title || ""}
+                      module="tasks"
+                      format="text"
+                      context={{
+                        module: "day_tasks",
+                        customer: task.customer || "",
+                        topic: task.title || "",
+                        notes: getDetailValue(task, "details") || ""
+                      }}
+                      onApply={(nextText) => {
+                        setDetailValue(task.id, "details", nextText);
+                        commitDetail(task, "details", nextText);
+                      }}
+                      variant="combo"
+                      className="justify-end"
+                    />
+                  </div>
                   <textarea
                     value={getDetailValue(task, "details")}
                     onChange={(event) => setDetailValue(task.id, "details", event.target.value)}
@@ -3536,7 +3598,7 @@ function FakturaTaskModal({
               <button
                 type="button"
                 onClick={handleRefreshScopeEstimate}
-                className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                className="ai-action inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
               >
                 <Sparkles size={11} />
                 {hasScopeEstimate ? "KI neu" : "KI schätzen"}
@@ -3605,7 +3667,7 @@ function FakturaTaskModal({
               </div>
 
               {/* KI Schätzung */}
-              <div className="rounded-lg border border-white bg-white px-2.5 py-2 space-y-1">
+              <div className="ai-panel rounded-lg border border-white bg-white px-2.5 py-2 space-y-1">
                 <div className="flex items-center justify-between gap-1">
                   <p className="text-[10px] uppercase tracking-[0.2em] text-sand-400">KI Schätzung</p>
                   {hasScopeEstimate && (
@@ -3627,7 +3689,7 @@ function FakturaTaskModal({
                     <button
                       type="button"
                       onClick={() => setLocalField("quantity", String(scopeEstimate.estimated_hours), { commit: true })}
-                      className={applyBtnClass}
+                      className={`${applyBtnClass} ai-action`}
                     >
                       <Sparkles size={10} /> Übernehmen
                     </button>
@@ -3683,14 +3745,14 @@ function FakturaTaskModal({
           </div>
 
           {/* Positionstext */}
-          <div className="flex flex-col gap-1.5">
+          <div className="ai-panel flex flex-col gap-1.5 rounded-xl border border-sky-200 bg-sky-50/60 p-3">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase tracking-[0.25em] text-sand-400">Positionstext</span>
+              <span className="ai-field-label text-[10px] uppercase tracking-[0.25em] text-sand-400">Positionstext</span>
               <button
                 type="button"
                 onClick={handleGenerateAi}
                 disabled={aiLoading}
-                className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-wait transition-colors"
+                className="ai-action inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-wait transition-colors"
               >
                 {aiLoading ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
                 {aiLoading ? "Wird verbessert…" : "KI verbessern"}
@@ -3701,7 +3763,7 @@ function FakturaTaskModal({
               onChange={(e) => setLocalField("text", e.target.value)}
               onBlur={(e) => setLocalField("text", e.target.value, { commit: true })}
               rows={4}
-              className={`${fieldClass} resize-none`}
+              className={`${fieldClass} ai-field resize-none`}
               placeholder="Leistung, Ergebnis oder Hinweise"
             />
           </div>

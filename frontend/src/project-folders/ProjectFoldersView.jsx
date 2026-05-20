@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import {
@@ -45,6 +45,7 @@ import {
   downloadBlob,
   getProjectExportBaseName
 } from "./projectFolderExport";
+import { BufferedInput, BufferedTextarea } from "../components/BufferedFields";
 
 const inputClass =
   "w-full rounded-xl border border-sand-200 bg-white/80 px-3 py-2 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100";
@@ -52,6 +53,7 @@ const textareaClass = `${inputClass} min-h-[88px] resize-y`;
 const selectClass = `${inputClass} appearance-none`;
 const CUSTOM_EXPORT_PROFILES_KEY = "qt_project_folder_custom_export_profiles";
 const PROJECT_ESTIMATES_CACHE_KEY = "qt_project_folder_estimates";
+const PROJECT_ESTIMATE_VERSION = "lower_labor_with_eur_2026_05";
 
 const hashText = (value) => {
   let hash = 2166136261;
@@ -107,8 +109,8 @@ const priorityMeta = {
 const creationModes = [
   { key: "empty", label: "Leere Projektmappe", text: "Freier Start ohne Vorlage." },
   { key: "ai", label: "KI-Projektmappe", text: "Aus Freitext Struktur erzeugen." },
-  { key: "blocks", label: "Bausteine auswählen", text: "Einzelne Themenblöcke kombinieren." },
-  { key: "template", label: "Vorlage verwenden", text: "Fertige Sammlung mehrerer Bausteine." }
+  { key: "blocks", label: "Tags auswählen", text: "Einzelne Themenblöcke kombinieren." },
+  { key: "template", label: "Vorlage verwenden", text: "Fertige Sammlung mehrerer Tags." }
 ];
 
 const exportFormatOptions = [
@@ -159,27 +161,18 @@ const getProjectFolderTagMeta = (value) => {
   const key = String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
   return projectFolderTagOptions[key] || { label: "Ohne Kennzeichen", className: "border-sand-200 bg-sand-50 text-sand-600", dot: "bg-sand-400" };
 };
+const getProjectFolderTagKey = (folder) =>
+  String(folder?.project_tag || folder?.content?.meta?.project_tag || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+const isCustomerProjectFolder = (folder) => getProjectFolderTagKey(folder) === "kundenprojekt";
 
 const projectBriefingFields = [
   {
     key: "project_description",
-    label: "Projektbeschreibung",
-    placeholder: "Ausgangslage, Systeme, Beteiligte und fachlicher Kontext"
-  },
-  {
-    key: "target_state",
-    label: "Zielbild",
-    placeholder: "Gewünschtes Ergebnis, Erfolgskriterien und Abnahmepunkte"
-  },
-  {
-    key: "scope_notes",
-    label: "Rahmen / Abgrenzung",
-    placeholder: "In Scope, Out of Scope, Abhängigkeiten und Annahmen"
-  },
-  {
-    key: "ai_guidance",
-    label: "KI-Fokus",
-    placeholder: "Hinweise für Prompts, Begriffe, Prioritäten oder gewünschte Detailtiefe"
+    label: "Notiz",
+    placeholder: "Projektbriefing, Zielbild, Scope, Annahmen und interne Hinweise"
   }
 ];
 
@@ -208,9 +201,22 @@ const uid = () => {
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 };
 
+const taskTagColorOptions = [
+  { key: "sky", label: "Blau", bg: "bg-sky-50", text: "text-sky-700", border: "border-sky-200", dot: "bg-sky-500", ring: "ring-sky-300" },
+  { key: "emerald", label: "Grün", bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200", dot: "bg-emerald-500", ring: "ring-emerald-300" },
+  { key: "amber", label: "Gelb", bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200", dot: "bg-amber-500", ring: "ring-amber-300" },
+  { key: "rose", label: "Rot", bg: "bg-rose-50", text: "text-rose-700", border: "border-rose-200", dot: "bg-rose-500", ring: "ring-rose-300" },
+  { key: "violet", label: "Violett", bg: "bg-violet-50", text: "text-violet-700", border: "border-violet-200", dot: "bg-violet-500", ring: "ring-violet-300" },
+  { key: "cyan", label: "Cyan", bg: "bg-cyan-50", text: "text-cyan-700", border: "border-cyan-200", dot: "bg-cyan-500", ring: "ring-cyan-300" },
+  { key: "sand", label: "Neutral", bg: "bg-sand-50", text: "text-sand-700", border: "border-sand-200", dot: "bg-sand-500", ring: "ring-sand-300" }
+];
+
+const getTaskTagColorMeta = (value) =>
+  taskTagColorOptions.find((item) => item.key === value) || null;
+
 const blankStream = (owner = "") => ({
   id: uid(),
-  title: "Neuer Arbeitsstrang",
+  title: "Neuer Tag",
   block_key: "",
   status: "yellow",
   marker: "",
@@ -338,6 +344,26 @@ const formatCurrency = (value) =>
     Number(value || 0)
   );
 
+const formatHoursValue = (value) => {
+  const number = Number(value || 0);
+  const fractionDigits = Number.isInteger(number) ? 0 : 2;
+  return new Intl.NumberFormat("de-DE", {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: 2
+  }).format(number);
+};
+
+const formatHoursRange = (minValue, maxValue) => {
+  const min = Number(minValue || 0);
+  const max = Math.max(min, Number(maxValue || 0));
+  return `${formatHoursValue(min)}-${formatHoursValue(max)} h`;
+};
+
+const formatCurrencyCompact = (value) =>
+  new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(
+    Number(value || 0)
+  );
+
 const parseMoneyValue = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const normalized = String(value || "")
@@ -348,6 +374,39 @@ const parseMoneyValue = (value) => {
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 };
+
+const firstText = (...values) => {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (text) return text;
+  }
+  return "";
+};
+
+const getProjectFolderTitle = (folder) =>
+  firstText(
+    folder?.title,
+    folder?.project_name,
+    folder?.projectName,
+    folder?.name,
+    folder?.content?.meta?.title,
+    folder?.content?.overview?.project_title,
+    folder?.content?.overview?.project_name
+  ) || "Projektmappe";
+
+const getProjectFolderCustomer = (folder) =>
+  firstText(
+    folder?.customer,
+    folder?.customer_name,
+    folder?.customerName,
+    folder?.client,
+    folder?.client_name,
+    folder?.content?.meta?.customer,
+    folder?.content?.meta?.customer_name,
+    folder?.content?.overview?.customer,
+    folder?.content?.overview?.customer_name,
+    folder?.content?.overview?.kunde
+  );
 
 const formatMoneyInput = (value) => {
   const raw = String(value ?? "").trim();
@@ -395,12 +454,131 @@ const getInvoiceCandidates = (folder) =>
       title: task.title || "Aufgabe",
       status: String(task.status || "open").trim().toLowerCase(),
       streamId: stream.id,
-      streamTitle: stream.title || "Baustein",
+      streamTitle: stream.title || "Tag",
       suggestedText: String(task.invoice_text || task.title || "Aufgabe").trim(),
       invoicedAt: Number(task?.invoiced_at || 0),
       defaultHours: Number(task?.estimate_hours || task?.hours || 1) || 1
     }))
   );
+
+const getAiItemText = (item) => {
+  if (typeof item === "string") return item.trim();
+  if (!item || typeof item !== "object") return "";
+  return String(item.text || item.title || item.name || item.description || item.summary || "").trim();
+};
+
+const splitAiTextLines = (value) =>
+  String(value || "")
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+    .filter(Boolean);
+
+const buildInvoicePositionFallbackText = (position) => {
+  const base = String(position?.text || position?.taskTitle || "IT-Leistung").trim();
+  const cleaned = base.replace(/\s+/g, " ").replace(/[.;:,]+$/, "");
+  return cleaned || "IT-Leistung nach Projektvereinbarung";
+};
+
+const normalizeInvoiceAiTexts = (result, selectedPositions) => {
+  const rawItems = Array.isArray(result?.items) ? result.items : splitAiTextLines(result?.text);
+  const texts = rawItems.map(getAiItemText).filter(Boolean);
+  return selectedPositions.map((position, index) => texts[index] || buildInvoicePositionFallbackText(position));
+};
+
+const buildProjectFolderTemplateDraft = (sourceFolder) => {
+  const sourceTitle = getProjectFolderTitle(sourceFolder);
+  const sourceCustomer = getProjectFolderCustomer(sourceFolder);
+  const now = Date.now();
+  const content = clone(sourceFolder?.content || {});
+  const taskIdMap = new Map();
+
+  content.meta = {
+    ...(content.meta && typeof content.meta === "object" ? content.meta : {}),
+    template_source_id: sourceFolder?.id || "",
+    template_source_title: sourceTitle,
+    template_created_at: now,
+    project_tag: sourceFolder?.project_tag || content?.meta?.project_tag || "kundenprojekt"
+  };
+  content.overview = {
+    ...(content.overview && typeof content.overview === "object" ? content.overview : {}),
+    customer: sourceCustomer,
+    customer_name: sourceCustomer,
+    project_deadline: "",
+    internal_value_eur: ""
+  };
+  delete content.archive;
+  delete content.completion;
+  content.invoices = [];
+  content.activities = [{ id: uid(), text: `Als Vorlage aus „${sourceTitle}“ übernommen`, at: now }];
+  content.time_tracking = { active_session: null, specific_timers: [], entries: [] };
+
+  content.streams = (Array.isArray(content.streams) ? content.streams : []).map((stream) => {
+    const newStreamId = uid();
+    const tasks = (Array.isArray(stream?.tasks) ? stream.tasks : []).map((task, taskIndex) => {
+      const oldTaskId = String(task?.id || "");
+      const newTaskId = uid();
+      if (oldTaskId) taskIdMap.set(oldTaskId, newTaskId);
+      const nextTask = {
+        ...task,
+        id: newTaskId,
+        status: "open",
+        due_date: "",
+        completed_at: 0,
+        invoiced_at: 0,
+        invoice_run_id: "",
+        sevdesk_invoice_id: "",
+        flow: task?.flow || getTaskFlowPosition({}, taskIndex)
+      };
+      delete nextTask.running;
+      delete nextTask.startTime;
+      delete nextTask.invoice_text;
+      return nextTask;
+    });
+    return {
+      ...stream,
+      id: newStreamId,
+      status: stream?.status === "green" ? "yellow" : stream?.status || "yellow",
+      tasks,
+      checklists: (Array.isArray(stream?.checklists) ? stream.checklists : []).map((checklist) => ({
+        ...checklist,
+        id: checklist?.id || uid(),
+        items: (Array.isArray(checklist?.items) ? checklist.items : []).map((item) => ({
+          ...item,
+          id: item?.id || uid(),
+          done: false
+        }))
+      })),
+      task_links: (Array.isArray(stream?.task_links) ? stream.task_links : [])
+        .map((link) => ({
+          ...link,
+          fromTaskId: taskIdMap.get(String(link?.fromTaskId || "")) || "",
+          toTaskId: taskIdMap.get(String(link?.toTaskId || "")) || ""
+        }))
+        .filter((link) => link.fromTaskId && link.toTaskId)
+    };
+  });
+
+  content.materials = (Array.isArray(content.materials) ? content.materials : []).map((item) => ({
+    ...item,
+    id: uid(),
+    status: "open",
+    ordered_at: 0,
+    received_at: 0
+  }));
+
+  return {
+    title: `Kopie von ${sourceTitle}`,
+    customer: sourceCustomer,
+    owner: sourceFolder?.owner || "",
+    status: "yellow",
+    priority: sourceFolder?.priority || "medium",
+    source_mode: "template",
+    project_tag: sourceFolder?.project_tag || content.meta.project_tag || "kundenprojekt",
+    current_state: "Aus archivierter Projektmappe als Vorlage übernommen.",
+    next_step: "Vorlage prüfen, Kunde/Termine anpassen und Projekt starten.",
+    content
+  };
+};
 
 const formatEur = (value) =>
   new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(
@@ -475,7 +653,7 @@ function BtnSecondary({ children, onClick, disabled, icon: Icon }) {
 function BtnAi({ children, onClick, disabled, icon: Icon }) {
   return (
     <button type="button" onClick={onClick} disabled={disabled}
-      className="inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:opacity-40">
+      className="ai-action inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:opacity-40">
       {Icon ? <Icon size={15} /> : null}{children}
     </button>
   );
@@ -538,7 +716,7 @@ function AiSparkleButton({ onClick, label = "KI", title = "Mit KI befüllen" }) 
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="inline-flex items-center justify-center rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700 hover:bg-sky-100"
+      className="ai-action inline-flex items-center justify-center rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700 hover:bg-sky-100"
     >
       <Sparkles size={14} />
       {label ? <span className="ml-1 text-[11px] font-medium">{label}</span> : null}
@@ -668,10 +846,52 @@ const getPrimaryGap = (stream) => {
     .flatMap((checklist) => checklist?.items || [])
     .find((item) => !item?.done && String(item?.title || "").trim());
   if (openChecklist?.title) return `Fehlt noch: ${openChecklist.title}`;
-  return "Baustein ist rund.";
+  return "Tag ist rund.";
 };
 
 const getTaskStatusKey = (task) => String(task?.status || "open").trim().toLowerCase() || "open";
+
+const compareTasksDoneLast = (left, right) => {
+  const leftDone = getTaskStatusKey(left) === "done";
+  const rightDone = getTaskStatusKey(right) === "done";
+  if (leftDone !== rightDone) return leftDone ? 1 : -1;
+  const leftOrder = Number(left?._order ?? left?._taskIndex ?? 0);
+  const rightOrder = Number(right?._order ?? right?._taskIndex ?? 0);
+  if (Number.isFinite(leftOrder) && Number.isFinite(rightOrder) && leftOrder !== rightOrder) return leftOrder - rightOrder;
+  return 0;
+};
+
+const getTaskDueGroupMeta = (task, today = new Date()) => {
+  const baseToday = new Date(today);
+  baseToday.setHours(0, 0, 0, 0);
+  const statusKey = getTaskStatusKey(task);
+  const due = parseDateInput(task?.due_date);
+  if (statusKey === "done") {
+    return { key: "done", label: "Erledigt", priority: 4, tone: "bg-emerald-50 text-emerald-700 border-emerald-100" };
+  }
+  if (due && due.getTime() < baseToday.getTime()) {
+    return { key: "overdue", label: "Überfällig", priority: 0, tone: "bg-rose-50 text-rose-700 border-rose-100" };
+  }
+  if (due && diffDays(baseToday, due) <= 7) {
+    return { key: "soon", label: "Diese Woche", priority: 1, tone: "bg-amber-50 text-amber-700 border-amber-100" };
+  }
+  if (!due) {
+    return { key: "unscheduled", label: "Ohne Datum", priority: 2, tone: "bg-sand-50 text-sand-600 border-sand-100" };
+  }
+  return { key: "later", label: "Später", priority: 3, tone: "bg-sky-50 text-sky-700 border-sky-100" };
+};
+
+const compareTasksByWorkPriority = (left, right) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const leftGroup = getTaskDueGroupMeta(left, today);
+  const rightGroup = getTaskDueGroupMeta(right, today);
+  if (leftGroup.priority !== rightGroup.priority) return leftGroup.priority - rightGroup.priority;
+  const leftDue = parseDateInput(left?.due_date)?.getTime() || Number.POSITIVE_INFINITY;
+  const rightDue = parseDateInput(right?.due_date)?.getTime() || Number.POSITIVE_INFINITY;
+  if (leftDue !== rightDue) return leftDue - rightDue;
+  return compareTasksDoneLast(left, right);
+};
 
 const getProjectHealthInsights = ({ streams = [], projectDeadline = null, projectDeadlineRaw = "" }) => {
   const today = new Date();
@@ -682,7 +902,7 @@ const getProjectHealthInsights = ({ streams = [], projectDeadline = null, projec
       return {
         ...task,
         streamId: stream?.id || "",
-        streamTitle: stream?.title || "Baustein",
+        streamTitle: stream?.title || "Tag",
         statusKey: getTaskStatusKey(task),
         due,
         dueDiff: due ? diffDays(today, due) : null
@@ -700,27 +920,27 @@ const getProjectHealthInsights = ({ streams = [], projectDeadline = null, projec
   const deadlineDiff = projectDeadline ? diffDays(today, projectDeadline) : null;
   const reasons = [];
 
-  if (blockedStreams.length) reasons.push({ tone: "rose", text: `${blockedStreams.length} Baustein(e) blockiert`, streamId: blockedStreams[0]?.id || "" });
+  if (blockedStreams.length) reasons.push({ tone: "rose", text: `${blockedStreams.length} Tag(e) blockiert`, streamId: blockedStreams[0]?.id || "" });
   if (overdueTasks.length) reasons.push({ tone: "rose", text: `${overdueTasks.length} Aufgabe(n) überfällig`, streamId: overdueTasks[0]?.streamId || "", taskId: overdueTasks[0]?.id || "" });
   if (deadlineDiff !== null && deadlineDiff < 0) reasons.push({ tone: "rose", text: `Projekt-Deadline überschritten (${formatDateLabel(projectDeadlineRaw)})` });
   if (deadlineDiff !== null && deadlineDiff >= 0 && deadlineDiff <= 7) reasons.push({ tone: "amber", text: `Deadline in ${deadlineDiff === 0 ? "heute" : `${deadlineDiff} Tag(en)`}` });
   if (feedbackStreams.length) reasons.push({ tone: "amber", text: `${feedbackStreams.length} Rückmeldung(en) offen`, streamId: feedbackStreams[0]?.id || "" });
-  if (ownerlessStreams.length) reasons.push({ tone: "sand", text: `${ownerlessStreams.length} Baustein(e) ohne Verantwortliche:n`, streamId: ownerlessStreams[0]?.id || "" });
+  if (ownerlessStreams.length) reasons.push({ tone: "sand", text: `${ownerlessStreams.length} Tag(e) ohne Verantwortliche:n`, streamId: ownerlessStreams[0]?.id || "" });
   if (!openTasks.length && streams.length) reasons.push({ tone: "emerald", text: "Alle Aufgaben erledigt" });
-  if (!streams.length) reasons.push({ tone: "sand", text: "Noch keine Bausteine angelegt" });
+  if (!streams.length) reasons.push({ tone: "sand", text: "Noch keine Tags angelegt" });
 
   const nextAction =
     blockedStreams[0]
-      ? { label: "Blockade klären", detail: blockedStreams[0].title || "Baustein", streamId: blockedStreams[0].id }
+      ? { label: "Blockade klären", detail: blockedStreams[0].title || "Tag", streamId: blockedStreams[0].id }
       : overdueTasks[0]
       ? { label: "Überfällige Aufgabe abschließen", detail: `${overdueTasks[0].streamTitle}: ${overdueTasks[0].title || "Aufgabe"}`, streamId: overdueTasks[0].streamId, taskId: overdueTasks[0].id }
       : feedbackStreams[0]
-      ? { label: "Kundenrückmeldung einholen", detail: feedbackStreams[0].title || "Baustein", streamId: feedbackStreams[0].id }
+      ? { label: "Kundenrückmeldung einholen", detail: feedbackStreams[0].title || "Tag", streamId: feedbackStreams[0].id }
       : soonTasks[0]
       ? { label: "Nächste fällige Aufgabe", detail: `${soonTasks[0].streamTitle}: ${soonTasks[0].title || "Aufgabe"}`, streamId: soonTasks[0].streamId, taskId: soonTasks[0].id }
       : openTasks[0]
       ? { label: "Nächste offene Aufgabe", detail: `${openTasks[0].streamTitle}: ${openTasks[0].title || "Aufgabe"}`, streamId: openTasks[0].streamId, taskId: openTasks[0].id }
-      : { label: "Projekt sauber", detail: streams.length ? "Keine akute Aktion offen" : "Ersten Baustein anlegen" };
+      : { label: "Projekt sauber", detail: streams.length ? "Keine akute Aktion offen" : "Ersten Tag anlegen" };
 
   const tone = blockedStreams.length || overdueTasks.length || (deadlineDiff !== null && deadlineDiff < 0)
     ? "rose"
@@ -832,7 +1052,7 @@ const buildFlowAutoLayout = (streams = [], expandedTaskMap = {}) => {
     if (!tasks.length) {
       lanes.push({
         streamId: stream?.id || `lane_${streamIndex}`,
-        streamTitle: stream?.title || "Baustein",
+        streamTitle: stream?.title || "Tag",
         top: currentLaneY,
         height: 180
       });
@@ -937,7 +1157,7 @@ const buildFlowAutoLayout = (streams = [], expandedTaskMap = {}) => {
     boardWidth = Math.max(boardWidth, laneWidth + 60);
     lanes.push({
       streamId: stream?.id || `lane_${streamIndex}`,
-      streamTitle: stream?.title || "Baustein",
+      streamTitle: stream?.title || "Tag",
       top: laneTop,
       height: laneHeight,
       width: laneWidth,
@@ -1002,10 +1222,12 @@ export default function ProjectFoldersView() {
   const [hourlyRate, setHourlyRate] = useState(0);
   const [estimateCache, setEstimateCache] = useState({});
   const [estimatesPending, setEstimatesPending] = useState({});
-  const [explorerLayout, setExplorerLayout] = useState("cards");
+  const [explorerLayout, setExplorerLayout] = useState("list");
   const [explorerSearch, setExplorerSearch] = useState("");
   const [explorerStatusFilter, setExplorerStatusFilter] = useState("");
   const [explorerSort, setExplorerSort] = useState("recent");
+  const [archiveFilters, setArchiveFilters] = useState({ search: "", customer: "", tag: "", invoice: "" });
+  const [templateSourceBusyId, setTemplateSourceBusyId] = useState("");
   const [favoriteFolderIds, setFavoriteFolderIds] = useState(() => {
     try {
       const cached = JSON.parse(window.localStorage.getItem("qt_project_folder_favorites") || "[]");
@@ -1030,6 +1252,9 @@ export default function ProjectFoldersView() {
   const [calendarAnchor, setCalendarAnchor] = useState("");
   const [taskDrafts, setTaskDrafts] = useState({});
   const [taskListFilters, setTaskListFilters] = useState({ search: "", status: "", streamId: "" });
+  const [taskDropTarget, setTaskDropTarget] = useState(null);
+  const [taskListSelection, setTaskListSelection] = useState({});
+  const [bulkTaskPatch, setBulkTaskPatch] = useState({ status: "", streamId: "", due_date: "" });
   const [newTaskDraft, setNewTaskDraft] = useState({ title: "", streamId: "" });
   const [timerNow, setTimerNow] = useState(Date.now());
   const [specificTimerDraft, setSpecificTimerDraft] = useState({ streamId: "", taskId: "", note: "" });
@@ -1040,11 +1265,13 @@ export default function ProjectFoldersView() {
   const [flowCanvasDragging, setFlowCanvasDragging] = useState(false);
   const [dueDateEditorId, setDueDateEditorId] = useState("");
   const [taskNoteEditorId, setTaskNoteEditorId] = useState("");
+  const [taskTagEditor, setTaskTagEditor] = useState({ key: "", draft: "", editTitle: "", color: "sky" });
   const [aiBusy, setAiBusy] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [aiDialog, setAiDialog] = useState({ open: false, action: "tasks", topic: "", target: null });
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [activeProjectTab, setActiveProjectTab] = useState("aufgaben");
+  const [projectSidebarCollapsed, setProjectSidebarCollapsed] = useState(false);
   const checklistOpen = activeProjectTab === "aufgaben";
   const timelineOpen = activeProjectTab === "timeline";
   const calculationOpen = activeProjectTab === "kalkulation";
@@ -1067,7 +1294,9 @@ export default function ProjectFoldersView() {
     improveBusy: false,
     saveBusy: false,
     pushBusy: false,
-    pushResult: null
+    pushResult: null,
+    completeProject: false,
+    openTaskCount: 0
   };
   const [invoiceDialog, setInvoiceDialog] = useState(INVOICE_DIALOG_INITIAL);
   const [exportFormat, setExportFormat] = useState("pdf");
@@ -1148,6 +1377,7 @@ export default function ProjectFoldersView() {
       .then((folder) => {
         if (cancelled) return;
         setActiveFolder(folder);
+        setFolders((rows) => rows.map((item) => (String(item.id) === String(folder.id) ? { ...item, ...folder } : item)));
         const nextStreamId = folder?.content?.streams?.[0]?.id || "";
         setSelectedStreamId((prev) =>
           folder?.content?.streams?.some((item) => item.id === prev) ? prev : nextStreamId
@@ -1183,11 +1413,23 @@ export default function ProjectFoldersView() {
       const target = event.target;
       if (target instanceof Element && target.closest("[data-due-editor='true']")) return;
       if (target instanceof Element && target.closest("[data-task-note-editor='true']")) return;
+      if (target instanceof Element && target.closest("[data-task-tag-editor='true']")) return;
       setDueDateEditorId("");
       setTaskNoteEditorId("");
+      setTaskTagEditor({ key: "", draft: "", editTitle: "", color: "sky" });
+    };
+    const handleKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      setDueDateEditorId("");
+      setTaskNoteEditorId("");
+      setTaskTagEditor({ key: "", draft: "", editTitle: "", color: "sky" });
     };
     window.addEventListener("mousedown", handlePointerDown);
-    return () => window.removeEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
 
   useEffect(() => {
@@ -1224,12 +1466,38 @@ export default function ProjectFoldersView() {
   }, [activeFolder, selectedStreamId]);
 
   const activeStreams = activeFolder?.content?.streams || [];
+  const getTagColorForStream = (streamId) => {
+    const streamIndex = activeStreams.findIndex((stream) => stream.id === streamId);
+    const stream = streamIndex >= 0 ? activeStreams[streamIndex] : null;
+    const customColor = getTaskTagColorMeta(stream?.tag_color || stream?.color);
+    if (customColor) return customColor;
+    return taskTagColorOptions[(streamIndex >= 0 ? streamIndex : 0) % 6];
+  };
   const activeOverview = activeFolder?.content?.overview || {};
   const updateOverviewField = (field, value) => {
     mutateFolder((folder) => {
       folder.content = folder.content || {};
       folder.content.overview = folder.content.overview || {};
       folder.content.overview[field] = value;
+      return folder;
+    });
+  };
+  const updateProjectCustomer = (customerName) => {
+    const cleanName = String(customerName || "").trim();
+    const selectedCustomer = customers.find(
+      (customer) => String(customer?.name || "").trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    mutateFolder((folder) => {
+      folder.customer = cleanName;
+      folder.content = folder.content || {};
+      folder.content.meta = folder.content.meta || {};
+      folder.content.overview = folder.content.overview || {};
+      folder.content.meta.customer = cleanName;
+      folder.content.meta.customer_name = cleanName;
+      folder.content.meta.customer_id = selectedCustomer?.id || "";
+      folder.content.meta.customer_number = selectedCustomer?.creditor_number || "";
+      folder.content.overview.customer = cleanName;
+      folder.content.overview.customer_name = cleanName;
       return folder;
     });
   };
@@ -1290,7 +1558,7 @@ export default function ProjectFoldersView() {
         .flatMap((stream) =>
           (stream?.tasks || [])
             .filter((task) => String(task?.status || "open").trim().toLowerCase() !== "done")
-            .map((task) => ({ ...task, stream_title: stream.title || "Baustein" }))
+            .map((task) => ({ ...task, stream_title: stream.title || "Tag" }))
         )
         .sort((a, b) => {
           const aDate = parseDateInput(a.due_date);
@@ -1306,12 +1574,14 @@ export default function ProjectFoldersView() {
   const groupedChecklistTasks = useMemo(
     () =>
       activeStreams
-        .map((stream) => {
+        .map((stream, streamIndex) => {
           const tasks = Array.isArray(stream?.tasks) ? stream.tasks : [];
           return {
             id: stream?.id || uid(),
-            title: stream?.title || "Baustein",
-            tasks,
+            title: stream?.title || "Tag",
+            tasks: tasks
+              .map((task, taskIndex) => ({ ...task, _taskIndex: taskIndex, _order: streamIndex * 100000 + taskIndex }))
+              .sort(compareTasksDoneLast),
             openCount: tasks.filter((task) => String(task?.status || "open").trim().toLowerCase() !== "done").length
           };
         })
@@ -1320,12 +1590,15 @@ export default function ProjectFoldersView() {
   );
   const flatProjectTasks = useMemo(
     () =>
-      activeStreams.flatMap((stream) =>
-        (Array.isArray(stream?.tasks) ? stream.tasks : []).map((task) => ({
+      activeStreams.flatMap((stream, streamIndex) =>
+        (Array.isArray(stream?.tasks) ? stream.tasks : []).map((task, taskIndex) => ({
           ...task,
           _streamId: stream.id,
-          _streamTitle: stream.title || "Baustein",
-          _streamStatus: stream.status || "yellow"
+          _streamTitle: stream.title || "Tag",
+          _streamStatus: stream.status || "yellow",
+          _streamIndex: streamIndex,
+          _taskIndex: taskIndex,
+          _order: streamIndex * 100000 + taskIndex
         }))
       ),
     [activeStreams]
@@ -1344,20 +1617,45 @@ export default function ProjectFoldersView() {
         if (!search) return true;
         return `${task.title || ""} ${task.note || ""} ${task.owner || ""} ${task._streamTitle || ""}`.toLowerCase().includes(search);
       })
-      .sort((a, b) => {
-        const aDone = getTaskStatusKey(a) === "done";
-        const bDone = getTaskStatusKey(b) === "done";
-        if (aDone !== bDone) return aDone ? 1 : -1;
-        const aDue = parseDateInput(a.due_date)?.getTime() || Number.POSITIVE_INFINITY;
-        const bDue = parseDateInput(b.due_date)?.getTime() || Number.POSITIVE_INFINITY;
-        if (aDue !== bDue) return aDue - bDue;
-        return String(a.title || "").localeCompare(String(b.title || ""), "de");
-      });
+      .sort(compareTasksByWorkPriority);
   }, [flatProjectTasks, taskListFilters]);
+  const taskListStats = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return flatProjectTasks.reduce(
+      (stats, task) => {
+        const statusKey = getTaskStatusKey(task);
+        const due = parseDateInput(task.due_date);
+        if (statusKey !== "done") stats.open += 1;
+        if (statusKey === "blocked") stats.blocked += 1;
+        if (statusKey === "waiting_customer") stats.waiting += 1;
+        if (due && statusKey !== "done" && due.getTime() < today.getTime()) stats.overdue += 1;
+        return stats;
+      },
+      { open: 0, overdue: 0, blocked: 0, waiting: 0 }
+    );
+  }, [flatProjectTasks]);
+  const groupedFilteredProjectTasks = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const groups = [
+      { ...getTaskDueGroupMeta({ due_date: "2000-01-01" }, today), items: [] },
+      { ...getTaskDueGroupMeta({ due_date: toDateKey(today) }, today), items: [] },
+      { ...getTaskDueGroupMeta({ due_date: "" }, today), items: [] },
+      { ...getTaskDueGroupMeta({ due_date: "2999-01-01" }, today), items: [] },
+      { ...getTaskDueGroupMeta({ status: "done" }, today), items: [] }
+    ];
+    const byKey = Object.fromEntries(groups.map((group) => [group.key, group]));
+    filteredProjectTasks.forEach((task) => {
+      byKey[getTaskDueGroupMeta(task, today).key]?.items.push(task);
+    });
+    return groups.filter((group) => group.items.length);
+  }, [filteredProjectTasks]);
   const activeBlockDraft = blockCatalogDraft[selectedBlockCatalogIndex] || null;
   const activeTemplateDraft = templateCatalogDraft[selectedTemplateCatalogIndex] || null;
   const requestEstimate = async (folder) => {
     if (!folder?.id) return;
+    if (!isCustomerProjectFolder(folder)) return;
     if (estimatesPending[folder.id]) return;
     setEstimatesPending((prev) => ({ ...prev, [folder.id]: true }));
     try {
@@ -1394,6 +1692,7 @@ export default function ProjectFoldersView() {
           generated_at: Date.now(),
           task_count: taskCount,
           task_signature: taskSignature,
+          version: PROJECT_ESTIMATE_VERSION,
           source: result?.usedFallback ? "fallback" : "ai"
         }
       }));
@@ -1411,6 +1710,7 @@ export default function ProjectFoldersView() {
   const isEstimateStale = (folder) => {
     const cached = estimateCache[folder?.id];
     if (!cached) return true;
+    if (String(cached.version || "") !== PROJECT_ESTIMATE_VERSION) return true;
     const currentSignature = getProjectTaskSignature(folder);
     if (currentSignature && !String(cached.task_signature || "")) return true;
     if (currentSignature && String(cached.task_signature || "") && currentSignature !== String(cached.task_signature || "")) return true;
@@ -1433,7 +1733,7 @@ export default function ProjectFoldersView() {
   const [bulkEstimateState, setBulkEstimateState] = useState({ active: false, done: 0, total: 0 });
 
   const estimateAllVisible = async (foldersToEstimate, { onlyMissing = true, concurrency = 3 } = {}) => {
-    const queue = foldersToEstimate.filter((f) => !onlyMissing || isEstimateStale(f));
+    const queue = foldersToEstimate.filter((f) => isCustomerProjectFolder(f) && (!onlyMissing || isEstimateStale(f)));
     if (!queue.length) return;
     setBulkEstimateState({ active: true, done: 0, total: queue.length });
     let cursor = 0;
@@ -1466,8 +1766,8 @@ export default function ProjectFoldersView() {
       if (explorerFavoritesOnly && !favSet.has(String(folder.id))) return false;
       if (explorerStatusFilter && folder.status !== explorerStatusFilter) return false;
       if (needle) {
-        const inTitle = String(folder.title || "").toLowerCase().includes(needle);
-        const inCustomer = String(folder.customer || "").toLowerCase().includes(needle);
+        const inTitle = getProjectFolderTitle(folder).toLowerCase().includes(needle);
+        const inCustomer = getProjectFolderCustomer(folder).toLowerCase().includes(needle);
         return inTitle || inCustomer;
       }
       return true;
@@ -1480,7 +1780,7 @@ export default function ProjectFoldersView() {
       const bFav = favSet.has(String(b.id)) ? 0 : 1;
       if (aFav !== bFav) return aFav - bFav;
       if (explorerSort === "name") {
-        return String(a.title || "").localeCompare(String(b.title || ""), "de", { sensitivity: "base" });
+        return getProjectFolderTitle(a).localeCompare(getProjectFolderTitle(b), "de", { sensitivity: "base" });
       }
       if (explorerSort === "progress") {
         return Number(a.summary?.progress || 0) - Number(b.summary?.progress || 0);
@@ -1505,11 +1805,43 @@ export default function ProjectFoldersView() {
   }, [folders, explorerSearch, explorerStatusFilter, explorerSort, favoriteFolderIds, explorerFavoritesOnly]);
   const activeFolders = useMemo(() => folders.filter((folder) => !isFolderArchived(folder)), [folders]);
   const archivedFolders = useMemo(() => folders.filter((folder) => isFolderArchived(folder)), [folders]);
+  const archiveCustomers = useMemo(
+    () =>
+      Array.from(new Set(archivedFolders.map((folder) => getProjectFolderCustomer(folder)).filter(Boolean))).sort((a, b) =>
+        a.localeCompare(b, "de", { sensitivity: "base" })
+      ),
+    [archivedFolders]
+  );
+  const filteredArchivedFolders = useMemo(() => {
+    const needle = archiveFilters.search.trim().toLowerCase();
+    const sorted = archivedFolders.filter((folder) => {
+      if (archiveFilters.customer && getProjectFolderCustomer(folder) !== archiveFilters.customer) return false;
+      if (archiveFilters.tag && String(folder.project_tag || "") !== archiveFilters.tag) return false;
+      if (archiveFilters.invoice === "with" && !folder.invoice_draft_count) return false;
+      if (archiveFilters.invoice === "without" && folder.invoice_draft_count) return false;
+      if (!needle) return true;
+      return [
+        getProjectFolderTitle(folder),
+        getProjectFolderCustomer(folder),
+        folder.owner,
+        folder.project_tag_label,
+        String(folder.id || "")
+      ].some((value) => String(value || "").toLowerCase().includes(needle));
+    });
+    sorted.sort((a, b) => Number(getFolderArchivedAt(b) || b.updated_at || 0) - Number(getFolderArchivedAt(a) || a.updated_at || 0));
+    return sorted;
+  }, [archivedFolders, archiveFilters]);
 
   useEffect(() => {
     if (loading || bulkEstimateState.active) return undefined;
     const queue = explorerFolders
-      .filter((folder) => !isFolderArchived(folder) && isEstimateStale(folder) && !estimatesPending[folder.id])
+      .filter(
+        (folder) =>
+          isCustomerProjectFolder(folder) &&
+          !isFolderArchived(folder) &&
+          isEstimateStale(folder) &&
+          !estimatesPending[folder.id]
+      )
       .map((folder) => {
         const signature = getProjectTaskSignature(folder) || `updated:${folder.updated_at || ""}:tasks:${folder.summary?.task_count || 0}`;
         return { folder, key: `${folder.id}:${signature}` };
@@ -1558,7 +1890,7 @@ export default function ProjectFoldersView() {
         }));
       return {
         streamId: stream.id,
-        streamTitle: stream.title || "Baustein",
+        streamTitle: stream.title || "Tag",
         workflowStatus,
         datedTasks,
         undatedTasks,
@@ -1661,7 +1993,7 @@ export default function ProjectFoldersView() {
       (stream?.tasks || []).map((task) => ({
         ...task,
         streamId: stream.id,
-        streamTitle: stream.title || "Baustein",
+        streamTitle: stream.title || "Tag",
         statusKey: String(task?.status || "open").trim().toLowerCase(),
         due: parseDateInput(task?.due_date),
         dueDate: String(task?.due_date || "")
@@ -1706,7 +2038,7 @@ export default function ProjectFoldersView() {
         }));
         return {
           streamId: stream.id,
-          streamTitle: stream.title || "Baustein",
+          streamTitle: stream.title || "Tag",
           tasks
         };
       }),
@@ -1738,7 +2070,7 @@ export default function ProjectFoldersView() {
         return {
           ...item,
           legacyStreamId: stream.id,
-          legacyStreamTitle: stream.title || "Baustein",
+          legacyStreamTitle: stream.title || "Tag",
           status: normalizeProjectMaterialStatus(item?.status),
           link: item?.link || item?.url || "",
           quantityValue: quantity,
@@ -1762,6 +2094,19 @@ export default function ProjectFoldersView() {
       materialCount: materialInventory.length
     };
   }, [calculationGroups, materialInventory]);
+  const activeCanEstimate = Boolean(activeFolder?.id && isCustomerProjectFolder(activeFolder));
+  const activeEffortEstimate = activeCanEstimate ? estimateCache[activeFolder.id] : null;
+  const activeEstimatePending = Boolean(activeCanEstimate && estimatesPending[activeFolder.id]);
+  const activeEstimateIsStale = activeCanEstimate ? isEstimateStale(activeFolder) : false;
+  const activeEstimateMinHours = Number(activeEffortEstimate?.hours_min || 0);
+  const activeEstimateMaxHours = Math.max(activeEstimateMinHours, Number(activeEffortEstimate?.hours_max || 0));
+  const activeEstimateHoursLabel = activeEffortEstimate
+    ? formatHoursRange(activeEstimateMinHours, activeEstimateMaxHours)
+    : "";
+  const activeEstimateCurrencyLabel = activeEffortEstimate && hourlyRate > 0
+    ? `${formatCurrencyCompact(activeEstimateMinHours * hourlyRate)}-${formatCurrencyCompact(activeEstimateMaxHours * hourlyRate)}`
+    : "";
+  const activeInternalValueRaw = activeOverview.internal_value_eur ?? activeOverview.project_budget_eur ?? "";
   const projectTimeTracking = useMemo(
     () => normalizeProjectTimeTracking(activeFolder?.content?.time_tracking),
     [activeFolder?.content?.time_tracking]
@@ -1771,7 +2116,7 @@ export default function ProjectFoldersView() {
       activeStreams.flatMap((stream) =>
         (Array.isArray(stream.tasks) ? stream.tasks : []).map((task) => ({
           streamId: stream.id,
-          streamTitle: stream.title || "Baustein",
+          streamTitle: stream.title || "Tag",
           taskId: task.id,
           taskTitle: task.title || "Aufgabe"
         }))
@@ -1819,7 +2164,7 @@ export default function ProjectFoldersView() {
         return {
           streamId: stream.id,
           streamIndex,
-          streamTitle: stream.title || "Baustein",
+          streamTitle: stream.title || "Tag",
           tone,
           task,
           position: {
@@ -1932,20 +2277,20 @@ export default function ProjectFoldersView() {
     mutateFolder((folder) => {
       const owner = folder.owner || "";
       const stream = blankStream(owner);
-      stream.title = String(title || "").trim() || "Neuer Baustein";
+      stream.title = String(title || "").trim() || "Neuer Tag";
       folder.content = folder.content || { streams: [] };
       folder.content.streams = Array.isArray(folder.content.streams) ? folder.content.streams : [];
       folder.content.streams.unshift(stream);
       setSelectedStreamId(stream.id);
-      return appendActivity(folder, `Baustein angelegt: ${stream.title}`);
+      return appendActivity(folder, `Tag angelegt: ${stream.title}`);
     });
     setNewStreamTitle("");
   };
 
   const removeStream = (streamId) => {
     const currentStream = activeStreams.find((stream) => stream.id === streamId);
-    const label = currentStream?.title || "diesen Baustein";
-    if (!window.confirm(`Baustein "${label}" wirklich löschen?`)) return;
+    const label = currentStream?.title || "diesen Tag";
+    if (!window.confirm(`Tag "${label}" wirklich löschen?`)) return;
     mutateFolder((folder) => {
       folder.content = folder.content || { streams: [] };
       folder.content.streams = Array.isArray(folder.content.streams) ? folder.content.streams : [];
@@ -1954,7 +2299,7 @@ export default function ProjectFoldersView() {
       if (selectedStreamId === streamId) {
         setSelectedStreamId(folder.content.streams[0]?.id || "");
       }
-      return appendActivity(folder, `Baustein gelöscht: ${removed?.title || "Baustein"}`);
+      return appendActivity(folder, `Tag gelöscht: ${removed?.title || "Tag"}`);
     });
   };
 
@@ -1987,6 +2332,109 @@ export default function ProjectFoldersView() {
       ...current,
       tasks: (current.tasks || []).filter((task) => task.id !== taskId)
     }));
+  };
+
+  const selectedTaskEntries = useMemo(
+    () => filteredProjectTasks.filter((task) => taskListSelection[`${task._streamId}_${task.id}`]),
+    [filteredProjectTasks, taskListSelection]
+  );
+
+  const toggleAllVisibleTasks = (checked) => {
+    setTaskListSelection((prev) => {
+      const next = { ...prev };
+      filteredProjectTasks.forEach((task) => {
+        const key = `${task._streamId}_${task.id}`;
+        if (checked) next[key] = true;
+        else delete next[key];
+      });
+      return next;
+    });
+  };
+
+  const applyBulkTaskPatch = (patch) => {
+    const selected = selectedTaskEntries;
+    if (!selected.length) return;
+    mutateFolder((folder) => {
+      folder.content = folder.content || { streams: [] };
+      folder.content.streams = Array.isArray(folder.content.streams) ? folder.content.streams : [];
+      const moveTargetId = patch.streamId || "";
+      const selectedKeys = new Set(selected.map((task) => `${task._streamId}_${task.id}`));
+      let movedTasks = [];
+      folder.content.streams = folder.content.streams.map((stream) => {
+        const tasks = Array.isArray(stream.tasks) ? stream.tasks : [];
+        const keepTasks = [];
+        const nextTasks = tasks.map((task) => {
+          const key = `${stream.id}_${task.id}`;
+          if (!selectedKeys.has(key)) return task;
+          const nextTask = {
+            ...task,
+            ...(patch.status ? { status: patch.status } : {}),
+            ...(patch.due_date !== undefined && patch.due_date !== "" ? { due_date: patch.due_date } : {})
+          };
+          if (moveTargetId && moveTargetId !== stream.id) {
+            movedTasks.push(nextTask);
+            return null;
+          }
+          return nextTask;
+        });
+        nextTasks.forEach((task) => {
+          if (task) keepTasks.push(task);
+        });
+        return {
+          ...stream,
+          tasks: keepTasks,
+          task_links: moveTargetId
+            ? (stream.task_links || []).filter((link) => !selectedKeys.has(`${stream.id}_${link.fromTaskId}`) && !selectedKeys.has(`${stream.id}_${link.toTaskId}`))
+            : stream.task_links
+        };
+      });
+      if (moveTargetId && movedTasks.length) {
+        folder.content.streams = folder.content.streams.map((stream) =>
+          stream.id === moveTargetId ? { ...stream, tasks: [...movedTasks, ...(stream.tasks || [])] } : stream
+        );
+      }
+      return appendActivity(folder, `${selected.length} Aufgaben per Bulk geändert`);
+    });
+    setTaskListSelection({});
+    setBulkTaskPatch({ status: "", streamId: "", due_date: "" });
+  };
+
+  const deleteSelectedTasks = () => {
+    const selected = selectedTaskEntries;
+    if (!selected.length) return;
+    if (!window.confirm(`${selected.length} ausgewählte Aufgaben löschen?`)) return;
+    const selectedKeys = new Set(selected.map((task) => `${task._streamId}_${task.id}`));
+    mutateFolder((folder) => {
+      folder.content = folder.content || { streams: [] };
+      folder.content.streams = (folder.content.streams || []).map((stream) => ({
+        ...stream,
+        tasks: (stream.tasks || []).filter((task) => !selectedKeys.has(`${stream.id}_${task.id}`)),
+        task_links: (stream.task_links || []).filter((link) => !selectedKeys.has(`${stream.id}_${link.fromTaskId}`) && !selectedKeys.has(`${stream.id}_${link.toTaskId}`))
+      }));
+      return appendActivity(folder, `${selected.length} Aufgaben gelöscht`);
+    });
+    setTaskListSelection({});
+  };
+
+  const mergeTagIntoStream = (sourceStreamId, targetStreamId) => {
+    if (!sourceStreamId || !targetStreamId || sourceStreamId === targetStreamId) return;
+    mutateFolder((folder) => {
+      folder.content = folder.content || { streams: [] };
+      const streams = Array.isArray(folder.content.streams) ? folder.content.streams : [];
+      const source = streams.find((stream) => stream.id === sourceStreamId);
+      const target = streams.find((stream) => stream.id === targetStreamId);
+      if (!source || !target) return folder;
+      const movedTasks = Array.isArray(source.tasks) ? source.tasks : [];
+      folder.content.streams = streams
+        .filter((stream) => stream.id !== sourceStreamId)
+        .map((stream) =>
+          stream.id === targetStreamId
+            ? { ...stream, tasks: [...movedTasks, ...(stream.tasks || [])] }
+            : stream
+        );
+      if (selectedStreamId === sourceStreamId) setSelectedStreamId(targetStreamId);
+      return appendActivity(folder, `Tag „${source.title || "Tag"}" zusammengeführt → ${target.title || "Tag"}`);
+    });
   };
 
   const addProjectTask = () => {
@@ -2378,35 +2826,84 @@ export default function ProjectFoldersView() {
     }));
   };
 
-  const reorderTaskInStream = (streamId, taskId, targetTaskId) => {
-    if (!streamId || !taskId || !targetTaskId || taskId === targetTaskId) return;
-    mutateStreamById(streamId, (current) => {
-      const tasks = Array.isArray(current.tasks) ? [...current.tasks] : [];
-      const fromIndex = tasks.findIndex((task) => task.id === taskId);
-      const targetIndex = tasks.findIndex((task) => task.id === targetTaskId);
-      if (fromIndex < 0 || targetIndex < 0 || fromIndex === targetIndex) return current;
-      const [moved] = tasks.splice(fromIndex, 1);
-      const nextTargetIndex = tasks.findIndex((task) => task.id === targetTaskId);
-      tasks.splice(Math.max(0, nextTargetIndex), 0, moved);
-      return { ...current, tasks };
+  const parseTaskDragPayload = (event) => {
+    const payload = event.dataTransfer.getData("application/x-task");
+    if (!payload) return null;
+    try {
+      const parsed = JSON.parse(payload);
+      if (!parsed?.sourceStreamId || !parsed?.taskId) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const moveTaskToPosition = (sourceStreamId, taskId, targetStreamId, targetTaskId = "", placement = "before") => {
+    if (!sourceStreamId || !taskId || !targetStreamId) return;
+    if (sourceStreamId === targetStreamId && taskId === targetTaskId) return;
+    mutateFolder((folder) => {
+      folder.content = folder.content || { streams: [] };
+      folder.content.streams = Array.isArray(folder.content.streams) ? folder.content.streams : [];
+      const sourceStream = folder.content.streams.find((s) => s.id === sourceStreamId);
+      const targetStream = folder.content.streams.find((s) => s.id === targetStreamId);
+      if (!sourceStream || !targetStream) return folder;
+      const sourceTasks = Array.isArray(sourceStream.tasks) ? [...sourceStream.tasks] : [];
+      const sourceIndex = sourceTasks.findIndex((t) => t.id === taskId);
+      if (sourceIndex < 0) return folder;
+      const [task] = sourceTasks.splice(sourceIndex, 1);
+      if (!task) return folder;
+      sourceStream.tasks = sourceTasks;
+      if (sourceStreamId !== targetStreamId) {
+        sourceStream.task_links = (sourceStream.task_links || []).filter(
+          (link) => link.fromTaskId !== taskId && link.toTaskId !== taskId
+        );
+      }
+      const targetTasks = sourceStreamId === targetStreamId ? sourceTasks : [...(targetStream.tasks || [])];
+      const targetIndex = targetTaskId ? targetTasks.findIndex((t) => t.id === targetTaskId) : -1;
+      const insertIndex = targetIndex < 0
+        ? targetTasks.length
+        : targetIndex + (placement === "after" ? 1 : 0);
+      targetTasks.splice(Math.max(0, insertIndex), 0, task);
+      targetStream.tasks = targetTasks;
+      if (sourceStreamId !== targetStreamId) {
+        return appendActivity(folder, `Aufgabe „${task.title || "Aufgabe"}" verschoben → ${targetStream.title || "Tag"}`);
+      }
+      return folder;
     });
+  };
+
+  const reorderTaskInStream = (streamId, taskId, targetTaskId, placement = "before") => {
+    moveTaskToPosition(streamId, taskId, streamId, targetTaskId, placement);
   };
 
   const moveTaskToStream = (sourceStreamId, taskId, targetStreamId) => {
     if (!sourceStreamId || !taskId || !targetStreamId || sourceStreamId === targetStreamId) return;
+    moveTaskToPosition(sourceStreamId, taskId, targetStreamId, "", "after");
+  };
+
+  const moveTaskToNewStream = (sourceStreamId, taskId, title, color = "sky") => {
+    const cleanTitle = String(title || "").trim();
+    if (!sourceStreamId || !taskId || !cleanTitle) return;
     mutateFolder((folder) => {
       folder.content = folder.content || { streams: [] };
-      const sourceStream = (folder.content.streams || []).find((s) => s.id === sourceStreamId);
-      const targetStream = (folder.content.streams || []).find((s) => s.id === targetStreamId);
-      if (!sourceStream || !targetStream) return folder;
-      const task = (sourceStream.tasks || []).find((t) => t.id === taskId);
-      if (!task) return folder;
-      sourceStream.tasks = (sourceStream.tasks || []).filter((t) => t.id !== taskId);
+      folder.content.streams = Array.isArray(folder.content.streams) ? folder.content.streams : [];
+      const sourceStream = folder.content.streams.find((stream) => stream.id === sourceStreamId);
+      if (!sourceStream) return folder;
+      const sourceTasks = Array.isArray(sourceStream.tasks) ? [...sourceStream.tasks] : [];
+      const sourceIndex = sourceTasks.findIndex((task) => task.id === taskId);
+      if (sourceIndex < 0) return folder;
+      const [task] = sourceTasks.splice(sourceIndex, 1);
+      sourceStream.tasks = sourceTasks;
       sourceStream.task_links = (sourceStream.task_links || []).filter(
         (link) => link.fromTaskId !== taskId && link.toTaskId !== taskId
       );
-      targetStream.tasks = [...(targetStream.tasks || []), task];
-      return appendActivity(folder, `Aufgabe „${task.title || "Aufgabe"}" verschoben → ${targetStream.title || "Baustein"}`);
+      const stream = blankStream(folder.owner || "");
+      stream.title = cleanTitle;
+      stream.tag_color = getTaskTagColorMeta(color) ? color : "sky";
+      stream.tasks = [task];
+      folder.content.streams.unshift(stream);
+      setSelectedStreamId(stream.id);
+      return appendActivity(folder, `Tag „${cleanTitle}" angelegt und Aufgabe verschoben`);
     });
   };
 
@@ -2425,6 +2922,36 @@ export default function ProjectFoldersView() {
   const loadFolderForAction = async (folderId) => {
     if (activeFolder?.id === folderId) return activeFolder;
     return api.getFolder(folderId);
+  };
+
+  const openProjectTemplateFromArchive = async (folderId) => {
+    setTemplateSourceBusyId(String(folderId));
+    setError("");
+    try {
+      const sourceFolder = await api.getFolder(folderId);
+      const draft = buildProjectFolderTemplateDraft(sourceFolder);
+      setCreateForm({
+        mode: "template",
+        title: draft.title,
+        customer: draft.customer,
+        owner: draft.owner,
+        project_tag: draft.project_tag || "kundenprojekt",
+        description: "",
+        template_key: "",
+        block_keys: []
+      });
+      setDraftFolder(draft);
+      const streamSelection = {};
+      (draft?.content?.streams || []).forEach((stream) => {
+        streamSelection[stream.id] = true;
+      });
+      setDraftSelection(streamSelection);
+      setCreateOpen(true);
+    } catch (templateError) {
+      setError(String(templateError?.message || "Projektvorlage konnte nicht vorbereitet werden."));
+    } finally {
+      setTemplateSourceBusyId("");
+    }
   };
 
   const handleArchiveFolder = async (folderId, archived) => {
@@ -2457,21 +2984,26 @@ export default function ProjectFoldersView() {
     }
   };
 
-  const openInvoiceModal = async (folderId) => {
+  const openInvoiceModal = async (folderId, options = {}) => {
     try {
       const folder = await loadFolderForAction(folderId);
       const candidates = getInvoiceCandidates(folder);
-      const preferredIds = candidates.filter((item) => item.status === "done" && !item.invoicedAt).map((item) => item.id);
+      const completeProject = Boolean(options.completeProject);
+      const preferredIds = candidates
+        .filter((item) => (completeProject || item.status === "done") && !item.invoicedAt)
+        .map((item) => item.id);
       const fallbackIds = candidates.filter((item) => !item.invoicedAt).map((item) => item.id);
-      const selectedIds = new Set((preferredIds.length ? preferredIds : fallbackIds).slice(0, 12));
+      const selectedIds = new Set(completeProject ? fallbackIds : (preferredIds.length ? preferredIds : fallbackIds).slice(0, 12));
       setInvoiceDialog({
         ...INVOICE_DIALOG_INITIAL,
         open: true,
+        completeProject,
+        openTaskCount: candidates.filter((item) => item.status !== "done").length,
         folderId,
-        folderTitle: folder.title || "Projektmappe",
-        folderCustomer: folder.customer || "",
+        folderTitle: getProjectFolderTitle(folder),
+        folderCustomer: getProjectFolderCustomer(folder),
         customerNumber: folder?.content?.meta?.customer_number || "",
-        invoiceTitle: `Rechnungsentwurf ${folder.title || "Projektmappe"}`,
+        invoiceTitle: `${completeProject ? "Abschlussrechnung" : "Rechnungsentwurf"} ${getProjectFolderTitle(folder)}`,
         positions: candidates.map((item) => ({
           taskId: item.id,
           streamId: item.streamId,
@@ -2496,22 +3028,26 @@ export default function ProjectFoldersView() {
     setInvoiceDialog((prev) => ({ ...prev, improveBusy: true }));
     try {
       const folder = await loadFolderForAction(invoiceDialog.folderId);
-      const topic = selectedPositions.map((item) => item.text || item.taskTitle).join("; ");
+      const positionContext = selectedPositions
+        .map((item, index) =>
+          `${index + 1}. Tag: ${item.streamTitle || "-"} | Aufgabe: ${item.taskTitle || "-"} | aktueller Text: ${item.text || item.taskTitle || "-"} | Stunden: ${item.hours || 0}`
+        )
+        .join("\n");
       const result = await api.aiAssist({
         action: "invoice_positions",
-        topic,
+        topic: `${selectedPositions.length} Rechnungsposition(en) für ${invoiceDialog.folderTitle || getProjectFolderTitle(folder)}`,
         project_folder: folder,
         stream_id: "",
-        context: "Verbessere kurze, kundentaugliche Rechnungspositionen."
+        context: `Verbessere kurze, kundentaugliche Rechnungspositionen. Gib exakt ${selectedPositions.length} Position(en) in gleicher Reihenfolge zurück.\n\nPositionen:\n${positionContext}`
       });
-      const improved = Array.isArray(result?.items) ? result.items : [];
+      const improved = normalizeInvoiceAiTexts(result, selectedPositions);
       setInvoiceDialog((prev) => ({
         ...prev,
         improveBusy: false,
-        positions: prev.positions.map((item, index) => {
+        positions: prev.positions.map((item) => {
           const selectedIndex = selectedPositions.findIndex((entry) => entry.taskId === item.taskId);
           return selectedIndex >= 0 && improved[selectedIndex]
-            ? { ...item, text: String(improved[selectedIndex] || item.text) }
+            ? { ...item, text: improved[selectedIndex] }
             : item;
         })
       }));
@@ -2533,7 +3069,7 @@ export default function ProjectFoldersView() {
       const savedAt = Date.now();
       folder.content.invoices.unshift({
         id: invoiceId,
-        title: String(invoiceDialog.invoiceTitle || "").trim() || `Rechnungsentwurf ${folder.title || "Projektmappe"}`,
+        title: String(invoiceDialog.invoiceTitle || "").trim() || `Rechnungsentwurf ${getProjectFolderTitle(folder)}`,
         note: String(invoiceDialog.note || "").trim(),
         created_at: savedAt,
         positions: selectedPositions.map((item) => ({
@@ -2583,6 +3119,7 @@ export default function ProjectFoldersView() {
   const pushInvoiceToSevdesk = async () => {
     const selectedPositions = invoiceDialog.positions.filter((item) => item.selected);
     if (!invoiceDialog.folderId || !selectedPositions.length) return;
+    const completeProject = Boolean(invoiceDialog.completeProject);
     setInvoiceDialog((prev) => ({ ...prev, pushBusy: true, pushResult: null }));
     try {
       const result = await api.pushSevdeskDraft(invoiceDialog.folderId, {
@@ -2591,6 +3128,7 @@ export default function ProjectFoldersView() {
         note: String(invoiceDialog.note || "").trim() || undefined,
         mark_invoiced: true,
         use_existing_draft: true,
+        close_project: completeProject,
         positions: selectedPositions.map((item) => ({
           task_id: item.taskId,
           stream_id: item.streamId,
@@ -2606,7 +3144,13 @@ export default function ProjectFoldersView() {
         pushBusy: false,
         pushResult: { ok: true, sevdeskInvoiceId: result?.sevdesk_invoice_id || null }
       }));
-      setTimeout(() => setInvoiceDialog(INVOICE_DIALOG_INITIAL), 1500);
+      setTimeout(() => {
+        setInvoiceDialog(INVOICE_DIALOG_INITIAL);
+        if (completeProject) {
+          setSelectedFolderId(null);
+          setOverviewSection("archive");
+        }
+      }, 1500);
     } catch (pushError) {
       setInvoiceDialog((prev) => ({ ...prev, pushBusy: false, pushResult: { ok: false, message: String(pushError?.message || "sevDesk-Übergabe fehlgeschlagen.") } }));
     }
@@ -2638,7 +3182,7 @@ export default function ProjectFoldersView() {
     try {
       const draft = await api.bootstrap({
         mode: "ai",
-        title: "Baustein-Vorschau",
+        title: "Tag-Vorschau",
         customer: "",
         owner: "",
         description: prompt,
@@ -2647,7 +3191,7 @@ export default function ProjectFoldersView() {
       });
       setBlockTemplatePreview(draft);
     } catch (bootstrapError) {
-      setError(String(bootstrapError?.message || "Baustein-Vorschau fehlgeschlagen."));
+      setError(String(bootstrapError?.message || "Tag-Vorschau fehlgeschlagen."));
     } finally {
       setBlockTemplateBusy(false);
     }
@@ -2729,7 +3273,7 @@ export default function ProjectFoldersView() {
       setSelectedBlockCatalogIndex(0);
       setSelectedTemplateCatalogIndex(0);
     } catch (saveError) {
-      setError(String(saveError?.message || "Bausteinpflege konnte nicht gespeichert werden."));
+      setError(String(saveError?.message || "Tagpflege konnte nicht gespeichert werden."));
     } finally {
       setCatalogSaveBusy(false);
     }
@@ -2739,6 +3283,19 @@ export default function ProjectFoldersView() {
     if (!draftFolder) return;
     const payload = clone(draftFolder);
     payload.content.streams = (payload.content.streams || []).filter((stream) => draftSelection[stream.id] !== false);
+    payload.title = String(createForm.title || payload.title || "").trim() || "Neue Projektmappe";
+    payload.customer = String(createForm.customer || payload.customer || "").trim();
+    payload.owner = String(createForm.owner || payload.owner || "").trim();
+    payload.project_tag = String(createForm.project_tag || payload.project_tag || "kundenprojekt").trim() || "kundenprojekt";
+    payload.content = payload.content || {};
+    payload.content.meta = payload.content.meta || {};
+    payload.content.overview = payload.content.overview || {};
+    payload.content.meta.title = payload.title;
+    payload.content.meta.customer = payload.customer;
+    payload.content.meta.customer_name = payload.customer;
+    payload.content.meta.project_tag = payload.project_tag;
+    payload.content.overview.customer = payload.customer;
+    payload.content.overview.customer_name = payload.customer;
     setCreateBusy(true);
     try {
       const saved = await api.createFolder(payload);
@@ -2780,7 +3337,14 @@ export default function ProjectFoldersView() {
   };
 
   const openAiAssist = (action, topic, target = null) => {
-    setAiDialog({ open: true, action, topic: topic || "", target });
+    const resolvedStreamId = target?.streamId || selectedStreamId || activeStreams[0]?.id || "";
+    if (resolvedStreamId && target?.scope !== "folder") setSelectedStreamId(resolvedStreamId);
+    setAiDialog({
+      open: true,
+      action,
+      topic: topic || "",
+      target: target ? { ...target, streamId: target.scope === "folder" ? "" : resolvedStreamId } : null
+    });
     setAiResult(null);
   };
 
@@ -2792,8 +3356,12 @@ export default function ProjectFoldersView() {
         action: aiDialog.action,
         topic: aiDialog.topic,
         project_folder: activeFolder,
-        stream_id: selectedStreamId,
-        context: selectedStream?.short_status || activeFolder.current_state || ""
+        stream_id: aiDialog.target?.streamId || selectedStreamId,
+        context:
+          activeStreams.find((stream) => stream.id === (aiDialog.target?.streamId || selectedStreamId))?.short_status ||
+          selectedStream?.short_status ||
+          activeFolder.current_state ||
+          ""
       });
       setAiResult(result);
     } catch (assistError) {
@@ -2804,7 +3372,7 @@ export default function ProjectFoldersView() {
   };
 
   const applyAiResult = () => {
-    if (!aiResult || !activeFolder || !selectedStream) return;
+    if (!aiResult || !activeFolder) return;
     const action = aiDialog.action;
     const target = aiDialog.target || { scope: "stream", field: "next_step" };
     mutateFolder((folder) => {
@@ -2812,47 +3380,72 @@ export default function ProjectFoldersView() {
       folder.content.overview = folder.content.overview || {};
       folder.content.open_customer_questions = Array.isArray(folder.content.open_customer_questions) ? folder.content.open_customer_questions : [];
       folder.content.last_ai_outputs = Array.isArray(folder.content.last_ai_outputs) ? folder.content.last_ai_outputs : [];
-      const stream = folder.content.streams.find((item) => item.id === selectedStreamId);
-      if (!stream) return folder;
+      const stream = folder.content.streams.find((item) => item.id === (target.streamId || selectedStreamId)) || folder.content.streams[0] || null;
+      const resultText = aiResult.text || (Array.isArray(aiResult.items) ? aiResult.items.map(getAiItemText).filter(Boolean).join("\n") : "");
       if (target.scope === "folder") {
         if (target.field === "next_step") {
-          folder.next_step = aiResult.text || folder.next_step;
-          folder.content.overview.next_step = aiResult.text || folder.content.overview?.next_step || "";
+          folder.next_step = resultText || folder.next_step;
+          folder.content.overview.next_step = resultText || folder.content.overview?.next_step || "";
+        } else if (target.field === "project_description") {
+          folder.content.overview.project_description = resultText || folder.content.overview.project_description || "";
         } else {
-          folder.current_state = aiResult.text || folder.current_state;
-          folder.content.overview.current_status = aiResult.text || folder.content.overview?.current_status || "";
+          folder.current_state = resultText || folder.current_state;
+          folder.content.overview.current_status = resultText || folder.content.overview?.current_status || "";
         }
       } else if (target.field === "short_status") {
-        stream.short_status = aiResult.text || stream.short_status;
+        if (!stream) return folder;
+        stream.short_status = resultText || stream.short_status;
       } else if (target.field === "open_points") {
-        const nextItems = (aiResult.items || []).map((item) => String(item || "")).filter(Boolean);
+        if (!stream) return folder;
+        const nextItems = (aiResult.items || []).map(getAiItemText).filter(Boolean);
         stream.open_points = [...(stream.open_points || []), ...nextItems];
         folder.content.open_customer_questions = [
           ...(folder.content.open_customer_questions || []),
           ...nextItems.map((item) => ({ id: uid(), title: item, kind: "customer_question" }))
         ];
       } else if (target.field === "recommendation") {
-        stream.recommendation = aiResult.text || stream.recommendation;
+        if (!stream) return folder;
+        stream.recommendation = resultText || stream.recommendation;
       } else if (target.field === "next_step") {
-        stream.next_step = aiResult.text || stream.next_step;
+        if (!stream) return folder;
+        stream.next_step = resultText || stream.next_step;
       } else if (target.field === "tasks" || action === "tasks") {
-        stream.tasks = [...(stream.tasks || []), ...(aiResult.items || []).map((item) => ({ id: uid(), owner: stream.owner || "", due_date: "", ...item }))];
+        if (!stream) return folder;
+        stream.tasks = [
+          ...(stream.tasks || []),
+          ...(aiResult.items || []).map((item) =>
+            typeof item === "string"
+              ? { id: uid(), title: item, status: "open", owner: stream.owner || "", due_date: "" }
+              : { id: uid(), owner: stream.owner || "", due_date: "", status: "open", ...item, title: getAiItemText(item) || item?.title || "Aufgabe" }
+          )
+        ];
       } else if (target.field === "checklists" || action === "checklist") {
+        if (!stream) return folder;
         stream.checklists.unshift({
           id: uid(),
           title: aiResult.title || "KI-Checkliste",
-          items: (aiResult.items || []).map((item) => ({ id: uid(), title: String(item || ""), done: false }))
+          items: (aiResult.items || []).map((item) => ({ id: uid(), title: getAiItemText(item), done: false })).filter((item) => item.title)
         });
       } else if (target.field === "risks" || action === "risks") {
-        stream.risks = [...(stream.risks || []), ...(aiResult.items || []).map((item) => ({ id: uid(), ...item }))];
+        if (!stream) return folder;
+        stream.risks = [
+          ...(stream.risks || []),
+          ...(aiResult.items || []).map((item) =>
+            typeof item === "string"
+              ? { id: uid(), title: item, level: "mittel", mitigation: "" }
+              : { id: uid(), ...item, title: getAiItemText(item) || item?.title || "Risiko" }
+          )
+        ];
       } else if (action === "questions") {
-        const nextItems = (aiResult.items || []).map((item) => String(item || "")).filter(Boolean);
+        if (!stream) return folder;
+        const nextItems = (aiResult.items || []).map(getAiItemText).filter(Boolean);
         stream.open_points = [...(stream.open_points || []), ...nextItems];
         folder.content.open_customer_questions = [
           ...(folder.content.open_customer_questions || []),
           ...nextItems.map((item) => ({ id: uid(), title: item, kind: "customer_question" }))
         ];
       } else if (action === "gantt") {
+        if (!stream) return folder;
         stream.gantt_phases = [
           ...(stream.gantt_phases || []),
           ...(aiResult.items || []).map((item) => ({
@@ -2864,12 +3457,13 @@ export default function ProjectFoldersView() {
           }))
         ];
       } else if (action === "summary") {
-        folder.current_state = aiResult.text || folder.current_state;
-        folder.content.overview.current_status = aiResult.text || folder.content.overview?.current_status || "";
+        folder.current_state = resultText || folder.current_state;
+        folder.content.overview.current_status = resultText || folder.content.overview?.current_status || "";
       } else {
+        if (!stream) return folder;
         stream.notes = [...(stream.notes || []), { id: uid(), title: aiResult.title || "KI-Ausgabe", text: aiResult.text || "" }];
       }
-      folder.content.last_ai_outputs = [{ id: uid(), title: aiResult.title || "KI-Ausgabe", text: aiResult.text || "" }, ...(folder.content.last_ai_outputs || [])].slice(0, 10);
+      folder.content.last_ai_outputs = [{ id: uid(), title: aiResult.title || "KI-Ausgabe", text: resultText || "" }, ...(folder.content.last_ai_outputs || [])].slice(0, 10);
       return appendActivity(folder, `KI-Aktion übernommen: ${aiResult.title || aiDialog.action}`);
     });
     setAiDialog({ open: false, action: "tasks", topic: "", target: null });
@@ -3029,15 +3623,18 @@ export default function ProjectFoldersView() {
   return (
     <div className="min-h-screen bg-sand-50">
       <header className="border-b border-sand-200 bg-white/80 backdrop-blur">
-        <div className="mx-auto flex max-w-[1380px] flex-wrap items-center justify-between gap-3 px-6 py-3">
+        <div className="mx-auto flex w-full max-w-[1680px] flex-wrap items-center justify-between gap-3 px-6 py-3">
           <div className="flex items-center gap-3">
-            {activeFolder || folderLoading ? (
-              <button
-                type="button"
-                onClick={() => setSelectedFolderId(null)}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-sand-200 bg-white text-sand-700 hover:bg-sand-50"
-                title="Zurück zur Projektmappenübersicht"
-              >
+	            {activeFolder || folderLoading ? (
+	              <button
+	                type="button"
+	                onClick={() => {
+	                  setOverviewSection("explorer");
+	                  setSelectedFolderId(null);
+	                }}
+	                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-sand-200 bg-white text-sand-700 hover:bg-sand-50"
+	                title="Zurück zur Projektmappenübersicht"
+	              >
                 <ArrowLeft size={18} />
               </button>
             ) : (
@@ -3048,7 +3645,7 @@ export default function ProjectFoldersView() {
             <div className="min-w-0">
               <p className="text-[11px] uppercase tracking-[0.2em] font-medium text-sand-500">QT Workbench</p>
               <h1 className="truncate text-xl font-display text-sand-900">
-                {activeFolder ? (activeFolder.title || "Projektmappe") : folderLoading ? "Projektmappe" : "Projektmappen"}
+                {activeFolder ? getProjectFolderTitle(activeFolder) : folderLoading ? "Projektmappe" : "Projektmappen"}
               </h1>
             </div>
           </div>
@@ -3091,7 +3688,7 @@ export default function ProjectFoldersView() {
           </div>
         </div>
       </header>
-      <div className="mx-auto max-w-[1380px] space-y-5 p-6">
+      <div className="mx-auto w-full max-w-[1680px] space-y-5 p-6">
 
         {folderLoading ? (
           <section className="rounded-[28px] border border-white/70 bg-white/82 p-5 shadow-soft">
@@ -3123,7 +3720,7 @@ export default function ProjectFoldersView() {
             {[
               { key: "explorer", label: "Explorer", icon: FolderKanban },
               { key: "archive", label: "Archiv", icon: Archive },
-              { key: "blocks", label: "Bausteinpflege", icon: CheckSquare }
+              { key: "blocks", label: "Tagpflege", icon: CheckSquare }
             ].map((item) => {
               const Icon = item.icon;
               return (
@@ -3147,6 +3744,7 @@ export default function ProjectFoldersView() {
 
           {overviewSection === "explorer" ? (
             <div className="space-y-3">
+              <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   value={explorerSearch}
@@ -3236,7 +3834,8 @@ export default function ProjectFoldersView() {
                 let staleCount = 0;
                 let overdue = 0;
                 const today = new Date(); today.setHours(0, 0, 0, 0);
-                explorerFolders.forEach((folder) => {
+                const estimateFolders = explorerFolders.filter((folder) => isCustomerProjectFolder(folder));
+                estimateFolders.forEach((folder) => {
                   const cached = estimateCache[folder.id];
                   if (cached) {
                     hoursMin += Number(cached.hours_min || 0);
@@ -3244,10 +3843,12 @@ export default function ProjectFoldersView() {
                     estimateCount += 1;
                     if (isEstimateStale(folder)) staleCount += 1;
                   }
+                });
+                explorerFolders.forEach((folder) => {
                   const deadline = parseDateInput(folder?.content?.overview?.project_deadline);
                   if (deadline && deadline.getTime() < today.getTime()) overdue += 1;
                 });
-                const missing = explorerFolders.length - estimateCount;
+                const missing = estimateFolders.length - estimateCount;
                 const fmtEur = (value) =>
                   new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
                 const bulkActive = bulkEstimateState.active;
@@ -3258,11 +3859,11 @@ export default function ProjectFoldersView() {
                       <>
                         <span className="text-sand-300">·</span>
                         <span title={staleCount ? `${staleCount} Schätzung(en) veraltet` : ""}>
-                          ≈ <b>{Math.round(hoursMin)}–{Math.round(hoursMax)} h</b> ({estimateCount}/{explorerFolders.length})
+                          ≈ <b>{formatHoursRange(hoursMin, hoursMax)}</b> ({estimateCount}/{estimateFolders.length})
                           {staleCount > 0 ? <span className="ml-1 text-amber-600">· {staleCount} veraltet</span> : null}
                         </span>
                         {hourlyRate > 0 ? (
-                          <span className="text-sand-500">{fmtEur(hoursMin * hourlyRate)} – {fmtEur(hoursMax * hourlyRate)}</span>
+                          <span className="text-sand-500">{fmtEur(hoursMin * hourlyRate)}-{fmtEur(hoursMax * hourlyRate)}</span>
                         ) : null}
                       </>
                     ) : null}
@@ -3279,21 +3880,21 @@ export default function ProjectFoldersView() {
                       {missing + staleCount > 0 ? (
                         <button
                           type="button"
-                          onClick={() => estimateAllVisible(explorerFolders, { onlyMissing: true })}
+                          onClick={() => estimateAllVisible(estimateFolders, { onlyMissing: true })}
                           disabled={bulkActive}
                           className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-medium text-sky-800 hover:bg-sky-100 disabled:opacity-60"
-                          title="Fehlende & veraltete KI-Schätzungen nachholen"
+                          title="Fehlende & veraltete KI-Schätzungen für Kundenprojekte nachholen"
                         >
                           ≈ Fehlende schätzen ({missing + staleCount})
                         </button>
                       ) : null}
-                      {explorerFolders.length > 0 ? (
+                      {estimateFolders.length > 0 ? (
                         <button
                           type="button"
-                          onClick={() => estimateAllVisible(explorerFolders, { onlyMissing: false })}
+                          onClick={() => estimateAllVisible(estimateFolders, { onlyMissing: false })}
                           disabled={bulkActive}
                           className="rounded-lg border border-sand-200 bg-white px-2.5 py-1 text-[11px] text-sand-700 hover:bg-sand-100 disabled:opacity-60"
-                          title="Alle sichtbaren neu schätzen"
+                          title="Alle sichtbaren Kundenprojekte neu schätzen"
                         >
                           Alle neu
                         </button>
@@ -3319,12 +3920,14 @@ export default function ProjectFoldersView() {
                 {explorerFolders.map((folder) => {
                   const meta = statusMeta[folder.status] || statusMeta.yellow;
                   const tagMeta = getProjectFolderTagMeta(folder.project_tag);
+                  const folderTitle = getProjectFolderTitle(folder);
+                  const folderCustomer = getProjectFolderCustomer(folder);
                   const folderProgress = Number(folder.summary?.progress ?? 0);
+                  const canEstimateFolder = isCustomerProjectFolder(folder);
                   const estimate = estimateCache[folder.id];
                   const estimatePending = Boolean(estimatesPending[folder.id]);
-                  const fmtEur = (value) =>
-                    new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(value);
                   const renderEstimate = () => {
+                    if (!canEstimateFolder) return null;
                     if (estimatePending) {
                       return <span className="text-[10px] italic text-sand-400">≈ schätze…</span>;
                     }
@@ -3340,8 +3943,11 @@ export default function ProjectFoldersView() {
                         </button>
                       );
                     }
-                    const min = Math.round(Number(estimate.hours_min || 0));
-                    const max = Math.round(Number(estimate.hours_max || 0));
+                    const min = Number(estimate.hours_min || 0);
+                    const max = Math.max(min, Number(estimate.hours_max || 0));
+                    const estimateCurrency = hourlyRate > 0
+                      ? `${formatCurrencyCompact(min * hourlyRate)}-${formatCurrencyCompact(max * hourlyRate)}`
+                      : "";
                     const stale = isEstimateStale(folder);
                     const conf = String(estimate.confidence || "low").toLowerCase();
                     const confDot = conf === "high" ? "bg-emerald-500" : conf === "medium" ? "bg-sky-400" : "bg-sand-400";
@@ -3349,7 +3955,7 @@ export default function ProjectFoldersView() {
                     const ageStr = formatEstimateAge(estimate.generated_at);
                     const breakdownText = Array.isArray(estimate.breakdown) && estimate.breakdown.length
                       ? "\n\nAufschlüsselung:\n" + estimate.breakdown
-                          .map((row) => `• ${row.stream}: ${Math.round(row.hours_min)}–${Math.round(row.hours_max)} h`)
+                          .map((row) => `• ${row.stream}: ${formatHoursRange(row.hours_min, row.hours_max)}`)
                           .join("\n")
                       : "";
                     const tooltip = [
@@ -3367,8 +3973,8 @@ export default function ProjectFoldersView() {
                         title={tooltip}
                       >
                         <span className={`h-1.5 w-1.5 rounded-full ${confDot}`} />
-                        <span className="italic">{isFallback ? "≈" : "KI"} {min}–{max} h</span>
-                        {hourlyRate > 0 ? <span className="text-sand-400">· {fmtEur(min * hourlyRate)}–{fmtEur(max * hourlyRate)}</span> : null}
+                        <span className="italic">{isFallback ? "≈" : "KI"} {formatHoursRange(min, max)}</span>
+                        {estimateCurrency ? <span className="text-sand-400">· {estimateCurrency}</span> : null}
                         {stale ? <span className="text-amber-500">·↻</span> : null}
                       </button>
                     );
@@ -3393,17 +3999,55 @@ export default function ProjectFoldersView() {
                         <span className={`h-6 w-1 shrink-0 rounded-full ${tagMeta.dot}`} title={tagMeta.label} />
                         <span className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} title={meta.label} />
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-sand-900">{folder.title}</div>
-                          <div className="truncate text-[11px] text-sand-500">{folder.customer || "Ohne Kunde"}</div>
+                          <div className="truncate text-sm font-medium text-sand-900" title={folderTitle}>{folderTitle}</div>
+                          <div className="truncate text-[11px] text-sand-500" title={folderCustomer || "Ohne Kunde"}>{folderCustomer || "Ohne Kunde"}</div>
+                          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-sand-500">
+                            <span className="tabular-nums">{folderProgress}%</span>
+                            <span>{folder.summary?.open_task_count || 0} offen</span>
+                            <span onClick={(e) => e.stopPropagation()}>{renderEstimate()}</span>
+                          </div>
                         </div>
-                        <div className="hidden w-20 shrink-0 text-right text-[11px] tabular-nums text-sand-500 sm:block">
-                          {folderProgress}%
+                        <div className="hidden min-w-[180px] shrink-0 md:block">
+                          <div className="flex items-center gap-2">
+                            <div className="h-1.5 flex-1 rounded-full bg-sand-100">
+                              <div className={`h-1.5 rounded-full ${tagMeta.dot}`} style={{ width: `${folderProgress}%` }} />
+                            </div>
+                            <span className="w-9 text-right text-[11px] tabular-nums text-sand-500">{folderProgress}%</span>
+                          </div>
+                          <div className="mt-1 flex justify-end gap-2 text-[10px] text-sand-500">
+                            <span>{folder.summary?.stream_count || 0} Tags</span>
+                            <span>{folder.summary?.task_count || 0} Aufgaben</span>
+                          </div>
                         </div>
-                        <div className="hidden w-20 shrink-0 text-right text-[11px] tabular-nums text-sand-500 sm:block">
-                          {folder.summary?.open_task_count || 0} offen
+                        <div className="hidden w-[132px] shrink-0 text-right text-[11px] text-sand-500 xl:block">
+                          {folder.content?.overview?.project_deadline ? (
+                            <span>Fällig {formatDateLabel(folder.content.overview.project_deadline)}</span>
+                          ) : (
+                            <span>Keine Fälligkeit</span>
+                          )}
+                          {folder.invoice_draft_count ? (
+                            <div className="mt-1 text-sky-700">{folder.invoice_draft_count} Rechnungen</div>
+                          ) : null}
                         </div>
-                        <div className="w-32 shrink-0 text-right" onClick={(e) => e.stopPropagation()}>
-                          {renderEstimate()}
+                        <div className="hidden shrink-0 items-center gap-1 xl:flex" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={() => handleArchiveFolder(folder.id, true)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                            title="Archivieren"
+                            aria-label="Archivieren"
+                          >
+                            <Archive size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openInvoiceModal(folder.id)}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100"
+                            title="Fakturieren"
+                            aria-label="Fakturieren"
+                          >
+                            <Receipt size={14} />
+                          </button>
                         </div>
                       </div>
                     );
@@ -3420,8 +4064,8 @@ export default function ProjectFoldersView() {
                           <div className="min-w-0 flex items-start gap-2">
                             <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${meta.dot}`} title={meta.label} />
                             <div className="min-w-0">
-                              <div className="truncate text-sm font-semibold text-sand-900">{folder.title}</div>
-                              <div className="mt-0.5 truncate text-xs text-sand-500">{folder.customer || "Ohne Kunde"}</div>
+                              <div className="truncate text-sm font-semibold text-sand-900" title={folderTitle}>{folderTitle}</div>
+                              <div className="mt-0.5 truncate text-xs text-sand-500" title={folderCustomer || "Ohne Kunde"}>{folderCustomer || "Ohne Kunde"}</div>
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
@@ -3472,7 +4116,9 @@ export default function ProjectFoldersView() {
                           </div>
                           <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-sand-500">
                             <span>{folder.summary?.open_task_count || 0} offene Aufgaben</span>
-                            <span onClick={(e) => e.stopPropagation()}>{renderEstimate()}</span>
+                            <span className="flex items-center gap-2">
+                              <span onClick={(e) => e.stopPropagation()}>{renderEstimate()}</span>
+                            </span>
                           </div>
                         </button>
                       </div>
@@ -3487,22 +4133,80 @@ export default function ProjectFoldersView() {
                   </div>
                 ) : null}
               </div>
+              </div>
             </div>
           ) : null}
 
           {overviewSection === "archive" ? (
             <div className="space-y-3">
-              <div>
-                <div className="text-sm font-semibold text-sand-900">Archivierte Projektmappen</div>
-                <div className="mt-0.5 text-xs text-sand-500">Reaktivieren oder zur Detailansicht öffnen.</div>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-sand-900">Projektarchiv</div>
+                  <div className="mt-0.5 text-xs text-sand-500">
+                    Geschlossene Projektmappen bleiben auffindbar und können als Vorlage für neue Projekte dienen.
+                  </div>
+                </div>
+                <Tag className="border-sand-200 bg-white text-sand-700">
+                  {filteredArchivedFolders.length}/{archivedFolders.length} Mappen
+                </Tag>
+              </div>
+              <div className="grid gap-2 rounded-2xl border border-sand-200 bg-sand-50/70 p-3 lg:grid-cols-[minmax(220px,1fr)_190px_170px_150px_auto]">
+                <input
+                  value={archiveFilters.search}
+                  onChange={(event) => setArchiveFilters((current) => ({ ...current, search: event.target.value }))}
+                  placeholder="Suche nach Projekt, Kunde, Owner…"
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                />
+                <select
+                  value={archiveFilters.customer}
+                  onChange={(event) => setArchiveFilters((current) => ({ ...current, customer: event.target.value }))}
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="">Alle Kunden</option>
+                  {archiveCustomers.map((customer) => (
+                    <option key={customer} value={customer}>{customer}</option>
+                  ))}
+                </select>
+                <select
+                  value={archiveFilters.tag}
+                  onChange={(event) => setArchiveFilters((current) => ({ ...current, tag: event.target.value }))}
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="">Alle Kennzeichen</option>
+                  {projectFolderTagOrder.map((key) => {
+                    const option = projectFolderTagOptions[key];
+                    return <option key={key} value={key}>{option?.label || key}</option>;
+                  })}
+                </select>
+                <select
+                  value={archiveFilters.invoice}
+                  onChange={(event) => setArchiveFilters((current) => ({ ...current, invoice: event.target.value }))}
+                  className="rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="">Alle Rechnungen</option>
+                  <option value="with">Mit Rechnung</option>
+                  <option value="without">Ohne Rechnung</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setArchiveFilters({ search: "", customer: "", tag: "", invoice: "" })}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-sand-200 bg-white px-3 py-2 text-xs text-sand-700 hover:bg-sand-100"
+                >
+                  <RotateCcw size={13} />
+                  Filter zurücksetzen
+                </button>
               </div>
               <div className="grid gap-3 xl:grid-cols-3">
-                {archivedFolders.map((folder) => (
+                {filteredArchivedFolders.map((folder) => {
+                  const folderTitle = getProjectFolderTitle(folder);
+                  const folderCustomer = getProjectFolderCustomer(folder);
+                  const busyAsTemplate = templateSourceBusyId === String(folder.id);
+                  return (
                     <div key={folder.id} className="rounded-[20px] border border-sand-200 bg-sand-50/70 p-4">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-sand-900">{folder.title}</div>
-                          <div className="mt-0.5 truncate text-xs text-sand-500">{folder.customer || "Ohne Kunde"}</div>
+                          <div className="truncate text-sm font-semibold text-sand-900" title={folderTitle}>{folderTitle}</div>
+                          <div className="mt-0.5 truncate text-xs text-sand-500" title={folderCustomer || "Ohne Kunde"}>{folderCustomer || "Ohne Kunde"}</div>
                           <div className="mt-2">
                             {folder.project_tag ? (
                               <Tag className={getProjectFolderTagMeta(folder.project_tag).className}>
@@ -3513,8 +4217,11 @@ export default function ProjectFoldersView() {
                           <div className="mt-2 text-[11px] text-sand-500">
                             Archiviert: {getFolderArchivedAt(folder) ? formatDateTime(getFolderArchivedAt(folder)) : "unbekannt"}
                           </div>
+                          {folder.invoice_draft_count ? (
+                            <div className="mt-1 text-[11px] text-sky-700">{folder.invoice_draft_count} Rechnungsentwurf</div>
+                          ) : null}
                         </div>
-                      <Tag className="border-sand-200 bg-white text-sand-700">{folder.summary?.stream_count || 0} Bausteine</Tag>
+                      <Tag className="border-sand-200 bg-white text-sand-700">{folder.summary?.stream_count || 0} Tags</Tag>
                     </div>
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button
@@ -3533,12 +4240,22 @@ export default function ProjectFoldersView() {
                         <RotateCcw size={14} />
                         Reaktivieren
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => openProjectTemplateFromArchive(folder.id)}
+                        disabled={busyAsTemplate}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700 hover:bg-sky-100 disabled:opacity-50"
+                      >
+                        <Plus size={14} />
+                        {busyAsTemplate ? "Bereite vor…" : "Als Vorlage"}
+                      </button>
                     </div>
                   </div>
-                ))}
-                {!archivedFolders.length ? (
+                  );
+                })}
+                {!filteredArchivedFolders.length ? (
                   <div className="rounded-[24px] border border-dashed border-sand-300 p-6 text-sm text-sand-500">
-                    Noch keine archivierten Projektmappen vorhanden.
+                    {archivedFolders.length ? "Keine archivierte Projektmappe passt zu den Filtern." : "Noch keine archivierten Projektmappen vorhanden."}
                   </div>
                 ) : null}
               </div>
@@ -3549,11 +4266,11 @@ export default function ProjectFoldersView() {
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] border border-sand-200 bg-sand-50/70 px-4 py-3">
                 <div>
-                  <div className="text-sm font-semibold text-sand-900">Bausteinpflege</div>
+                  <div className="text-sm font-semibold text-sand-900">Tagpflege</div>
                   <div className="mt-0.5 text-xs text-sand-600">Kompakte Listen links, Detailbearbeitung rechts.</div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Tag className="border-sky-200 bg-sky-50 text-sky-700">{blockCatalogDraft.length} Bausteine</Tag>
+                  <Tag className="border-sky-200 bg-sky-50 text-sky-700">{blockCatalogDraft.length} Tags</Tag>
                   <Tag className="border-sand-200 bg-white text-sand-700">{templateCatalogDraft.length} Vorlagen</Tag>
                   <button
                     type="button"
@@ -3576,7 +4293,7 @@ export default function ProjectFoldersView() {
                         onClick={() => setCatalogEditorTab("blocks")}
                         className={`rounded-lg px-2.5 py-1 text-[11px] ${catalogEditorTab === "blocks" ? "bg-white text-sand-900 shadow-sm" : "text-sand-500"}`}
                       >
-                        Bausteine
+                        Tags
                       </button>
                       <button
                         type="button"
@@ -3594,7 +4311,7 @@ export default function ProjectFoldersView() {
                             ...prev,
                             {
                               key: `baustein_${prev.length + 1}`,
-                              label: "Neuer Baustein",
+                              label: "Neuer Tag",
                               summary: "",
                               tasksText: "",
                               checklistText: "",
@@ -3646,7 +4363,7 @@ export default function ProjectFoldersView() {
                         </button>
                       )) : (
                         <div className="rounded-2xl border border-dashed border-sand-300 bg-sand-50/40 px-4 py-6 text-center text-sm text-sand-500">
-                          Noch keine Bausteine vorhanden.
+                          Noch keine Tags vorhanden.
                         </div>
                       )
                     ) : (
@@ -3661,7 +4378,7 @@ export default function ProjectFoldersView() {
                         >
                           <div className="truncate text-sm font-semibold text-sand-900">{template.label || "Ohne Titel"}</div>
                           <div className="mt-0.5 truncate text-[11px] text-sand-500">{template.key || "ohne_key"}</div>
-                          <div className="mt-1 text-[11px] text-sand-600">{(template.blocks || []).length} zugeordnete Bausteine</div>
+                          <div className="mt-1 text-[11px] text-sand-600">{(template.blocks || []).length} zugeordnete Tags</div>
                         </button>
                       )) : (
                         <div className="rounded-2xl border border-dashed border-sand-300 bg-sand-50/40 px-4 py-6 text-center text-sm text-sand-500">
@@ -3678,14 +4395,14 @@ export default function ProjectFoldersView() {
                       <div className="space-y-4">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <div className="text-sm font-semibold text-sand-900">Baustein bearbeiten</div>
+                            <div className="text-sm font-semibold text-sand-900">Tag bearbeiten</div>
                             <div className="mt-0.5 text-xs text-sand-500">Ein Eintrag pro Zeile in den Listenfeldern.</div>
                           </div>
                           <button
                             type="button"
                             onClick={() => setBlockCatalogDraft((prev) => prev.filter((_, itemIndex) => itemIndex !== selectedBlockCatalogIndex))}
                             className="rounded-full border border-rose-200 bg-rose-50 p-1 text-rose-700 hover:bg-rose-100"
-                            aria-label="Baustein entfernen"
+                            aria-label="Tag entfernen"
                           >
                             <X size={12} />
                           </button>
@@ -3740,7 +4457,7 @@ export default function ProjectFoldersView() {
                       </div>
                     ) : (
                       <div className="rounded-2xl border border-dashed border-sand-300 bg-sand-50/40 px-4 py-10 text-center text-sm text-sand-500">
-                        Baustein auswählen oder neu anlegen.
+                        Tag auswählen oder neu anlegen.
                       </div>
                     )
                   ) : (
@@ -3749,7 +4466,7 @@ export default function ProjectFoldersView() {
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <div className="text-sm font-semibold text-sand-900">Vorlage bearbeiten</div>
-                            <div className="mt-0.5 text-xs text-sand-500">Bausteine direkt per Checkbox zuordnen.</div>
+                            <div className="mt-0.5 text-xs text-sand-500">Tags direkt per Checkbox zuordnen.</div>
                           </div>
                           <button
                             type="button"
@@ -3779,7 +4496,7 @@ export default function ProjectFoldersView() {
                           </label>
                         </div>
                         <div className="space-y-2">
-                          <div className="text-[11px] uppercase tracking-[0.14em] text-sand-500">Bausteine auswählen</div>
+                          <div className="text-[11px] uppercase tracking-[0.14em] text-sand-500">Tags auswählen</div>
                           <div className="grid gap-2 md:grid-cols-2">
                             {blockCatalogDraft.map((block) => {
                               const checked = Array.isArray(activeTemplateDraft.blocks) && activeTemplateDraft.blocks.includes(block.key);
@@ -3823,10 +4540,10 @@ export default function ProjectFoldersView() {
                     <div>
                       <div className="text-sm font-semibold text-sand-900">KI-Vorschau</div>
                       <div className="mt-0.5 text-xs leading-5 text-sand-600">
-                        Aus Freitext einen plausiblen Baustein-Entwurf erzeugen.
+                        Aus Freitext einen plausiblen Tag-Entwurf erzeugen.
                       </div>
                     </div>
-                    <AiSparkleButton onClick={handleBlockTemplatePreview} label="" title="Baustein-Vorschau per KI erzeugen" />
+                    <AiSparkleButton onClick={handleBlockTemplatePreview} label="" title="Tag-Vorschau per KI erzeugen" />
                   </div>
                   <div className="mt-3 space-y-3">
                     <textarea
@@ -3850,12 +4567,12 @@ export default function ProjectFoldersView() {
                         <div className="flex items-center justify-between gap-2">
                           <div className="text-[11px] uppercase tracking-[0.16em] text-sand-500">Erkannt</div>
                           <Tag className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                            {blockTemplatePreview.content.streams.length} Bausteine
+                            {blockTemplatePreview.content.streams.length} Tags
                           </Tag>
                         </div>
                         {(blockTemplatePreview.content.streams || []).slice(0, 3).map((stream) => (
                           <div key={stream.id} className="rounded-2xl border border-sand-200 bg-white px-3 py-2">
-                            <div className="text-sm font-semibold text-sand-900">{stream.title || "Baustein"}</div>
+                            <div className="text-sm font-semibold text-sand-900">{stream.title || "Tag"}</div>
                             <div className="mt-0.5 text-xs text-sand-600">{stream.short_status || "Ohne Kurztext"}</div>
                             <div className="mt-2 space-y-1 text-[11px] text-sand-500">
                               {(stream.tasks || []).slice(0, 3).map((task) => (
@@ -3881,18 +4598,39 @@ export default function ProjectFoldersView() {
 
         {activeFolder ? (
           <div className="flex flex-col gap-4 lg:flex-row">
-            <aside className="w-full shrink-0 lg:w-64">
+            <aside className={`w-full shrink-0 transition-all ${projectSidebarCollapsed ? "lg:w-12" : "lg:w-64"}`}>
               <div className="sticky top-4 space-y-2">
-                <div className="flex items-center justify-between gap-2 px-1">
-                  <div className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Projekte</div>
+                {projectSidebarCollapsed ? (
                   <button
                     type="button"
-                    onClick={() => setCreateOpen(true)}
-                    title="Neue Mappe"
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                    onClick={() => setProjectSidebarCollapsed(false)}
+                    className="hidden h-10 w-10 items-center justify-center rounded-xl border border-sand-200 bg-white text-sand-600 shadow-sm hover:bg-sand-50 lg:inline-flex"
+                    title="Projektliste einblenden"
                   >
-                    <Plus size={12} />
+                    <FolderKanban size={16} />
                   </button>
+                ) : (
+                  <>
+                <div className="flex items-center justify-between gap-2 px-1">
+                  <div className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Projekte</div>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setProjectSidebarCollapsed(true)}
+                      title="Projektliste einklappen"
+                      className="hidden h-6 w-6 items-center justify-center rounded-md border border-sand-200 bg-white text-sand-500 hover:bg-sand-50 lg:inline-flex"
+                    >
+                      <ChevronRight size={12} className="rotate-180" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCreateOpen(true)}
+                      title="Neue Mappe"
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                    >
+                      <Plus size={12} />
+                    </button>
+                  </div>
                 </div>
                 <div className="overflow-hidden rounded-2xl border border-sand-200 bg-white">
                   <div className="max-h-[calc(100vh-180px)] overflow-y-auto">
@@ -3910,6 +4648,8 @@ export default function ProjectFoldersView() {
                             const selected = String(folder.id) === String(activeFolder.id);
                             const favorite = isFavorite(folder.id);
                             const meta = statusMeta[folder.status] || statusMeta.yellow;
+                            const folderTitle = getProjectFolderTitle(folder);
+                            const folderCustomer = getProjectFolderCustomer(folder);
                             return (
                               <li key={folder.id}>
                                 <button
@@ -3923,9 +4663,9 @@ export default function ProjectFoldersView() {
                                   <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
                                   <span className="min-w-0 flex-1">
                                     <span className={`block truncate font-medium ${selected ? "text-sky-900" : "text-sand-900"}`}>
-                                      {folder.title || "Projektmappe"}
+                                      {folderTitle}
                                     </span>
-                                    {folder.customer ? <span className="block truncate text-[10px] text-sand-500">{folder.customer}</span> : null}
+                                    {folderCustomer ? <span className="block truncate text-[10px] text-sand-500">{folderCustomer}</span> : null}
                                   </span>
                                   <span
                                     onClick={(event) => {
@@ -3947,6 +4687,8 @@ export default function ProjectFoldersView() {
                     )}
                   </div>
                 </div>
+                  </>
+                )}
               </div>
             </aside>
 
@@ -3959,28 +4701,79 @@ export default function ProjectFoldersView() {
               const deadlineUrgent = deadlineDiff !== null && deadlineDiff <= 7;
               const deadlineOverdue = deadlineDiff !== null && deadlineDiff < 0;
               return (
-              <section className="overflow-hidden rounded-xl border border-sand-200 bg-white shadow-sm">
-                <div className={`h-0.5 w-full ${folderMeta.dot}`} />
-                <div className="space-y-1.5 px-2.5 py-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <input
-                        className="w-full rounded-lg border border-transparent bg-transparent py-0 pl-0 pr-2 font-display text-base leading-6 text-sand-900 outline-none transition hover:border-sand-200 hover:bg-white focus:border-sky-300 focus:bg-white focus:pl-2 focus:ring-2 focus:ring-sky-100 md:text-lg"
-                        value={activeFolder.title || ""}
-                        onChange={(e) => mutateFolder((folder) => ({ ...folder, title: e.target.value }))}
+              <section className="overflow-hidden rounded-2xl border border-sand-200 bg-white shadow-sm">
+                {/* Status accent bar */}
+                <div className={`h-1 w-full ${folderMeta.dot}`} />
+
+                {/* Main header */}
+	                <div className="px-3 py-2">
+	                  <div className="flex flex-wrap items-start justify-between gap-1.5">
+	                    <div className="min-w-0 flex-1">
+	                      {/* Title */}
+	                      <BufferedInput
+	                        className="w-full border-0 bg-transparent p-0 font-display text-base leading-tight text-sand-900 outline-none placeholder:text-sand-300 focus:placeholder:text-sand-200 md:text-lg"
+	                        value={activeFolder.title || ""}
+                        onCommit={(value) => mutateFolder((folder) => ({ ...folder, title: value }))}
                         aria-label="Projektüberschrift bearbeiten"
-                      />
-                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                        <Tag className={getProjectFolderTagMeta(activeFolder.project_tag).className}>
+                        placeholder="Projektname"
+	                      />
+	                      {/* Meta row */}
+	                      <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                        <span className={`inline-flex h-5 items-center rounded-full border px-1.5 text-[10px] font-medium ${getProjectFolderTagMeta(activeFolder.project_tag).className}`}>
                           {activeFolder.project_tag_label || getProjectFolderTagMeta(activeFolder.project_tag).label}
-                        </Tag>
-                        <Tag className="border-sand-200 bg-sand-50">{activeFolder.customer || "Ohne Kunde"}</Tag>
-                        {feedbackCount ? <Tag className="border-amber-200 bg-amber-50 text-amber-700">{feedbackCount} Rückmeldungen</Tag> : null}
-                        {blockedCount ? <Tag className="border-rose-200 bg-rose-50 text-rose-700">{blockedCount} Blockaden</Tag> : null}
-                        <label className="inline-flex h-6 items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2 text-[11px] text-sand-700">
-                          <span className="uppercase tracking-[0.12em] text-sand-500">Kennz.</span>
+                        </span>
+                        <label className="inline-flex h-5 max-w-[260px] items-center gap-1 rounded-full border border-sand-200 bg-sand-50 px-1.5 text-[10px] text-sand-600 hover:border-sand-300">
+                          <span className="shrink-0 text-[9px] uppercase tracking-[0.12em] text-sand-400">Kunde</span>
                           <select
-                            className="border-0 bg-transparent p-0 text-[11px] outline-none"
+                            className="min-w-0 max-w-[190px] border-0 bg-transparent p-0 text-[10px] text-sand-700 outline-none"
+                            value={getProjectFolderCustomer(activeFolder)}
+                            onChange={(event) => updateProjectCustomer(event.target.value)}
+                            title="Kunde zuordnen"
+                          >
+                            <option value="">Ohne Kunde</option>
+                            {(() => {
+                              const activeCustomerName = getProjectFolderCustomer(activeFolder);
+                              const options = activeCustomerName && !customerNames.includes(activeCustomerName)
+                                ? [activeCustomerName, ...customerNames]
+                                : customerNames;
+                              return options.map((name) => (
+                                <option key={name} value={name}>{name}</option>
+                              ));
+                            })()}
+                          </select>
+                        </label>
+                        {feedbackCount ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveProjectTab("aufgaben");
+                              setTaskListFilters((prev) => ({ ...prev, status: "waiting_customer" }));
+                            }}
+                            className="inline-flex h-5 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 text-[10px] font-medium text-amber-700 hover:bg-amber-100"
+                            title="Aufgaben mit Kundenfeedback anzeigen"
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                            {feedbackCount} Rückmeldung{feedbackCount !== 1 ? "en" : ""}
+                          </button>
+                        ) : null}
+                        {blockedCount ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveProjectTab("aufgaben");
+                              setTaskListFilters((prev) => ({ ...prev, status: "blocked" }));
+                            }}
+                            className="inline-flex h-5 items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-1.5 text-[10px] font-medium text-rose-700 hover:bg-rose-100"
+                            title="Blockierte Aufgaben anzeigen"
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+                            {blockedCount} Blockade{blockedCount !== 1 ? "n" : ""}
+                          </button>
+                        ) : null}
+                        <label className="inline-flex h-5 items-center gap-1 rounded-full border border-sand-200 bg-white px-1.5 text-[10px] text-sand-600 hover:border-sand-300">
+                          <span className="text-[9px] uppercase tracking-[0.12em] text-sand-400">Kennz.</span>
+                          <select
+                            className="border-0 bg-transparent p-0 text-[10px] text-sand-700 outline-none"
                             value={activeFolder.project_tag || ""}
                             onChange={(e) =>
                               mutateFolder((folder) => {
@@ -3992,7 +4785,7 @@ export default function ProjectFoldersView() {
                               })
                             }
                           >
-                            <option value="">Ohne Kennzeichen</option>
+                            <option value="">Ohne</option>
                             {projectFolderTagOrder.map((key) => {
                               const option = projectFolderTagOptions[key];
                               return <option key={key} value={key}>{option?.label || key}</option>;
@@ -4001,75 +4794,171 @@ export default function ProjectFoldersView() {
                         </label>
                       </div>
                     </div>
-                    <label className={`flex h-7 shrink-0 items-center gap-1.5 rounded-lg border px-2 text-[11px] ${
-                      deadlineOverdue ? "border-rose-300 bg-rose-50 text-rose-700" :
-                      deadlineUrgent  ? "border-amber-300 bg-amber-50 text-amber-700" :
-                      "border-sand-200 bg-white text-sand-700"
-                    }`}>
-                      <Clock3 size={12} />
-                      <span className="text-[10px] uppercase tracking-[0.14em] opacity-70">Fällig</span>
-                      <input
-                        type="date"
-                        className="border-0 bg-transparent p-0 text-[11px] outline-none"
-                        value={projectDeadlineRaw}
-                        onChange={(e) =>
-                          mutateFolder((folder) => {
-                            folder.content = folder.content || {};
-                            folder.content.overview = folder.content.overview || {};
-                            folder.content.overview.project_deadline = e.target.value;
-                            return folder;
-                          })
-                        }
-                      />
-                    </label>
-                  </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-sand-700">
-                    <span className={`inline-flex h-7 items-center gap-1.5 rounded-lg border px-2 ${Number(activeSummary.progress || 0) >= 80 ? "border-emerald-200 bg-emerald-50 text-emerald-800" : Number(activeSummary.progress || 0) >= 40 ? "border-sky-200 bg-sky-50 text-sky-800" : "border-sand-200 bg-sand-50 text-sand-800"}`}>
-                      <TrendingUp size={12} className="opacity-60" />
-                      <span>Fortschritt</span>
-                      <b className="tabular-nums">{activeSummary.progress || 0}%</b>
-                    </span>
-                    <span className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-sand-200 bg-sand-50 px-2 text-sand-800">
-                      <ListChecks size={12} className="opacity-60" />
-                      <span>Aufgaben</span>
-                      <b className="tabular-nums">{taskCompletionLabel}</b>
-                    </span>
-                    <span className={`inline-flex h-7 items-center gap-1.5 rounded-lg border px-2 ${overdueTaskCount > 0 ? "border-rose-200 bg-rose-50 text-rose-800" : "border-sand-200 bg-sand-50 text-sand-800"}`}>
-                      <AlertTriangle size={12} className="opacity-60" />
-                      <span>Überfällig</span>
-                      <b className="tabular-nums">{overdueTaskCount}</b>
-                    </span>
-                    <span className={`inline-flex h-7 items-center gap-1.5 rounded-lg border px-2 ${activeProjectTimeStartedAt ? "border-sky-200 bg-sky-50 text-sky-800" : "border-sand-200 bg-sand-50 text-sand-800"}`}>
-                      <Clock3 size={12} className="opacity-60" />
-                      <span>Zeit</span>
-                      <b className="tabular-nums">{formatProjectDuration(activeProjectTimeMs)}</b>
+                    {/* Right side: deadline + timer */}
+	                    <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-1">
+	                      <label className={`flex h-6 items-center gap-1 rounded-md border px-1.5 text-[10px] cursor-pointer ${
+	                        deadlineOverdue ? "border-rose-300 bg-rose-50 text-rose-700" :
+	                        deadlineUrgent  ? "border-amber-300 bg-amber-50 text-amber-700" :
+	                        "border-sand-200 bg-sand-50 text-sand-600 hover:border-sand-300"
+	                      }`}>
+                        <Clock3 size={11} />
+                        <span className="text-[9px] uppercase tracking-[0.12em] opacity-80">{deadlineOverdue ? "Überfällig" : deadlineUrgent ? "Fällig" : "Deadline"}</span>
+                        <input
+                          type="date"
+                          className="border-0 bg-transparent p-0 text-[10px] outline-none"
+                          value={projectDeadlineRaw}
+                          onChange={(e) =>
+                            mutateFolder((folder) => {
+                              folder.content = folder.content || {};
+                              folder.content.overview = folder.content.overview || {};
+                              folder.content.overview.project_deadline = e.target.value;
+                              return folder;
+                            })
+                          }
+                        />
+                      </label>
+	                      <button
+	                        type="button"
+	                        onClick={activeProjectTimeStartedAt ? stopProjectTimer : startProjectTimer}
+	                        title={activeProjectTimeStartedAt ? "Zeiterfassung stoppen" : "Zeiterfassung starten"}
+	                        className={`inline-flex h-6 items-center gap-1 rounded-md border px-1.5 text-[10px] font-medium transition ${
+	                          activeProjectTimeStartedAt
+                            ? "border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100"
+                            : "border-sand-200 bg-white text-sand-700 hover:bg-sand-50"
+                        }`}
+                      >
+	                        <span className={`inline-flex h-4 w-4 items-center justify-center rounded text-white ${activeProjectTimeStartedAt ? "bg-sky-600" : "bg-emerald-600"}`}>
+	                          {activeProjectTimeStartedAt ? <Square size={8} /> : <Play size={8} />}
+	                        </span>
+                        <span className="tabular-nums">{formatProjectDuration(activeProjectTimeMs)}</span>
+                        {activeProjectTimeStartedAt ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500" /> : null}
+                      </button>
+	                      <label
+	                        className="inline-flex h-6 items-center gap-1 rounded-md border border-sand-200 bg-white px-1.5 text-[10px] font-medium text-sand-700"
+	                        title="Manuell definierter Richtwert"
+	                      >
+                        <span className="text-[9px] uppercase tracking-[0.12em] text-sand-400">RW</span>
+                        <BufferedInput
+                          value={activeInternalValueRaw}
+                          onCommit={(value) => updateOverviewField("internal_value_eur", value)}
+                          onBlur={(event) => updateOverviewField("internal_value_eur", event.target.value ? formatMoneyInput(event.target.value) : "")}
+                          inputMode="decimal"
+                          placeholder="0"
+	                          className="w-14 border-0 bg-transparent p-0 text-right text-[10px] tabular-nums text-sand-900 outline-none placeholder:text-sand-300"
+                        />
+                        <span className="text-sand-400">€</span>
+                      </label>
+	                      <button
+	                        type="button"
+	                        onClick={() => openAiAssist("summary", activeFolder.title || "", { scope: "folder", field: "current_state" })}
+	                        title="Projektstand per KI formulieren"
+	                        className="inline-flex h-6 items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-1.5 text-[10px] font-medium text-sky-800 transition hover:bg-sky-100"
+	                      >
+	                        <Sparkles size={11} />
+	                        Stand
+	                      </button>
+	                      <button
+	                        type="button"
+	                        onClick={() => openAiAssist("handover", activeFolder.title || "", { scope: "folder", field: "next_step" })}
+	                        title="Nächsten Schritt / Übergabe per KI formulieren"
+	                        className="inline-flex h-6 items-center gap-1 rounded-md border border-sky-200 bg-white px-1.5 text-[10px] font-medium text-sky-700 transition hover:bg-sky-50"
+	                      >
+	                        <Sparkles size={11} />
+	                        Schritt
+	                      </button>
+	                      {activeCanEstimate ? (
+	                        <button
+	                          type="button"
+	                          onClick={() => requestEstimate(activeFolder)}
+	                          disabled={activeEstimatePending}
+	                          title={activeEffortEstimate ? "Aufwandsschätzung aktualisieren" : "Aufwandsschätzung berechnen"}
+	                          className={`inline-flex h-6 items-center gap-1 rounded-md border px-1.5 text-[10px] font-medium transition ${
+	                            activeEstimateIsStale
+	                              ? "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100"
+	                              : "border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100"
+	                          } disabled:opacity-60`}
+	                        >
+	                          <TrendingUp size={11} />
+	                          <span className="text-[9px] uppercase tracking-[0.12em] opacity-75">KI</span>
+	                          <span>{activeEstimatePending ? "Schätze..." : activeEffortEstimate ? activeEstimateHoursLabel : "Schätzwert"}</span>
+	                          {activeEstimateCurrencyLabel ? <span className="text-sand-400">{activeEstimateCurrencyLabel}</span> : null}
+	                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        onClick={activeProjectTimeStartedAt ? stopProjectTimer : startProjectTimer}
-                        title={activeProjectTimeStartedAt ? "Zeiterfassung stoppen" : "Zeiterfassung starten"}
-                        className={`ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-md text-white ${activeProjectTimeStartedAt ? "bg-sky-600 hover:bg-sky-700" : "bg-emerald-600 hover:bg-emerald-700"}`}
+                        onClick={() => openInvoiceModal(activeFolder.id, { completeProject: true })}
+                        title="Projekt abschließen und als sevDesk-Rechnungsentwurf übergeben"
+                        className="inline-flex h-6 items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-1.5 text-[10px] font-medium text-emerald-800 transition hover:bg-emerald-100"
                       >
-                        {activeProjectTimeStartedAt ? <Square size={10} /> : <Play size={10} />}
+                        <Receipt size={11} />
+                        Abschließen
                       </button>
-                    </span>
+                    </div>
                   </div>
 
-                  <details className="group">
-                    <summary className="flex cursor-pointer select-none list-none items-center gap-1.5 text-[10px] uppercase tracking-[0.16em] text-sand-400 hover:text-sand-600">
-                      <ChevronRight size={11} className="transition group-open:rotate-90" />
-                      Projektbriefing
+                  {/* Progress bar + stats */}
+	                  <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-sand-500">
+                    <div className="flex min-w-[220px] flex-1 items-center gap-2">
+                      <div className="h-1 flex-1 overflow-hidden rounded-full bg-sand-100">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            Number(activeSummary.progress || 0) >= 80 ? "bg-emerald-500" :
+                            Number(activeSummary.progress || 0) >= 40 ? "bg-sky-500" : "bg-sand-400"
+                          }`}
+                          style={{ width: `${activeSummary.progress || 0}%` }}
+                        />
+                      </div>
+                      <span className="shrink-0 tabular-nums font-semibold text-sand-700">{activeSummary.progress || 0}%</span>
+                    </div>
+                    <span className="inline-flex items-center gap-1 text-sand-500">
+                      <ListChecks size={10} className="text-sand-400" />
+                      <span className="tabular-nums font-medium text-sand-800">{taskCompletionLabel}</span>
+                      <span>Aufgaben</span>
+                    </span>
+                      {overdueTaskCount > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveProjectTab("aufgaben");
+                            setTaskListFilters((prev) => ({ ...prev, status: "open" }));
+                          }}
+                          className="inline-flex h-5 items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-1.5 font-medium text-rose-700 hover:bg-rose-100"
+                          title="Offene Aufgaben nach Fälligkeit anzeigen"
+                        >
+                          <AlertTriangle size={10} />
+                          {overdueTaskCount} überfällig
+                        </button>
+                      ) : null}
+                  </div>
+
+                  {/* Briefing (collapsible) */}
+	                  <details className="group mt-1">
+                    <summary className="flex cursor-pointer select-none list-none items-center gap-1 text-[9px] uppercase tracking-[0.16em] text-sand-400 hover:text-sand-600">
+                      <ChevronRight size={9} className="transition group-open:rotate-90" />
+                      Projektbriefing / Notiz
                     </summary>
-                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+	                    <div className="mt-1">
+                      <div className="mb-1 flex justify-end gap-1">
+                        <AiSparkleButton
+                          label="Notiz"
+                          title="Projektbriefing per KI zusammenfassen"
+                          onClick={() => openAiAssist("summary", activeFolder.title || "", { scope: "folder", field: "project_description" })}
+                        />
+                        <AiSparkleButton
+                          label="Übergabe"
+                          title="Interne Übergabenotiz per KI erzeugen"
+                          onClick={() => openAiAssist("handover", activeFolder.title || "", { scope: "folder", field: "project_description" })}
+                        />
+                      </div>
                       {projectBriefingFields.map((field) => (
-                        <label key={field.key} className="block space-y-1">
-                          <span className="text-[10px] uppercase tracking-[0.16em] text-sand-500">{field.label}</span>
-                          <textarea
-                            rows={2}
+                        <label key={field.key} className="block">
+                          <BufferedTextarea
+	                            rows={1}
                             value={activeOverview[field.key] || ""}
-                            onChange={(event) => updateOverviewField(field.key, event.target.value)}
+                            onCommit={(value) => updateOverviewField(field.key, value)}
                             placeholder={field.placeholder}
-                            className="min-h-[54px] w-full resize-y rounded-lg border border-sand-200 bg-sand-50/70 px-2.5 py-1.5 text-xs leading-relaxed text-sand-900 outline-none placeholder:text-sand-400 focus:border-sky-300 focus:bg-white focus:ring-2 focus:ring-sky-100"
+	                            className="min-h-[38px] w-full resize-y rounded-lg border border-sand-200 bg-sand-50/60 px-2 py-1 text-xs leading-snug text-sand-900 outline-none placeholder:text-sand-400 focus:border-sky-300 focus:bg-white focus:ring-2 focus:ring-sky-100"
                           />
                         </label>
                       ))}
@@ -4080,31 +4969,56 @@ export default function ProjectFoldersView() {
               );
             })()}
 
-            <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-sand-200 bg-sand-50/70 p-1">
-              {[
-                { key: "aufgaben", label: "Aufgaben", icon: ListChecks },
-                { key: "timeline", label: "Timeline", icon: GitBranch },
-                { key: "kalkulation", label: "Kalkulation", icon: TrendingUp },
-                { key: "material", label: "Material", icon: FileText },
-                { key: "bausteine", label: "Bausteine (klassisch)", icon: FolderKanban },
-                { key: "zeiterfassung", label: "Zeit-Detail", icon: Clock3 }
-              ].map((tab) => {
-                const Icon = tab.icon;
-                const active = activeProjectTab === tab.key;
-                return (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    onClick={() => setActiveProjectTab(tab.key)}
-                    className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium transition ${
-                      active ? "bg-white text-sand-900 shadow-sm" : "text-sand-500 hover:text-sand-900"
-                    }`}
-                  >
-                    <Icon size={13} />
-                    {tab.label}
-                  </button>
-                );
-              })}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {/* Primary tabs */}
+              <div className="inline-flex overflow-hidden rounded-xl border border-sand-200 bg-white shadow-sm">
+                {[
+                  { key: "aufgaben", label: "Aufgaben", icon: ListChecks },
+                  { key: "timeline", label: "Timeline", icon: GitBranch },
+                  { key: "kalkulation", label: "Kalkulation", icon: TrendingUp },
+                  { key: "material", label: "Material", icon: FileText }
+                ].map((tab) => {
+                  const Icon = tab.icon;
+                  const active = activeProjectTab === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setActiveProjectTab(tab.key)}
+                      className={`inline-flex items-center gap-1.5 border-r border-sand-200 px-3 py-2 text-xs font-medium transition last:border-r-0 focus:outline-none ${
+                        active ? "bg-sand-900 text-white" : "text-sand-600 hover:bg-sand-50 hover:text-sand-900"
+                      }`}
+                    >
+                      <Icon size={13} />
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Secondary tabs */}
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] uppercase tracking-[0.2em] text-sand-400 mr-1">Erweitert</span>
+                {[
+                  { key: "bausteine", label: "Tag-Details", icon: FolderKanban },
+                  { key: "zeiterfassung", label: "Zeit-Detail", icon: Clock3 }
+                ].map((tab) => {
+                  const Icon = tab.icon;
+                  const active = activeProjectTab === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setActiveProjectTab(tab.key)}
+                      className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-medium transition focus:outline-none ${
+                        active ? "border-sand-800 bg-sand-800 text-white" : "border-sand-200 bg-white text-sand-500 hover:border-sand-300 hover:text-sand-800"
+                      }`}
+                    >
+                      <Icon size={12} />
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             {activeProjectTab === "bausteine" ? (
@@ -4113,7 +5027,7 @@ export default function ProjectFoldersView() {
                   <div className="mb-3 space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
-                        <div className="text-xs uppercase tracking-[0.2em] text-sand-500">Bausteine</div>
+                        <div className="text-xs uppercase tracking-[0.2em] text-sand-500">Tags</div>
                         <Tag className="border-sand-200 bg-sand-50 text-sand-700">{activeStreams.length}</Tag>
                       </div>
                       <div className="inline-flex rounded-xl border border-sand-200 bg-sand-50 p-1">
@@ -4138,7 +5052,7 @@ export default function ProjectFoldersView() {
                         className={`${inputClass} flex-1`}
                         value={newStreamTitle}
                         onChange={(e) => setNewStreamTitle(e.target.value)}
-                        placeholder="Neuer Baustein anlegen, z. B. Firewall, Migration, Backup"
+                        placeholder="Neuer Tag anlegen, z. B. Firewall, Migration, Backup"
                         onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addStream(newStreamTitle); } }}
                       />
                       <button
@@ -4188,16 +5102,16 @@ export default function ProjectFoldersView() {
                             <div className="flex items-start justify-between gap-2">
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2">
-	                                  <input
+	                                  <BufferedInput
 	                                    value={stream.title || ""}
 	                                    onFocus={() => setSelectedStreamId(stream.id)}
-                                    onChange={(e) =>
-                                      mutateStreamById(stream.id, (current) => ({ ...current, title: e.target.value }))
+                                    onCommit={(value) =>
+                                      mutateStreamById(stream.id, (current) => ({ ...current, title: value }))
                                     }
                                     className={`min-w-0 flex-1 border-0 bg-transparent p-0 text-[15px] font-semibold leading-5 outline-none ${
                                       isSelected ? "text-slate-900 placeholder:text-slate-400" : "text-sand-900 placeholder:text-sand-400"
                                     }`}
-	                                    placeholder="Baustein"
+	                                    placeholder="Tag"
 	                                  />
 	                                  <Tag className={workflowStatusMeta[workflowStatus]?.tone || workflowStatusMeta.open.tone}>
 	                                    {workflowStatusMeta[workflowStatus]?.label || "offen"}
@@ -4210,7 +5124,7 @@ export default function ProjectFoldersView() {
                                         ? "border-sky-200 bg-white text-slate-700 hover:bg-slate-50"
                                         : "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
                                     }`}
-                                    aria-label="Baustein löschen"
+                                    aria-label="Tag löschen"
                                   >
                                     <X size={11} />
                                   </button>
@@ -4246,16 +5160,52 @@ export default function ProjectFoldersView() {
                                   />
                                 ))}
                               </div>
-                              <input
+                              <BufferedInput
                                 list="project-folder-employees"
                                 value={stream.owner || ""}
                                 onClick={(e) => e.stopPropagation()}
-                                onChange={(e) =>
-                                  mutateStreamById(stream.id, (current) => ({ ...current, owner: e.target.value }))
+                                onCommit={(value) =>
+                                  mutateStreamById(stream.id, (current) => ({ ...current, owner: value }))
                                 }
                                 placeholder="Zuständig"
                                 className="w-32 rounded-md border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-700 outline-none placeholder:text-sand-400 focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                               />
+                            </div>
+                            ) : null}
+	                            {isSelected ? (
+	                            <div className="mt-2 flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => openAiAssist("summary", stream.title || activeFolder.title || "", { scope: "stream", field: "short_status", streamId: stream.id })}
+                                className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] font-medium text-sky-800 hover:bg-sky-100"
+                                title="Kurzlage per KI formulieren"
+                              >
+                                <Sparkles size={11} /> Kurzlage
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openAiAssist("tasks", stream.title || activeFolder.title || "", { scope: "stream", field: "tasks", streamId: stream.id })}
+                                className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-white px-2 py-1 text-[10px] font-medium text-sky-700 hover:bg-sky-50"
+                                title="Aufgaben per KI ergänzen"
+                              >
+                                <Sparkles size={11} /> Aufgaben
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openAiAssist("checklist", stream.title || activeFolder.title || "", { scope: "stream", field: "checklists", streamId: stream.id })}
+                                className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-white px-2 py-1 text-[10px] font-medium text-sky-700 hover:bg-sky-50"
+                                title="Checkliste per KI ergänzen"
+                              >
+                                <Sparkles size={11} /> Checks
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openAiAssist("risks", stream.title || activeFolder.title || "", { scope: "stream", field: "risks", streamId: stream.id })}
+                                className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-white px-2 py-1 text-[10px] font-medium text-sky-700 hover:bg-sky-50"
+                                title="Risiken per KI ergänzen"
+                              >
+                                <Sparkles size={11} /> Risiken
+                              </button>
                             </div>
                             ) : null}
 	                            {isSelected ? (
@@ -4304,6 +5254,8 @@ export default function ProjectFoldersView() {
                                     const deadlineMeta = getTaskDeadlineMeta(task.due_date);
                                     const taskDepth = getTaskDepth(task);
                                     const isTaskSelected = selectedTaskId === task.id;
+                                    const taskKey = `${stream.id}_${task.id}`;
+                                    const isDropTarget = taskDropTarget?.key === taskKey;
                                     return (
                                       <div
                                         key={task.id}
@@ -4316,13 +5268,42 @@ export default function ProjectFoldersView() {
                                             JSON.stringify({ sourceStreamId: stream.id, taskId: task.id })
                                           );
                                         }}
+                                        onDragEnd={() => setTaskDropTarget(null)}
+                                        onDragOver={(e) => {
+                                          if (!e.dataTransfer.types.includes("application/x-task")) return;
+                                          e.preventDefault();
+                                          e.dataTransfer.dropEffect = "move";
+                                          const rect = e.currentTarget.getBoundingClientRect();
+                                          const placement = e.clientY > rect.top + rect.height / 2 ? "after" : "before";
+                                          setTaskDropTarget({ key: taskKey, placement });
+                                        }}
+                                        onDragLeave={(e) => {
+                                          if (e.currentTarget.contains(e.relatedTarget)) return;
+                                          setTaskDropTarget((current) => (current?.key === taskKey ? null : current));
+                                        }}
+                                        onDrop={(e) => {
+                                          const payload = parseTaskDragPayload(e);
+                                          if (!payload) return;
+                                          e.preventDefault();
+                                          const rect = e.currentTarget.getBoundingClientRect();
+                                          const placement = e.clientY > rect.top + rect.height / 2 ? "after" : "before";
+                                          moveTaskToPosition(payload.sourceStreamId, payload.taskId, stream.id, task.id, placement);
+                                          setTaskDropTarget(null);
+                                        }}
                                         className={`relative cursor-grab rounded-lg border bg-white px-2.5 py-2 shadow-[0_2px_6px_rgba(150,120,60,0.08)] transition-colors active:cursor-grabbing ${accentClass} ${
                                           isTaskSelected ? "ring-2 ring-sky-200" : ""
                                         } ${isSelected ? "border-sky-200" : "border-sand-200"
-                                        }`}
+                                        } ${isDropTarget ? "bg-sky-50/90" : ""}`}
                                         style={{ marginLeft: `${taskDepth * 18}px` }}
                                         onMouseDown={() => setSelectedTaskId(task.id)}
                                       >
+                                        {isDropTarget ? (
+                                          <div
+                                            className={`pointer-events-none absolute left-2 right-2 z-10 h-0.5 rounded-full bg-sky-400 ${
+                                              taskDropTarget.placement === "after" ? "bottom-0" : "top-0"
+                                            }`}
+                                          />
+                                        ) : null}
                                         {deadlineMeta.cornerClass ? (
                                           <div
                                             className={`pointer-events-none absolute right-0 top-0 h-0 w-0 border-l-[12px] border-t-[12px] border-l-transparent ${deadlineMeta.cornerClass}`}
@@ -4356,15 +5337,15 @@ export default function ProjectFoldersView() {
                                                   ✓
                                                 </button>
                                                 <label className="min-w-0 flex-1">
-                                                  <input
+                                                  <BufferedInput
                                                     value={task.title || ""}
                                                     onFocus={() => setSelectedTaskId(task.id)}
                                                     onKeyDown={(e) => handleTaskHierarchyKeyDown(stream.id, task.id, orderedTaskIds, e)}
-                                                    onChange={(e) =>
+                                                    onCommit={(value) =>
                                                       mutateStreamById(stream.id, (current) => ({
                                                         ...current,
                                                         tasks: (current.tasks || []).map((item) =>
-                                                          item.id === task.id ? { ...item, title: e.target.value } : item
+                                                          item.id === task.id ? { ...item, title: value } : item
                                                         )
                                                       }))
                                                     }
@@ -4396,14 +5377,14 @@ export default function ProjectFoldersView() {
                                                   </button>
                                                   {taskNoteEditorId === `card_note_${stream.id}_${task.id}` ? (
                                                     <div className="absolute right-0 top-full z-40 mt-1 w-64 rounded-2xl border border-amber-200 bg-amber-50 p-2 shadow-soft">
-                                                      <textarea
+                                                      <BufferedTextarea
                                                         rows={4}
                                                         value={task.note || ""}
-                                                        onChange={(e) =>
+                                                        onCommit={(value) =>
                                                           mutateStreamById(stream.id, (current) => ({
                                                             ...current,
                                                             tasks: (current.tasks || []).map((item) =>
-                                                              item.id === task.id ? { ...item, note: e.target.value } : item
+                                                              item.id === task.id ? { ...item, note: value } : item
                                                             )
                                                           }))
                                                         }
@@ -4534,7 +5515,7 @@ export default function ProjectFoldersView() {
                       <section className="rounded-[18px] border border-sand-200 bg-white p-3">
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                           <div>
-                            <div className="text-sm font-semibold text-sand-900">Flowchart aller Bausteine</div>
+                            <div className="text-sm font-semibold text-sand-900">Flowchart aller Tags</div>
                             <div className="mt-0.5 text-[11px] text-sand-500">Ein gemeinsames Canvas mit Grid-Snap und direkter Verbindungsführung.</div>
                           </div>
                         </div>
@@ -4575,7 +5556,7 @@ export default function ProjectFoldersView() {
                         >
                           <div className="sticky right-0 top-0 z-20 flex justify-end p-3">
                             <div className="w-56 rounded-2xl border border-sand-200 bg-white/92 p-2 shadow-soft backdrop-blur">
-                              <div className="px-1 pb-1 text-[10px] uppercase tracking-[0.16em] text-sand-500">Bausteine</div>
+                              <div className="px-1 pb-1 text-[10px] uppercase tracking-[0.16em] text-sand-500">Tags</div>
                               <div className="space-y-1">
                                 {flowBoardData.streams.map(({ stream, tone }) => (
                                   <button
@@ -4585,10 +5566,10 @@ export default function ProjectFoldersView() {
                                     className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-[11px] ${
                                       selectedStreamId === stream.id ? "bg-sand-100 text-sand-900" : "text-sand-600 hover:bg-sand-50"
                                     }`}
-                                    title={stream.short_status || getPrimaryGap(stream) || "Baustein"}
+                                    title={stream.short_status || getPrimaryGap(stream) || "Tag"}
                                   >
                                     <span className={`h-2.5 w-2.5 shrink-0 rounded-full border ${tone.tag.split(" ").find((item) => item.startsWith("border-")) || "border-sand-200"} ${tone.tag.split(" ").find((item) => item.startsWith("bg-")) || "bg-sand-50"}`} />
-                                    <span className="truncate">{stream.title || "Baustein"}</span>
+                                    <span className="truncate">{stream.title || "Tag"}</span>
                                   </button>
                                 ))}
                               </div>
@@ -5087,7 +6068,7 @@ export default function ProjectFoldersView() {
                           </section>
                         ))
                       ) : (
-                        <div className="p-8 text-center text-sm text-sand-500">Noch keine Aufgaben in den Bausteinen vorhanden.</div>
+                        <div className="p-8 text-center text-sm text-sand-500">Noch keine Aufgaben in den Tags vorhanden.</div>
                       )}
                     </div>
                     </div>
@@ -5214,7 +6195,7 @@ export default function ProjectFoldersView() {
                     )
                   ) : (
                     <div className="rounded-[22px] border border-dashed border-sand-300 p-5 text-sm text-sand-500">
-                      Noch keine Bausteine vorhanden.
+                      Noch keine Tags vorhanden.
                     </div>
                   )}
                 </section>
@@ -5223,206 +6204,668 @@ export default function ProjectFoldersView() {
             ) : null}
 
             {checklistOpen && activeFolder ? (
-              <section className="space-y-3 rounded-[28px] border border-white/70 bg-white/85 p-5 shadow-soft">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.2em] text-sand-500">Aufgaben</div>
-                    <div className="text-lg font-semibold text-sand-900">{filteredProjectTasks.length} von {flatProjectTasks.length}</div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {[
-                      { key: "", label: "Alle" },
-                      { key: "open", label: "Offen" },
-                      { key: "doing", label: "Läuft" },
-                      { key: "done", label: "Erledigt" }
-                    ].map((filter) => (
-                      <button
-                        key={filter.key || "all"}
-                        type="button"
-                        onClick={() => setTaskListFilters((prev) => ({ ...prev, status: filter.key }))}
-                        className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
-                          taskListFilters.status === filter.key
-                            ? "border-slate-800 bg-slate-800 text-white"
-                            : "border-sand-200 bg-white text-sand-700 hover:bg-sand-50"
-                        }`}
+              <section className="space-y-3">
+                {/* Toolbar */}
+                <div className="overflow-visible rounded-2xl border border-sand-200 bg-white shadow-sm">
+                  {/* New task input */}
+                  <div className="flex items-center gap-2 border-b border-sand-100 px-3 py-2.5">
+                    <Plus size={15} className="shrink-0 text-sand-400" />
+                    <input
+                      value={newTaskDraft.title}
+                      onChange={(event) => setNewTaskDraft((prev) => ({ ...prev, title: event.target.value }))}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") { event.preventDefault(); addProjectTask(); }
+                      }}
+                      placeholder="Neue Aufgabe eingeben und Enter drücken…"
+                      className="flex-1 bg-transparent text-sm text-sand-900 outline-none placeholder:text-sand-400"
+                    />
+                    {activeStreams.length > 0 ? (
+                      <select
+                        value={newTaskDraft.streamId}
+                        onChange={(event) => setNewTaskDraft((prev) => ({ ...prev, streamId: event.target.value }))}
+                        className="rounded-lg border border-sand-200 bg-sand-50 px-2 py-1 text-xs text-sand-700 outline-none focus:border-sky-300"
                       >
-                        {filter.label}
+                        <option value="">Tag wählen…</option>
+                        {activeStreams.map((stream) => (
+                          <option key={stream.id} value={stream.id}>{stream.title || "Tag"}</option>
+                        ))}
+                      </select>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={addProjectTask}
+                      className="shrink-0 rounded-lg border border-sand-900 bg-sand-900 px-3 py-1 text-xs font-medium text-white hover:bg-sand-800"
+                    >
+                      Hinzufügen
+                    </button>
+                  </div>
+
+                  {/* Filters */}
+                  <div className="border-t border-sand-200 border-b border-sand-200 bg-sand-50/90 px-3 py-2.5 shadow-inner">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                      <div className="inline-flex h-6 items-center rounded-md border border-sand-200 bg-white px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sand-500">
+                        Filter
+                      </div>
+                    {/* Status chips */}
+                    <div className="flex items-center gap-1">
+                      {[
+                        { key: "", label: "Alle" },
+                        { key: "open", label: "Offen" },
+                        { key: "doing", label: "Läuft" },
+                        { key: "waiting_customer", label: "Feedback" },
+                        { key: "blocked", label: "Blockiert" },
+                        { key: "done", label: "Erledigt" }
+                      ].map((filter) => (
+                        <button
+                          key={filter.key || "all"}
+                          type="button"
+                          onClick={() => setTaskListFilters((prev) => ({ ...prev, status: filter.key }))}
+                          className={`rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition ${
+                            taskListFilters.status === filter.key
+                              ? "border-sand-900 bg-sand-900 text-white"
+                              : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                          }`}
+                        >
+                          {filter.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Tag filter chips */}
+                    {activeStreams.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-1">
+                        {taskListFilters.streamId ? (
+                          <button
+                            type="button"
+                            onClick={() => setTaskListFilters((prev) => ({ ...prev, streamId: "" }))}
+                            className="rounded-full border border-sand-300 bg-sand-100 px-2 py-0.5 text-[11px] text-sand-600 hover:bg-sand-200"
+                          >
+                            × Alle Tags
+                          </button>
+                        ) : null}
+                        {activeStreams.map((stream) => {
+                          const tagColor = getTagColorForStream(stream.id);
+                          const isActive = taskListFilters.streamId === stream.id;
+                          return (
+                            <button
+                              key={stream.id}
+                              type="button"
+                              onClick={() => setTaskListFilters((prev) => ({ ...prev, streamId: isActive ? "" : stream.id }))}
+                              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
+                                isActive
+                                  ? `${tagColor.bg} ${tagColor.text} ${tagColor.border}`
+                                  : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
+                              }`}
+                            >
+                              <span className={`h-1.5 w-1.5 rounded-full ${tagColor.dot}`} />
+                              {stream.title || "Tag"}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+
+                    <div className="ml-auto flex items-center gap-2">
+                      <input
+                        value={taskListFilters.search}
+                        onChange={(event) => setTaskListFilters((prev) => ({ ...prev, search: event.target.value }))}
+                        placeholder="Suchen…"
+                        className="w-36 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1 text-xs text-sand-900 outline-none focus:border-sky-300 focus:ring-1 focus:ring-sky-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openAiAssist("tasks", activeFolder?.title || "", {
+                            scope: "stream",
+                            field: "tasks",
+                            streamId: taskListFilters.streamId || selectedStream?.id || activeStreams[0]?.id || ""
+                          })
+                        }
+                        className="inline-flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
+                      >
+                        <Sparkles size={11} /> KI
                       </button>
-                    ))}
+                    </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    value={taskListFilters.search}
-                    onChange={(event) => setTaskListFilters((prev) => ({ ...prev, search: event.target.value }))}
-                    placeholder="Suche..."
-                    className="w-44 rounded-xl border border-sand-200 bg-white px-3 py-1.5 text-sm outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                  />
-                  <select
-                    value={taskListFilters.status}
-                    onChange={(event) => setTaskListFilters((prev) => ({ ...prev, status: event.target.value }))}
-                    className="rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-xs"
-                  >
-                    <option value="">Alle Status</option>
-                    <option value="open">nur offen</option>
-                    <option value="doing">nur läuft</option>
-                    <option value="waiting_customer">nur Feedback</option>
-                    <option value="blocked">nur blockiert</option>
-                    <option value="done">nur erledigt</option>
-                  </select>
-                  <select
-                    value={taskListFilters.streamId}
-                    onChange={(event) => setTaskListFilters((prev) => ({ ...prev, streamId: event.target.value }))}
-                    className="rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-xs"
-                  >
-                    <option value="">Alle Bausteine</option>
-                    {activeStreams.map((stream) => (
-                      <option key={stream.id} value={stream.id}>{stream.title || "Baustein"}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => openAiDialog("tasks", activeFolder?.title || "", { scope: "stream" })}
-                    className="inline-flex items-center gap-1 rounded-xl border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100"
-                  >
-                    <Sparkles size={12} /> KI-Aufgaben
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveProjectTab("bausteine")}
-                    className="inline-flex items-center gap-1 rounded-xl border border-sand-200 bg-white px-2.5 py-1.5 text-xs text-sand-700 hover:bg-sand-50"
-                  >
-                    <FolderKanban size={12} /> Bausteine
-                  </button>
-                </div>
+                <details className="rounded-2xl border border-sand-200 bg-white shadow-sm">
+                  <summary className="flex cursor-pointer select-none list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-sand-800">
+                    <span className="inline-flex items-center gap-2">
+                      <FolderKanban size={14} className="text-sand-500" />
+                      Tags verwalten
+                    </span>
+                    <span className="text-[11px] font-normal text-sand-500">{activeStreams.length} Tags</span>
+                  </summary>
+                  <div className="border-t border-sand-100 px-3 py-3">
+                    <div className="mb-3 flex flex-wrap items-center gap-2">
+                      <input
+                        value={newStreamTitle}
+                        onChange={(event) => setNewStreamTitle(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            addStream(newStreamTitle);
+                          }
+                        }}
+                        placeholder="Neuen Tag anlegen..."
+                        className="min-w-[220px] flex-1 rounded-lg border border-sand-200 bg-sand-50 px-2.5 py-1.5 text-xs text-sand-900 outline-none placeholder:text-sand-400 focus:border-sky-300 focus:bg-white focus:ring-1 focus:ring-sky-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => addStream(newStreamTitle)}
+                        disabled={!String(newStreamTitle || "").trim()}
+                        className="rounded-lg border border-sand-200 bg-white px-3 py-1.5 text-xs font-medium text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Tag anlegen
+                      </button>
+                    </div>
+                    <div className="grid gap-2 xl:grid-cols-2">
+                      {activeStreams.map((stream) => {
+                        const tagColor = getTagColorForStream(stream.id);
+                        const taskCount = Array.isArray(stream.tasks) ? stream.tasks.length : 0;
+                        const otherStreams = activeStreams.filter((item) => item.id !== stream.id);
+                        return (
+                          <div key={stream.id} className="rounded-xl border border-sand-200 bg-sand-50/55 p-2">
+                            <div className="flex items-center gap-2">
+                              <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${tagColor.dot}`} />
+                              <BufferedInput
+                                value={stream.title || ""}
+                                onCommit={(value) => mutateStreamById(stream.id, (current) => ({ ...current, title: value }))}
+                                className="min-w-0 flex-1 rounded-lg border border-transparent bg-white/70 px-2 py-1 text-xs font-medium text-sand-900 outline-none focus:border-sky-300 focus:bg-white focus:ring-1 focus:ring-sky-100"
+                                placeholder="Tagname"
+                              />
+                              <span className="shrink-0 rounded-full border border-sand-200 bg-white px-2 py-0.5 text-[10px] text-sand-500">{taskCount} Aufg.</span>
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              {taskTagColorOptions.map((color) => (
+                                <button
+                                  key={color.key}
+                                  type="button"
+                                  onClick={() => mutateStreamById(stream.id, (current) => ({ ...current, tag_color: color.key }))}
+                                  className={`h-5 w-5 rounded-full border ${color.border} ${color.bg} p-1 transition ${(stream.tag_color || stream.color) === color.key ? `ring-2 ${color.ring} ring-offset-1` : "hover:ring-1 hover:ring-sand-300"}`}
+                                  title={color.label}
+                                  aria-label={`Tagfarbe ${color.label}`}
+                                >
+                                  <span className={`block h-full w-full rounded-full ${color.dot}`} />
+                                </button>
+                              ))}
+                              {otherStreams.length ? (
+                                <select
+                                  value=""
+                                  onChange={(event) => {
+                                    const targetId = event.target.value;
+                                    if (!targetId) return;
+                                    const target = activeStreams.find((item) => item.id === targetId);
+                                    if (window.confirm(`Tag "${stream.title || "Tag"}" mit "${target?.title || "Tag"}" zusammenführen?`)) {
+                                      mergeTagIntoStream(stream.id, targetId);
+                                    }
+                                  }}
+                                  className="ml-auto rounded-lg border border-sand-200 bg-white px-2 py-1 text-[11px] text-sand-600 outline-none focus:border-sky-300"
+                                  title="Tag zusammenführen"
+                                >
+                                  <option value="">Zusammenführen...</option>
+                                  {otherStreams.map((target) => (
+                                    <option key={target.id} value={target.id}>{target.title || "Tag"}</option>
+                                  ))}
+                                </select>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() => removeStream(stream.id)}
+                                disabled={activeStreams.length <= 1 || taskCount > 0}
+                                title={taskCount > 0 ? "Tag zuerst zusammenführen oder Aufgaben verschieben" : "Tag löschen"}
+                                className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                Löschen
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </details>
 
-                <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-sand-200 bg-sand-50/60 p-2">
-                  <input
-                    value={newTaskDraft.title}
-                    onChange={(event) => setNewTaskDraft((prev) => ({ ...prev, title: event.target.value }))}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        addProjectTask();
-                      }
-                    }}
-                    placeholder="Neue Aufgabe..."
-                    className="min-w-[200px] flex-1 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                  />
-                  <select
-                    value={newTaskDraft.streamId}
-                    onChange={(event) => setNewTaskDraft((prev) => ({ ...prev, streamId: event.target.value }))}
-                    className="rounded-xl border border-sand-200 bg-white px-2 py-2 text-xs"
-                  >
-                    <option value="">Baustein wählen...</option>
-                    {activeStreams.map((stream) => (
-                      <option key={stream.id} value={stream.id}>{stream.title || "Baustein"}</option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={addProjectTask}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
-                  >
-                    <Plus size={13} /> Hinzufügen
-                  </button>
+                {/* Count summary */}
+                <div className="flex flex-wrap items-center gap-2 px-1 text-xs text-sand-500">
+                  <span>
+                    {filteredProjectTasks.length !== flatProjectTasks.length
+                      ? `${filteredProjectTasks.length} von ${flatProjectTasks.length} Aufgaben`
+                      : `${flatProjectTasks.length} ${flatProjectTasks.length === 1 ? "Aufgabe" : "Aufgaben"}`}
+                  </span>
+                  <span className="text-sand-300">·</span>
+                  <span>{taskListStats.open} offen</span>
+                  {taskListStats.overdue ? <span className="rounded-full bg-rose-50 px-2 py-0.5 font-medium text-rose-700">{taskListStats.overdue} überfällig</span> : null}
+                  {taskListStats.blocked ? <span className="rounded-full bg-rose-50 px-2 py-0.5 font-medium text-rose-700">{taskListStats.blocked} blockiert</span> : null}
+                  {taskListStats.waiting ? <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700">{taskListStats.waiting} wartet</span> : null}
                 </div>
+                {selectedTaskEntries.length ? (
+                  <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                    <span className="font-semibold">{selectedTaskEntries.length} ausgewählt</span>
+                    <select
+                      value={bulkTaskPatch.status}
+                      onChange={(event) => setBulkTaskPatch((current) => ({ ...current, status: event.target.value }))}
+                      className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs text-sand-800 outline-none"
+                    >
+                      <option value="">Status setzen...</option>
+                      {taskStatusOrder.map((key) => (
+                        <option key={key} value={key}>{taskStatusMeta[key]?.label || key}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={bulkTaskPatch.streamId}
+                      onChange={(event) => setBulkTaskPatch((current) => ({ ...current, streamId: event.target.value }))}
+                      className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs text-sand-800 outline-none"
+                    >
+                      <option value="">Tag setzen...</option>
+                      {activeStreams.map((stream) => (
+                        <option key={stream.id} value={stream.id}>{stream.title || "Tag"}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="date"
+                      value={bulkTaskPatch.due_date}
+                      onChange={(event) => setBulkTaskPatch((current) => ({ ...current, due_date: event.target.value }))}
+                      className="rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs text-sand-800 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => applyBulkTaskPatch(bulkTaskPatch)}
+                      disabled={!bulkTaskPatch.status && !bulkTaskPatch.streamId && !bulkTaskPatch.due_date}
+                      className="rounded-lg border border-sky-300 bg-white px-2.5 py-1 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Anwenden
+                    </button>
+                    <button
+                      type="button"
+                      onClick={deleteSelectedTasks}
+                      className="rounded-lg border border-rose-200 bg-white px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                    >
+                      Löschen
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTaskListSelection({});
+                        setBulkTaskPatch({ status: "", streamId: "", due_date: "" });
+                      }}
+                      className="ml-auto rounded-lg border border-sky-200 bg-white px-2.5 py-1 text-xs text-sand-600 hover:bg-sand-50"
+                    >
+                      Auswahl aufheben
+                    </button>
+                  </div>
+                ) : null}
+                {groupedFilteredProjectTasks.length ? (
+                  <div className="flex flex-wrap gap-1 px-1">
+                    {groupedFilteredProjectTasks.map((group) => (
+                      <span key={group.key} className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${group.tone}`}>
+                        {group.label}: {group.items.length}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
 
-                <div className="overflow-hidden rounded-2xl border border-sand-200 bg-white">
+                {/* Task list */}
+                <div className="overflow-visible rounded-2xl border border-sand-200 bg-white shadow-sm">
+                  {filteredProjectTasks.length > 0 ? (
+                    <div className="hidden border-b border-sand-200 bg-sand-50/80 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-sand-500 lg:grid lg:grid-cols-[20px_16px_20px_minmax(0,1fr)_150px_132px_112px_24px_24px] lg:items-center lg:gap-3">
+                      <input
+                        type="checkbox"
+                        checked={filteredProjectTasks.length > 0 && filteredProjectTasks.every((task) => taskListSelection[`${task._streamId}_${task.id}`])}
+                        onChange={(event) => toggleAllVisibleTasks(event.target.checked)}
+                        aria-label="Alle sichtbaren Aufgaben auswählen"
+                      />
+                      <span />
+                      <span />
+                      <span>Aufgabe</span>
+                      <span>Tag</span>
+                      <span>Status</span>
+                      <span>Fällig</span>
+                      <span />
+                      <span />
+                    </div>
+                  ) : null}
                   {filteredProjectTasks.length === 0 ? (
-                    <div className="px-4 py-10 text-center text-sm text-sand-500">
+                    <div className="flex flex-col items-center gap-2 py-12 text-sm text-sand-400">
+                      <ListChecks size={24} className="text-sand-300" />
                       {flatProjectTasks.length === 0 ? "Noch keine Aufgaben angelegt." : "Keine Aufgaben passen zum Filter."}
                     </div>
                   ) : (
                     <ul className="divide-y divide-sand-100">
-                      {filteredProjectTasks.map((task) => {
+                      {filteredProjectTasks.map((task, taskIndex) => {
                         const statusKey = getTaskStatusKey(task);
                         const status = taskStatusMeta[statusKey] || taskStatusMeta.open;
-                        const streamTone = statusMeta[task._streamStatus] || statusMeta.yellow;
+                        const tagColor = getTagColorForStream(task._streamId);
+                        const taskStream = activeStreams.find((stream) => stream.id === task._streamId) || null;
+                        const taskTagColorKey = taskStream?.tag_color || taskStream?.color || tagColor.key || "sky";
+                        const groupMeta = getTaskDueGroupMeta(task);
+                        const previousGroupKey = taskIndex > 0 ? getTaskDueGroupMeta(filteredProjectTasks[taskIndex - 1]).key : "";
+                        const showGroupHeader = groupMeta.key !== previousGroupKey;
                         const due = parseDateInput(task.due_date);
                         const today = new Date();
                         today.setHours(0, 0, 0, 0);
                         const overdue = due && statusKey !== "done" && due.getTime() < today.getTime();
+                        const dueSoon = due && statusKey !== "done" && !overdue && diffDays(today, due) <= 3;
+                        const isDone = statusKey === "done";
+                        const rowTone = isDone
+                          ? "border-l-sand-200 bg-sand-50/35"
+                          : statusKey === "blocked" || overdue
+                            ? "border-l-rose-400 bg-rose-50/30"
+                            : statusKey === "waiting_customer" || dueSoon
+                              ? "border-l-amber-400 bg-amber-50/25"
+                              : "border-l-transparent bg-white";
+                        const hasNote = Boolean(String(task.note || "").trim());
+                        const noteOpen = taskNoteEditorId === `row_note_${task._streamId}_${task.id}`;
+                        const taskKey = `${task._streamId}_${task.id}`;
+                        const isDropTarget = taskDropTarget?.key === taskKey;
+                        const tagEditorOpen = taskTagEditor.key === taskKey;
                         return (
-                          <li key={`${task._streamId}_${task.id}`} className="group flex flex-wrap items-center gap-3 px-3 py-2 hover:bg-sand-50/60">
-                            <span
-                              className="inline-flex h-6 w-4 shrink-0 cursor-grab items-center justify-center rounded-md text-sand-300 opacity-30 transition group-hover:opacity-80 active:cursor-grabbing"
-                              title="Ziehen zum Sortieren"
-                              aria-hidden="true"
-                            >
-                              <GripVertical size={14} />
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => updateProjectTask(task._streamId, task.id, { status: statusKey === "done" ? "open" : "done" })}
-                              title={statusKey === "done" ? "Wieder öffnen" : "Erledigen"}
-                              className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${
-                                statusKey === "done" ? "border-emerald-400 bg-emerald-500 text-white" : "border-sand-300 bg-white text-transparent hover:border-emerald-400"
-                              }`}
-                            >
-                              <CheckSquare size={12} />
-                            </button>
-                            <input
-                              value={task.title || ""}
-                              onChange={(event) => updateProjectTask(task._streamId, task.id, { title: event.target.value })}
-                              className={`min-w-[200px] flex-1 rounded-md border border-transparent bg-transparent px-2 py-1 text-sm outline-none hover:border-sand-200 focus:border-sky-300 focus:bg-white ${
-                                statusKey === "done" ? "text-sand-400 line-through" : "text-sand-900"
-                              }`}
-                            />
-                            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${streamTone.badge || "border-sand-200 bg-sand-50 text-sand-700"}`}>
-                              <span className={`h-1.5 w-1.5 rounded-full ${streamTone.dot}`} />
-                              {task._streamTitle}
-                            </span>
-                            <Tag className={status.tone}>{status.label}</Tag>
-                            <input
-                              list="project-folder-employees"
-                              value={task.owner || ""}
-                              onChange={(event) => updateProjectTask(task._streamId, task.id, { owner: event.target.value })}
-                              placeholder="Verantwortlich"
-                              className="w-32 rounded-md border border-transparent bg-transparent px-2 py-1 text-xs text-sand-700 outline-none hover:border-sand-200 focus:border-sky-300 focus:bg-white"
-                            />
-                            <input
-                              type="date"
-                              value={task.due_date || ""}
-                              onChange={(event) => updateProjectTask(task._streamId, task.id, { due_date: event.target.value })}
-                              className={`rounded-md border border-transparent bg-transparent px-2 py-1 text-xs outline-none hover:border-sand-200 focus:border-sky-300 focus:bg-white ${
-                                overdue ? "text-rose-600" : "text-sand-700"
-                              }`}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setTaskNoteEditorId((current) => (current === `row_note_${task._streamId}_${task.id}` ? "" : `row_note_${task._streamId}_${task.id}`))}
-                              title="Notiz zur Aufgabe"
-                              aria-label="Notiz zur Aufgabe"
-                              className={`inline-flex h-6 w-6 items-center justify-center rounded-md border ${
-                                String(task.note || "").trim()
-                                  ? "border-amber-400 bg-amber-300 text-amber-900"
-                                  : "border-amber-200 bg-amber-50 text-amber-600 hover:bg-amber-100"
-                              }`}
-                            >
-                              <StickyNote size={13} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => deleteProjectTask(task._streamId, task.id)}
-                              title="Aufgabe löschen"
-                              className="inline-flex h-6 w-6 items-center justify-center rounded-md text-sand-400 opacity-0 hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                            {taskNoteEditorId === `row_note_${task._streamId}_${task.id}` ? (
-                              <div data-task-note-editor="true" className="basis-full pl-11">
-                                <textarea
-                                  rows={3}
+                          <Fragment key={taskKey}>
+                          {showGroupHeader ? (
+                            <li className={`border-y px-4 py-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${groupMeta.tone}`}>
+                              {groupMeta.label}
+                            </li>
+                          ) : null}
+                          <li
+                            onDragOver={(event) => {
+                              if (!event.dataTransfer.types.includes("application/x-task")) return;
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              const placement = event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+                              setTaskDropTarget({ key: taskKey, placement });
+                            }}
+                            onDragLeave={(event) => {
+                              if (event.currentTarget.contains(event.relatedTarget)) return;
+                              setTaskDropTarget((current) => (current?.key === taskKey ? null : current));
+                            }}
+                            onDrop={(event) => {
+                              const payload = parseTaskDragPayload(event);
+                              if (!payload) return;
+                              event.preventDefault();
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              const placement = event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+                              moveTaskToPosition(payload.sourceStreamId, payload.taskId, task._streamId, task.id, placement);
+                              setTaskDropTarget(null);
+                            }}
+                            className={`group relative border-l-4 transition hover:bg-sand-50 ${rowTone} ${
+                              isDropTarget ? "bg-sky-50/70" : ""
+                            }`}
+                          >
+                            {isDropTarget ? (
+                              <div
+                                className={`pointer-events-none absolute left-3 right-3 z-10 h-0.5 rounded-full bg-sky-400 ${
+                                  taskDropTarget.placement === "after" ? "bottom-0" : "top-0"
+                                }`}
+                              />
+                            ) : null}
+                            <div className="flex items-center gap-3 px-4 py-2.5 lg:grid lg:grid-cols-[20px_16px_20px_minmax(0,1fr)_150px_132px_112px_24px_24px] lg:gap-3">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(taskListSelection[taskKey])}
+                                onChange={(event) =>
+                                  setTaskListSelection((current) => {
+                                    const next = { ...current };
+                                    if (event.target.checked) next[taskKey] = true;
+                                    else delete next[taskKey];
+                                    return next;
+                                  })
+                                }
+                                aria-label="Aufgabe auswählen"
+                                className="h-4 w-4 rounded border-sand-300 text-sky-600 focus:ring-sky-200"
+                              />
+                              <button
+                                type="button"
+                                draggable
+                                onDragStart={(event) => {
+                                  event.stopPropagation();
+                                  event.dataTransfer.effectAllowed = "move";
+                                  event.dataTransfer.setData(
+                                    "application/x-task",
+                                    JSON.stringify({ sourceStreamId: task._streamId, taskId: task.id })
+                                  );
+                                }}
+                                onDragEnd={() => setTaskDropTarget(null)}
+                                title="Aufgabe ziehen"
+                                aria-label="Aufgabe ziehen"
+                                className="hidden h-6 w-4 shrink-0 cursor-grab items-center justify-center rounded-md text-sand-300 opacity-30 transition hover:bg-sand-100 hover:text-sand-500 group-hover:opacity-100 active:cursor-grabbing sm:inline-flex"
+                              >
+                                <GripVertical size={14} />
+                              </button>
+                              {/* Done toggle */}
+                              <button
+                                type="button"
+                                onClick={() => updateProjectTask(task._streamId, task.id, { status: isDone ? "open" : "done" })}
+                                title={isDone ? "Wieder öffnen" : "Erledigen"}
+                                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition ${
+                                  isDone
+                                    ? "border-emerald-400 bg-emerald-500 text-white"
+                                    : "border-sand-300 bg-white text-transparent hover:border-emerald-400 hover:text-emerald-400"
+                                }`}
+                              >
+                                <CheckSquare size={11} />
+                              </button>
+
+                              {/* Title */}
+                              <BufferedInput
+                                value={task.title || ""}
+                                onCommit={(value) => updateProjectTask(task._streamId, task.id, { title: value })}
+                                className={`min-w-0 flex-1 bg-transparent py-0.5 text-sm outline-none focus:rounded-md focus:bg-white focus:px-2 focus:ring-1 focus:ring-sky-200 ${
+                                  isDone ? "text-sand-400 line-through" : "text-sand-900"
+                                }`}
+                              />
+
+                              {/* Tag badge */}
+                              {task._streamTitle ? (
+                                <div className="relative hidden shrink-0 sm:block" data-task-tag-editor="true">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setTaskTagEditor((current) =>
+                                        current.key === taskKey
+                                          ? { key: "", draft: "", editTitle: "", color: "sky" }
+                                          : { key: taskKey, draft: "", editTitle: task._streamTitle || "", color: taskTagColorKey }
+                                      )
+                                    }
+                                    title="Tag ändern"
+                                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition hover:ring-2 hover:ring-sky-100 ${tagColor.bg} ${tagColor.text} ${tagColor.border}`}
+                                  >
+                                    <span className={`h-1.5 w-1.5 rounded-full ${tagColor.dot}`} />
+                                    {task._streamTitle}
+                                  </button>
+                                  {tagEditorOpen ? (
+                                    <div className="absolute right-0 top-7 z-40 w-[340px] rounded-2xl border border-sand-200 bg-white p-3 text-left shadow-xl">
+                                      <div className="mb-2 flex items-center justify-between gap-2">
+                                        <div>
+                                          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sand-500">Tag bearbeiten</div>
+                                          <div className="mt-0.5 text-xs text-sand-500">Auswählen, umbenennen, Farbe setzen oder neu anlegen.</div>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => setTaskTagEditor({ key: "", draft: "", editTitle: "", color: "sky" })}
+                                          className="rounded-md p-1 text-sand-400 hover:bg-sand-50 hover:text-sand-700"
+                                          title="Schließen"
+                                        >
+                                          <X size={13} />
+                                        </button>
+                                      </div>
+
+                                      <label className="block space-y-1">
+                                        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sand-500">Vorhandenen Tag wählen</span>
+                                        <select
+                                          value={task._streamId}
+                                          onChange={(event) => {
+                                            const targetStreamId = event.target.value;
+                                            if (targetStreamId && targetStreamId !== task._streamId) {
+                                              moveTaskToStream(task._streamId, task.id, targetStreamId);
+                                            }
+                                            setTaskTagEditor({ key: "", draft: "", editTitle: "", color: "sky" });
+                                          }}
+                                          className="w-full rounded-lg border border-sand-200 bg-sand-50 px-2 py-1.5 text-xs text-sand-800 outline-none focus:border-sky-300 focus:bg-white focus:ring-1 focus:ring-sky-100"
+                                        >
+                                          {activeStreams.map((stream) => (
+                                            <option key={stream.id} value={stream.id}>{stream.title || "Tag"}</option>
+                                          ))}
+                                        </select>
+                                      </label>
+
+                                      <div className="mt-3 rounded-xl border border-sand-200 bg-sand-50/70 p-2">
+                                        <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sand-500">Aktuellen Tag editieren</div>
+                                        <div className="flex items-center gap-1.5">
+                                          <input
+                                            value={taskTagEditor.editTitle}
+                                            onChange={(event) => setTaskTagEditor((current) => ({ ...current, editTitle: event.target.value }))}
+                                            onKeyDown={(event) => {
+                                              if (event.key !== "Enter") return;
+                                              event.preventDefault();
+                                              const title = String(taskTagEditor.editTitle || "").trim();
+                                              if (title) mutateStreamById(task._streamId, (current) => ({ ...current, title }));
+                                            }}
+                                            className="min-w-0 flex-1 rounded-lg border border-sand-200 bg-white px-2 py-1.5 text-xs text-sand-900 outline-none focus:border-sky-300 focus:ring-1 focus:ring-sky-100"
+                                            placeholder="Tagname"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const title = String(taskTagEditor.editTitle || "").trim();
+                                              if (!title) return;
+                                              mutateStreamById(task._streamId, (current) => ({ ...current, title }));
+                                            }}
+                                            disabled={!String(taskTagEditor.editTitle || "").trim()}
+                                            className="rounded-lg border border-sand-200 bg-white px-2.5 py-1.5 text-xs font-medium text-sand-700 hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                          >
+                                            Speichern
+                                          </button>
+                                        </div>
+                                        <div className="mt-2 flex flex-wrap gap-1">
+                                          {taskTagColorOptions.map((color) => {
+                                            const activeColor = taskTagColorKey === color.key;
+                                            return (
+                                              <button
+                                                key={color.key}
+                                                type="button"
+                                                onClick={() => mutateStreamById(task._streamId, (current) => ({ ...current, tag_color: color.key }))}
+                                                className={`h-6 w-6 rounded-full border ${color.border} ${color.bg} p-1 transition ${activeColor ? `ring-2 ${color.ring} ring-offset-1` : "hover:ring-1 hover:ring-sand-300"}`}
+                                                title={color.label}
+                                                aria-label={`Farbe ${color.label}`}
+                                              >
+                                                <span className={`block h-full w-full rounded-full ${color.dot}`} />
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+
+                                      <form
+                                        className="mt-3 rounded-xl border border-sky-100 bg-sky-50/60 p-2"
+                                        onSubmit={(event) => {
+                                          event.preventDefault();
+                                          const title = String(taskTagEditor.draft || "").trim();
+                                          if (!title) return;
+                                          moveTaskToNewStream(task._streamId, task.id, title, taskTagEditor.color);
+                                          setTaskTagEditor({ key: "", draft: "", editTitle: "", color: "sky" });
+                                        }}
+                                      >
+                                        <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-700">Neuen Tag anlegen</div>
+                                        <div className="flex items-center gap-1.5">
+                                          <input
+                                            value={taskTagEditor.draft}
+                                            onChange={(event) => setTaskTagEditor((current) => ({ ...current, draft: event.target.value }))}
+                                            placeholder="Neuer Tagname..."
+                                            className="min-w-0 flex-1 rounded-lg border border-sky-200 bg-white px-2 py-1.5 text-xs text-sand-900 outline-none placeholder:text-sand-400 focus:border-sky-300 focus:ring-1 focus:ring-sky-100"
+                                          />
+                                          <button
+                                            type="submit"
+                                            disabled={!String(taskTagEditor.draft || "").trim()}
+                                            className="rounded-lg border border-sky-200 bg-white px-2.5 py-1.5 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                          >
+                                            Anlegen
+                                          </button>
+                                        </div>
+                                        <div className="mt-2 flex flex-wrap gap-1">
+                                          {taskTagColorOptions.map((color) => (
+                                            <button
+                                              key={color.key}
+                                              type="button"
+                                              onClick={() => setTaskTagEditor((current) => ({ ...current, color: color.key }))}
+                                              className={`h-5 w-5 rounded-full border ${color.border} ${color.bg} p-1 transition ${taskTagEditor.color === color.key ? `ring-2 ${color.ring} ring-offset-1` : "hover:ring-1 hover:ring-sand-300"}`}
+                                              title={color.label}
+                                              aria-label={`Neue Tagfarbe ${color.label}`}
+                                            >
+                                              <span className={`block h-full w-full rounded-full ${color.dot}`} />
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </form>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+
+                              {/* Status */}
+                              <select
+                                value={statusKey}
+                                onChange={(event) => updateProjectTask(task._streamId, task.id, { status: event.target.value })}
+                                title="Status"
+                                className={`hidden w-32 shrink-0 rounded-lg border px-2 py-1 text-[11px] font-medium outline-none transition focus:border-sky-300 focus:ring-1 focus:ring-sky-100 sm:block ${status.tone}`}
+                              >
+                                {taskStatusOrder.map((key) => (
+                                  <option key={key} value={key}>{taskStatusMeta[key]?.label || key}</option>
+                                ))}
+                              </select>
+
+                              {/* Due date */}
+                              <input
+                                type="date"
+                                value={task.due_date || ""}
+                                onChange={(event) => updateProjectTask(task._streamId, task.id, { due_date: event.target.value })}
+                                className={`hidden w-28 shrink-0 rounded-lg border border-transparent bg-transparent px-2 py-0.5 text-xs outline-none hover:border-sand-200 focus:border-sky-300 focus:bg-white md:block ${
+                                  overdue ? "font-semibold text-rose-600" : dueSoon ? "text-amber-600" : "text-sand-500"
+                                }`}
+                              />
+
+                              {/* Note button */}
+                              <button
+                                type="button"
+                                onClick={() => setTaskNoteEditorId((current) => (current === `row_note_${task._streamId}_${task.id}` ? "" : `row_note_${task._streamId}_${task.id}`))}
+                                title="Notiz"
+                                className={`shrink-0 rounded-md p-1 transition ${
+                                  hasNote
+                                    ? "border border-amber-300 bg-amber-100 text-amber-700"
+                                    : "text-sand-300 opacity-0 hover:text-amber-500 group-hover:opacity-100"
+                                }`}
+                              >
+                                <StickyNote size={13} />
+                              </button>
+
+                              {/* Delete */}
+                              <button
+                                type="button"
+                                onClick={() => deleteProjectTask(task._streamId, task.id)}
+                                title="Löschen"
+                                className="shrink-0 rounded-md p-1 text-sand-300 opacity-0 transition hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+
+                            {/* Note textarea */}
+                            {noteOpen ? (
+                              <div className="border-t border-amber-100 bg-amber-50/50 px-4 pb-3 pt-2">
+                                <BufferedTextarea
+                                  rows={2}
+                                  autoFocus
                                   value={task.note || ""}
-                                  onChange={(event) => updateProjectTask(task._streamId, task.id, { note: event.target.value })}
-                                  placeholder="Notiz zur Aufgabe"
-                                  className="mt-1 w-full resize-y rounded-xl border border-amber-200 bg-yellow-50 px-3 py-2 text-xs text-sand-900 outline-none placeholder:text-amber-500 focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+                                  onCommit={(value) => updateProjectTask(task._streamId, task.id, { note: value })}
+                                  placeholder="Notiz zur Aufgabe…"
+                                  className="w-full resize-none rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-sand-900 outline-none placeholder:text-amber-400 focus:border-amber-300 focus:ring-1 focus:ring-amber-100"
                                 />
                               </div>
                             ) : null}
                           </li>
+                          </Fragment>
                         );
                       })}
                     </ul>
@@ -5432,45 +6875,57 @@ export default function ProjectFoldersView() {
             ) : null}
 
             {calculationOpen && activeFolder ? (
-              <InlineSection><h3 className="font-display text-xl text-sand-900 mb-4">Kalkulation</h3>
-                <div className="space-y-5">
-                  <ModalHint>Regelwert = Vorschlag aus Baustein oder KI · Eigenwert = tatsächlicher Preis · Kosten = für Gewinnschätzung</ModalHint>
-                  <div className="grid gap-3 md:grid-cols-4">
-                    <StatTile label="Geschätzter Umsatz" value={formatCurrency(calculationTotals.revenue)} accent="sky" icon={TrendingUp} />
-                    <StatTile label="Geschätzter Gewinn" value={formatCurrency(calculationTotals.profit)} accent={calculationTotals.profit >= 0 ? "emerald" : "rose"} icon={TrendingUp} />
-                    <StatTile label="Aufgaben" value={calculationTotals.taskCount} accent="sand" icon={ListChecks} />
-                    <StatTile label="Material" value={calculationTotals.materialCount} accent="sand" icon={FolderKanban} />
+              <InlineSection>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-display text-lg text-sand-900">Kalkulation</h3>
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 font-medium text-sky-800">
+                      Umsatz {formatCurrency(calculationTotals.revenue)}
+                    </span>
+                    <span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 font-medium ${
+                      calculationTotals.profit >= 0 ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"
+                    }`}>
+                      Gewinn {formatCurrency(calculationTotals.profit)}
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-lg border border-sand-200 bg-white px-2 py-1 text-sand-600">
+                      {calculationTotals.taskCount} Aufgaben
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-lg border border-sand-200 bg-white px-2 py-1 text-sand-600">
+                      {calculationTotals.materialCount} Material
+                    </span>
                   </div>
+                </div>
+                <div className="space-y-3">
                   {calculationGroups.length ? (
-                    <div className="space-y-4">
+                    <div className="space-y-2">
                       {calculationGroups.map((group) => {
                         return (
-                          <section key={group.streamId} className="overflow-hidden rounded-[24px] border border-sand-200 bg-white">
-                            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sand-200 bg-sand-50/70 px-4 py-3">
+                          <section key={group.streamId} className="overflow-hidden rounded-2xl border border-sand-200 bg-white">
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sand-200 bg-sand-50/70 px-3 py-2">
                               <div>
                                 <div className="text-sm font-semibold text-sand-900">{group.streamTitle}</div>
-                                <div className="mt-0.5 text-xs text-sand-500">
+                                <div className="text-[11px] text-sand-500">
                                   {group.tasks.length} Aufgaben
                                 </div>
                               </div>
                             </div>
 
                             <div className="overflow-x-auto">
-                              <table className="min-w-full text-sm">
+                              <table className="min-w-full text-xs">
                                 <thead>
-                                  <tr className="border-b border-sand-200 bg-white text-left text-[11px] uppercase tracking-[0.16em] text-sand-500">
-                                    <th className="px-4 py-3 font-medium">Position</th>
-                                    <th className="px-4 py-3 font-medium">Status / Menge</th>
-                                    <th className="px-4 py-3 font-medium">Regelwert</th>
-                                    <th className="px-4 py-3 font-medium">Eigenwert</th>
-                                    <th className="px-4 py-3 font-medium">Kosten</th>
-                                    <th className="px-4 py-3 font-medium">Effektiv</th>
-                                    <th className="px-4 py-3 font-medium">Aktion</th>
+                                  <tr className="border-b border-sand-200 bg-white text-left text-[10px] uppercase tracking-[0.14em] text-sand-500">
+                                    <th className="px-2 py-2 font-medium">Position</th>
+                                    <th className="px-2 py-2 font-medium">Status</th>
+                                    <th className="px-2 py-2 font-medium">Regel</th>
+                                    <th className="px-2 py-2 font-medium">Eigen</th>
+                                    <th className="px-2 py-2 font-medium">Kosten</th>
+                                    <th className="px-2 py-2 font-medium">Effektiv</th>
+                                    <th className="px-2 py-2 font-medium" />
                                   </tr>
                                 </thead>
                                 <tbody>
                                   <tr className="border-b border-sand-200 bg-sand-50/60">
-                                    <td colSpan={7} className="px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-sand-500">
+                                    <td colSpan={7} className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-sand-500">
                                       Aufgaben
                                     </td>
                                   </tr>
@@ -5479,7 +6934,7 @@ export default function ProjectFoldersView() {
                                       const meta = taskStatusMeta[String(task.status || "open").trim().toLowerCase()] || taskStatusMeta.open;
                                       return (
                                         <tr key={task.id} className="border-b border-sand-100 align-top last:border-b-0">
-                                          <td className="px-4 py-3">
+                                          <td className="px-2 py-1.5">
                                             <input
                                               value={task.title || ""}
                                               onChange={(e) =>
@@ -5490,10 +6945,10 @@ export default function ProjectFoldersView() {
                                                   )
                                                 }))
                                               }
-                                              className={`${inputClass} px-3 py-2`}
+                                              className={`${inputClass} h-8 rounded-lg px-2 py-1 text-xs`}
                                             />
                                           </td>
-                                          <td className="px-4 py-3">
+                                          <td className="px-2 py-1.5">
                                             <button
                                               type="button"
                                               onClick={() =>
@@ -5509,7 +6964,7 @@ export default function ProjectFoldersView() {
                                               {meta.label}
                                             </button>
                                           </td>
-                                          <td className="px-4 py-3">
+                                          <td className="px-2 py-1.5">
                                             <input
                                               value={task.rule_value || ""}
                                               onChange={(e) =>
@@ -5520,11 +6975,11 @@ export default function ProjectFoldersView() {
                                                   )
                                                 }))
                                               }
-                                              className={inputClass}
+                                              className={`${inputClass} h-8 rounded-lg px-2 py-1 text-right text-xs tabular-nums`}
                                               placeholder="0,00"
                                             />
                                           </td>
-                                          <td className="px-4 py-3">
+                                          <td className="px-2 py-1.5">
                                             <input
                                               value={task.custom_value || ""}
                                               onChange={(e) =>
@@ -5535,11 +6990,11 @@ export default function ProjectFoldersView() {
                                                   )
                                                 }))
                                               }
-                                              className={inputClass}
+                                              className={`${inputClass} h-8 rounded-lg px-2 py-1 text-right text-xs tabular-nums`}
                                               placeholder="0,00"
                                             />
                                           </td>
-                                          <td className="px-4 py-3">
+                                          <td className="px-2 py-1.5">
                                             <input
                                               value={task.cost_value || ""}
                                               onChange={(e) =>
@@ -5550,17 +7005,17 @@ export default function ProjectFoldersView() {
                                                   )
                                                 }))
                                               }
-                                              className={inputClass}
+                                              className={`${inputClass} h-8 rounded-lg px-2 py-1 text-right text-xs tabular-nums`}
                                               placeholder="0,00"
                                             />
                                           </td>
-                                          <td className="px-4 py-3">
+                                          <td className="px-2 py-1.5">
                                             <div className="font-medium text-sand-900">{formatCurrency(task.lineRevenue ?? getEffectivePrice(task))}</div>
-                                            <div className={`mt-1 text-xs ${(task.lineRevenue ?? getEffectivePrice(task)) - (task.lineCost ?? getEffectiveCost(task)) >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                                            <div className={`text-[11px] ${(task.lineRevenue ?? getEffectivePrice(task)) - (task.lineCost ?? getEffectiveCost(task)) >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                                               Gewinn {formatCurrency((task.lineRevenue ?? getEffectivePrice(task)) - (task.lineCost ?? getEffectiveCost(task)))}
                                             </div>
                                           </td>
-                                          <td className="px-4 py-3">
+                                          <td className="px-2 py-1.5">
                                             <button
                                               type="button"
                                               onClick={() =>
@@ -5569,7 +7024,7 @@ export default function ProjectFoldersView() {
                                                   tasks: (current.tasks || []).filter((item) => item.id !== task.id)
                                                 }))
                                               }
-                                              className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700"
+                                              className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700"
                                             >
                                               Löschen
                                             </button>
@@ -5579,7 +7034,7 @@ export default function ProjectFoldersView() {
                                     })
                                   ) : (
                                     <tr className="border-b border-sand-100">
-                                      <td colSpan={7} className="px-4 py-4 text-sm text-sand-400">
+                                      <td colSpan={7} className="px-3 py-3 text-xs text-sand-400">
                                         Keine Aufgaben vorhanden.
                                       </td>
                                     </tr>
@@ -5591,39 +7046,39 @@ export default function ProjectFoldersView() {
                           </section>
                         );
                       })}
-                      <section className="overflow-hidden rounded-[24px] border border-sand-200 bg-white">
-                        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sand-200 bg-sand-50/70 px-4 py-3">
+                      <section className="overflow-hidden rounded-2xl border border-sand-200 bg-white">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-sand-200 bg-sand-50/70 px-3 py-2">
                           <div>
                             <div className="text-sm font-semibold text-sand-900">Material</div>
-                            <div className="mt-0.5 text-xs text-sand-500">{materialInventory.length} Positionen projektweit</div>
+                            <div className="text-[11px] text-sand-500">{materialInventory.length} Positionen projektweit</div>
                           </div>
                           <button
                             type="button"
                             onClick={addProjectMaterial}
-                            className="inline-flex items-center gap-2 rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-800 hover:bg-sand-50"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-sand-200 bg-white px-2 py-1 text-xs text-sand-800 hover:bg-sand-50"
                           >
                             <Plus size={14} />
                             Material
                           </button>
                         </div>
                         <div className="overflow-x-auto">
-                          <table className="min-w-full text-sm">
+                          <table className="min-w-full text-xs">
                             <thead>
-                              <tr className="border-b border-sand-200 bg-white text-left text-[11px] uppercase tracking-[0.16em] text-sand-500">
-                                <th className="px-4 py-3 font-medium">Material</th>
-                                <th className="px-4 py-3 font-medium">Status / Menge</th>
-                                <th className="px-4 py-3 font-medium">Link</th>
-                                <th className="px-4 py-3 font-medium">Preis</th>
-                                <th className="px-4 py-3 font-medium">EK</th>
-                                <th className="px-4 py-3 font-medium">Effektiv</th>
-                                <th className="px-4 py-3 font-medium">Aktion</th>
+                              <tr className="border-b border-sand-200 bg-white text-left text-[10px] uppercase tracking-[0.14em] text-sand-500">
+                                <th className="px-2 py-2 font-medium">Material</th>
+                                <th className="px-2 py-2 font-medium">Status / Menge</th>
+                                <th className="px-2 py-2 font-medium">Link</th>
+                                <th className="px-2 py-2 font-medium">Preis</th>
+                                <th className="px-2 py-2 font-medium">EK</th>
+                                <th className="px-2 py-2 font-medium">Effektiv</th>
+                                <th className="px-2 py-2 font-medium" />
                               </tr>
                             </thead>
                             <tbody>
                               {materialInventory.length ? (
                                 materialInventory.map((item) => (
                                   <tr key={item.id} className="border-b border-sand-100 align-top last:border-b-0 bg-white">
-                                    <td className="px-4 py-3">
+                                    <td className="px-2 py-1.5">
                                       <input
                                         value={item.title || ""}
                                         onChange={(e) =>
@@ -5636,12 +7091,12 @@ export default function ProjectFoldersView() {
                                             return folder;
                                           })
                                         }
-                                        className={inputClass}
+                                        className={`${inputClass} h-8 rounded-lg px-2 py-1 text-xs`}
                                         placeholder="Materialposition"
                                       />
                                     </td>
-                                    <td className="px-4 py-3">
-                                      <div className="grid gap-2 md:grid-cols-[minmax(0,1.2fr)_96px_70px]">
+                                    <td className="px-2 py-1.5">
+                                      <div className="grid gap-1.5 md:grid-cols-[minmax(0,1.1fr)_72px_48px]">
                                         <select
                                           value={normalizeProjectMaterialStatus(item.status)}
                                           onChange={(e) =>
@@ -5654,7 +7109,7 @@ export default function ProjectFoldersView() {
                                               return folder;
                                             })
                                           }
-                                          className={selectClass}
+                                          className={`${selectClass} h-8 rounded-lg px-2 py-1 text-xs`}
                                         >
                                           <option value="open">offen</option>
                                           <option value="ordered">bestellt</option>
@@ -5672,16 +7127,16 @@ export default function ProjectFoldersView() {
                                               return folder;
                                             })
                                           }
-                                          className={inputClass}
+                                          className={`${inputClass} h-8 rounded-lg px-2 py-1 text-right text-xs tabular-nums`}
                                           placeholder="Menge"
                                         />
-                                        <div className="inline-flex items-center justify-center rounded-xl border border-sand-200 bg-sand-50 px-3 text-sm font-medium text-sand-600">
-                                          Stück
+                                        <div className="inline-flex items-center justify-center rounded-lg border border-sand-200 bg-sand-50 px-2 text-[11px] font-medium text-sand-600">
+                                          Stk.
                                         </div>
                                       </div>
                                     </td>
-                                    <td className="px-4 py-3">
-                                      <div className="flex items-center gap-2">
+                                    <td className="px-2 py-1.5">
+                                      <div className="flex items-center gap-1.5">
                                         <input
                                           value={item.link || ""}
                                           onChange={(e) =>
@@ -5694,14 +7149,14 @@ export default function ProjectFoldersView() {
                                               return folder;
                                             })
                                           }
-                                          className={inputClass}
+                                          className={`${inputClass} h-8 rounded-lg px-2 py-1 text-xs`}
                                           placeholder="https://..."
                                         />
                                         <button
                                           type="button"
                                           onClick={() => item.link ? window.open(item.link, "_blank", "noopener,noreferrer") : null}
                                           disabled={!String(item.link || "").trim()}
-                                          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sand-200 bg-white text-sand-700 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-sand-200 bg-white text-sand-700 hover:bg-sand-50 disabled:cursor-not-allowed disabled:opacity-40"
                                           aria-label="Materiallink öffnen"
                                           title="Link öffnen"
                                         >
@@ -5709,7 +7164,7 @@ export default function ProjectFoldersView() {
                                         </button>
                                       </div>
                                     </td>
-                                    <td className="px-4 py-3">
+                                    <td className="px-2 py-1.5">
                                       <div className="relative">
                                         <input
                                           value={item.price || ""}
@@ -5734,13 +7189,13 @@ export default function ProjectFoldersView() {
                                             })
                                           }
                                           inputMode="decimal"
-                                          className={`${inputClass} pr-10 text-right tabular-nums`}
+                                          className={`${inputClass} h-8 rounded-lg px-2 py-1 pr-8 text-right text-xs tabular-nums`}
                                           placeholder="0,0 €"
                                         />
-                                        <span className="pointer-events-none absolute inset-y-0 right-3 inline-flex items-center text-sm text-sand-400">€</span>
+                                        <span className="pointer-events-none absolute inset-y-0 right-2 inline-flex items-center text-xs text-sand-400">€</span>
                                       </div>
                                     </td>
-                                    <td className="px-4 py-3">
+                                    <td className="px-2 py-1.5">
                                       <div className="relative">
                                         <input
                                           value={item.purchase_price || ""}
@@ -5765,19 +7220,19 @@ export default function ProjectFoldersView() {
                                             })
                                           }
                                           inputMode="decimal"
-                                          className={`${inputClass} pr-10 text-right tabular-nums`}
+                                          className={`${inputClass} h-8 rounded-lg px-2 py-1 pr-8 text-right text-xs tabular-nums`}
                                           placeholder="0,0 €"
                                         />
-                                        <span className="pointer-events-none absolute inset-y-0 right-3 inline-flex items-center text-sm text-sand-400">€</span>
+                                        <span className="pointer-events-none absolute inset-y-0 right-2 inline-flex items-center text-xs text-sand-400">€</span>
                                       </div>
                                     </td>
-                                    <td className="px-4 py-3">
+                                    <td className="px-2 py-1.5">
                                       <div className="font-medium text-sand-900">{formatCurrency(item.lineRevenue ?? 0)}</div>
-                                      <div className={`mt-1 text-xs ${(item.lineRevenue ?? 0) - (item.lineCost ?? 0) >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                                      <div className={`text-[11px] ${(item.lineRevenue ?? 0) - (item.lineCost ?? 0) >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                                         Gewinn {formatCurrency((item.lineRevenue ?? 0) - (item.lineCost ?? 0))}
                                       </div>
                                     </td>
-                                    <td className="px-4 py-3">
+                                    <td className="px-2 py-1.5">
                                       <button
                                         type="button"
                                         onClick={() =>
@@ -5788,7 +7243,7 @@ export default function ProjectFoldersView() {
                                             return folder;
                                           })
                                         }
-                                        className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700"
+                                        className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700"
                                       >
                                         Löschen
                                       </button>
@@ -5797,7 +7252,7 @@ export default function ProjectFoldersView() {
                                 ))
                               ) : (
                                 <tr>
-                                  <td colSpan={7} className="px-4 py-4 text-sm text-sand-400">
+                                  <td colSpan={7} className="px-3 py-3 text-xs text-sand-400">
                                     Noch kein Material angelegt.
                                   </td>
                                 </tr>
@@ -5808,8 +7263,8 @@ export default function ProjectFoldersView() {
                       </section>
                     </div>
                   ) : (
-                    <div className="rounded-[24px] border border-dashed border-sand-300 p-8 text-center text-sm text-sand-500">
-                      Für die Kalkulation fehlen noch Bausteine.
+                    <div className="rounded-2xl border border-dashed border-sand-300 p-5 text-center text-sm text-sand-500">
+                      Für die Kalkulation fehlen noch Tags.
                     </div>
                   )}
                 </div>
@@ -5820,7 +7275,7 @@ export default function ProjectFoldersView() {
               <InlineSection><h3 className="font-display text-xl text-sand-900 mb-4">Materialbedarf</h3>
                 <div className="space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <ModalHint>Projektweite Liste aller benötigten Materialien ohne Bausteinbezug.</ModalHint>
+                    <ModalHint>Projektweite Liste aller benötigten Materialien ohne Tagbezug.</ModalHint>
                     <BtnSecondary onClick={addProjectMaterial} icon={Plus}>Material hinzufügen</BtnSecondary>
                   </div>
                   {materialInventory.length ? (
@@ -6014,9 +7469,9 @@ export default function ProjectFoldersView() {
                         <div className="rounded-2xl border border-sky-100 bg-sky-50/60 px-3 py-2 text-xs text-sky-800">
                           Start {formatDateTime(activeProjectTimeStartedAt)}
                         </div>
-                        <input
+                        <BufferedInput
                           value={projectTimeTracking.active_session?.note || ""}
-                          onChange={(event) => updateActiveProjectTimeNote(event.target.value)}
+                          onCommit={updateActiveProjectTimeNote}
                           className={inputClass}
                           placeholder="Notiz zur unzugeordneten Zeit"
                         />
@@ -6047,7 +7502,7 @@ export default function ProjectFoldersView() {
                       >
                         <option value="">Tag wählen</option>
                         {activeStreams.map((stream) => (
-                          <option key={stream.id} value={stream.id}>{stream.title || "Baustein"}</option>
+                          <option key={stream.id} value={stream.id}>{stream.title || "Tag"}</option>
                         ))}
                       </select>
                       <select
@@ -6102,9 +7557,9 @@ export default function ProjectFoldersView() {
                               </div>
                             </div>
                             <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                              <input
+                              <BufferedInput
                                 value={timer.note || ""}
-                                onChange={(event) => updateSpecificProjectTimerNote(timer.id, event.target.value)}
+                                onCommit={(value) => updateSpecificProjectTimerNote(timer.id, value)}
                                 className={`${inputClass} min-w-0 flex-1`}
                                 placeholder="Notiz"
                               />
@@ -6164,7 +7619,7 @@ export default function ProjectFoldersView() {
             {timelineOpen && activeFolder ? (
               <InlineSection><h3 className="font-display text-xl text-sand-900 mb-4">Timeline</h3>
                 <div className="space-y-4">
-                  <ModalHint>Bausteine, Aufgaben und Deadlines auf der Zeitachse. Undatierte Aufgaben bleiben je Baustein sichtbar.</ModalHint>
+                  <ModalHint>Tags, Aufgaben und Deadlines auf der Zeitachse. Undatierte Aufgaben bleiben je Tag sichtbar.</ModalHint>
                   {timelineData.lanes.some((lane) => lane.datedTasks.length || lane.phases.length || lane.undatedTasks.length) || timelineData.projectDeadline ? (
                     <div className="overflow-x-auto rounded-[24px] border border-sand-200 bg-white p-4">
                       <div className="min-w-[1100px]">
@@ -6385,11 +7840,19 @@ export default function ProjectFoldersView() {
           }));
         return (
         <Modal
-          title={`Fakturierung · ${invoiceDialog.folderTitle || "Projektmappe"}`}
+          title={`${invoiceDialog.completeProject ? "Projekt abschließen" : "Fakturierung"} · ${invoiceDialog.folderTitle || "Projektmappe"}`}
           onClose={() => setInvoiceDialog(INVOICE_DIALOG_INITIAL)}
           width="max-w-6xl"
         >
           <div className="space-y-3">
+            {invoiceDialog.completeProject ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-900">
+                Nach erfolgreicher sevDesk-Übergabe wird die Projektmappe als abgeschlossen ins Projektarchiv verschoben.
+                {invoiceDialog.openTaskCount > 0 ? (
+                  <span className="ml-1 font-semibold">{invoiceDialog.openTaskCount} Aufgabe(n) sind noch nicht erledigt.</span>
+                ) : null}
+              </div>
+            ) : null}
             <div className="rounded-2xl border border-sand-200 bg-white p-3">
               <div className="grid gap-2 lg:grid-cols-[minmax(220px,1fr)_160px_110px_110px_130px_150px]">
                 <label className="space-y-1">
@@ -6554,7 +8017,11 @@ export default function ProjectFoldersView() {
                 {invoiceDialog.saveBusy ? "Speichert…" : "Nur intern speichern"}
               </BtnSecondary>
               <BtnPrimary onClick={pushInvoiceToSevdesk} disabled={invoiceDialog.pushBusy || !hasSelection} icon={Receipt}>
-                {invoiceDialog.pushBusy ? "Übergibt an sevDesk…" : `An sevDesk übergeben · ${formatEur(totalNet)}`}
+                {invoiceDialog.pushBusy
+                  ? "Übergibt an sevDesk…"
+                  : invoiceDialog.completeProject
+                    ? `Abschließen + sevDesk · ${formatEur(totalNet)}`
+                    : `An sevDesk übergeben · ${formatEur(totalNet)}`}
               </BtnPrimary>
             </ModalActions>
           </div>
@@ -6573,7 +8040,7 @@ export default function ProjectFoldersView() {
                   </span>
                   <div>
                     <div className="text-sm font-semibold text-sand-900">Startart</div>
-                    <div className="text-xs text-sand-500">KI erzeugt Bausteine, Aufgaben und Risiken aus der Beschreibung.</div>
+                    <div className="text-xs text-sand-500">KI erzeugt Tags, Aufgaben und Risiken aus der Beschreibung.</div>
                   </div>
                 </div>
                 <div className="grid gap-2">
@@ -6650,7 +8117,7 @@ export default function ProjectFoldersView() {
                     />
                   </label>
                   <div className="mt-3 grid gap-2 text-xs text-sky-800 sm:grid-cols-2">
-                    <div className="rounded-xl border border-sky-200 bg-white/70 px-3 py-2">Erkennt passende Bausteine aus Inhalt und Katalog.</div>
+                    <div className="rounded-xl border border-sky-200 bg-white/70 px-3 py-2">Erkennt passende Tags aus Inhalt und Katalog.</div>
                     <div className="rounded-xl border border-sky-200 bg-white/70 px-3 py-2">Erzeugt konkrete Aufgaben, Risiken, Fragen und Zeitphasen.</div>
                   </div>
                   {!canCreatePreview ? (
@@ -6660,7 +8127,7 @@ export default function ProjectFoldersView() {
               ) : null}
               {createForm.mode === "blocks" ? (
                 <div className="rounded-2xl border border-sand-200 bg-white p-4">
-                  <div className="mb-2 text-xs uppercase tracking-[0.18em] text-sand-500">Bausteine</div>
+                  <div className="mb-2 text-xs uppercase tracking-[0.18em] text-sand-500">Tags</div>
                   <div className="grid gap-2">
                     {(catalog.blocks || []).map((block) => {
                       const checked = createForm.block_keys.includes(block.key);
@@ -6716,7 +8183,7 @@ export default function ProjectFoldersView() {
               {!draftFolder ? (
                 <div className="flex h-full min-h-[360px] flex-col items-center justify-center gap-3 p-8 text-sand-400">
                   <FolderKanban size={32} className="opacity-30" />
-                  <span className="text-sm">{createForm.mode === "ai" ? "KI-Vorschau mit Bausteinen und Aufgaben erscheint hier." : "Vorschau erscheint hier nach der Erzeugung."}</span>
+                  <span className="text-sm">{createForm.mode === "ai" ? "KI-Vorschau mit Tags und Aufgaben erscheint hier." : "Vorschau erscheint hier nach der Erzeugung."}</span>
                 </div>
               ) : (
                 <div className="space-y-4 p-5">
@@ -6733,7 +8200,7 @@ export default function ProjectFoldersView() {
                     ) : null}
                   </div>
                   <div className="grid gap-2 sm:grid-cols-4">
-                    <StatTile compact label="Bausteine" value={draftStats.streams} icon={FolderKanban} />
+                    <StatTile compact label="Tags" value={draftStats.streams} icon={FolderKanban} />
                     <StatTile compact label="Aufgaben" value={draftStats.tasks} icon={ListChecks} />
                     <StatTile compact label="Checkpunkte" value={draftStats.checklist} icon={CheckSquare} />
                     <StatTile compact label="Risiken" value={draftStats.risks} icon={ShieldAlert} />
@@ -6805,7 +8272,7 @@ export default function ProjectFoldersView() {
             {aiDialog.target ? (
               <div className="flex items-center gap-2 text-[11px] text-sand-500">
                 <span className="rounded-full border border-sand-200 bg-sand-50 px-2.5 py-1 font-medium uppercase tracking-wider">
-                  {aiDialog.target.scope === "folder" ? "Projekt" : "Baustein"}
+                  {aiDialog.target.scope === "folder" ? "Projekt" : "Tag"}
                 </span>
                 <span className="text-sand-400">→</span>
                 <span>{aiDialog.target.field}</span>
@@ -6880,7 +8347,7 @@ export default function ProjectFoldersView() {
             {aiResult ? (
               <ModalActions>
                 <BtnPrimary onClick={applyAiResult} icon={Sparkles}>
-                  In Baustein übernehmen
+                  {aiDialog.target?.scope === "folder" ? "Ins Projekt übernehmen" : "In Tag übernehmen"}
                 </BtnPrimary>
               </ModalActions>
             ) : null}
@@ -6941,7 +8408,7 @@ export default function ProjectFoldersView() {
 
             <div className="grid gap-3 sm:grid-cols-5">
               <StatTile label="Fortschritt" value={`${activeSummary.progress || 0}%`} accent={Number(activeSummary.progress || 0) >= 80 ? "emerald" : Number(activeSummary.progress || 0) >= 40 ? "sky" : "sand"} icon={TrendingUp} />
-              <StatTile label="Bausteine" value={activeSummary.stream_count || 0} accent="sand" icon={FolderKanban} />
+              <StatTile label="Tags" value={activeSummary.stream_count || 0} accent="sand" icon={FolderKanban} />
               <StatTile label="Aufgaben" value={taskCompletionLabel} accent="sand" icon={ListChecks} />
               <StatTile label="Blocker" value={blockerCount} accent={blockerCount > 0 ? "rose" : "emerald"} icon={ShieldAlert} />
               <StatTile label="Rückmeldungen" value={feedbackCount} accent={feedbackCount > 0 ? "amber" : "sand"} icon={Zap} />
@@ -6975,7 +8442,7 @@ export default function ProjectFoldersView() {
                       >
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-sand-900">{task.title || "Aufgabe"}</div>
-                          <div className="mt-0.5 truncate text-xs text-sand-500">{task.stream_title || stream?.title || "Baustein"}</div>
+                          <div className="mt-0.5 truncate text-xs text-sand-500">{task.stream_title || stream?.title || "Tag"}</div>
                         </div>
                         <div className="flex shrink-0 flex-col items-end gap-1">
                           <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${tone}`}>{taskStatusMeta[statusKey]?.label || statusKey}</span>
@@ -7008,7 +8475,7 @@ export default function ProjectFoldersView() {
                         className="flex w-full items-start justify-between gap-3 px-5 py-3 text-left hover:bg-sand-50"
                       >
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-sand-900">{stream.title || "Baustein"}</div>
+                          <div className="truncate text-sm font-semibold text-sand-900">{stream.title || "Tag"}</div>
                           <div className="mt-0.5 line-clamp-2 text-xs text-sand-500">{getPrimaryGap(stream)}</div>
                         </div>
                         <Tag className={workflowStatusMeta[workflowStatus]?.tone || workflowStatusMeta.open.tone}>
@@ -7017,7 +8484,7 @@ export default function ProjectFoldersView() {
                       </button>
                     );
                   }) : (
-                    <div className="p-5 text-sm text-sand-500">Keine kritischen Bausteine.</div>
+                    <div className="p-5 text-sm text-sand-500">Keine kritischen Tags.</div>
                   )}
                 </div>
               </section>
@@ -7025,7 +8492,7 @@ export default function ProjectFoldersView() {
 
             <div className="overflow-hidden rounded-[24px] border border-sand-200 bg-white">
               <div className="border-b border-sand-100 bg-sand-50/60 px-5 py-3">
-                <div className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Baustein-Übersicht</div>
+                <div className="text-[11px] uppercase tracking-[0.2em] text-sand-500">Tag-Übersicht</div>
               </div>
               <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
                 {activeStreams.map((stream) => {
@@ -7048,7 +8515,7 @@ export default function ProjectFoldersView() {
                       <div className="p-3.5">
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-sand-900">{stream.title || "Baustein"}</div>
+                            <div className="truncate text-sm font-semibold text-sand-900">{stream.title || "Tag"}</div>
                             <div className="mt-0.5 line-clamp-2 text-xs text-sand-500">{stream.short_status || getPrimaryGap(stream) || "—"}</div>
                           </div>
                           <Tag className={workflowStatusMeta[workflowStatus]?.tone || workflowStatusMeta.open.tone}>
@@ -7093,7 +8560,7 @@ export default function ProjectFoldersView() {
                     <div className="text-[10px] uppercase tracking-[0.18em] text-sand-500">Profil</div>
                     <div className="mt-1 text-base font-semibold text-sand-900">{selectedExportProfile?.label || "Standard"}</div>
                     <p className="mt-1 text-xs text-sand-500">
-                      {exportOptions.customer_view ? "Kundenversion ohne interne Bausteine" : "Interne Fassung mit vollständigem Kontext"}
+                      {exportOptions.customer_view ? "Kundenversion ohne interne Tags" : "Interne Fassung mit vollständigem Kontext"}
                     </p>
                   </div>
                   <span className="rounded-full border border-sand-200 bg-sand-50 px-3 py-1 text-xs text-sand-600">
@@ -7219,7 +8686,7 @@ export default function ProjectFoldersView() {
             </div>
             <div className="space-y-4 p-5">
               <p className="text-sm text-sand-700">
-                Soll <span className="font-semibold text-sand-900">„{activeFolder?.title}"</span> unwiderruflich gelöscht werden? Alle Bausteine, Aufgaben und Dokumente gehen verloren.
+                Soll <span className="font-semibold text-sand-900">„{activeFolder?.title}"</span> unwiderruflich gelöscht werden? Alle Tags, Aufgaben und Dokumente gehen verloren.
               </p>
               <ModalHint>Diese Aktion kann nicht rückgängig gemacht werden. Alternativ kann die Projektmappe archiviert werden.</ModalHint>
               <ModalActions>

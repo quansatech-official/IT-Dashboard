@@ -20,6 +20,12 @@ tar --exclude='.git' --exclude='node_modules' --exclude='dist' --exclude='fronte
 ssh root@192.168.100.4 "cd /var/lib/docker/volumes/portainer_data/_data/compose/23/7fe03fb76692630bf863460ca40b5309ad165e69 && docker compose -p it_dashboard --env-file stack.env up -d --build frontend"
 ```
 
+Codex-Bridge mit aktueller Codex CLI neu bauen:
+
+```bash
+ssh root@192.168.100.4 "cd /var/lib/docker/volumes/portainer_data/_data/compose/23/7fe03fb76692630bf863460ca40b5309ad165e69 && docker compose -p it_dashboard --env-file stack.env build --no-cache codex-bridge && docker compose -p it_dashboard --env-file stack.env up -d codex-bridge"
+```
+
 Verifikation:
 
 ```bash

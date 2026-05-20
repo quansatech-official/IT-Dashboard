@@ -99,7 +99,7 @@ export default function CallListView({
   const [selectedExtension, setSelectedExtension] = useState("");
   const [callbackStatus, setCallbackStatus] = useState("");
   const [resolvedNames, setResolvedNames] = useState({});
-  const [onlyMissed, setOnlyMissed] = useState(false);
+  const [callFilter, setCallFilter] = useState("all");
   const [assignTarget, setAssignTarget] = useState(null);
   const [assignQuery, setAssignQuery] = useState("");
   const [assignStatus, setAssignStatus] = useState("");
@@ -114,22 +114,6 @@ export default function CallListView({
     const timer = setTimeout(() => setToast(""), 2000);
     return () => clearTimeout(timer);
   }, [toast]);
-
-  const filteredCalls = useMemo(() => {
-    if (!onlyMissed) return calls;
-    return calls.filter((call) => !call.answered);
-  }, [calls, onlyMissed]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredCalls.length / pageSize));
-
-  useEffect(() => {
-    if (page > totalPages) setPage(1);
-  }, [page, totalPages]);
-
-  const pagedCalls = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return filteredCalls.slice(start, start + pageSize);
-  }, [filteredCalls, page]);
 
   const displayNumber = (call) => {
     const direction = call.direction?.toLowerCase();
@@ -159,6 +143,49 @@ export default function CallListView({
     if (direction?.includes("out")) return call.to || "";
     return call.from || "";
   };
+
+  const outboundByNumber = useMemo(() => {
+    const map = new Map();
+    calls.forEach((call) => {
+      const direction = call.direction?.toLowerCase() || "";
+      if (!direction.includes("out")) return;
+      const number = normalizeDigits(call.to || call.from || "");
+      if (!number) return;
+      const ts = call.startTime || 0;
+      if (ts > (map.get(number) || 0)) map.set(number, ts);
+    });
+    return map;
+  }, [calls]);
+
+  const isUnreturned = (call) => {
+    if (call.answered || call.callbackResolved) return false;
+    const direction = call.direction?.toLowerCase() || "";
+    if (direction.includes("out")) return false;
+    const number = normalizeDigits(call.from || call.to || "");
+    if (!number) return false;
+    const lastOut = outboundByNumber.get(number) || 0;
+    return !lastOut || lastOut < (call.startTime || 0);
+  };
+
+  const missedCount = useMemo(() => calls.filter((call) => !call.answered).length, [calls]);
+  const openCallbackCount = useMemo(() => calls.filter((call) => isUnreturned(call)).length, [calls, outboundByNumber]);
+
+  const filteredCalls = useMemo(() => {
+    if (callFilter === "missed") return calls.filter((call) => !call.answered);
+    if (callFilter === "callbacks") return calls.filter((call) => isUnreturned(call));
+    return calls;
+  }, [calls, callFilter, outboundByNumber]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredCalls.length / pageSize));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(1);
+  }, [page, totalPages]);
+
+  const pagedCalls = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredCalls.slice(start, start + pageSize);
+  }, [filteredCalls, page]);
 
   const extensionOptions = Array.isArray(extensions) ? extensions : [];
 
@@ -205,7 +232,13 @@ export default function CallListView({
   useEffect(() => {
     if (!pbxEditTarget) return;
     setPbxEditName(pbxEditTarget?.suggestedName || pbxEditTarget?.name || "");
-    setPbxEditError(pbxEditTarget?.reason === "length" ? `Name zu lang (max. ${PBX_NAME_LIMIT} Zeichen).` : "");
+    setPbxEditError(
+      pbxEditTarget?.reason === "length"
+        ? `Name zu lang (max. ${PBX_NAME_LIMIT} Zeichen).`
+        : pbxEditTarget?.reason === "missing"
+          ? "Bitte Namen eintragen."
+          : ""
+    );
   }, [pbxEditTarget]);
 
   useEffect(() => {
@@ -236,29 +269,6 @@ export default function CallListView({
     return () => { active = false; };
   }, [pagedCalls, resolvedNames, onResolve]);
 
-  const outboundByNumber = useMemo(() => {
-    const map = new Map();
-    calls.forEach((call) => {
-      const direction = call.direction?.toLowerCase() || "";
-      if (!direction.includes("out")) return;
-      const number = normalizeDigits(call.to || call.from || "");
-      if (!number) return;
-      const ts = call.startTime || 0;
-      if (ts > (map.get(number) || 0)) map.set(number, ts);
-    });
-    return map;
-  }, [calls]);
-
-  const isUnreturned = (call) => {
-    if (call.answered || call.callbackResolved) return false;
-    const direction = call.direction?.toLowerCase() || "";
-    if (direction.includes("out")) return false;
-    const number = normalizeDigits(call.from || call.to || "");
-    if (!number) return false;
-    const lastOut = outboundByNumber.get(number) || 0;
-    return !lastOut || lastOut < (call.startTime || 0);
-  };
-
   const customerNameForCall = (call) => {
     const key = resolveKey(call);
     return key ? customerMatches.get(key) : "";
@@ -288,6 +298,10 @@ export default function CallListView({
     if (!onAddToPbx) return;
     const rawName = normalizePbxName(payload?.name || "");
     const number = String(payload?.number || "").trim();
+    if (!rawName) {
+      setPbxEditTarget({ name: "", suggestedName: "", originalName: "", number, reason: "missing" });
+      return;
+    }
     if (rawName && rawName.length > PBX_NAME_LIMIT) {
       const suggestion = shortenPbxName(rawName, PBX_NAME_LIMIT);
       setPbxEditTarget({ name: suggestion, suggestedName: suggestion, originalName: rawName, number, reason: "length" });
@@ -341,37 +355,31 @@ export default function CallListView({
               <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-sand-500">Live</p>
               <h2 className="text-xl font-display text-sand-900">Anrufliste</h2>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => { setOnlyMissed(false); setPage(1); }}
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition ${
-                  !onlyMissed
-                    ? "border-sand-900 bg-sand-900 text-white"
-                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
-                }`}
-              >
-                <PhoneIncoming size={12} />
-                Alle
-                <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${!onlyMissed ? "bg-white/20" : "bg-sand-100 text-sand-500"}`}>
-                  {calls.length}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => { setOnlyMissed(true); setPage(1); }}
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition ${
-                  onlyMissed
-                    ? "border-rose-600 bg-rose-600 text-white"
-                    : "border-sand-200 bg-white text-sand-600 hover:bg-sand-50"
-                }`}
-              >
-                <PhoneMissed size={12} />
-                Verpasst
-                <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${onlyMissed ? "bg-white/20" : "bg-rose-50 text-rose-600"}`}>
-                  {calls.filter((c) => !c.answered).length}
-                </span>
-              </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                { key: "all", label: "Alle", count: calls.length, Icon: PhoneIncoming, activeClass: "border-sand-900 bg-sand-900 text-white", inactiveClass: "border-sand-200 bg-white text-sand-600 hover:bg-sand-50", countClass: "bg-sand-100 text-sand-500" },
+                { key: "missed", label: "Verpasst", count: missedCount, Icon: PhoneMissed, activeClass: "border-rose-600 bg-rose-600 text-white", inactiveClass: "border-sand-200 bg-white text-sand-600 hover:bg-sand-50", countClass: "bg-rose-50 text-rose-600" },
+                { key: "callbacks", label: "Offene Rückrufe", count: openCallbackCount, Icon: PhoneOutgoing, activeClass: "border-amber-600 bg-amber-600 text-white", inactiveClass: "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100", countClass: "bg-amber-100 text-amber-700" }
+              ].map((filter) => {
+                const active = callFilter === filter.key;
+                const Icon = filter.Icon;
+                return (
+                  <button
+                    key={filter.key}
+                    type="button"
+                    onClick={() => { setCallFilter(filter.key); setPage(1); }}
+                    className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition ${
+                      active ? filter.activeClass : filter.inactiveClass
+                    }`}
+                  >
+                    <Icon size={12} />
+                    {filter.label}
+                    <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${active ? "bg-white/20 text-white" : filter.countClass}`}>
+                      {filter.count}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -391,11 +399,26 @@ export default function CallListView({
         ) : null}
 
         {/* Call rows */}
-        <div className="divide-y divide-sand-100">
+        <div>
+          {filteredCalls.length > 0 && !loading ? (
+            <div className="hidden border-b border-sand-200 bg-white px-5 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sand-400 sm:grid sm:grid-cols-[40px_minmax(0,1.5fr)_86px_78px_72px_96px] sm:items-center sm:gap-3 md:grid-cols-[40px_minmax(140px,1fr)_86px_82px_64px_104px_94px] lg:grid-cols-[40px_minmax(0,1.35fr)_96px_92px_78px_124px_96px]">
+              <span />
+              <span>Kontakt</span>
+              <span>Zeit</span>
+              <span>Nebenstelle</span>
+              <span className="text-right">Dauer</span>
+              <span className="hidden text-right md:block">Status</span>
+              <span className="text-right">Aktion</span>
+            </div>
+          ) : null}
           {filteredCalls.length === 0 && !loading ? (
             <div className="flex flex-col items-center gap-2 py-12 text-sm text-sand-400">
               <PhoneIncoming size={24} className="text-sand-300" />
-              {onlyMissed ? "Keine verpassten Anrufe." : "Noch keine Telefonie-Events geladen."}
+              {callFilter === "callbacks"
+                ? "Keine offenen Rückrufe."
+                : callFilter === "missed"
+                  ? "Keine verpassten Anrufe."
+                  : "Noch keine Telefonie-Events geladen."}
             </div>
           ) : (
             pagedCalls.map((call) => {
@@ -406,14 +429,33 @@ export default function CallListView({
               const isInbound = direction.includes("in");
               const isOutbound = direction.includes("out");
               const dur = durationSeconds(call);
+              const rowTone = unreturned
+                ? "border-l-amber-400 bg-amber-50/65 hover:bg-amber-50"
+                : !call.answered
+                  ? "border-l-rose-300 bg-white hover:bg-rose-50/35"
+                  : "border-l-transparent bg-white hover:bg-sand-50";
+              const primaryLabel = name || displayNumber(call);
+              const secondaryLabel = name ? displayNumber(call) : isInbound ? "Eingehender Anruf" : isOutbound ? "Ausgehender Anruf" : "Anruf";
+              const statusLabel = unreturned
+                ? "Rückruf offen"
+                : call.callbackResolved
+                  ? "Rückruf erledigt"
+                  : call.answered ? "Beantwortet" : "Verpasst";
+              const statusClass = unreturned
+                ? "border-amber-300 bg-amber-100 text-amber-800"
+                : call.callbackResolved
+                  ? "border-sky-200 bg-sky-50 text-sky-700"
+                  : call.answered
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-rose-200 bg-rose-50 text-rose-700";
 
               return (
                 <div
                   key={call.uuid}
-                  className={`flex items-center gap-3 px-5 py-3 transition hover:bg-sand-50 ${unreturned ? "bg-amber-50/60" : ""}`}
+                  className={`grid grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-3 border-l-4 border-b border-sand-100 px-5 py-3 transition last:border-b-0 sm:grid-cols-[40px_minmax(0,1.5fr)_86px_78px_72px_96px] md:grid-cols-[40px_minmax(140px,1fr)_86px_82px_64px_104px_94px] lg:grid-cols-[40px_minmax(0,1.35fr)_96px_92px_78px_124px_96px] ${rowTone}`}
                 >
                   {/* Direction icon */}
-                  <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
                     call.answered
                       ? isInbound ? "bg-emerald-50 text-emerald-600" : "bg-sand-100 text-sand-500"
                       : "bg-rose-50 text-rose-500"
@@ -421,17 +463,11 @@ export default function CallListView({
                     {isInbound ? <ArrowDownLeft size={15} /> : isOutbound ? <ArrowUpRight size={15} /> : <Phone size={15} />}
                   </div>
 
-                  {/* Date/time */}
-                  <div className="w-24 shrink-0">
-                    <p className="text-[11px] font-medium text-sand-700">{formatDate(call.startTime)}</p>
-                    <p className="text-[10px] text-sand-400">{formatTime(call.startTime)}</p>
-                  </div>
-
                   {/* Number + name */}
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`text-sm font-medium ${unreturned ? "text-amber-800" : "text-sand-900"}`}>
-                        {displayNumber(call)}
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <span className={`truncate text-sm font-semibold ${unreturned ? "text-amber-900" : "text-sand-900"}`}>
+                        {primaryLabel}
                       </span>
                       {source ? (
                         <span className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-1.5 py-0.5 text-[10px] text-sand-500" title={`Name aus ${source.label}`}>
@@ -452,32 +488,38 @@ export default function CallListView({
                         </button>
                       ) : null}
                     </div>
-                    {name ? <p className="truncate text-[11px] text-sand-500">{name}</p> : null}
+                    <p className="truncate text-[11px] text-sand-500">{secondaryLabel}</p>
+                  </div>
+
+                  {/* Date/time */}
+                  <div className="hidden shrink-0 sm:block">
+                    <p className="text-[11px] font-medium text-sand-700">{formatDate(call.startTime)}</p>
+                    <p className="text-[10px] text-sand-400">{formatTime(call.startTime)}</p>
                   </div>
 
                   {/* Extension */}
                   {call.extension ? (
-                    <span className="hidden shrink-0 rounded-lg border border-sand-200 bg-sand-50 px-2 py-0.5 text-[11px] text-sand-600 sm:block">
+                    <span className="hidden w-fit shrink-0 rounded-lg border border-sand-200 bg-sand-50 px-2 py-0.5 text-[11px] text-sand-600 sm:block">
                       NS {call.extension}
                     </span>
-                  ) : null}
+                  ) : (
+                    <span className="hidden text-[11px] text-sand-300 sm:block">-</span>
+                  )}
 
                   {/* Duration */}
-                  <span className="hidden w-12 shrink-0 text-right text-[11px] text-sand-400 sm:block">
+                  <span className="hidden shrink-0 text-right text-[11px] text-sand-400 sm:block">
                     {formatDuration(dur)}
                   </span>
 
-                  {/* Status badge */}
-                  <span className={`hidden shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold sm:block ${
-                    call.answered
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : "border-rose-200 bg-rose-50 text-rose-700"
-                  }`}>
-                    {call.answered ? "Beantwortet" : "Verpasst"}
-                  </span>
+                  {/* Status */}
+                  <div className="hidden min-w-0 justify-end md:flex">
+                    <span className={`inline-flex max-w-full shrink-0 justify-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusClass}`}>
+                      {statusLabel}
+                    </span>
+                  </div>
 
                   {/* Actions */}
-                  <div className="flex shrink-0 items-center gap-1">
+                  <div className="flex shrink-0 items-center justify-end gap-1">
                     {assignNumber(call) && !pbxEntryForCall(call) && onAddToPbx ? (
                       <button
                         onClick={() => handleAddToPbx({ name: name || "", number: assignNumber(call) })}
@@ -677,7 +719,9 @@ export default function CallListView({
           <div className="w-full max-w-sm overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
             <div className="border-b border-sand-100 px-5 py-4">
               <p className="text-[10px] uppercase tracking-[0.28em] text-sand-500">Anlagentelefonbuch</p>
-              <h3 className="text-lg font-display text-sand-900">Name kürzen</h3>
+              <h3 className="text-lg font-display text-sand-900">
+                {pbxEditTarget?.reason === "missing" ? "Name eintragen" : "Name kürzen"}
+              </h3>
             </div>
             <div className="space-y-4 p-5">
               <div>
@@ -688,7 +732,11 @@ export default function CallListView({
                 <label className="mb-1 block text-[10px] uppercase tracking-[0.2em] text-sand-500">Name</label>
                 <input
                   value={pbxEditName}
-                  onChange={(e) => setPbxEditName(e.target.value)}
+                  onChange={(e) => { setPbxEditName(e.target.value); setPbxEditError(""); }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handlePbxManualSave();
+                  }}
+                  autoFocus
                   className="w-full rounded-xl border border-sand-200 bg-white px-3 py-2 text-sm text-sand-900 outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
                 />
               </div>

@@ -195,7 +195,7 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
         </div>
       </div>
 
-      <div className="rounded-2xl border border-sand-200 bg-white p-4">
+      <div className="ai-panel rounded-2xl border border-sand-200 bg-white p-4">
         <div className="flex items-center gap-2 text-sand-700 mb-2">
           <Shield size={15} />
           <p className="text-sm uppercase tracking-[0.2em] text-sand-500">Begründung</p>
@@ -250,7 +250,7 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
             type="button"
             onClick={() => load(true)}
             disabled={status === "loading" || aiBusy}
-            className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
+            className="ai-action inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
           >
             {status === "loading" ? <InlineSpinner /> : <Sparkles size={12} />}
             KI-Preanalyse aktualisieren
@@ -264,7 +264,7 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
                   type="button"
                   onClick={() => selectAiMode(entry.mode)}
                   disabled={aiBusy}
-                  className="inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
+                  className="ai-action inline-flex items-center gap-1 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-wait disabled:opacity-70"
                 >
                   {running ? <InlineSpinner /> : <Sparkles size={12} />}
                   {running ? "Lädt..." : entry.label}
@@ -275,7 +275,7 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
               type="button"
               onClick={() => runAiAssist(aiMode)}
               disabled={aiBusy}
-              className="inline-flex items-center gap-1 rounded-full border border-sand-900 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white hover:bg-sand-800 disabled:cursor-wait disabled:opacity-70"
+              className="ai-action inline-flex items-center gap-1 rounded-full border border-sand-900 bg-sand-900 px-3 py-1 text-xs uppercase tracking-wide text-white hover:bg-sand-800 disabled:cursor-wait disabled:opacity-70"
             >
               {aiBusy ? <InlineSpinner /> : <Sparkles size={12} />}
               {aiBusy ? "Generiert..." : "Jetzt neu generieren"}
@@ -289,7 +289,7 @@ export default function CustomerDevelopmentCustomerTab({ customerId, customerNam
           <textarea
             readOnly
             value={aiText}
-            className="mt-2 w-full min-h-[180px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
+            className="ai-field mt-2 w-full min-h-[180px] rounded-2xl border border-sand-200 bg-sand-50 px-3 py-2 text-sm text-sand-800"
           />
         ) : (
           !aiBusy && <p className="mt-2 text-sm text-sand-500">Noch kein KI-Vorschlag geladen ({aiMode}).</p>

@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowRight,
@@ -31,10 +31,11 @@ import {
   X
 } from "lucide-react";
 import EmailComposerModal from "../components/EmailComposerModal";
+import AiTextAssistToolbar from "../components/AiTextAssistToolbar";
 import NotesRichTextEditor from "../components/NotesRichTextEditor";
+import { BufferedInput, BufferedTextarea } from "../components/BufferedFields";
 import { sanitizeHtml } from "../utils/sanitizeHtml";
-import html2canvas from "html2canvas";
-import jsPDF from "jspdf";
+import { OfferPdfPreview, buildOfferPdfBlob } from "./OfferPdfDocument";
 
 const SMTP_STORAGE_KEY = "qt_smtp_settings_cache";
 
@@ -150,248 +151,6 @@ const billingCycleOptions = [
   { value: "yearly", label: "Jährlich" }
 ];
 
-const buildPdfBlobFromElement = async (element) => {
-  const canvas = await html2canvas(element, {
-    scale: 2,
-    useCORS: true,
-    backgroundColor: "#ffffff",
-    logging: false
-  });
-  const imgData = canvas.toDataURL("image/jpeg", 0.92);
-  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-  const pageWidth = pdf.internal.pageSize.getWidth();
-  const pageHeight = pdf.internal.pageSize.getHeight();
-  const ratio = pageWidth / canvas.width;
-  const imgHeight = canvas.height * ratio;
-  let position = 0;
-  pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
-  let heightLeft = imgHeight - pageHeight;
-  while (heightLeft > 0) {
-    position -= pageHeight;
-    pdf.addPage();
-    pdf.addImage(imgData, "JPEG", 0, position, pageWidth, imgHeight);
-    heightLeft -= pageHeight;
-  }
-  const arrayBuffer = pdf.output("arraybuffer");
-  return new Blob([arrayBuffer], { type: "application/pdf" });
-};
-
-const buildPdfBlobFromPages = async (pages, options = {}) => {
-  const marginTopMm = Number(options.marginTopMm ?? 8);
-  const marginBottomMm = Number(options.marginBottomMm ?? 8);
-  const marginLeftMm = Number(options.marginLeftMm ?? 8);
-  const marginRightMm = Number(options.marginRightMm ?? 8);
-  const footerBottomMm = Number(options.footerBottomMm ?? marginBottomMm);
-  const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-  const pageWidth = pdf.internal.pageSize.getWidth();
-  const pageHeight = pdf.internal.pageSize.getHeight();
-  const maxHeight = pageHeight - marginTopMm - marginBottomMm;
-  const usableWidth = pageWidth - marginLeftMm - marginRightMm;
-  let isFirst = true;
-
-  const renderFullPage = async (page) => {
-    const canvas = await html2canvas(page, {
-      scale: 2,
-      useCORS: true,
-      backgroundColor: "#ffffff",
-      logging: false
-    });
-    const imgData = canvas.toDataURL("image/jpeg", 0.98);
-    const scale = usableWidth / canvas.width;
-    const renderWidth = canvas.width * scale;
-    const renderHeight = canvas.height * scale;
-    const xOffset = marginLeftMm + (usableWidth - renderWidth) / 2;
-    if (!isFirst) pdf.addPage();
-    if (renderHeight <= maxHeight + 0.5) {
-      pdf.addImage(imgData, "JPEG", xOffset, marginTopMm, renderWidth, renderHeight);
-      isFirst = false;
-      return;
-    }
-    pdf.addImage(imgData, "JPEG", xOffset, marginTopMm, renderWidth, renderHeight);
-    let heightLeft = renderHeight - maxHeight;
-    let offset = maxHeight;
-    while (heightLeft > 0.5) {
-      pdf.addPage();
-      pdf.addImage(imgData, "JPEG", xOffset, marginTopMm - offset, renderWidth, renderHeight);
-      heightLeft -= maxHeight;
-      offset += maxHeight;
-    }
-    isFirst = false;
-  };
-
-  const renderPagedContent = async (page) => {
-    const headerEl = page.querySelector("[data-pdf-header]");
-    const footerEl = page.querySelector("[data-pdf-footer]");
-    const bodyEl = page.querySelector("[data-pdf-body]");
-    if (!headerEl || !footerEl || !bodyEl) {
-      await renderFullPage(page);
-      return;
-    }
-
-    const isDetailPage = page.hasAttribute("data-detail-page");
-    if (isDetailPage) {
-      await renderFullPage(page);
-      return;
-    }
-    const pageRect = page.getBoundingClientRect();
-    const headerRect = headerEl.getBoundingClientRect();
-    const footerRect = footerEl.getBoundingClientRect();
-    const headerStartPx = 0;
-    const headerEndPx = Math.max(0, headerRect.bottom - pageRect.top);
-    const footerStartPx = Math.max(headerEndPx, footerRect.top - pageRect.top);
-    const footerEndPx = Math.max(footerStartPx, pageRect.height);
-    const bodyTopPx = headerEndPx;
-    const detailGapPx = isDetailPage ? 6 : 0;
-    const bodyBottomPx = Math.max(bodyTopPx, footerStartPx - detailGapPx);
-    const headerHeightPx = Math.max(0, headerEndPx - headerStartPx);
-    const footerHeightPx = Math.max(0, footerEndPx - footerStartPx);
-    const bodyChildren = Array.from(bodyEl.children || []);
-    let contentBottomPx = bodyTopPx;
-    let hasBodyContent = false;
-    bodyChildren.forEach((child) => {
-      const rect = child.getBoundingClientRect();
-      if (rect.height <= 1) return;
-      const text = (child.textContent || "").trim();
-      const hasMedia = child.querySelector(
-        "img,svg,canvas,table,hr,ul,ol,li,div,span,p"
-      );
-      if (!text && !hasMedia) return;
-      hasBodyContent = true;
-      contentBottomPx = Math.max(contentBottomPx, rect.bottom - pageRect.top);
-    });
-    if (!hasBodyContent) {
-      contentBottomPx = bodyTopPx;
-    }
-    const bodyContentBottomPx = Math.min(bodyBottomPx, contentBottomPx);
-    const bodyHeightPx = Math.max(0, bodyContentBottomPx - bodyTopPx);
-    if (!bodyHeightPx || bodyBottomPx <= bodyTopPx) {
-      await renderFullPage(page);
-      return;
-    }
-
-    const pageCanvas = await html2canvas(page, {
-      scale: 2,
-      useCORS: true,
-      backgroundColor: "#ffffff",
-      logging: false
-    });
-    const canvasScale = pageRect.width ? pageCanvas.width / pageRect.width : 1;
-    const headerStartCanvasPx = headerStartPx * canvasScale;
-    const headerHeightCanvasPx = headerHeightPx * canvasScale;
-    const footerStartCanvasPx = footerStartPx * canvasScale;
-    const footerHeightCanvasPx = footerHeightPx * canvasScale;
-    const bodyTopCanvasPx = bodyTopPx * canvasScale;
-    const bodyHeightCanvasPx = bodyHeightPx * canvasScale;
-    const ratio = usableWidth / pageCanvas.width;
-    const headerHeightMm = headerHeightCanvasPx * ratio;
-    const footerHeightMm = footerHeightCanvasPx * ratio;
-    const availableBodyMm = maxHeight - headerHeightMm - footerHeightMm;
-    if (availableBodyMm <= 10) {
-      await renderFullPage(page);
-      return;
-    }
-
-    const headerCanvas = document.createElement("canvas");
-    headerCanvas.width = pageCanvas.width;
-    headerCanvas.height = Math.max(1, Math.round(headerHeightCanvasPx));
-    const headerCtx = headerCanvas.getContext("2d");
-    if (headerCtx) {
-      headerCtx.drawImage(
-        pageCanvas,
-        0,
-        Math.round(headerStartCanvasPx),
-        pageCanvas.width,
-        headerCanvas.height,
-        0,
-        0,
-        headerCanvas.width,
-        headerCanvas.height
-      );
-    }
-
-    const footerCanvas = document.createElement("canvas");
-    footerCanvas.width = pageCanvas.width;
-    footerCanvas.height = Math.max(1, Math.round(footerHeightCanvasPx));
-    const footerCtx = footerCanvas.getContext("2d");
-    if (footerCtx) {
-      footerCtx.drawImage(
-        pageCanvas,
-        0,
-        Math.round(footerStartCanvasPx),
-        pageCanvas.width,
-        footerCanvas.height,
-        0,
-        0,
-        footerCanvas.width,
-        footerCanvas.height
-      );
-    }
-
-    const headerData = headerCanvas.toDataURL("image/jpeg", 0.98);
-    const footerData = footerCanvas.toDataURL("image/jpeg", 0.98);
-    const overlapCanvasPx = Math.max(1, Math.round(canvasScale));
-    const overlapMm = isDetailPage ? 0 : overlapCanvasPx * ratio;
-    const bodySliceHeightPx = Math.max(1, (availableBodyMm - overlapMm) / ratio);
-    let offsetY = 0;
-    let sliceIndex = 0;
-    while (offsetY < bodyHeightCanvasPx - 1) {
-      const sliceHeightPx = Math.min(bodySliceHeightPx, bodyHeightCanvasPx - offsetY);
-      const sliceCanvas = document.createElement("canvas");
-      sliceCanvas.width = pageCanvas.width;
-      sliceCanvas.height = sliceHeightPx;
-      const ctx = sliceCanvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(
-          pageCanvas,
-          0,
-          Math.round(bodyTopCanvasPx + offsetY),
-          pageCanvas.width,
-          sliceHeightPx,
-          0,
-          0,
-          pageCanvas.width,
-          sliceHeightPx
-        );
-      }
-      const sliceData = sliceCanvas.toDataURL("image/jpeg", 0.98);
-      if (!isFirst) pdf.addPage();
-      pdf.addImage(headerData, "JPEG", marginLeftMm, marginTopMm, usableWidth, headerHeightMm);
-      const sliceHeightMm = sliceHeightPx * ratio;
-      const sliceWidthMm = pageCanvas.width * ratio;
-      const sliceXOffset = marginLeftMm + (usableWidth - sliceWidthMm) / 2;
-      pdf.addImage(
-        sliceData,
-        "JPEG",
-        sliceXOffset,
-        marginTopMm + headerHeightMm,
-        sliceWidthMm,
-        sliceHeightMm
-      );
-      const footerY = pageHeight - footerBottomMm - footerHeightMm - overlapMm;
-      pdf.addImage(
-        footerData,
-        "JPEG",
-        marginLeftMm,
-        footerY,
-        usableWidth,
-        footerHeightMm + overlapMm
-      );
-      isFirst = false;
-      offsetY += sliceHeightPx;
-      sliceIndex += 1;
-      if (sliceIndex > 50) {
-        break;
-      }
-    }
-  };
-
-  for (const page of pages) {
-    await renderPagedContent(page);
-  }
-
-  const arrayBuffer = pdf.output("arraybuffer");
-  return new Blob([arrayBuffer], { type: "application/pdf" });
-};
 
 const initialServiceBlocks = [
   {
@@ -590,6 +349,57 @@ const getOfferActivityTime = (offer) => {
 };
 const sortOffersByRecentActivity = (a, b) =>
   getOfferActivityTime(b) - getOfferActivityTime(a);
+
+const OFFER_VALIDITY_DAYS = 14;
+const OFFER_EXPIRING_DAYS = 4;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+const getOfferValidityBaseTime = (offer) => {
+  const base = getOfferSentAt(offer) || getOfferCreatedAt(offer);
+  const time = base ? new Date(base).getTime() : NaN;
+  return Number.isFinite(time) ? time : 0;
+};
+const getOfferValidUntilTime = (offer) => {
+  const base = getOfferValidityBaseTime(offer);
+  return base ? base + OFFER_VALIDITY_DAYS * MS_PER_DAY : 0;
+};
+const getOfferDaysToExpiry = (offer) => {
+  const until = getOfferValidUntilTime(offer);
+  if (!until) return null;
+  return Math.ceil((until - Date.now()) / MS_PER_DAY);
+};
+const getOfferValidityState = (offer) => {
+  const status = String(offer?.status || "").trim().toLowerCase();
+  if (status === "angenommen" || status === "abgelehnt") return null;
+  const days = getOfferDaysToExpiry(offer);
+  if (days === null) return null;
+  if (days < 0) return "expired";
+  if (days <= OFFER_EXPIRING_DAYS) return "expiring";
+  return "fresh";
+};
+
+const getOfferTotal = (offer) => {
+  const serviceTotal = (offer?.lineItems || []).reduce(
+    (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
+    0
+  );
+  const deviceTotal = (offer?.deviceItems || []).reduce(
+    (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
+    0
+  );
+  const subtotal = serviceTotal + deviceTotal;
+  return subtotal - calculateOfferDiscount(offer, subtotal);
+};
+
+const OFFER_LIST_SORT_OPTIONS = [
+  { value: "activity", label: "Aktivität (neueste)" },
+  { value: "created-desc", label: "Erstellt (neueste)" },
+  { value: "created-asc", label: "Erstellt (älteste)" },
+  { value: "value-desc", label: "Wert (höchster)" },
+  { value: "value-asc", label: "Wert (niedrigster)" },
+  { value: "customer", label: "Kunde (A–Z)" },
+  { value: "expiry", label: "Ablauf (zuerst)" }
+];
 const getOfferItemCount = (offer) =>
   (offer?.lineItems || []).length + (offer?.deviceItems || []).length;
 const getOfferPrimaryTitle = (offer) =>
@@ -3036,7 +2846,7 @@ function OfferAiPrefillModal({ open, values, onChange, onClose, onSubmit }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-auto bg-sand-900/50 px-4 py-6">
       <div
-        className="w-full max-w-2xl overflow-hidden rounded-2xl border border-sand-200 bg-white shadow-soft"
+        className="ai-panel w-full max-w-2xl overflow-hidden rounded-2xl border border-sand-200 bg-white shadow-soft"
         tabIndex={-1}
         onKeyDown={handleKeyDown}
       >
@@ -3067,7 +2877,7 @@ function OfferAiPrefillModal({ open, values, onChange, onClose, onSubmit }) {
         <div className="space-y-3 px-4 py-3">
           <Field label="Beschreibung">
             <textarea
-              className={`${textareaClass} min-h-[180px] text-sm normal-case tracking-normal`}
+              className={`${textareaClass} ai-field min-h-[180px] text-sm normal-case tracking-normal`}
               value={values?.description || ""}
               onChange={(event) => onChange({ description: event.target.value, error: "" })}
               placeholder="Beispiel: Für Kunde Mustermann Angebot für Firewalltausch, Einrichtung VPN, 4 Stunden Arbeitszeit, optional WLAN-Access-Point, Deckblatt mit IT-Sicherheitsmodernisierung..."
@@ -3101,7 +2911,7 @@ function OfferAiPrefillModal({ open, values, onChange, onClose, onSubmit }) {
             type="button"
             onClick={onSubmit}
             disabled={loading || !String(values?.description || "").trim()}
-            className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-1.5 text-xs uppercase tracking-wide text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="ai-action inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-4 py-1.5 text-xs uppercase tracking-wide text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {loading ? (
               <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/70 border-t-transparent" />
@@ -3249,7 +3059,9 @@ function PriceCalcModal({
   );
 }
 
-function PositionCard({
+const areOfferItemCardPropsEqual = (previous, next) => previous.item === next.item;
+
+const PositionCard = memo(function PositionCard({
   item,
   onUpdate,
   onRemove,
@@ -3288,26 +3100,26 @@ function PositionCard({
         >
           {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
-        <input
+        <BufferedInput
           className={`${inputClass} flex-[7] min-w-[220px]`}
           value={item.title || ""}
-          onChange={(event) => onUpdate({ title: event.target.value })}
+          onCommit={(value) => onUpdate({ title: value })}
           placeholder="Leistungstitel"
         />
         <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-1.5 flex-[1.4] min-w-[96px]">
           <span className="text-sand-500 mr-0.5 text-[10px] uppercase tracking-wide">VK</span>
-          <input
+          <BufferedInput
             className={inlinePriceInputClass}
             type="number"
             value={item.price ?? ""}
-            onChange={(event) => onUpdate({ price: parseNumberInput(event.target.value) })}
+            onCommit={(value) => onUpdate({ price: parseNumberInput(value) })}
           />
         </div>
-        <input
+        <BufferedInput
           className={`${quantityInputClass} flex-[1.2] min-w-[70px]`}
           type="number"
           value={item.quantity ?? ""}
-          onChange={(event) => onUpdate({ quantity: parseNumberInput(event.target.value) })}
+          onCommit={(value) => onUpdate({ quantity: parseNumberInput(value) })}
           placeholder="Menge"
         />
         <button
@@ -3330,10 +3142,10 @@ function PositionCard({
       {open ? (
         <div className="space-y-2">
           <Field label="Beschreibung">
-            <textarea
+            <BufferedTextarea
               className={noteTextareaClass}
               value={item.aiDraft || ""}
-              onChange={(event) => onUpdate({ aiDraft: event.target.value })}
+              onCommit={(value) => onUpdate({ aiDraft: value })}
               placeholder="Leistungsbeschreibung"
             />
           </Field>
@@ -3384,13 +3196,11 @@ function PositionCard({
                   {item.discountType === "absolute" ? (
                     <span className="text-sand-500 mr-1 text-xs">€</span>
                   ) : null}
-                  <input
+                  <BufferedInput
                     className={`${inlinePriceInputClass} !bg-transparent`}
                     type="number"
                     value={item.discountValue ?? ""}
-                    onChange={(event) =>
-                      onUpdate({ discountValue: parseNumberInput(event.target.value) })
-                    }
+                    onCommit={(value) => onUpdate({ discountValue: parseNumberInput(value) })}
                     disabled={!item.discountType}
                     placeholder="0"
                   />
@@ -3453,13 +3263,13 @@ function PositionCard({
                             ))}
                           </SelectField>
                         </div>
-                        <input
+                        <BufferedInput
                           className={inputClass}
                           value={note.text || ""}
-                          onChange={(event) => {
+                          onCommit={(value) => {
                             if (!onNotesChange) return;
                             const next = notes.map((entry, idx) =>
-                              idx === index ? { ...entry, text: event.target.value } : entry
+                              idx === index ? { ...entry, text: value } : entry
                             );
                             onNotesChange(next);
                           }}
@@ -3520,7 +3330,7 @@ function PositionCard({
       ) : null}
     </div>
   );
-}
+}, areOfferItemCardPropsEqual);
 
 const UnitOptions = () => (
   <datalist id="unit-options">
@@ -3541,7 +3351,7 @@ const UnitOptions = () => (
   </datalist>
 );
 
-function DeviceCard({
+const DeviceCard = memo(function DeviceCard({
   item,
   onUpdate,
   onRemove,
@@ -3617,19 +3427,19 @@ function DeviceCard({
         >
           {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
-        <input
+        <BufferedInput
           className={`${inputClass} flex-[7] min-w-[220px]`}
           value={item.product || ""}
-          onChange={(event) => onUpdate({ product: event.target.value })}
+          onCommit={(value) => onUpdate({ product: value })}
           placeholder="Gerät / Material"
         />
         <div className="flex items-center rounded-xl border border-sand-200 bg-sand-50 px-1.5 flex-[1.4] min-w-[96px]">
           <span className="text-sand-500 mr-0.5 text-[10px] uppercase tracking-wide">VK</span>
-          <input
+          <BufferedInput
             className={inlinePriceInputClass}
             type="number"
             value={item.price ?? ""}
-            onChange={(event) => onUpdate({ price: parseNumberInput(event.target.value) })}
+            onCommit={(value) => onUpdate({ price: parseNumberInput(value) })}
           />
           <button
             type="button"
@@ -3641,11 +3451,11 @@ function DeviceCard({
             <Info size={12} />
           </button>
         </div>
-        <input
+        <BufferedInput
           className={`${quantityInputClass} flex-[1.2] min-w-[70px]`}
           type="number"
           value={item.quantity ?? ""}
-          onChange={(event) => onUpdate({ quantity: parseNumberInput(event.target.value) })}
+          onCommit={(value) => onUpdate({ quantity: parseNumberInput(value) })}
           placeholder="Menge"
         />
         <button
@@ -3677,22 +3487,22 @@ function DeviceCard({
       {open ? (
         <div className="space-y-2">
           <Field label="Beschreibung">
-            <textarea
+            <BufferedTextarea
               className={noteTextareaClass}
               value={item.description || ""}
-              onChange={(event) => onUpdate({ description: event.target.value })}
+              onCommit={(value) => onUpdate({ description: value })}
               placeholder="Beschreibung"
             />
           </Field>
           <Field label="EK netto">
-            <input
+            <BufferedInput
               className={priceInputClass}
               type="number"
               inputMode="decimal"
               step="0.01"
               value={item.calcBase ?? item.ekMin ?? item.ekMax ?? ""}
-              onChange={(event) => {
-                const next = parseNumberInput(event.target.value);
+              onCommit={(value) => {
+                const next = parseNumberInput(value);
                 onUpdate({ calcBase: next === "" ? null : next });
               }}
               placeholder="optional"
@@ -3749,13 +3559,11 @@ function DeviceCard({
                 {item.discountType === "absolute" ? (
                   <span className="text-sand-500 mr-1 text-xs">€</span>
                 ) : null}
-                <input
+                <BufferedInput
                   className={`${inlinePriceInputClass} !bg-transparent`}
                   type="number"
                   value={item.discountValue ?? ""}
-                  onChange={(event) =>
-                    onUpdate({ discountValue: parseNumberInput(event.target.value) })
-                  }
+                  onCommit={(value) => onUpdate({ discountValue: parseNumberInput(value) })}
                   disabled={!item.discountType}
                   placeholder="0"
                 />
@@ -3883,13 +3691,13 @@ function DeviceCard({
                           ))}
                         </SelectField>
                       </div>
-                      <input
+                      <BufferedInput
                         className={inputClass}
                         value={note.text || ""}
-                        onChange={(event) => {
+                        onCommit={(value) => {
                           if (!onNotesChange) return;
                           const next = notes.map((entry, idx) =>
-                            idx === index ? { ...entry, text: event.target.value } : entry
+                            idx === index ? { ...entry, text: value } : entry
                           );
                           onNotesChange(next);
                         }}
@@ -3949,7 +3757,7 @@ function DeviceCard({
       ) : null}
     </div>
   );
-}
+}, areOfferItemCardPropsEqual);
 
 function OfferBucketRow({
   offer,
@@ -3986,8 +3794,12 @@ function OfferBucketRow({
   formatVatLabel,
   stripHtml,
   shorten,
+  selected = false,
+  onToggleSelect,
 }) {
   const netTotal = getOfferTotal(offer);
+  const validityState = getOfferValidityState(offer);
+  const daysToExpiry = getOfferDaysToExpiry(offer);
   const vatTotal = calcVat(netTotal, offer);
   const grossTotal = netTotal + vatTotal;
   const keywords = getOfferKeywords(offer);
@@ -4041,43 +3853,53 @@ function OfferBucketRow({
   const statusBadgeClass = `rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${c.badge}`;
 
   return (
-    <div className={`rounded-2xl border ${c.border} bg-white shadow-sm`}>
-      <div className="grid gap-3 px-3 py-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(245px,0.85fr)_auto] lg:items-center">
-        <button type="button" onClick={() => setActiveId(offer.id)} className="min-w-0 text-left">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`text-[10px] uppercase tracking-[0.25em] ${c.refText}`}>
+    <div className={`rounded-xl border ${c.border} bg-white shadow-sm ${selected ? "ring-2 ring-amber-300" : ""}`}>
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+        {onToggleSelect ? (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect(offer.id)}
+            className="h-4 w-4 shrink-0 cursor-pointer rounded border-sand-300 text-amber-500 focus:ring-amber-300"
+            title="Auswählen"
+            onClick={(event) => event.stopPropagation()}
+          />
+        ) : null}
+        <button type="button" onClick={() => setActiveId(offer.id)} className="min-w-[260px] flex-1 text-left">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className={`shrink-0 text-[10px] uppercase tracking-[0.18em] ${c.refText}`}>
               {getOfferReferenceLabel(offer)}
             </span>
             <span className={statusBadgeClass}>{statusLabel}</span>
+            <span className="min-w-[140px] truncate text-sm font-semibold text-sand-900">
+              {offer.customer || "Kunde offen"}
+            </span>
+            <span className="hidden min-w-[160px] flex-1 truncate text-[11px] text-sand-500 md:inline">
+              {primaryTitle ? shorten(primaryTitle, 140) : "Kein kurzer Angebotstitel hinterlegt"}
+            </span>
             {sentAt ? (
               <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700">
                 Versendet
               </span>
             ) : null}
+            {validityState === "expired" ? (
+              <span className="rounded-full border border-rose-300 bg-rose-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-rose-700" title={`Abgelaufen seit ${Math.abs(daysToExpiry)} Tag(en)`}>
+                Abgelaufen
+              </span>
+            ) : validityState === "expiring" ? (
+              <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] uppercase tracking-wide text-amber-700" title={`Läuft in ${daysToExpiry} Tag(en) ab`}>
+                {daysToExpiry === 0 ? "Läuft heute ab" : `${daysToExpiry} Tag(e)`}
+              </span>
+            ) : null}
             {renderOfferReadBadge(offer)}
           </div>
-          <p className="mt-1 truncate text-sm font-semibold text-sand-900">
-            {offer.customer || "Kunde offen"}
-          </p>
-          <p className="mt-0.5 truncate text-[11px] text-sand-500">
-            {primaryTitle ? shorten(primaryTitle, 100) : "Kein kurzer Angebotstitel hinterlegt"}
-          </p>
         </button>
-        <div className="grid grid-cols-3 gap-2 rounded-xl border border-sand-200 bg-sand-50 px-3 py-2 text-[11px] text-sand-500">
-          <div className="min-w-0">
-            <p className="uppercase tracking-[0.2em] text-sand-400">Netto</p>
-            <p className="mt-0.5 truncate font-metrics font-semibold text-sand-900">{formatMoney(netTotal)}</p>
-          </div>
-          <div className="min-w-0">
-            <p className="uppercase tracking-[0.2em] text-sand-400">Pos.</p>
-            <p className="mt-0.5 font-metrics font-semibold text-sand-900">{itemCount}</p>
-          </div>
-          <div className="min-w-0">
-            <p className="uppercase tracking-[0.2em] text-sand-400">Datum</p>
-            <p className="mt-0.5 truncate font-semibold text-sand-900">{formatDate(createdAt) || "-"}</p>
-          </div>
+        <div className="flex shrink-0 items-center gap-3 text-[11px] text-sand-500">
+          <span className="font-metrics text-sm font-semibold text-sand-900">{formatMoney(netTotal)}</span>
+          <span>{itemCount} Pos.</span>
+          <span>{formatDate(createdAt) || "-"}</span>
         </div>
-        <div className="flex flex-wrap items-center justify-start gap-1.5 lg:justify-end">
+        <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-start gap-1.5">
           <button type="button" onClick={() => toggleOfferExpanded(offer.id)} className={btnClass} title="Details">
             {expandedOffers[offer.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
@@ -4119,7 +3941,7 @@ function OfferBucketRow({
                   <Receipt size={14} />
                 </button>
                 {confirmationMenuOfferId === offer.id ? (
-                  <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-emerald-200 bg-white p-2 shadow-soft text-xs text-sand-700 z-30">
+                  <div className="absolute right-0 z-30 mt-2 w-44 rounded-2xl border border-emerald-200 bg-white p-2 text-xs text-sand-700 shadow-soft">
                     <button type="button" onClick={() => { setPreviewMode("confirmation"); setPreviewOfferId(offer.id); setConfirmationMenuOfferId(""); }} className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50">Vorschau</button>
                     <button type="button" onClick={() => { exportOfferPdf(offer, "confirmation"); setConfirmationMenuOfferId(""); }} className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50">PDF exportieren</button>
                     <button type="button" onClick={() => { setActiveId(offer.id); openConfirmationEmailComposerForOffer(offer); setConfirmationMenuOfferId(""); }} disabled={(sendStatus === "sending" || sendStatus === "preparing") || !offer.serverId} className="w-full rounded-xl px-3 py-2 text-left hover:bg-emerald-50 disabled:opacity-50">E-Mail senden</button>
@@ -4248,6 +4070,17 @@ export default function OffersView() {
   const normalizedDeferredOfferListQuery = deferredOfferListQuery.trim().toLowerCase();
   const effectiveOfferListQuery = normalizedOfferListQuery ? normalizedDeferredOfferListQuery : "";
   const [expandedStatusBuckets, setExpandedStatusBuckets] = useState({});
+  const [listSort, setListSort] = useState("activity");
+  const [listFilter, setListFilter] = useState({
+    validity: "all",
+    minValue: "",
+    maxValue: "",
+    dateFrom: "",
+    dateTo: ""
+  });
+  const [listFilterOpen, setListFilterOpen] = useState(false);
+  const [selectedOfferIds, setSelectedOfferIds] = useState(() => new Set());
+  const [bulkActionStatus, setBulkActionStatus] = useState("");
   const [saveStatus, setSaveStatus] = useState("idle");
   const [imageDrafts, setImageDrafts] = useState({});
   const [importingItemId, setImportingItemId] = useState("");
@@ -4260,11 +4093,6 @@ export default function OffersView() {
   const [lastOfferIndex, setLastOfferIndex] = useState(0);
   const [previewOfferId, setPreviewOfferId] = useState("");
   const [previewMode, setPreviewMode] = useState("offer");
-  const [exportOfferId, setExportOfferId] = useState("");
-  const [exportMode, setExportMode] = useState("offer");
-  const [emailExportOfferId, setEmailExportOfferId] = useState("");
-  const [emailExportMode, setEmailExportMode] = useState("offer");
-  const [emailExportReadyTick, setEmailExportReadyTick] = useState(0);
   const [sendTo, setSendTo] = useState("");
   const [sendSubject, setSendSubject] = useState("");
   const [sendStatus, setSendStatus] = useState("idle");
@@ -4310,9 +4138,6 @@ export default function OffersView() {
   const previewSectionRef = useRef(null);
   const documentBuildRef = useRef(null);
   const offerHeaderRef = useRef(null);
-  const exportRef = useRef(null);
-  const emailPdfRef = useRef(null);
-  const emailExportPromiseRef = useRef(null);
   const lastSavedOffersRef = useRef({});
   const offersFetchedRef = useRef(false);
   const lastOfferIndexRef = useRef(0);
@@ -4344,8 +4169,6 @@ export default function OffersView() {
 
   const activeOffer = offers.find((offer) => offer.id === activeId) || null;
   const previewOffer = offers.find((offer) => offer.id === previewOfferId) || null;
-  const exportOffer = offers.find((offer) => offer.id === exportOfferId) || null;
-  const emailExportOffer = offers.find((offer) => offer.id === emailExportOfferId) || null;
   const emailOffer = offers.find((offer) => offer.id === emailOfferId) || null;
   const activeSevdeskKey = activeOffer ? activeOffer.serverId || activeOffer.id : null;
   const activeSevdeskState = activeSevdeskKey ? sevdeskStatus[activeSevdeskKey] : null;
@@ -4923,102 +4746,6 @@ export default function OffersView() {
   }, [offersLoaded]);
 
   useEffect(() => {
-    if (!exportOfferId) return;
-    const offer = offers.find((item) => item.id === exportOfferId);
-    if (!offer || !exportRef.current) return;
-    const element = exportRef.current;
-    const filenameBase =
-      exportMode === "confirmation"
-        ? `auftragsbestaetigung_${offer.reference || "angebot"}`
-        : offer.reference || "angebot";
-    const waitForDetailReady = async () => {
-      if (!element) return;
-      for (let i = 0; i < 30; i += 1) {
-        if (element.getAttribute("data-detail-ready") === "true") return;
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-      }
-    };
-    const run = async () => {
-      await waitForDetailReady();
-      const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
-      const blob = pages.length
-        ? await buildPdfBlobFromPages(pages, {
-          marginTopMm: 0,
-          marginBottomMm: 0,
-          marginLeftMm: 0,
-          marginRightMm: 0,
-          footerBottomMm: 0
-        })
-        : await buildPdfBlobFromElement(element);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${filenameBase}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    };
-    run()
-      .catch(() => setToast("PDF Export fehlgeschlagen."))
-      .finally(() => {
-        setExportOfferId("");
-        setExportMode("offer");
-      });
-  }, [exportOfferId, offers, exportMode]);
-
-  useEffect(() => {
-    if (!emailExportOfferId) return;
-    const offer = offers.find((item) => item.id === emailExportOfferId);
-    if (!offer || !emailPdfRef.current) {
-      const timer = setTimeout(() => {
-        setEmailExportReadyTick((tick) => tick + 1);
-      }, 50);
-      return () => clearTimeout(timer);
-    }
-    const element = emailPdfRef.current;
-    const handlers = emailExportPromiseRef.current;
-    const waitForDetailReady = async () => {
-      if (!element) return;
-      for (let i = 0; i < 30; i += 1) {
-        if (element.getAttribute("data-detail-ready") === "true") return;
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-      }
-    };
-    const run = async () => {
-      try {
-        await new Promise((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(resolve))
-        );
-        await waitForDetailReady();
-        const pages = Array.from(element.querySelectorAll("[data-pdf-page]"));
-        const blob = pages.length
-          ? await buildPdfBlobFromPages(pages, {
-              marginTopMm: 0,
-              marginBottomMm: 0,
-              marginLeftMm: 0,
-              marginRightMm: 0,
-              footerBottomMm: 0
-            })
-          : await buildPdfBlobFromElement(element);
-        handlers?.resolve?.(blob);
-      } catch (error) {
-        try {
-          const blob = await buildPdfBlobFromElement(element);
-          handlers?.resolve?.(blob);
-        } catch (fallbackError) {
-          handlers?.reject?.(fallbackError);
-        }
-      } finally {
-        emailExportPromiseRef.current = null;
-        setEmailExportOfferId("");
-        setEmailExportMode("offer");
-      }
-    };
-    run();
-  }, [emailExportOfferId, offers, emailExportMode, emailExportReadyTick]);
-
-  useEffect(() => {
     let active = true;
     fetch("/api/offer_settings")
       .then((res) => (res.ok ? res.json() : null))
@@ -5143,6 +4870,12 @@ export default function OffersView() {
   const offerBuckets = useMemo(() => {
     const buckets = createEmptyOfferBuckets();
     if (mainTab !== "status") return buckets;
+    const minValue = listFilter.minValue !== "" ? Number(listFilter.minValue) : null;
+    const maxValue = listFilter.maxValue !== "" ? Number(listFilter.maxValue) : null;
+    const dateFromMs = listFilter.dateFrom ? new Date(listFilter.dateFrom).getTime() : null;
+    const dateToMs = listFilter.dateTo
+      ? new Date(listFilter.dateTo).getTime() + MS_PER_DAY - 1
+      : null;
     offers.forEach((offer) => {
       if (
         effectiveOfferListQuery &&
@@ -5150,6 +4883,21 @@ export default function OffersView() {
       ) {
         return;
       }
+      if (minValue !== null || maxValue !== null) {
+        const total = getOfferTotal(offer);
+        if (minValue !== null && total < minValue) return;
+        if (maxValue !== null && total > maxValue) return;
+      }
+      if (dateFromMs !== null || dateToMs !== null) {
+        const createdMs = new Date(getOfferCreatedAt(offer)).getTime();
+        if (!Number.isFinite(createdMs)) return;
+        if (dateFromMs !== null && createdMs < dateFromMs) return;
+        if (dateToMs !== null && createdMs > dateToMs) return;
+      }
+      const validityState = getOfferValidityState(offer);
+      if (listFilter.validity === "expiring" && validityState !== "expiring") return;
+      if (listFilter.validity === "expired" && validityState !== "expired") return;
+      if (listFilter.validity === "fresh" && validityState !== "fresh") return;
       const status = String(offer.status || "").trim().toLowerCase();
       if (status === "angenommen") {
         if (offer.handoverLocked) {
@@ -5163,12 +4911,36 @@ export default function OffersView() {
         buckets.open.push(offer);
       }
     });
-    buckets.open.sort(sortOffersByRecentActivity);
-    buckets.accepted.sort(sortOffersByRecentActivity);
-    buckets.invoiced.sort(sortOffersByRecentActivity);
-    buckets.declined.sort(sortOffersByRecentActivity);
+    const comparators = {
+      activity: sortOffersByRecentActivity,
+      "created-desc": (a, b) =>
+        new Date(getOfferCreatedAt(b)).getTime() - new Date(getOfferCreatedAt(a)).getTime(),
+      "created-asc": (a, b) =>
+        new Date(getOfferCreatedAt(a)).getTime() - new Date(getOfferCreatedAt(b)).getTime(),
+      "value-desc": (a, b) => getOfferTotal(b) - getOfferTotal(a),
+      "value-asc": (a, b) => getOfferTotal(a) - getOfferTotal(b),
+      customer: (a, b) =>
+        String(a.customer || "").localeCompare(String(b.customer || ""), "de", { sensitivity: "base" }),
+      expiry: (a, b) => {
+        const av = getOfferValidUntilTime(a) || Number.POSITIVE_INFINITY;
+        const bv = getOfferValidUntilTime(b) || Number.POSITIVE_INFINITY;
+        return av - bv;
+      }
+    };
+    const cmp = comparators[listSort] || comparators.activity;
+    buckets.open.sort(cmp);
+    buckets.accepted.sort(cmp);
+    buckets.invoiced.sort(cmp);
+    buckets.declined.sort(cmp);
     return buckets;
-  }, [mainTab, effectiveOfferListQuery, offerSearchIndex, offers]);
+  }, [
+    mainTab,
+    effectiveOfferListQuery,
+    offerSearchIndex,
+    offers,
+    listSort,
+    listFilter
+  ]);
 
   const cloneOffer = (offer) => JSON.parse(JSON.stringify(offer));
 
@@ -5324,10 +5096,12 @@ export default function OffersView() {
     });
   };
 
-  const deleteArchivedOffer = async (offer) => {
+  const deleteArchivedOffer = async (offer, options = {}) => {
     if (!offer) return;
-    const ok = window.confirm("Angebot wirklich löschen?");
-    if (!ok) return;
+    if (!options.skipConfirm) {
+      const ok = window.confirm("Angebot wirklich löschen?");
+      if (!ok) return;
+    }
     if (offer.serverId) {
       try {
         const res = await fetch(`/api/offers/${offer.serverId}`, { method: "DELETE" });
@@ -5723,28 +5497,33 @@ export default function OffersView() {
     setMainTab("new");
   };
 
-  const exportOfferPdf = (offer, mode = "offer") => {
+  const exportOfferPdf = async (offer, mode = "offer") => {
     if (!offer) return;
-    setExportMode(mode);
-    setExportOfferId(offer.id);
+    try {
+      const blob = await buildOfferPdfBlob(offer, mode);
+      const filenameBase =
+        mode === "confirmation"
+          ? `auftragsbestaetigung_${offer.reference || "angebot"}`
+          : offer.reference || "angebot";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${filenameBase}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setToast("PDF Export fehlgeschlagen.");
+    }
   };
 
-  const generateOfferPdfBlob = (offer, mode = "offer") =>
-    new Promise((resolve, reject) => {
-      if (!offer) {
-        reject(new Error("offer_missing"));
-        return;
-      }
-      emailExportPromiseRef.current = { resolve, reject };
-      setEmailExportMode(mode);
-      setEmailExportOfferId(offer.id);
-    });
-
-  const cancelEmailExport = () => {
-    emailExportPromiseRef.current = null;
-    setEmailExportOfferId("");
-    setEmailExportMode("offer");
+  const generateOfferPdfBlob = (offer, mode = "offer") => {
+    if (!offer) return Promise.reject(new Error("offer_missing"));
+    return buildOfferPdfBlob(offer, mode);
   };
+
+  const cancelEmailExport = () => {};
 
   const withTimeout = (promise, ms, label = "timeout") =>
     new Promise((resolve, reject) => {
@@ -5828,19 +5607,6 @@ export default function OffersView() {
     return keywords;
   };
 
-  const getOfferTotal = (offer) => {
-    const serviceTotal = (offer.lineItems || []).reduce(
-      (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
-      0
-    );
-    const deviceTotal = (offer.deviceItems || []).reduce(
-      (sum, item) => sum + (item?.optional ? 0 : calculateLineNet(item)),
-      0
-    );
-    const subtotal = serviceTotal + deviceTotal;
-    return subtotal - calculateOfferDiscount(offer, subtotal);
-  };
-
   const offerBucketSummaries = useMemo(() => {
     if (mainTab !== "status") return {};
     return offerStatusSections.reduce((acc, section) => {
@@ -5865,6 +5631,109 @@ export default function OffersView() {
       ...prev,
       [key]: !prev[key]
     }));
+  };
+
+  const visibleOffersFlat = useMemo(() => {
+    if (mainTab !== "status") return [];
+    return offerStatusSections.flatMap((section) => offerBuckets[section.key] || []);
+  }, [mainTab, offerBuckets]);
+
+  const offerListKpis = useMemo(() => {
+    if (mainTab !== "status") {
+      return { pipeline: 0, acceptedValue: 0, conversion: 0, avgValue: 0, expiringCount: 0, expiredCount: 0 };
+    }
+    const openBucket = offerBuckets.open || [];
+    const acceptedBucket = offerBuckets.accepted || [];
+    const invoicedBucket = offerBuckets.invoiced || [];
+    const declinedBucket = offerBuckets.declined || [];
+    const pipeline = openBucket.reduce((sum, offer) => sum + getOfferTotal(offer), 0);
+    const acceptedValue =
+      acceptedBucket.reduce((sum, offer) => sum + getOfferTotal(offer), 0) +
+      invoicedBucket.reduce((sum, offer) => sum + getOfferTotal(offer), 0);
+    const decided = acceptedBucket.length + invoicedBucket.length + declinedBucket.length;
+    const conversion = decided
+      ? (acceptedBucket.length + invoicedBucket.length) / decided
+      : 0;
+    const totalCount = openBucket.length + acceptedBucket.length + invoicedBucket.length + declinedBucket.length;
+    const totalValue = pipeline + acceptedValue + declinedBucket.reduce((sum, offer) => sum + getOfferTotal(offer), 0);
+    const avgValue = totalCount ? totalValue / totalCount : 0;
+    let expiringCount = 0;
+    let expiredCount = 0;
+    openBucket.forEach((offer) => {
+      const state = getOfferValidityState(offer);
+      if (state === "expiring") expiringCount += 1;
+      if (state === "expired") expiredCount += 1;
+    });
+    return { pipeline, acceptedValue, conversion, avgValue, expiringCount, expiredCount };
+  }, [mainTab, offerBuckets]);
+
+  useEffect(() => {
+    if (!selectedOfferIds.size) return;
+    const visible = new Set(visibleOffersFlat.map((offer) => offer.id));
+    let changed = false;
+    const next = new Set();
+    selectedOfferIds.forEach((id) => {
+      if (visible.has(id)) {
+        next.add(id);
+      } else {
+        changed = true;
+      }
+    });
+    if (changed) setSelectedOfferIds(next);
+  }, [visibleOffersFlat, selectedOfferIds]);
+
+  const toggleOfferSelected = (offerId) => {
+    setSelectedOfferIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(offerId)) next.delete(offerId);
+      else next.add(offerId);
+      return next;
+    });
+  };
+  const selectAllVisible = () => {
+    setSelectedOfferIds(new Set(visibleOffersFlat.map((offer) => offer.id)));
+  };
+  const clearSelection = () => setSelectedOfferIds(new Set());
+
+  const filterActiveCount =
+    (listFilter.validity !== "all" ? 1 : 0) +
+    (listFilter.minValue !== "" ? 1 : 0) +
+    (listFilter.maxValue !== "" ? 1 : 0) +
+    (listFilter.dateFrom ? 1 : 0) +
+    (listFilter.dateTo ? 1 : 0);
+
+  const resetListFilter = () => {
+    setListFilter({ validity: "all", minValue: "", maxValue: "", dateFrom: "", dateTo: "" });
+  };
+
+  const bulkUpdateStatus = async (status) => {
+    if (!selectedOfferIds.size) return;
+    setBulkActionStatus("running");
+    const ids = Array.from(selectedOfferIds);
+    for (const id of ids) {
+      // sequential to avoid hammering the server
+      // eslint-disable-next-line no-await-in-loop
+      await updateOfferStatus(id, status);
+    }
+    setBulkActionStatus("");
+    clearSelection();
+    setToast(`${ids.length} Angebot(e) aktualisiert.`);
+  };
+
+  const bulkDelete = async () => {
+    if (!selectedOfferIds.size) return;
+    if (!window.confirm(`${selectedOfferIds.size} Angebot(e) wirklich löschen?`)) return;
+    setBulkActionStatus("running");
+    const ids = Array.from(selectedOfferIds);
+    for (const id of ids) {
+      const offer = offers.find((entry) => entry.id === id);
+      if (!offer) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await deleteArchivedOffer(offer, { skipConfirm: true });
+    }
+    setBulkActionStatus("");
+    clearSelection();
+    setToast(`${ids.length} Angebot(e) gelöscht.`);
   };
 
   const persistOfferForCustomer = async (offer) => {
@@ -6819,7 +6688,7 @@ export default function OffersView() {
                 : "border-transparent text-sand-500 hover:text-sand-700 hover:border-sand-300"
             }`}
           >
-            <Receipt size={13} /> Angebote
+            <Receipt size={13} /> Archiv
           </button>
           <button
             type="button"
@@ -7001,13 +6870,13 @@ export default function OffersView() {
                           </div>
                           <div className="grid gap-2 md:grid-cols-2">
                             <Field label="Kunde">
-                              <input
+                              <BufferedInput
                                 className={inputClass}
                                 value={activeOffer.customer}
-                                onChange={(event) =>
+                                onCommit={(value) =>
                                   updateOffer(activeOffer.id, (offer) => ({
                                     ...offer,
-                                    customer: event.target.value
+                                    customer: value
                                   }))
                                 }
                                 placeholder="Kunde eingeben"
@@ -7051,14 +6920,14 @@ export default function OffersView() {
                               </SelectField>
                             </Field>
                             <Field label="MwSt Satz (%)">
-                              <input
+                              <BufferedInput
                                 className={inputClass}
                                 type="number"
                                 value={activeOffer.vatRate ?? DEFAULT_VAT_RATE}
-                                onChange={(event) =>
+                                onCommit={(value) =>
                                   updateOffer(activeOffer.id, (offer) => ({
                                     ...offer,
-                                    vatRate: Number(event.target.value)
+                                    vatRate: Number(value)
                                   }))
                                 }
                                 disabled={activeOffer.vatMode !== "standard"}
@@ -7104,14 +6973,14 @@ export default function OffersView() {
                                 {activeOffer.discountType === "absolute" ? (
                                   <span className="text-sand-500 mr-1 text-xs">€</span>
                                 ) : null}
-                                <input
+                                <BufferedInput
                                   className={`${inlinePriceInputClass} !bg-transparent`}
                                   type="number"
                                   value={activeOffer.discountValue ?? ""}
-                                  onChange={(event) =>
+                                  onCommit={(value) =>
                                     updateOffer(activeOffer.id, (offer) => ({
                                       ...offer,
-                                      discountValue: parseNumberInput(event.target.value)
+                                      discountValue: parseNumberInput(value)
                                     }))
                                   }
                                   disabled={!activeOffer.discountType}
@@ -7134,26 +7003,26 @@ export default function OffersView() {
                           </div>
                           <div className="space-y-3">
                             <Field label="Anrede">
-                              <input
+                              <BufferedInput
                                 className={inputClass}
                                 value={activeOffer.salutation || ""}
-                                onChange={(event) =>
+                                onCommit={(value) =>
                                   updateOffer(activeOffer.id, (offer) => ({
                                     ...offer,
-                                    salutation: event.target.value
+                                    salutation: value
                                   }))
                                 }
                                 placeholder="Sehr geehrte Damen und Herren,"
                               />
                             </Field>
                             <Field label="Einleitung">
-                              <textarea
+                              <BufferedTextarea
                                 className={noteTextareaClass}
                                 value={activeOffer.introText || ""}
-                                onChange={(event) =>
+                                onCommit={(value) =>
                                   updateOffer(activeOffer.id, (offer) => ({
                                     ...offer,
-                                    introText: event.target.value
+                                    introText: value
                                   }))
                                 }
                                 placeholder="Vielen Dank für Ihre Anfrage..."
@@ -7401,13 +7270,13 @@ export default function OffersView() {
                     {activeOffer.coverEnabled ? (
                       <div className="space-y-2">
                         <Field label="Deckblatt Titel">
-                          <input
+                          <BufferedInput
                             className={inputClass}
                             value={activeOffer.coverHeadline}
-                            onChange={(event) =>
+                            onCommit={(value) =>
                               updateOffer(activeOffer.id, (offer) => ({
                                 ...offer,
-                                coverHeadline: event.target.value
+                                coverHeadline: value
                               }))
                             }
                             placeholder="z.B. Angebot IT-Modernisierung"
@@ -7415,7 +7284,19 @@ export default function OffersView() {
                         </Field>
                         <Field label="Kurzintro">
                           <div className="space-y-1">
-                            <div className="flex justify-end">
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                              <AiTextAssistToolbar
+                                value={activeOffer.coverIntro || ""}
+                                onApply={(text) =>
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    coverIntro: text
+                                  }))
+                                }
+                                module="offers"
+                                format="plain"
+                                context={{ field: "cover_intro", customer: activeOffer.customer || "" }}
+                              />
                               <button
                                 type="button"
                                 onClick={async () => {
@@ -7438,22 +7319,23 @@ export default function OffersView() {
                                   }
                                 }}
                                 className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                                title="Text neu generieren"
                               >
                                 {isAiBusy("cover-intro") ? (
                                   <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
                                 ) : (
                                   <Sparkles size={12} />
                                 )}{" "}
-                                Text
+                                Neu erstellen
                               </button>
                             </div>
-                            <textarea
+                            <BufferedTextarea
                               className={noteTextareaClass}
                               value={activeOffer.coverIntro}
-                              onChange={(event) =>
+                              onCommit={(value) =>
                                 updateOffer(activeOffer.id, (offer) => ({
                                   ...offer,
-                                  coverIntro: event.target.value
+                                  coverIntro: value
                                 }))
                               }
                               placeholder="Einleitung für das Deckblatt"
@@ -7464,46 +7346,61 @@ export default function OffersView() {
                     ) : null}
                     <Field label="Übersicht">
                       <div className="space-y-1">
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="text-[11px] text-sand-500">Kurzer Überblick zum Angebot</span>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const key = "overview";
-                              if (isAiBusy(key)) return;
-                              setAiBusy(key, true);
-                              try {
-                                const text = await requestOfferAiText({
-                                  mode: "overview",
-                                  currentText: activeOffer.overviewText || "",
-                                  context: buildOfferContext(activeOffer),
-                                  fallback: () => generateOverviewText(activeOffer)
-                                });
+                          <div className="flex flex-wrap items-center gap-2">
+                            <AiTextAssistToolbar
+                              value={activeOffer.overviewText || ""}
+                              onApply={(text) =>
                                 updateOffer(activeOffer.id, (offer) => ({
                                   ...offer,
                                   overviewText: text
-                                }));
-                              } finally {
-                                setAiBusy(key, false);
+                                }))
                               }
-                            }}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600"
-                          >
-                            {isAiBusy("overview") ? (
-                              <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
-                            ) : (
-                              <Sparkles size={12} />
-                            )}{" "}
-                            Text
-                          </button>
+                              module="offers"
+                              format="plain"
+                              context={{ field: "overview", customer: activeOffer.customer || "" }}
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const key = "overview";
+                                if (isAiBusy(key)) return;
+                                setAiBusy(key, true);
+                                try {
+                                  const text = await requestOfferAiText({
+                                    mode: "overview",
+                                    currentText: activeOffer.overviewText || "",
+                                    context: buildOfferContext(activeOffer),
+                                    fallback: () => generateOverviewText(activeOffer)
+                                  });
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    overviewText: text
+                                  }));
+                                } finally {
+                                  setAiBusy(key, false);
+                                }
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                              title="Text neu generieren"
+                            >
+                              {isAiBusy("overview") ? (
+                                <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                              ) : (
+                                <Sparkles size={12} />
+                              )}{" "}
+                              Neu erstellen
+                            </button>
+                          </div>
                         </div>
-                        <textarea
+                        <BufferedTextarea
                           className={noteTextareaClass}
                           value={activeOffer.overviewText}
-                          onChange={(event) =>
+                          onCommit={(value) =>
                             updateOffer(activeOffer.id, (offer) => ({
                               ...offer,
-                              overviewText: event.target.value
+                              overviewText: value
                             }))
                           }
                           placeholder="Kurzer Überblick zum Angebot"
@@ -7537,44 +7434,59 @@ export default function OffersView() {
                               <Plus size={12} />
                             </button>
                           </div>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const key = "calculation";
-                              if (isAiBusy(key)) return;
-                              setAiBusy(key, true);
-                              try {
-                                const text = await requestOfferAiText({
-                                  mode: "calculation",
-                                  currentText: activeOffer.calculationText || "",
-                                  context: buildOfferContext(activeOffer),
-                                  fallback: () => generateCalculationText(activeOffer)
-                                });
+                          <div className="flex flex-wrap items-center gap-2">
+                            <AiTextAssistToolbar
+                              value={activeOffer.calculationText || ""}
+                              onApply={(text) =>
                                 updateOffer(activeOffer.id, (offer) => ({
                                   ...offer,
                                   calculationText: text
-                                }));
-                              } finally {
-                                setAiBusy(key, false);
+                                }))
                               }
-                            }}
-                            className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600"
-                          >
-                            {isAiBusy("calculation") ? (
-                              <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
-                            ) : (
-                              <Sparkles size={12} />
-                            )}{" "}
-                            Text
-                          </button>
+                              module="offers"
+                              format="plain"
+                              context={{ field: "calculation", customer: activeOffer.customer || "" }}
+                            />
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const key = "calculation";
+                                if (isAiBusy(key)) return;
+                                setAiBusy(key, true);
+                                try {
+                                  const text = await requestOfferAiText({
+                                    mode: "calculation",
+                                    currentText: activeOffer.calculationText || "",
+                                    context: buildOfferContext(activeOffer),
+                                    fallback: () => generateCalculationText(activeOffer)
+                                  });
+                                  updateOffer(activeOffer.id, (offer) => ({
+                                    ...offer,
+                                    calculationText: text
+                                  }));
+                                } finally {
+                                  setAiBusy(key, false);
+                                }
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600"
+                              title="Text neu generieren"
+                            >
+                              {isAiBusy("calculation") ? (
+                                <span className="h-3 w-3 animate-spin rounded-full border-2 border-sand-400 border-t-transparent" />
+                              ) : (
+                                <Sparkles size={12} />
+                              )}{" "}
+                              Neu erstellen
+                            </button>
+                          </div>
                       </div>
-                      <textarea
+                      <BufferedTextarea
                         className={noteTextareaClass}
                         value={activeOffer.calculationText}
-                        onChange={(event) =>
+                        onCommit={(value) =>
                             updateOffer(activeOffer.id, (offer) => ({
                               ...offer,
-                              calculationText: event.target.value
+                              calculationText: value
                             }))
                           }
                           placeholder="Hinweise zur Kalkulation"
@@ -7688,24 +7600,24 @@ export default function OffersView() {
                         </div>
                         <div className="mt-2 grid gap-2 md:grid-cols-3">
                           <Field label="Titel">
-                            <input
+                            <BufferedInput
                               className={inputClass}
                               value={item.title || ""}
-                              onChange={(event) =>
+                              onCommit={(value) =>
                                 updateAttachment(activeOffer.id, item.id, {
-                                  title: event.target.value
+                                  title: value
                                 })
                               }
                               placeholder="z.B. Leistungsblatt"
                             />
                           </Field>
                           <Field label="Beschreibung">
-                            <textarea
+                            <BufferedTextarea
                               className={noteTextareaClass}
                               value={item.description || ""}
-                              onChange={(event) =>
+                              onCommit={(value) =>
                                 updateAttachment(activeOffer.id, item.id, {
-                                  description: event.target.value
+                                  description: value
                                 })
                               }
                               placeholder="Kurztext zur Beilage"
@@ -7749,10 +7661,10 @@ export default function OffersView() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-[220px]">
             <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-              Angebotsstatus
+              Angebotsarchiv
             </p>
             <h2 className={modalTitleClass}>
-              Offene & abgeschlossene Angebote
+              Statusübersicht
             </h2>
             <p className="mt-1 text-xs text-sand-500">
               {visibleOfferCount} Angebote sichtbar{normalizedOfferListQuery ? " nach Filter" : ""}.
@@ -7777,6 +7689,27 @@ export default function OffersView() {
                 Filter löschen
               </button>
             ) : null}
+            <select
+              value={listSort}
+              onChange={(event) => setListSort(event.target.value)}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1.5 text-xs text-sand-700 hover:bg-sand-100 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+              title="Sortierung"
+            >
+              {OFFER_LIST_SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setListFilterOpen((prev) => !prev)}
+              className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-wide ${
+                filterActiveCount
+                  ? "border-amber-300 bg-amber-50 text-amber-700"
+                  : "border-sand-200 bg-white text-sand-600 hover:bg-sand-100"
+              }`}
+            >
+              Filter{filterActiveCount ? ` (${filterActiveCount})` : ""}
+            </button>
             <button
               type="button"
               onClick={loadOffersFromServer}
@@ -7786,6 +7719,167 @@ export default function OffersView() {
             </button>
           </div>
         </div>
+
+        {listFilterOpen ? (
+          <div className="mt-3 rounded-2xl border border-sand-200 bg-sand-50 p-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wide text-sand-500">
+                Gültigkeit
+                <select
+                  value={listFilter.validity}
+                  onChange={(event) => setListFilter((prev) => ({ ...prev, validity: event.target.value }))}
+                  className="rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-xs text-sand-800 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                >
+                  <option value="all">Alle</option>
+                  <option value="fresh">Aktiv (gültig)</option>
+                  <option value="expiring">Läuft bald ab</option>
+                  <option value="expired">Abgelaufen</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wide text-sand-500">
+                Wert von (€)
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={listFilter.minValue}
+                  onChange={(event) => setListFilter((prev) => ({ ...prev, minValue: event.target.value }))}
+                  className="rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-xs text-sand-800 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  placeholder="0"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wide text-sand-500">
+                Wert bis (€)
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  value={listFilter.maxValue}
+                  onChange={(event) => setListFilter((prev) => ({ ...prev, maxValue: event.target.value }))}
+                  className="rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-xs text-sand-800 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  placeholder="∞"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wide text-sand-500">
+                Erstellt ab
+                <input
+                  type="date"
+                  value={listFilter.dateFrom}
+                  onChange={(event) => setListFilter((prev) => ({ ...prev, dateFrom: event.target.value }))}
+                  className="rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-xs text-sand-800 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] uppercase tracking-wide text-sand-500">
+                Erstellt bis
+                <input
+                  type="date"
+                  value={listFilter.dateTo}
+                  onChange={(event) => setListFilter((prev) => ({ ...prev, dateTo: event.target.value }))}
+                  className="rounded-xl border border-sand-200 bg-white px-2 py-1.5 text-xs text-sand-800 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                />
+              </label>
+            </div>
+            {filterActiveCount ? (
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={resetListFilter}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                >
+                  Filter zurücksetzen
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-3">
+            <p className="text-[10px] uppercase tracking-[0.25em] text-amber-700">Pipeline (offen)</p>
+            <p className="mt-1 truncate font-metrics text-sm font-semibold text-sand-900">{formatMoney(offerListKpis.pipeline)}</p>
+            <p className="text-[11px] text-sand-500">{(offerBuckets.open || []).length} Angebote</p>
+          </div>
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-3">
+            <p className="text-[10px] uppercase tracking-[0.25em] text-emerald-700">Akzeptiert</p>
+            <p className="mt-1 truncate font-metrics text-sm font-semibold text-sand-900">{formatMoney(offerListKpis.acceptedValue)}</p>
+            <p className="text-[11px] text-sand-500">{(offerBuckets.accepted || []).length + (offerBuckets.invoiced || []).length} Angebote</p>
+          </div>
+          <div className="rounded-2xl border border-sky-200 bg-sky-50/40 p-3">
+            <p className="text-[10px] uppercase tracking-[0.25em] text-sky-700">Conversion</p>
+            <p className="mt-1 font-metrics text-sm font-semibold text-sand-900">{(offerListKpis.conversion * 100).toFixed(0)}%</p>
+            <p className="text-[11px] text-sand-500">akzeptiert / entschieden</p>
+          </div>
+          <div className="rounded-2xl border border-sand-200 bg-sand-50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.25em] text-sand-600">Ø Volumen</p>
+            <p className="mt-1 truncate font-metrics text-sm font-semibold text-sand-900">{formatMoney(offerListKpis.avgValue)}</p>
+            <p className="text-[11px] text-sand-500">pro Angebot</p>
+          </div>
+          <div className={`rounded-2xl border p-3 ${offerListKpis.expiringCount ? "border-amber-300 bg-amber-50" : "border-sand-200 bg-white"}`}>
+            <p className="text-[10px] uppercase tracking-[0.25em] text-amber-700">Läuft bald ab</p>
+            <p className="mt-1 font-metrics text-sm font-semibold text-sand-900">{offerListKpis.expiringCount}</p>
+            <p className="text-[11px] text-sand-500">≤ {OFFER_EXPIRING_DAYS} Tage</p>
+          </div>
+          <div className={`rounded-2xl border p-3 ${offerListKpis.expiredCount ? "border-rose-300 bg-rose-50" : "border-sand-200 bg-white"}`}>
+            <p className="text-[10px] uppercase tracking-[0.25em] text-rose-700">Abgelaufen</p>
+            <p className="mt-1 font-metrics text-sm font-semibold text-sand-900">{offerListKpis.expiredCount}</p>
+            <p className="text-[11px] text-sand-500">offen &gt; {OFFER_VALIDITY_DAYS} Tage</p>
+          </div>
+        </div>
+
+        {selectedOfferIds.size ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-sand-700">
+            <span className="font-semibold text-amber-800">{selectedOfferIds.size} ausgewählt</span>
+            <span className="text-sand-400">·</span>
+            <button
+              type="button"
+              onClick={() => bulkUpdateStatus("angenommen")}
+              disabled={bulkActionStatus === "running"}
+              className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+            >
+              Als akzeptiert
+            </button>
+            <button
+              type="button"
+              onClick={() => bulkUpdateStatus("abgelehnt")}
+              disabled={bulkActionStatus === "running"}
+              className="rounded-full border border-rose-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+            >
+              Als abgelehnt
+            </button>
+            <button
+              type="button"
+              onClick={() => bulkUpdateStatus("Entwurf")}
+              disabled={bulkActionStatus === "running"}
+              className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-sand-700 hover:bg-sand-100 disabled:opacity-50"
+            >
+              Wieder öffnen
+            </button>
+            <button
+              type="button"
+              onClick={bulkDelete}
+              disabled={bulkActionStatus === "running"}
+              className="rounded-full border border-rose-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+            >
+              Löschen
+            </button>
+            <span className="ml-auto flex items-center gap-2">
+              {selectedOfferIds.size < visibleOffersFlat.length ? (
+                <button
+                  type="button"
+                  onClick={selectAllVisible}
+                  className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                >
+                  Alle sichtbaren ({visibleOffersFlat.length})
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="rounded-full border border-sand-200 bg-white px-3 py-1 text-[11px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+              >
+                Auswahl leeren
+              </button>
+            </span>
+          </div>
+        ) : null}
 
         <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {offerStatusSections.map((section) => {
@@ -7816,12 +7910,13 @@ export default function OffersView() {
           })}
         </div>
 
-        <div className="mt-4 grid gap-3 xl:grid-cols-2">
+        <div className="mt-4 grid gap-3 2xl:grid-cols-2">
           {offerStatusSections.map((section) => {
             const bucket = offerBuckets[section.key] || [];
             const styles = offerStatusSectionStyles[section.accent] || offerStatusSectionStyles.sand;
             const Icon = section.icon;
             const isExpanded = Boolean(expandedStatusBuckets[section.key]);
+            const summary = offerBucketSummaries[section.key] || { count: 0, total: 0, positions: 0 };
             const shouldShowAll = normalizedOfferListQuery || isExpanded;
             const visibleOffers = shouldShowAll
               ? bucket
@@ -7839,6 +7934,11 @@ export default function OffersView() {
                         {section.label}
                       </p>
                       <p className="mt-0.5 text-xs text-sand-500">{section.description}</p>
+                      <p className="mt-1 text-[11px] text-sand-600">
+                        <span className="font-metrics font-semibold text-sand-900">{formatMoney(summary.total)}</span>
+                        <span className="text-sand-300"> · </span>
+                        {summary.positions} Positionen
+                      </p>
                     </div>
                   </div>
                   <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${styles.count}`}>
@@ -7884,6 +7984,8 @@ export default function OffersView() {
                       formatVatLabel={formatVatLabel}
                       stripHtml={stripHtml}
                       shorten={shorten}
+                      selected={selectedOfferIds.has(offer.id)}
+                      onToggleSelect={toggleOfferSelected}
                     />
                   ))
                 ) : (
@@ -8598,16 +8700,17 @@ export default function OffersView() {
     )}
     {previewOffer ? (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-        <div className="max-h-[90vh] w-full max-w-5xl overflow-auto rounded-3xl bg-white p-6 shadow-soft">
-          <div className="flex items-center justify-between mb-4">
+        <div className="flex h-[92vh] w-full max-w-6xl flex-col rounded-3xl bg-white p-4 shadow-soft">
+          <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-sand-500">
-                Vorschau
+                PDF-Vorschau
               </p>
               <h3 className={modalTitleClass}>
                 {previewMode === "confirmation"
                   ? "Auftragsbestätigung"
                   : previewOffer.customer || "Angebot"}
+                {previewOffer.reference ? ` · ${previewOffer.reference}` : ""}
               </h3>
             </div>
             <div className="flex items-center gap-2">
@@ -8616,7 +8719,7 @@ export default function OffersView() {
                 onClick={() => exportOfferPdf(previewOffer, previewMode)}
                 className="inline-flex items-center gap-2 rounded-full border border-sand-200 bg-white px-3 py-1 text-xs uppercase tracking-wide text-sand-600 hover:bg-sand-100"
               >
-                <FileDown size={12} /> PDF
+                <FileDown size={12} /> PDF herunterladen
               </button>
               <button
                 type="button"
@@ -8631,7 +8734,9 @@ export default function OffersView() {
               </button>
             </div>
           </div>
-          <OfferPreview offer={previewOffer} scale={0.9} mode={previewMode} />
+          <div className="flex-1 overflow-hidden rounded-2xl border border-sand-200 bg-sand-100">
+            <OfferPdfPreview offer={previewOffer} mode={previewMode} />
+          </div>
         </div>
       </div>
     ) : null}
@@ -8804,21 +8909,6 @@ export default function OffersView() {
             ) : null}
           </div>
         </div>
-      </div>
-    ) : null}
-    {exportOffer ? (
-      <div className="fixed -left-[9999px] top-0 pointer-events-none">
-        <OfferPreview offer={exportOffer} scale={1} containerRef={exportRef} mode={exportMode} />
-      </div>
-    ) : null}
-    {emailExportOffer ? (
-      <div className="fixed -left-[9999px] top-0 pointer-events-none">
-        <OfferPreview
-          offer={emailExportOffer}
-          scale={1}
-          containerRef={emailPdfRef}
-          mode={emailExportMode}
-        />
       </div>
     ) : null}
   </main>

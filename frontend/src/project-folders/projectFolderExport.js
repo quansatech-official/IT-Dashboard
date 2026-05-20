@@ -196,7 +196,7 @@ export const buildProjectHtml = ({ folder, options, statusMeta }) => {
             (stream) => `
               <section class="stream">
                 <div class="stream-head">
-                  <h2>${escapeHtml(stream.title || "Baustein")}</h2>
+                  <h2>${escapeHtml(stream.title || "Tag")}</h2>
                   <p class="muted">${escapeHtml(stream.short_status || "Keine Kurzlage erfasst.")}</p>
                 </div>
                 <div class="stream-body">
@@ -255,7 +255,7 @@ const buildOperationalRows = (folder, options = {}) => {
   const risks = [];
   const phases = [];
   streams.forEach((stream, streamIndex) => {
-    const streamTitle = stream.title || `Baustein ${streamIndex + 1}`;
+    const streamTitle = stream.title || `Tag ${streamIndex + 1}`;
     (stream.tasks || []).forEach((task, taskIndex) => {
       tasks.push({
         nr: `${streamIndex + 1}.${taskIndex + 1}`,
@@ -302,7 +302,7 @@ const buildOperationalRows = (folder, options = {}) => {
         phase: streamTitle,
         date: stream.deadline ? formatExportDate(stream.deadline) : "-",
         owner: stream.owner || folder?.owner || "-",
-        content: stream.next_step || stream.short_status || "Baustein vorbereiten und abarbeiten.",
+        content: stream.next_step || stream.short_status || "Tag vorbereiten und abarbeiten.",
         result: stream.customer_decision || stream.recommendation || "Abnahme dokumentieren."
       });
     }
@@ -614,16 +614,16 @@ export const buildProjectOperationalMatrixHtml = (folder, options = {}) => {
       <h1>${escapeHtml(folder?.title || "Projektmappe")} · Einsatzplan</h1>
       <div class="meta">Kunde: ${escapeHtml(folder?.customer || "-")} · Verantwortlich: ${escapeHtml(folder?.owner || "-")} · Deadline: ${escapeHtml(formatExportDate(folder?.deadline))}</div>
       ${table("Ablaufplan", ["Phase", "Termin/Zeitraum", "Verantwortlich", "Inhalt", "Ergebnis/Abnahme"], phases, (phase) => `<tr><td>${escapeHtml(phase.phase)}</td><td>${escapeHtml(phase.date)}</td><td>${escapeHtml(phase.owner)}</td><td>${escapeHtml(phase.content)}</td><td>${escapeHtml(phase.result)}</td></tr>`)}
-      ${table("Priorisierung", ["Priorität", "Baustein", "Kurzlage", "Zuständig", "Nächster Schritt"], streams, (stream, index) => `<tr><td>${escapeHtml(streamPriorityLabel(stream, index))}</td><td>${escapeHtml(stream.title || "-")}</td><td>${escapeHtml(stream.short_status || stream.recommendation || "-")}</td><td>${escapeHtml(stream.owner || folder?.owner || "-")}</td><td>${escapeHtml(stream.next_step || "-")}</td></tr>`)}
-      ${table("Aufgabenmatrix", ["Nr.", "Baustein", "Aufgabe", "Status", "Zuständig", "Termin", "Abnahme"], tasks, (task) => `<tr><td>${escapeHtml(task.nr)}</td><td>${escapeHtml(task.stream)}</td><td>${escapeHtml(task.title)}</td><td>${escapeHtml(task.status)}</td><td>${escapeHtml(task.owner)}</td><td>${escapeHtml(formatExportDate(task.due))}</td><td>${escapeHtml(task.acceptance || "")}</td></tr>`)}
-      ${table("Checklistenmatrix", ["Baustein", "Checkliste", "Prüfpunkt", "Status", "Zuständig", "Termin"], checkItems, (item) => `<tr><td>${escapeHtml(item.stream)}</td><td>${escapeHtml(item.checklist)}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.owner)}</td><td>${escapeHtml(formatExportDate(item.due))}</td></tr>`)}
-      ${table("Risiken", ["Baustein", "Stufe", "Risiko", "Gegenmaßnahme"], risks, (risk) => `<tr><td>${escapeHtml(risk.stream)}</td><td>${escapeHtml(risk.level)}</td><td>${escapeHtml(risk.title)}</td><td>${escapeHtml(risk.mitigation)}</td></tr>`)}
+      ${table("Priorisierung", ["Priorität", "Tag", "Kurzlage", "Zuständig", "Nächster Schritt"], streams, (stream, index) => `<tr><td>${escapeHtml(streamPriorityLabel(stream, index))}</td><td>${escapeHtml(stream.title || "-")}</td><td>${escapeHtml(stream.short_status || stream.recommendation || "-")}</td><td>${escapeHtml(stream.owner || folder?.owner || "-")}</td><td>${escapeHtml(stream.next_step || "-")}</td></tr>`)}
+      ${table("Aufgabenmatrix", ["Nr.", "Tag", "Aufgabe", "Status", "Zuständig", "Termin", "Abnahme"], tasks, (task) => `<tr><td>${escapeHtml(task.nr)}</td><td>${escapeHtml(task.stream)}</td><td>${escapeHtml(task.title)}</td><td>${escapeHtml(task.status)}</td><td>${escapeHtml(task.owner)}</td><td>${escapeHtml(formatExportDate(task.due))}</td><td>${escapeHtml(task.acceptance || "")}</td></tr>`)}
+      ${table("Checklistenmatrix", ["Tag", "Checkliste", "Prüfpunkt", "Status", "Zuständig", "Termin"], checkItems, (item) => `<tr><td>${escapeHtml(item.stream)}</td><td>${escapeHtml(item.checklist)}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(item.owner)}</td><td>${escapeHtml(formatExportDate(item.due))}</td></tr>`)}
+      ${table("Risiken", ["Tag", "Stufe", "Risiko", "Gegenmaßnahme"], risks, (risk) => `<tr><td>${escapeHtml(risk.stream)}</td><td>${escapeHtml(risk.level)}</td><td>${escapeHtml(risk.title)}</td><td>${escapeHtml(risk.mitigation)}</td></tr>`)}
     </body></html>
   `;
 };
 
 export const buildProjectExcelHtml = (folder) => {
-  const rows = [["Baustein", "Aufgabe", "Status", "Risiko", "Nächster Schritt"]];
+  const rows = [["Tag", "Aufgabe", "Status", "Risiko", "Nächster Schritt"]];
   (folder?.content?.streams || []).forEach((stream) => {
     const tasks = stream.tasks?.length ? stream.tasks : [{ title: "", status: "" }];
     tasks.forEach((task, index) => {

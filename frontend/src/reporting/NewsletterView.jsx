@@ -1367,7 +1367,7 @@ export default function NewsletterView() {
         {newsletterTab === "draft" ? (
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_420px]">
             <div className="rounded-3xl border border-sand-200 bg-white p-5 shadow-soft">
-              <div className="mb-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
+              <div className="ai-panel mb-5 rounded-2xl border border-sand-200 bg-sand-50 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.24em] text-sand-500">KI aus Rohtext</p>
@@ -1380,7 +1380,7 @@ export default function NewsletterView() {
                     type="button"
                     onClick={generateFromRawText}
                     disabled={isRawGenerating || rawNewsletterText.trim().length < 20}
-                    className="inline-flex items-center gap-1.5 rounded-full bg-sand-900 px-4 py-2 text-xs uppercase tracking-wide text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="ai-action inline-flex items-center gap-1.5 rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-xs uppercase tracking-wide text-sky-800 hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Sparkles size={13} /> {isRawGenerating ? "Generiert…" : "HTML-Body erzeugen"}
                   </button>
@@ -1389,7 +1389,7 @@ export default function NewsletterView() {
                   value={rawNewsletterText}
                   onChange={(event) => setRawNewsletterText(event.target.value)}
                   rows={6}
-                  className="mt-3 w-full rounded-xl border border-sand-200 bg-white px-4 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  className="ai-field mt-3 w-full rounded-xl border border-sand-200 bg-white px-4 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-amber-200"
                   placeholder="Rohtext einfügen, z. B. Hinweis zu Update, Sicherheitsprüfung, Wartung oder geplanter Umstellung. Die KI formuliert daraus eine kurze Kundeninformation."
                 />
                 <p className="mt-2 text-[11px] text-sand-400">

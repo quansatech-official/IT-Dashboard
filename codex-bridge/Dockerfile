@@ -7,11 +7,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+ARG CODEX_CLI_VERSION=latest
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 python3-pip python3-venv ca-certificates git \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @openai/codex@0.128.0
+RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}"
 
 COPY requirements.txt .
 RUN python3 -m venv /opt/venv \

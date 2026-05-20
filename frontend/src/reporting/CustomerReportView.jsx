@@ -1887,7 +1887,7 @@ export default function CustomerReportView() {
                   </button>
                 </div>
 
-                <div className="bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 lg:col-span-2">
+                <div className="ai-panel bg-white border border-sand-200 rounded-2xl p-4 shadow-sm flex flex-col gap-3 lg:col-span-2">
                   <div className="flex items-center gap-2 text-sand-700">
                     <Sparkles size={16} />
                     <p className="text-xs uppercase tracking-wide text-sand-600">Aus Freitext</p>
@@ -1899,7 +1899,7 @@ export default function CustomerReportView() {
                     value={freeText}
                     onChange={(event) => setFreeText(event.target.value)}
                     rows={3}
-                    className="w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
+                    className="ai-field w-full rounded-2xl border border-sand-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sand-300"
                     placeholder="z. B. Server-Updates einspielen, um kritische Sicherheitslücken zu schließen. Wartungsfenster nötig. Dauer 1h."
                   />
                   <div className="mt-auto flex flex-wrap items-center gap-2">
@@ -1907,7 +1907,7 @@ export default function CustomerReportView() {
                       type="button"
                       onClick={addFromFreeTextWithAi}
                       disabled={isGenerating || isAiGenerating}
-                      className="inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="ai-action inline-flex items-center gap-2 rounded-full border border-sand-300 bg-white px-4 py-2 text-xs uppercase tracking-wide hover:bg-sand-100 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {isAiGenerating ? (
                         <span className="inline-flex items-center gap-2">

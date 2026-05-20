@@ -43,7 +43,7 @@ export const projectFoldersApi = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    }).then((response) => readJson(response, {}, "Bausteinkatalog konnte nicht gespeichert werden.")),
+    }).then((response) => readJson(response, {}, "Tagkatalog konnte nicht gespeichert werden.")),
   customers: () => fetch(`${API}/customers`).then((response) => response.json()),
   employees: () => fetch(`${API}/employees`).then((response) => response.json()),
   integrations: () => fetch(`${API}/integrations`).then((response) => response.json().catch(() => ({}))),

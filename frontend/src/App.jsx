@@ -172,11 +172,11 @@ export default function App() {
             <NavButton view="dayplan" active={activeView} onClick={setActiveView} icon={ClipboardList}>
               Aufgaben
             </NavButton>
-            <NavButton view="notes" active={activeView} onClick={setActiveView} icon={StickyNote}>
-              Notizen
-            </NavButton>
             <NavButton view="projectfolders" active={activeView} onClick={setActiveView} icon={FolderKanban}>
               Projektmappe
+            </NavButton>
+            <NavButton view="notes" active={activeView} onClick={setActiveView} icon={StickyNote}>
+              Notizen
             </NavButton>
             <div className="border-t border-sand-200 my-2" />
             <p className="text-[11px] uppercase tracking-[0.2em] text-sand-500 px-2 pb-1 font-medium">

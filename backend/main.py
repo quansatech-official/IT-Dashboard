@@ -306,6 +306,41 @@ _ollama_missing_model_until_ms: Dict[str, int] = {}
 _ollama_missing_model_lock = threading.Lock()
 _openai_compatible_context_limits: Dict[str, int] = {}
 _openai_compatible_context_limits_lock = threading.Lock()
+_ai_error_state = threading.local()
+
+
+def _reset_ai_error_details() -> None:
+    _ai_error_state.details = []
+
+
+def _record_ai_error_detail(
+    error_type: str,
+    detail: Any = "",
+    *,
+    model: str = "",
+    http_status: int = 0,
+) -> None:
+    clean_type = _telemetry_text(error_type or "ai_error", 80)
+    clean_detail = _telemetry_text(detail or "", 500)
+    rows = getattr(_ai_error_state, "details", None)
+    if not isinstance(rows, list):
+        rows = []
+        _ai_error_state.details = rows
+    rows.append(
+        {
+            "error_type": clean_type,
+            "error_detail": clean_detail,
+            "model": _telemetry_text(model or "", 160),
+            "http_status": _telemetry_int(http_status, 0, 0, 599),
+        }
+    )
+
+
+def _get_ai_error_details() -> List[Dict[str, Any]]:
+    rows = getattr(_ai_error_state, "details", None)
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -869,6 +904,7 @@ class IntegrationSettings(Base):
     remote_deploy_default_max_installs = Column(Integer, default=0)
     remote_deploy_default_expiry_days = Column(Integer, default=0)
     ai_provider = Column(String, default="ollama")
+    ai_default_enabled = Column(Boolean, default=True)
     ai_base_url = Column(String, default="")
     ai_api_key = Column(String, default="")
     ai_default_model = Column(String, default="")
@@ -882,6 +918,7 @@ class IntegrationSettings(Base):
     ai_newsletter_model = Column(String, default="")
     ai_meta_hub_model = Column(String, default="")
     ai_project_folder_model = Column(String, default="")
+    ai_codex_model = Column(String, default="")
     ai_endpoints_json = Column(Text, default="[]")
     ai_purpose_routes_json = Column(Text, default="{}")
 
@@ -1419,6 +1456,8 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN remote_deploy_default_expiry_days INTEGER DEFAULT 0")
     if "ai_provider" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN ai_provider VARCHAR DEFAULT 'ollama'")
+    if "ai_default_enabled" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_default_enabled BOOLEAN DEFAULT TRUE")
     if "ai_base_url" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN ai_base_url VARCHAR DEFAULT ''")
     if "ai_api_key" not in columns:
@@ -1445,6 +1484,8 @@ def _ensure_integration_settings_columns() -> None:
         statements.append("ALTER TABLE integration_settings ADD COLUMN ai_meta_hub_model VARCHAR DEFAULT ''")
     if "ai_project_folder_model" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN ai_project_folder_model VARCHAR DEFAULT ''")
+    if "ai_codex_model" not in columns:
+        statements.append("ALTER TABLE integration_settings ADD COLUMN ai_codex_model VARCHAR DEFAULT ''")
     if "ai_endpoints_json" not in columns:
         statements.append("ALTER TABLE integration_settings ADD COLUMN ai_endpoints_json TEXT DEFAULT '[]'")
     if "ai_purpose_routes_json" not in columns:
@@ -2768,6 +2809,7 @@ class IntegrationSettingsUpdate(BaseModel):
     remote_deploy_default_max_installs: Optional[int] = None
     remote_deploy_default_expiry_days: Optional[int] = None
     ai_provider: Optional[str] = None
+    ai_default_enabled: Optional[bool] = None
     ai_base_url: Optional[str] = None
     ai_api_key: Optional[str] = None
     ai_default_model: Optional[str] = None
@@ -2781,12 +2823,14 @@ class IntegrationSettingsUpdate(BaseModel):
     ai_newsletter_model: Optional[str] = None
     ai_meta_hub_model: Optional[str] = None
     ai_project_folder_model: Optional[str] = None
+    ai_codex_model: Optional[str] = None
     ai_endpoints: Optional[List[Dict[str, Any]]] = None
     ai_purpose_routes: Optional[Dict[str, str]] = None
 
 
 class AiConnectionProbeRequest(BaseModel):
     ai_provider: Optional[str] = None
+    ai_default_enabled: Optional[bool] = None
     ai_base_url: Optional[str] = None
     ai_api_key: Optional[str] = None
     ai_default_model: Optional[str] = None
@@ -2800,6 +2844,7 @@ class AiConnectionProbeRequest(BaseModel):
     ai_newsletter_model: Optional[str] = None
     ai_meta_hub_model: Optional[str] = None
     ai_project_folder_model: Optional[str] = None
+    ai_codex_model: Optional[str] = None
     ai_endpoint_id: Optional[str] = None
     ai_endpoints: Optional[List[Dict[str, Any]]] = None
     ai_purpose_routes: Optional[Dict[str, str]] = None
@@ -3560,6 +3605,7 @@ class SevdeskProjectFolderDraftRequest(BaseModel):
     positions: List[SevdeskProjectFolderDraftPosition] = []
     use_existing_draft: Optional[bool] = True
     mark_invoiced: Optional[bool] = True
+    close_project: Optional[bool] = False
     add_mileage: Optional[bool] = False
     mileage_name: Optional[str] = None
     mileage_text: Optional[str] = None
@@ -4109,11 +4155,11 @@ def _new_project_item(title: Any = "", **extra: Any) -> Dict[str, Any]:
 
 
 def _build_project_stream(block_key: str, owner: str = "") -> Dict[str, Any]:
-    block = _get_project_block_library().get(block_key) or {"label": str(block_key or "Arbeitsstrang").strip() or "Arbeitsstrang"}
+    block = _get_project_block_library().get(block_key) or {"label": str(block_key or "Tag").strip() or "Tag"}
     return {
         "id": _project_uuid(),
         "block_key": block_key,
-        "title": block.get("label") or "Arbeitsstrang",
+        "title": block.get("label") or "Tag",
         "status": "yellow",
         "priority": "medium",
         "owner": owner or "",
@@ -4128,7 +4174,7 @@ def _build_project_stream(block_key: str, owner: str = "") -> Dict[str, Any]:
         "checklists": [
             {
                 "id": _project_uuid(),
-                "title": f"{block.get('label') or 'Arbeitsstrang'} Checkliste",
+                "title": f"{block.get('label') or 'Tag'} Checkliste",
                 "items": [_new_project_item(item, done=False) for item in (block.get("checklist") or [])],
             }
         ],
@@ -4258,7 +4304,7 @@ def _normalize_project_ai_task(item: Any, owner: str = "") -> Dict[str, Any]:
 
 def _normalize_project_ai_stream(item: Any, owner: str = "", index: int = 0) -> Dict[str, Any]:
     payload = item if isinstance(item, dict) else {"title": str(item or "").strip()}
-    title = str(payload.get("title") or payload.get("label") or f"Baustein {index + 1}").strip()
+    title = str(payload.get("title") or payload.get("label") or f"Tag {index + 1}").strip()
     block_key = _normalize_project_catalog_key(payload.get("block_key") or title, fallback=f"ki_baustein_{index + 1}")
     status = _normalize_project_status(payload.get("status") or "yellow")
     priority = _normalize_project_priority(payload.get("priority") or "medium")
@@ -4302,7 +4348,7 @@ def _normalize_project_ai_stream(item: Any, owner: str = "", index: int = 0) -> 
     return {
         "id": _project_uuid(),
         "block_key": block_key,
-        "title": title or "Baustein",
+        "title": title or "Tag",
         "status": status,
         "priority": priority,
         "owner": stream_owner,
@@ -4318,7 +4364,7 @@ def _normalize_project_ai_stream(item: Any, owner: str = "", index: int = 0) -> 
         "checklists": [
             {
                 "id": _project_uuid(),
-                "title": f"{title or 'Baustein'} Checkliste",
+                "title": f"{title or 'Tag'} Checkliste",
                 "items": [_new_project_item(check, done=False) for check in checklist_items],
             }
         ] if checklist_items else [],
@@ -4345,19 +4391,19 @@ def _try_project_folder_ai_bootstrap(data: ProjectFolderBootstrapRequest) -> Opt
     )
     prompt_text = (
         "Du bist Senior IT-Projektleiter. Erzeuge aus der Beschreibung eine konkrete Projektmappe.\n"
-        "Erkenne sinnvolle Bausteine auch dann, wenn sie nicht exakt im Katalog stehen. Nutze vorhandene block_key, wenn passend.\n"
+        "Erkenne sinnvolle Tags auch dann, wenn sie nicht exakt im Katalog stehen. Nutze vorhandene block_key, wenn passend.\n"
         "Aufgaben muessen umsetzbar, fachlich sortiert und nicht generisch sein.\n"
         "Antworte nur als JSON-Objekt mit: title, project_description, target_state, current_state, next_step, priority, streams[].\n"
         "Jeder stream: title, block_key, short_status, priority, status, tasks[], checklist[], risks[], questions[], gantt[], offer_positions[].\n"
         "Task: title, status(open|doing|waiting_customer|blocked|done), due_offset_days optional, notes optional.\n"
         "Risk: title, level(niedrig|mittel|hoch|kritisch), mitigation.\n"
         "Gantt: title, duration_days, dependency optional.\n"
-        "Erzeuge 3-8 Bausteine, pro Baustein 3-8 Aufgaben, 3-8 Checklistenpunkte, 1-4 Risiken.\n\n"
+        "Erzeuge 3-8 Tags, pro Tag 3-8 Aufgaben, 3-8 Checklistenpunkte, 1-4 Risiken.\n\n"
         f"Kunde: {data.customer or 'n/a'}\n"
         f"Verantwortlich: {data.owner or 'n/a'}\n"
         f"Gewuenschter Titel: {data.title or 'n/a'}\n"
         f"Beschreibung:\n{description}\n\n"
-        f"Baustein-Katalog:\n{catalog_summary}"
+        f"Tag-Katalog:\n{catalog_summary}"
     )
     try:
         model_candidates = _resolve_ai_models(purpose="project_folder")
@@ -4386,7 +4432,7 @@ def _try_project_folder_ai_bootstrap(data: ProjectFolderBootstrapRequest) -> Opt
             "project_description": str(parsed.get("project_description") or description).strip(),
             "target_state": str(parsed.get("target_state") or parsed.get("goal") or "").strip(),
             "current_state": str(parsed.get("current_state") or "KI-Struktur aus Projektbeschreibung erzeugt.").strip(),
-            "next_step": str(parsed.get("next_step") or "Vorschau prüfen, Bausteine abwählen und Projektmappe anlegen.").strip(),
+            "next_step": str(parsed.get("next_step") or "Vorschau prüfen, Tags abwählen und Projektmappe anlegen.").strip(),
             "priority": _normalize_project_priority(parsed.get("priority") or "medium"),
             "streams": streams,
             "ai_meta": {"provider": provider, "model": model, "usedFallback": False},
@@ -4429,7 +4475,7 @@ def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, 
         content["last_ai_outputs"] = [{
             "id": _project_uuid(),
             "title": "KI-Projektstruktur",
-            "text": f"{len(content['streams'])} Bausteine aus Beschreibung erzeugt.",
+            "text": f"{len(content['streams'])} Tags aus Beschreibung erzeugt.",
             **ai_bootstrap.get("ai_meta", {}),
         }]
         title = ai_bootstrap.get("title") or title
@@ -4473,6 +4519,7 @@ def _bootstrap_project_folder(data: ProjectFolderBootstrapRequest) -> Dict[str, 
 
 def _project_folder_summary_from_content(content: Dict[str, Any]) -> Dict[str, Any]:
     streams = content.get("streams") if isinstance(content.get("streams"), list) else []
+    materials = content.get("materials") if isinstance(content.get("materials"), list) else []
     task_count = 0
     done_task_count = 0
     open_task_count = 0
@@ -4498,6 +4545,7 @@ def _project_folder_summary_from_content(content: Dict[str, Any]) -> Dict[str, A
         decision_count += len(stream.get("decisions") or [])
     stream_count = len(streams)
     progress = int(round((done_task_count / task_count) * 100)) if task_count else (int(round(progress_total / stream_count)) if stream_count else 0)
+    financials = _project_folder_financial_totals(content)
     return {
         "stream_count": stream_count,
         "task_count": task_count,
@@ -4508,6 +4556,11 @@ def _project_folder_summary_from_content(content: Dict[str, Any]) -> Dict[str, A
         "decision_count": decision_count,
         "progress": max(0, min(100, progress)),
         "owners": [item for item in sorted(owners) if item],
+        "material_count": len(materials) if materials else int(financials.get("materialCount") or 0),
+        "task_revenue_eur": round(float(financials.get("taskRevenueEur") or 0.0), 2),
+        "material_revenue_eur": round(float(financials.get("materialRevenueEur") or 0.0), 2),
+        "project_revenue_eur": round(float(financials.get("projectRevenueEur") or 0.0), 2),
+        "project_cost_eur": round(float(financials.get("projectCostEur") or 0.0), 2),
     }
 
 
@@ -4579,6 +4632,52 @@ def _project_item_price(item: Dict[str, Any]) -> float:
 
 def _project_item_cost(item: Dict[str, Any]) -> float:
     return _parse_project_money_value(item.get("cost_value") or item.get("purchase_price") or item.get("cost_price"))
+
+
+def _project_folder_financial_totals(content: Dict[str, Any]) -> Dict[str, Any]:
+    streams = content.get("streams") if isinstance(content.get("streams"), list) else []
+    materials = content.get("materials") if isinstance(content.get("materials"), list) else []
+    task_revenue = 0.0
+    task_cost = 0.0
+    material_revenue = 0.0
+    material_cost = 0.0
+    material_count = 0
+
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        for task in stream.get("tasks") or []:
+            if not isinstance(task, dict):
+                continue
+            task_revenue += _project_item_price(task)
+            task_cost += _project_item_cost(task)
+        if not materials:
+            for item in stream.get("offer_positions") or []:
+                if not isinstance(item, dict):
+                    continue
+                quantity = _project_item_quantity(item)
+                material_revenue += _project_item_price(item) * quantity
+                material_cost += _project_item_cost(item) * quantity
+                material_count += 1
+
+    for item in materials:
+        if not isinstance(item, dict):
+            continue
+        quantity = _project_item_quantity(item)
+        material_revenue += _parse_project_money_value(item.get("price")) * quantity
+        material_cost += _parse_project_money_value(item.get("purchase_price")) * quantity
+        material_count += 1
+
+    project_revenue = round(task_revenue + material_revenue, 2)
+    project_cost = round(task_cost + material_cost, 2)
+    return {
+        "projectRevenueEur": project_revenue,
+        "projectCostEur": project_cost,
+        "projectProfitEur": round(project_revenue - project_cost, 2),
+        "taskRevenueEur": round(task_revenue, 2),
+        "materialRevenueEur": round(material_revenue, 2),
+        "materialCount": int(material_count),
+    }
 
 
 def _build_project_value_stats(db: Session) -> Dict[str, Any]:
@@ -4742,7 +4841,7 @@ def _compact_project_folder_context(folder: Dict[str, Any], stream_id: str = "")
     if selected_stream:
         parts.extend(
             [
-                f"Arbeitsstrang: {str(selected_stream.get('title') or '').strip()}",
+                f"Tag: {str(selected_stream.get('title') or '').strip()}",
                 f"Kurzlage: {str(selected_stream.get('short_status') or '').strip()}",
                 f"Offene Punkte: {'; '.join(str(item).strip() for item in (selected_stream.get('open_points') or [])[:6])}",
             ]
@@ -4750,43 +4849,146 @@ def _compact_project_folder_context(folder: Dict[str, Any], stream_id: str = "")
     return "\n".join(item for item in parts if item and not item.endswith(": "))
 
 
-def _estimate_project_task_range(task: Dict[str, Any], stream: Dict[str, Any]) -> Tuple[float, float]:
+def _round_project_hours(value: float, minimum: float = 0.25) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 0.0
+    if number <= 0:
+        return 0.0
+    rounded = math.ceil((number - 1e-9) * 4) / 4
+    return round(max(minimum, rounded), 2)
+
+
+PROJECT_EFFORT_CALIBRATION_FACTOR = 0.78
+PROJECT_HARDWARE_EFFORT_CALIBRATION_FACTOR = 0.72
+
+
+def _extract_project_device_count(text_value: str) -> int:
+    normalized = str(text_value or "").lower()
+    device_terms = r"(?:pcs?|pc['’`]?s|computer|notebooks?|laptops?|clients?|arbeitsplaetze|arbeitsplätze|workstations?)"
+    patterns = [
+        rf"\b(\d{{1,3}})\s*(?:x|stk\.?|stueck|stück)?\s*{device_terms}\b",
+        rf"\b{device_terms}\s*(?:x|anzahl)?\s*(\d{{1,3}})\b",
+    ]
+    counts: List[int] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, normalized, re.I):
+            try:
+                count = int(match.group(1))
+            except (TypeError, ValueError):
+                continue
+            if 1 <= count <= 200:
+                counts.append(count)
+    return max(counts) if counts else 0
+
+
+def _is_hardware_swap_scope(text_value: str) -> bool:
+    normalized = str(text_value or "").lower()
+    has_device = re.search(
+        r"\b(pc|pcs|computer|notebook|laptop|client|arbeitsplatz|workstation|gerät|geraet)\b",
+        normalized,
+        re.I,
+    )
+    has_swap = re.search(r"\b(tausch|tauschen|austausch|ersetzen|ersatz|wechsel|austauschen)\b", normalized, re.I)
+    return bool(has_device and has_swap)
+
+
+def _estimate_project_task_range(task: Dict[str, Any], stream: Dict[str, Any], project_context: str = "") -> Tuple[float, float]:
     text_value = " ".join(
         [
+            str(project_context or ""),
             str(stream.get("title") or ""),
             str(stream.get("short_status") or ""),
             str(task.get("title") or ""),
             str(task.get("note") or ""),
         ]
     ).lower()
+    explicit_hours = _parse_project_money_value(task.get("estimate_hours") or task.get("hours"))
+    if explicit_hours > 0:
+        return _round_project_hours(explicit_hours * 0.75), _round_project_hours(explicit_hours * 1.1)
+    if _is_hardware_swap_scope(text_value):
+        device_count = max(1, _extract_project_device_count(text_value))
+        onsite_buffer = 0.75 if re.search(r"\b(anfahrt|vor ort|vortermin|auslieferung|lieferung)\b", text_value, re.I) else 0.5
+        min_hours = onsite_buffer + (device_count * 1.0)
+        max_hours = onsite_buffer + (device_count * 2.0)
+        if re.search(r"\b(daten|profil|outlook|drucker|software|domain|domäne|domaene|azure|entra|backup)\b", text_value, re.I):
+            min_hours += device_count * 0.25
+            max_hours += device_count * 0.75
+        return _round_project_hours(min_hours), _round_project_hours(max_hours)
     rules: List[Tuple[str, Tuple[float, float]]] = [
-        (r"\b(drupal|wordpress|cms|website|webseite|php|theme|ckeditor|modul|plugin|twig|schema)\b", (2.0, 5.5)),
-        (r"\b(upgrade|major update|versionswechsel|migration|migrat|umzug|cutover|datenmigration)\b", (3.0, 8.0)),
-        (r"\b(domain|active directory|ad\b|entra|tenant|exchange|m365|office 365|sharepoint)\b", (3.0, 9.0)),
-        (r"\b(firewall|vpn|routing|vlan|netzwerk|switch|wlan|nfon|telefonanlage)\b", (1.5, 5.0)),
-        (r"\b(server|hyper-?v|vmware|host|cluster|storage|backup|restore|replikation)\b", (2.5, 8.0)),
-        (r"\b(schnittstelle|api|integration|automatisierung|sync)\b", (2.0, 6.0)),
-        (r"\b(test|validierung|abnahme|rollback|wartungsfenster|go-?live|deployment)\b", (1.0, 3.5)),
-        (r"\b(dokumentation|übergabe|einschulung|protokoll)\b", (0.75, 2.0)),
-        (r"\b(prüf|analyse|aufnahme|bestandsaufnahme|abstimmung|termin|freigabe)\b", (0.75, 2.0)),
+        (r"\b(analyse|aufnahme|bestandsaufnahme|konzept|planung|workshop|anforderung|spezifikation)\b", (0.75, 2.25)),
+        (r"\b(abstimmung|termin|koordination|freigabe|rückfrage|rueckfrage|entscheidung|stakeholder)\b", (0.25, 1.0)),
+        (r"\b(einrichtung|konfiguration|umsetzung|implementierung|anpassung|bereitstellung|setup)\b", (0.75, 3.0)),
+        (r"\b(migration|migrat|umzug|rollout|cutover|go-?live|umstellung|übernahme|uebernahme)\b", (2.0, 7.0)),
+        (r"\b(integration|schnittstelle|api|automatisierung|sync|import|export|datenübernahme|datenuebernahme)\b", (1.5, 6.0)),
+        (r"\b(produktiv|kritisch|rollback|wartungsfenster|abhängigkeit|abhaengigkeit|risiko|fallback)\b", (0.75, 3.0)),
+        (r"\b(test|validierung|abnahme|prüfung|pruefung|qa|kontrolle|nachkontrolle)\b", (0.5, 1.75)),
+        (r"\b(dokumentation|übergabe|uebergabe|einschulung|protokoll|handbuch)\b", (0.25, 1.25)),
     ]
     matches = [hours for pattern, hours in rules if re.search(pattern, text_value, re.I)]
     if matches:
-        min_hours = max(item[0] for item in matches)
-        max_hours = max(item[1] for item in matches)
+        primary = max(matches, key=lambda item: item[1])
+        extras = [item for item in matches if item is not primary]
+        min_hours = primary[0] + sum(item[0] * 0.3 for item in extras)
+        max_hours = primary[1] + sum(item[1] * 0.4 for item in extras)
     else:
-        min_hours, max_hours = (0.75, 1.75)
+        min_hours, max_hours = (0.25, 1.0)
     if len(_normalize_space(text_value)) > 180:
-        min_hours += 0.5
-        max_hours += 1.0
-    if str(task.get("due_date") or "").strip():
         min_hours += 0.15
-        max_hours += 0.35
-    return min_hours, max_hours
+        max_hours += 0.5
+    if str(task.get("due_date") or "").strip():
+        min_hours += 0.05
+        max_hours += 0.15
+    return _round_project_hours(min_hours), _round_project_hours(max(min_hours * 1.18, max_hours))
+
+
+def _tighten_project_effort_range(hours_min: float, hours_max: float, meta: Dict[str, Any]) -> Tuple[float, float]:
+    low = _round_project_hours(hours_min)
+    high = _round_project_hours(max(low, hours_max))
+    if low <= 0 or high <= 0:
+        return low, high
+
+    confidence = str(meta.get("confidence") or "low").strip().lower()
+    scope = str(meta.get("scope") or "").strip().lower()
+    try:
+        task_count = int(float(meta.get("task_count") or 0))
+    except (TypeError, ValueError):
+        task_count = 0
+    try:
+        risk_count = int(float(meta.get("risk_count") or 0))
+    except (TypeError, ValueError):
+        risk_count = 0
+
+    if scope == "hardware_swap":
+        ratio_limit = 1.45
+        absolute_slack = 3.5
+    elif task_count and task_count <= 2:
+        ratio_limit = 1.65
+        absolute_slack = 4.0
+    elif confidence == "high":
+        ratio_limit = 1.45
+        absolute_slack = 6.0
+    elif confidence == "medium":
+        ratio_limit = 1.6
+        absolute_slack = 8.0
+    else:
+        ratio_limit = 1.85
+        absolute_slack = 10.0
+
+    risk_slack = min(4.0, max(0, risk_count) * 1.0)
+    allowed_high = max(low * 1.15, min(low * ratio_limit, low + absolute_slack + risk_slack))
+    return low, _round_project_hours(min(high, max(low, allowed_high)))
 
 
 def _fallback_project_effort_estimate(folder: Dict[str, Any]) -> Dict[str, Any]:
-    streams = folder.get("content", {}).get("streams", []) if isinstance(folder, dict) else []
+    content = folder.get("content", {}) if isinstance(folder, dict) and isinstance(folder.get("content"), dict) else {}
+    overview = content.get("overview") if isinstance(content.get("overview"), dict) else {}
+    project_context = " ".join(
+        str(overview.get(key) or "").strip()
+        for key in ("project_description", "target_state", "scope_notes", "ai_guidance")
+    )
+    streams = content.get("streams", []) if isinstance(content.get("streams"), list) else []
     breakdown: List[Dict[str, Any]] = []
     total_min = 0.0
     total_max = 0.0
@@ -4795,6 +4997,8 @@ def _fallback_project_effort_estimate(folder: Dict[str, Any]) -> Dict[str, Any]:
     checklist_count = 0
     stream_count = 0
     detailed_tasks = 0
+    hardware_swap_tasks = 0
+    hardware_device_count = 0
     for stream in streams or []:
         if not isinstance(stream, dict):
             continue
@@ -4805,49 +5009,78 @@ def _fallback_project_effort_estimate(folder: Dict[str, Any]) -> Dict[str, Any]:
         checklist_count += len(checklists)
         risk_count += len(risks)
         task_count += len(tasks)
-        stream_min = 0.75
-        stream_max = 1.5
+        stream_min = 0.25 if tasks else 0.0
+        stream_max = 0.5 if tasks else 0.0
         for task in tasks:
             if not isinstance(task, dict):
                 continue
-            low, high = _estimate_project_task_range(task, stream)
+            task_text = " ".join([str(stream.get("title") or ""), str(task.get("title") or ""), str(task.get("note") or "")])
+            if _is_hardware_swap_scope(task_text):
+                hardware_swap_tasks += 1
+                hardware_device_count += max(1, _extract_project_device_count(task_text))
+            low, high = _estimate_project_task_range(task, stream, project_context=project_context)
             stream_min += low
             stream_max += high
             if len(_normalize_space(str(task.get("title") or "") + " " + str(task.get("note") or ""))) >= 45:
                 detailed_tasks += 1
         if not tasks:
-            stream_min += 2.0
-            stream_max += 6.0
-        stream_min += len(risks) * 0.75 + len(checklists) * 0.2
-        stream_max += len(risks) * 2.0 + len(checklists) * 0.5
+            stream_min += 0.75
+            stream_max += 2.5
+        stream_min += len(risks) * 0.25 + len(checklists) * 0.05
+        stream_max += len(risks) * 0.9 + len(checklists) * 0.2
         breakdown.append(
             {
-                "stream": str(stream.get("title") or "Baustein").strip() or "Baustein",
-                "hours_min": round(stream_min, 1),
-                "hours_max": round(stream_max, 1),
+                "stream": str(stream.get("title") or "Tag").strip() or "Tag",
+                "hours_min": _round_project_hours(stream_min),
+                "hours_max": _round_project_hours(stream_max),
             }
         )
         total_min += stream_min
         total_max += stream_max
-    coordination_factor_min = 1.12 if task_count else 1.2
-    coordination_factor_max = 1.25 if task_count else 1.45
-    total_min = max(2.0, total_min * coordination_factor_min)
-    total_max = max(total_min * 1.3, total_max * coordination_factor_max)
+    calibration_factor = (
+        PROJECT_HARDWARE_EFFORT_CALIBRATION_FACTOR
+        if hardware_swap_tasks and hardware_swap_tasks == max(1, task_count)
+        else PROJECT_EFFORT_CALIBRATION_FACTOR
+    )
+    coordination_factor_min = 1.0 if task_count else 1.08
+    coordination_factor_max = 1.05 if task_count else 1.18
+    total_min = max(0.5, total_min * coordination_factor_min * calibration_factor)
+    total_max = max(total_min * 1.15, total_max * coordination_factor_max * calibration_factor)
     if risk_count:
-        total_max *= min(1.5, 1 + (risk_count * 0.04))
-    confidence = "high" if task_count >= 8 and detailed_tasks >= max(2, task_count // 3) else "medium" if task_count >= 4 else "low"
-    return {
+        total_max *= min(1.22, 1 + (risk_count * 0.02))
+    confidence = (
+        "high"
+        if task_count >= 8 and detailed_tasks >= max(2, task_count // 3)
+        else "medium"
+        if task_count >= 4 or hardware_swap_tasks
+        else "low"
+    )
+    scope_note = (
+        f", {hardware_device_count} Gerät(e) aus Tausch-Aufgaben"
+        if hardware_swap_tasks
+        else ""
+    )
+    estimate = {
         "mode": "estimate",
         "title": "Aufwandsschätzung",
-        "hours_min": round(total_min, 1),
-        "hours_max": round(total_max, 1),
+        "hours_min": _round_project_hours(total_min),
+        "hours_max": _round_project_hours(total_max),
         "confidence": confidence,
         "reasoning": (
-            f"Heuristik mit {task_count} Aufgaben, {stream_count} Bausteinen, "
-            f"{checklist_count} Checks und {risk_count} Risiken inkl. Koordination."
+            f"Heuristik mit {task_count} Aufgaben, {stream_count} Tags, "
+            f"{checklist_count} Checks und {risk_count} Risiken{scope_note} inkl. Koordination."
         )[:200],
         "breakdown": breakdown[:20],
+        "scope": "hardware_swap" if hardware_swap_tasks and hardware_swap_tasks == max(1, task_count) else "mixed",
+        "task_count": int(task_count),
+        "risk_count": int(risk_count),
     }
+    estimate["hours_min"], estimate["hours_max"] = _tighten_project_effort_range(
+        float(estimate["hours_min"]),
+        float(estimate["hours_max"]),
+        estimate,
+    )
+    return estimate
 
 
 def _normalize_project_effort_estimate(parsed: Dict[str, Any], folder: Dict[str, Any]) -> Dict[str, Any]:
@@ -4865,15 +5098,55 @@ def _normalize_project_effort_estimate(parsed: Dict[str, Any], folder: Dict[str,
     if hours_min <= 0 or hours_max <= 0:
         hours_min, hours_max = fallback_min, fallback_max
     else:
-        hours_min = max(hours_min, fallback_min * 0.65)
-        hours_max = max(hours_max, hours_min * 1.25, fallback_max * 0.65)
-    parsed["hours_min"] = round(hours_min, 1)
-    parsed["hours_max"] = round(max(hours_min, hours_max), 1)
+        hours_min = max(hours_min, fallback_min)
+        hours_max = max(hours_max, hours_min * 1.18, fallback_max)
+        fallback_confidence = str(fallback.get("confidence") or "low").lower()
+        fallback_scope = str(fallback.get("scope") or "").lower()
+        if fallback_scope == "hardware_swap":
+            ceiling_factor = 1.12
+        elif fallback_confidence == "high":
+            ceiling_factor = 1.18
+        elif fallback_confidence == "medium":
+            ceiling_factor = 1.3
+        else:
+            ceiling_factor = 1.55
+        ceiling_min = max(fallback_min, fallback_min * ceiling_factor)
+        ceiling_max = max(fallback_max, fallback_max * ceiling_factor)
+        hours_min = min(hours_min, ceiling_min)
+        hours_max = min(hours_max, max(hours_min * 1.18, ceiling_max))
     confidence = str(parsed.get("confidence") or fallback.get("confidence") or "low").strip().lower()
     parsed["confidence"] = confidence if confidence in {"low", "medium", "high"} else "low"
+    parsed["task_count"] = int(fallback.get("task_count") or 0)
+    parsed["risk_count"] = int(fallback.get("risk_count") or 0)
+    hours_min, hours_max = _tighten_project_effort_range(hours_min, hours_max, {**fallback, **parsed})
+    parsed["hours_min"] = hours_min
+    parsed["hours_max"] = hours_max
     if not isinstance(parsed.get("breakdown"), list) or not parsed.get("breakdown"):
         parsed["breakdown"] = fallback.get("breakdown") or []
+    else:
+        normalized_breakdown: List[Dict[str, Any]] = []
+        for row in parsed.get("breakdown") or []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                row_min = float(row.get("hours_min") or 0)
+            except (TypeError, ValueError):
+                row_min = 0.0
+            try:
+                row_max = float(row.get("hours_max") or 0)
+            except (TypeError, ValueError):
+                row_max = 0.0
+            normalized_breakdown.append(
+                {
+                    **row,
+                    "hours_min": _round_project_hours(row_min),
+                    "hours_max": _round_project_hours(max(row_min, row_max)),
+                }
+            )
+        parsed["breakdown"] = normalized_breakdown or fallback.get("breakdown") or []
     parsed["reasoning"] = str(parsed.get("reasoning") or fallback.get("reasoning") or "")[:220]
+    if fallback.get("scope"):
+        parsed["scope"] = fallback.get("scope")
     return parsed
 
 
@@ -4897,9 +5170,21 @@ def _fallback_project_ai_assist(action: str, topic: str, folder: Dict[str, Any],
     if action == "offer_basis":
         return {"mode": "text", "text": f"Leistungsgrundlage zu {topic_value}:\n- Analyse und Abstimmung\n- Umsetzung des beschlossenen Zielbilds\n- Test, Dokumentation und Übergabe", "title": "Angebotsgrundlage"}
     if action == "invoice_positions":
+        source_lines = []
+        for line in str(context or "").splitlines():
+            match = re.match(r"\s*\d+[.)]\s*(.+)", line)
+            if not match:
+                continue
+            text_value = _normalize_space(match.group(1))
+            text_value = re.sub(r"^Tag:\s*[^|]+\|\s*", "", text_value, flags=re.I)
+            text_value = re.sub(r"Stunden:\s*[\d.,]+.*$", "", text_value, flags=re.I).strip(" |")
+            text_value = re.sub(r"aktueller Text:\s*", "", text_value, flags=re.I)
+            text_value = re.sub(r"Aufgabe:\s*", "", text_value, flags=re.I)
+            if text_value:
+                source_lines.append(text_value[:160])
         return {
             "mode": "items",
-            "items": [
+            "items": source_lines or [
                 f"Analyse und Umsetzung für {topic_value}",
                 f"Abstimmung, Dokumentation und Übergabe zu {topic_value}",
                 f"Projektleistung {topic_value} inklusive Qualitätssicherung"
@@ -4916,7 +5201,9 @@ def _build_estimate_context(folder: Dict[str, Any]) -> str:
         return ""
     content = folder.get("content") if isinstance(folder.get("content"), dict) else {}
     streams = content.get("streams") if isinstance(content.get("streams"), list) else []
+    materials = content.get("materials") if isinstance(content.get("materials"), list) else []
     overview = content.get("overview") if isinstance(content.get("overview"), dict) else {}
+    financials = _project_folder_financial_totals(content)
     lines = [
         f"Projekt: {str(folder.get('title') or '').strip()}",
         f"Kunde: {str(folder.get('customer') or '').strip()}",
@@ -4930,15 +5217,29 @@ def _build_estimate_context(folder: Dict[str, Any]) -> str:
         f"KI-Fokus: {str(overview.get('ai_guidance') or '').strip()[:400]}",
         f"Aktuell: {str(folder.get('current_state') or '').strip()[:200]}",
         f"Nächster Schritt: {str(folder.get('next_step') or '').strip()[:200]}",
+        f"Erfasster Material-Verkauf: {round(float(financials.get('materialRevenueEur') or 0.0), 2)} EUR",
+        f"Erfasste Leistungspositionen: {round(float(financials.get('taskRevenueEur') or 0.0), 2)} EUR",
     ]
-    lines.append(f"\nBausteine ({len(streams)}):")
+    if materials:
+        lines.append(f"\nMaterialpositionen ({len(materials)}):")
+        for item in materials[:12]:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or item.get("name") or "Material").strip()[:90]
+            quantity = _project_item_quantity(item)
+            price = _parse_project_money_value(item.get("price"))
+            purchase_price = _parse_project_money_value(item.get("purchase_price"))
+            price_text = f", VK {price:g} EUR" if price > 0 else ""
+            cost_text = f", EK {purchase_price:g} EUR" if purchase_price > 0 else ""
+            lines.append(f"- {title}: Menge {quantity:g}{price_text}{cost_text}")
+    lines.append(f"\nTags ({len(streams)}):")
     for stream in streams[:20]:
         if not isinstance(stream, dict):
             continue
         tasks = stream.get("tasks") or []
         checks = stream.get("checklists") if isinstance(stream.get("checklists"), list) else stream.get("checklist") or []
         risks = stream.get("risks") or []
-        title = str(stream.get("title") or "Baustein").strip()
+        title = str(stream.get("title") or "Tag").strip()
         short = str(stream.get("short_status") or "").strip()
         lines.append(f"- {title} | {len(tasks)} Aufgaben, {len(checks)} Checks, {len(risks)} Risiken{' — ' + short if short else ''}")
         for task in tasks[:8]:
@@ -4951,6 +5252,15 @@ def _build_estimate_context(folder: Dict[str, Any]) -> str:
                 if t_title:
                     meta = ", ".join(item for item in [t_status or "open", f"Owner {t_owner}" if t_owner else "", f"Termin {t_due}" if t_due else ""] if item)
                     lines.append(f"   • [{meta}] {t_title}{' — ' + t_note if t_note else ''}")
+        if not materials:
+            offer_positions = stream.get("offer_positions") if isinstance(stream.get("offer_positions"), list) else []
+            for item in offer_positions[:5]:
+                if isinstance(item, dict):
+                    title_text = str(item.get("title") or item.get("name") or "Position").strip()[:90]
+                    quantity = _project_item_quantity(item)
+                    price = _project_item_price(item)
+                    if title_text:
+                        lines.append(f"   Material/Position: {title_text}, Menge {quantity:g}{', VK ' + format(price, 'g') + ' EUR' if price > 0 else ''}")
     return "\n".join(line for line in lines if line and not line.endswith(": "))
 
 
@@ -4973,39 +5283,71 @@ def _try_project_ai_assist(action: str, topic: str, folder: Dict[str, Any], stre
         "customer_mail": "Erstelle eine Kundenmail als JSON mit mode=text, title und text.",
         "offer_basis": "Erstelle eine Angebotsgrundlage als JSON mit mode=text, title und text.",
         "handover": "Erstelle eine interne Übergabe als JSON mit mode=text, title und text.",
-        "invoice_positions": "Erstelle Rechnungspositionen als JSON mit mode=items, title und items[] (Strings). Formuliere kurz, fakturierbar und kundentauglich.",
+        "invoice_positions": (
+            "Erstelle Rechnungspositionen als JSON mit mode=items, title und items[] (Strings). "
+            "Wenn im Zusatzkontext Positionen nummeriert sind, gib exakt gleich viele items in gleicher Reihenfolge zurück. "
+            "Formuliere kurz, fakturierbar, kundentauglich und ohne interne Statusbegriffe."
+        ),
         "estimate_effort": (
             "Du bist Senior IT-Consultant in einem deutschen IT-Systemhaus. Schätze den realistischen "
-            "Gesamtaufwand der Projektmappe in Personenstunden — inklusive Vorbereitung, Umsetzung, "
-            "Tests, Doku/Übergabe, Abstimmung, Warte-/Koordinationsanteilen und Nachkontrolle. "
-            "Schätze wie für eine echte interne Kapazitätsplanung, nicht wie eine knappe Kundenzusammenfassung.\n\n"
+            "Arbeitsaufwand der Projektmappe in Personenstunden. Es geht ausschließlich um Arbeitszeit, "
+            "nicht um Warenwert, Materialpreis, Projektbudget oder Umsatz. Materialpositionen werden separat "
+            "addiert und dürfen die Stunden nicht erhöhen, außer aus dem Material folgt konkret eine Tätigkeit "
+            "(z. B. Einbau, Tausch, Konfiguration, Datenübernahme).\n\n"
+            "Grundregel: Schätze von unten nach oben. Erst konkrete Aufgabe lesen, dann Arbeitsschritte ableiten, "
+            "dann min/max bilden. Kein pauschaler Projektaufschlag, kein mehrtägiger Risikopuffer für kleine, "
+            "klar abgegrenzte Vor-Ort-Jobs. Die Spanne soll ein nutzbarer Planungsbereich sein, kein Worst-Case-Fächer.\n\n"
             "Referenzwerte (Spannweiten, an Komplexität anpassen):\n"
-            "- Kleine Abstimmungs-/Prüfaufgabe: 0,75–2 h\n"
-            "- Konfiguration eines überschaubaren Dienstes: 2–6 h\n"
-            "- Backup-Konzept neu aufsetzen: 6–14 h\n"
-            "- Datei-/Datenmigration (Server→Server, M365): 8–24 h\n"
-            "- Hyper-V/VMware Hostmigration: 12–32 h pro Host\n"
-            "- Domain/Active-Directory-Umstellung: 16–40 h\n"
-            "- Firewall-Regeln einrichten/dokumentieren: 4–10 h\n"
-            "- M365-Tenant-Setup inkl. Identity: 8–20 h\n"
-            "- Website/CMS-Major-Upgrade mit Themes/Plugins/Tests: 16–60 h je nach Umfang\n"
-            "- Custom-Code-/Schnittstellen-Anpassung: 4–16 h pro abgegrenztem Teil\n"
-            "- Standard-Arbeitsplatz einrichten: 1,5–3 h\n"
-            "- Software-Rollout (paketiert): 0,5 h pro Gerät + 4 h Setup\n"
-            "- Doku/Übergabe: 10–15 % der Umsetzungszeit\n"
-            "- Koordination/Termin/Rückfragen: 10–20 % zusätzlich\n\n"
+            "- Kurze Abstimmung, Rückfrage, Terminfixierung: 0,25–0,75 h\n"
+            "- Kleine Abstimmungs-/Prüfaufgabe: 0,5–1,5 h\n"
+            "- Analyse, Aufnahme, Konzept oder Planung: 0,75–2,25 h je klar abgegrenztem Schritt\n"
+            "- Normale Umsetzung oder Konfiguration: 0,75–3 h je Schritt\n"
+            "- PC/Notebook tauschen vor Ort: ca. 1–2 h je Gerät plus 0,5–0,75 h Anfahrt/Vorbereitung; "
+            "2 PCs tauschen ist typischerweise ca. 3–5 h, mit Profil/Daten/Software eher 4–7 h, nicht 10+ h\n"
+            "- Einzelner Standard-Arbeitsplatz mit Domäne/M365/Drucker/Grundsoftware: 1,5–3 h je Gerät\n"
+            "- Mehrere gleichartige Arbeitsplätze: Setup-/Anfahrtsanteil nur einmal rechnen, je weiteres Gerät degressiv\n"
+            "- Kleine Hardware-Lieferung ohne Einrichtung: 0,25–1 h Handling plus Anfahrt falls nötig\n"
+            "- Komplexe Migration, Rollout oder Go-live: 2–7 h je Schritt\n"
+            "- Integration, Schnittstelle, Automatisierung oder Datenübernahme: 1,5–6 h je Schritt\n"
+            "- Produktive/kritische Änderung mit Rollback- oder Wartungsfenster: +10–20 %\n"
+            "- Test, Abnahme, Nachkontrolle: 5–12 % der Umsetzungszeit\n"
+            "- Doku/Übergabe: 3–8 % der Umsetzungszeit\n"
+            "- Koordination/Termin/Rückfragen: 3–10 % zusätzlich\n\n"
+            "Plausibilitätsanker:\n"
+            "- Wenn es <=2 konkrete Aufgaben und keine Migration/Schnittstelle/Serverumstellung gibt, ist hours_max "
+            "normalerweise <=8 h. Überschreite das nur bei klar erkennbarem Zusatzscope.\n"
+            "- Wenn nur Geräteanzahl und Tausch/Einrichtung genannt sind, rechne Geräte x Arbeitszeit plus einmalige "
+            "Anfahrt/Vorbereitung, nicht pro Gerät einen vollen Projekttag.\n"
+            "- Wenn Materialpreise hoch sind, bleibt die Arbeitszeit trotzdem niedrig, solange die Tätigkeit einfach ist.\n"
+            "- Wenn Informationen fehlen, erhöhe primär die Konfidenz auf low und das Max moderat, nicht automatisch um Tage.\n"
+            "- Material, Lizenzkosten und Hardwarepreise niemals in Stunden umrechnen.\n\n"
+            "Präzision der Spanne:\n"
+            "- Gib eine enge, entscheidungsfähige Spanne zurück. hours_max ist ein realistischer Komplikationswert, "
+            "nicht der schlimmstmögliche Fall.\n"
+            "- Bei kleinen klaren Jobs soll hours_max meist höchstens 40–65 % über hours_min liegen.\n"
+            "- Bei mittleren Projekten soll hours_max meist höchstens 60 % über hours_min liegen.\n"
+            "- Bei sehr unklarem Scope darf die Spanne breiter sein, aber erkläre die Unsicherheit über confidence=low "
+            "statt hours_max massiv aufzublähen.\n"
+            "- Wenn du innerlich auf eine Spanne wie 6,5–22 h kommst, ist sie zu breit: Scope enger interpretieren, "
+            "Annahmen treffen und eher z. B. 6,5–10,5 h oder 8–12 h ausgeben.\n\n"
             "Vorgehen:\n"
-            "1) Geh die Bausteine einzeln durch und schätze pro Baustein eine min/max-Zeit.\n"
-            "2) Zähle Analyse, Vorbereitung, Durchführung, Tests, Rollback-Plan, Dokumentation und Übergabe explizit mit.\n"
-            "3) Berücksichtige Risiken (Risiko = +20–50 %), unklare Anforderungen (+30 %), "
-            "Schnittstellen (+15 %), produktive Systeme (+25 %).\n"
-            "4) Wenn keine Aufgaben vorhanden sind, schätze konservativ höher (großes max).\n"
-            "5) Konfidenz: high=detaillierte Aufgaben + klare Kurzlage, "
+            "1) Geh die Tags einzeln durch und schätze pro Tag eine min/max-Zeit.\n"
+            "2) Zerlege jeden Tag gedanklich in Arbeitsschritte: Vorbereitung/Anfahrt, Durchführung, "
+            "Konfiguration, Test, Doku/Übergabe. Streiche Schritte, die im Text nicht plausibel sind.\n"
+            "3) Runde alle Stundenwerte auf 0,25h-Schritte.\n"
+            "4) Zähle nur benötigte Analyse, Vorbereitung, Durchführung, Tests, Doku und Übergabe mit; "
+            "keinen pauschalen Projektmanagement-Block, wenn die Aufgaben klein und klar sind.\n"
+            "5) Berücksichtige Risiken moderat: Risiko +15–35 %, unklare Anforderungen +20 %, "
+            "Schnittstellen +15 %, produktive Systeme +20 %.\n"
+            "6) Prüfe vor der Antwort, ob min/max zu den konkreten Aufgaben passen. Ein einfacher PC-Tausch darf "
+            "nicht wie eine Migration oder ein Rollout bewertet werden.\n"
+            "7) Wenn keine Aufgaben vorhanden sind, schätze mit niedriger Konfidenz und größerem max.\n"
+            "8) Konfidenz: high=detaillierte Aufgaben + klare Kurzlage, "
             "medium=grobe Aufgaben, low=fast keine Strukturinfo.\n\n"
             "Antworte ausschließlich als JSON-Objekt mit:\n"
             "  mode='estimate', title (string), hours_min (number), hours_max (number), "
             "confidence ('low'|'medium'|'high'), reasoning (deutsch, max 200 Zeichen, knapp warum), "
-            "breakdown (Array von Objekten {stream, hours_min, hours_max} pro Baustein, optional)."
+            "breakdown (Array von Objekten {stream, hours_min, hours_max} pro Tag, optional)."
         ),
     }
     prompt_text = (
@@ -5166,6 +5508,10 @@ def _normalize_model_setting_value(raw_value: Any) -> str:
     return candidates[0] if candidates else ""
 
 
+def _normalize_codex_model_setting_value(raw_value: Any) -> str:
+    return _normalize_model_setting_value(raw_value)
+
+
 def _normalize_ai_provider(raw_value: Any) -> str:
     provider = str(raw_value or "").strip().lower()
     if provider in {
@@ -5211,6 +5557,11 @@ def _normalize_openai_compatible_url(base_url: str, path: str) -> str:
     return f"{normalized_base}/v1/{normalized_path}"
 
 
+def _is_codex_bridge_endpoint(base_url: Any) -> bool:
+    normalized = str(base_url or "").strip().lower()
+    return bool(normalized and ("codex-bridge" in normalized or "codex_bridge" in normalized))
+
+
 def _merge_model_candidates(*values: Any) -> List[str]:
     ordered: List[str] = []
     seen: Set[str] = set()
@@ -5247,6 +5598,7 @@ def _normalize_ai_endpoint(raw: Any, *, fallback_id: str = "", existing: Optiona
         "base_url": base_url,
         "api_key": api_key,
         "default_model": _normalize_model_setting_value(raw.get("default_model") or raw.get("defaultModel") or raw.get("ai_default_model")),
+        "codex_model": _normalize_codex_model_setting_value(raw.get("codex_model") or raw.get("codexModel") or raw.get("ai_codex_model")),
         "enabled": raw.get("enabled") is not False,
         "notes": _telemetry_text(raw.get("notes") or "", 240),
     }
@@ -5268,7 +5620,10 @@ def _default_ai_endpoint_from_settings(settings: Optional[IntegrationSettings]) 
         "default_model": _normalize_model_setting_value(
             getattr(settings, "ai_default_model", "") if settings is not None else ""
         ),
-        "enabled": True,
+        "codex_model": _normalize_codex_model_setting_value(
+            getattr(settings, "ai_codex_model", "") if settings is not None else ""
+        ),
+        "enabled": (getattr(settings, "ai_default_enabled", True) is not False) if settings is not None else True,
         "notes": "Kompatibilitaets-Endpoint aus den bisherigen KI-Feldern.",
     }
 
@@ -5299,6 +5654,7 @@ def _serialize_ai_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
         "provider": endpoint.get("provider") or AI_PROVIDER_OLLAMA,
         "base_url": endpoint.get("base_url") or "",
         "default_model": endpoint.get("default_model") or "",
+        "codex_model": endpoint.get("codex_model") or "",
         "enabled": endpoint.get("enabled") is not False,
         "notes": endpoint.get("notes") or "",
         "has_api_key": bool(str(endpoint.get("api_key") or "").strip()),
@@ -5313,7 +5669,7 @@ def _parse_ai_purpose_routes(settings: Optional[IntegrationSettings]) -> Dict[st
         parsed = {}
     if not isinstance(parsed, dict):
         parsed = {}
-    endpoints = {endpoint["id"] for endpoint in _parse_ai_endpoints(settings)}
+    endpoints = {endpoint["id"] for endpoint in _parse_ai_endpoints(settings) if endpoint.get("enabled") is not False}
     routes: Dict[str, str] = {}
     for purpose in AI_PURPOSE_LABELS:
         endpoint_id = _ai_endpoint_id(parsed.get(purpose))
@@ -5346,6 +5702,7 @@ def _build_ai_config_snapshot(settings: Optional[IntegrationSettings] = None, *,
     endpoint_lookup = {endpoint["id"]: endpoint for endpoint in endpoints}
     normalized_purpose = str(purpose or "").strip().lower()
     selected_endpoint_id = _ai_endpoint_id(endpoint_id) or routes.get(normalized_purpose) or "default"
+    selected_endpoint_missing = selected_endpoint_id not in endpoint_lookup
     endpoint = endpoint_lookup.get(selected_endpoint_id) or endpoint_lookup.get("default") or _default_ai_endpoint_from_settings(settings)
     provider = _normalize_ai_provider(endpoint.get("provider"))
     base_url = _normalize_ai_base_url(endpoint.get("base_url"), provider)
@@ -5354,6 +5711,11 @@ def _build_ai_config_snapshot(settings: Optional[IntegrationSettings] = None, *,
     if endpoint.get("id") == "default" and not endpoint_default_model:
         endpoint_default_model = getattr(settings, "ai_default_model", "") if settings is not None else ""
     configured_default_model = _normalize_model_setting_value(endpoint_default_model)
+    endpoint_codex_model = _normalize_codex_model_setting_value(endpoint.get("codex_model"))
+    if endpoint.get("id") == "default" and not endpoint_codex_model:
+        endpoint_codex_model = _normalize_codex_model_setting_value(
+            getattr(settings, "ai_codex_model", "") if settings is not None else ""
+        )
     default_model = configured_default_model or AI_DEFAULT_MODEL_ENV
     configured_models: Dict[str, str] = {}
     models: Dict[str, str] = {}
@@ -5362,14 +5724,21 @@ def _build_ai_config_snapshot(settings: Optional[IntegrationSettings] = None, *,
         normalized_value = _normalize_model_setting_value(configured_value)
         configured_models[purpose] = normalized_value
         models[purpose] = normalized_value or str(AI_MODEL_ENV_DEFAULTS.get(purpose) or "").strip()
+    if endpoint_codex_model and _is_codex_bridge_endpoint(base_url):
+        default_model = endpoint_codex_model
     return {
         "provider": provider,
         "base_url": base_url,
         "api_key": api_key,
         "endpoint_id": endpoint.get("id") or "default",
         "endpoint_name": endpoint.get("name") or endpoint.get("id") or "Standard",
+        "requested_endpoint_id": selected_endpoint_id,
+        "endpoint_missing": selected_endpoint_missing,
+        "enabled": endpoint.get("enabled") is not False,
         "default_model": default_model,
         "configured_default_model": configured_default_model,
+        "codex_model": endpoint_codex_model,
+        "is_codex_bridge": _is_codex_bridge_endpoint(base_url),
         "models": models,
         "configured_models": configured_models,
         "endpoints": endpoints,
@@ -5401,6 +5770,7 @@ def _build_ai_config_from_request(
         if persisted_settings is not None:
             for field_name in (
                 "ai_provider",
+                "ai_default_enabled",
                 "ai_base_url",
                 "ai_api_key",
                 "ai_default_model",
@@ -5414,6 +5784,7 @@ def _build_ai_config_from_request(
                 "ai_newsletter_model",
                 "ai_meta_hub_model",
                 "ai_project_folder_model",
+                "ai_codex_model",
                 "ai_purpose_routes_json",
             ):
                 setattr(temp_settings, field_name, getattr(persisted_settings, field_name, ""))
@@ -5438,7 +5809,22 @@ def _build_ai_config_from_request(
         if endpoint_selected
         else payload.get("ai_default_model", base_config.get("configured_default_model"))
     )
-    default_model = configured_default_model or str(base_config.get("default_model") or "").strip()
+    configured_codex_model = _normalize_codex_model_setting_value(
+        base_config.get("codex_model")
+        if endpoint_selected
+        else payload.get("ai_codex_model", base_config.get("codex_model"))
+    )
+    endpoint_enabled = (
+        base_config.get("enabled") is not False
+        if endpoint_selected
+        else bool(payload.get("ai_default_enabled", base_config.get("enabled") is not False))
+    )
+    is_codex_bridge = _is_codex_bridge_endpoint(base_url)
+    default_model = (
+        configured_codex_model
+        if configured_codex_model and is_codex_bridge
+        else configured_default_model or str(base_config.get("default_model") or "").strip()
+    )
     models = dict(base_config.get("models") or {})
     configured_models = dict(base_config.get("configured_models") or {})
     for purpose, field_name in AI_MODEL_SETTINGS_FIELDS.items():
@@ -5453,8 +5839,13 @@ def _build_ai_config_from_request(
         "api_key": api_key,
         "endpoint_id": base_config.get("endpoint_id") or requested_endpoint_id,
         "endpoint_name": base_config.get("endpoint_name") or "",
+        "requested_endpoint_id": requested_endpoint_id or base_config.get("requested_endpoint_id") or base_config.get("endpoint_id") or "",
+        "endpoint_missing": bool(base_config.get("endpoint_missing")),
+        "enabled": endpoint_enabled,
         "default_model": default_model,
         "configured_default_model": configured_default_model,
+        "codex_model": configured_codex_model,
+        "is_codex_bridge": is_codex_bridge,
         "models": models,
         "configured_models": configured_models,
     }
@@ -5467,6 +5858,9 @@ def _resolve_ai_models(
     config: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     resolved_config = config or _get_ai_config_snapshot(settings, purpose=purpose)
+    codex_model = str(resolved_config.get("codex_model") or "").strip()
+    if codex_model and bool(resolved_config.get("is_codex_bridge")):
+        return [codex_model]
     ordered = _merge_model_candidates(*specific_values)
     if ordered:
         return ordered
@@ -5493,6 +5887,21 @@ def _resolve_ollama_models(*specific_values: Any) -> List[str]:
     return _resolve_ai_models(*specific_values)
 
 
+def _validate_ai_generation_config(config: Dict[str, Any]) -> Tuple[bool, str, str]:
+    provider = str((config or {}).get("provider") or AI_PROVIDER_OLLAMA)
+    base_url = str((config or {}).get("base_url") or "").strip()
+    if (config or {}).get("enabled") is False:
+        return False, "endpoint_disabled", "KI-Endpunkt ist deaktiviert"
+    if (config or {}).get("endpoint_missing"):
+        requested = str((config or {}).get("requested_endpoint_id") or "").strip() or "unbekannt"
+        return False, "endpoint_missing", f"Gerouteter KI-Endpunkt existiert nicht: {requested}"
+    if not base_url:
+        return False, "not_configured", "Base URL fehlt"
+    if provider == AI_PROVIDER_OPENAI_COMPATIBLE and not _normalize_openai_compatible_url(base_url, "chat/completions"):
+        return False, "invalid_base_url", "OpenAI-kompatible Base URL ist ungueltig"
+    return True, "", ""
+
+
 def _configured_ai_models_for_picker(config: Dict[str, Any]) -> List[str]:
     models = config.get("models") if isinstance(config, dict) else {}
     configured = _merge_model_candidates(
@@ -5500,6 +5909,7 @@ def _configured_ai_models_for_picker(config: Dict[str, Any]) -> List[str]:
         (models or {}).get("action", ""),
         (models or {}).get("task_draft", ""),
         (models or {}).get("invoice_summary", ""),
+        config.get("codex_model") if isinstance(config, dict) and config.get("is_codex_bridge") else "",
         config.get("default_model") if isinstance(config, dict) else "",
     )
     return configured
@@ -5508,6 +5918,8 @@ def _configured_ai_models_for_picker(config: Dict[str, Any]) -> List[str]:
 def _has_explicit_ai_model_selection(config: Optional[Dict[str, Any]], purpose: str = "") -> bool:
     if not isinstance(config, dict):
         return False
+    if config.get("is_codex_bridge") and str(config.get("codex_model") or "").strip():
+        return True
     normalized_purpose = str(purpose or "").strip().lower()
     configured_models = config.get("configured_models") or {}
     if normalized_purpose and isinstance(configured_models, dict):
@@ -5649,6 +6061,8 @@ def _list_available_ai_models(
             timeout_seconds=timeout_seconds,
             base_url=str(resolved_config.get("base_url") or OLLAMA_BASE_URL),
         )
+    if resolved_config.get("is_codex_bridge") and str(resolved_config.get("codex_model") or "").strip():
+        models = _merge_model_candidates(resolved_config.get("codex_model"), models)
     if models:
         return models
     return _configured_ai_models_for_picker(resolved_config)
@@ -6004,6 +6418,7 @@ def _ollama_generate(
     connect_timeout = max(1, int(OLLAMA_CONNECT_TIMEOUT_SECONDS or 1))
     resolved_base_url = _normalize_ai_base_url(base_url or OLLAMA_BASE_URL, AI_PROVIDER_OLLAMA)
     if not resolved_base_url:
+        _record_ai_error_detail("not_configured", "Ollama Base URL fehlt")
         return {}, ""
     normalized_models = []
     seen_models: Set[str] = set()
@@ -6037,6 +6452,7 @@ def _ollama_generate(
 
     prompt_text = str(prompt or "").strip()
     if not prompt_text:
+        _record_ai_error_detail("empty_prompt", "Prompt ist leer")
         return {}, ""
     if len(prompt_text) > OLLAMA_PROMPT_MAX_CHARS:
         prompt_text = prompt_text[:OLLAMA_PROMPT_MAX_CHARS]
@@ -6134,6 +6550,7 @@ def _ollama_generate(
             response = exc.response
             if response is not None and response.status_code == 404:
                 detail = (response.text or "").strip()
+                _record_ai_error_detail("missing_model", detail or "Ollama Modell nicht gefunden", model=model, http_status=404)
                 logger.warning(
                     "Ollama model missing for %s (404). Pull it first. Response: %s",
                     model,
@@ -6141,9 +6558,16 @@ def _ollama_generate(
                 )
                 _mark_ollama_model_missing(model)
             else:
+                _record_ai_error_detail(
+                    "provider_http_error",
+                    (response.text if response is not None else str(exc)) or str(exc),
+                    model=model,
+                    http_status=int(response.status_code) if response is not None else 0,
+                )
                 logger.warning("Ollama request failed with model %s: %s", model, exc)
             continue
         except requests.RequestException as exc:
+            _record_ai_error_detail("provider_request_error", str(exc), model=model)
             logger.warning("Ollama request failed with model %s: %s", model, exc)
             continue
         if isinstance(data, dict):
@@ -6165,8 +6589,13 @@ def _ollama_generate(
             )
             if cache_key and has_response:
                 _store_cached_ollama_response(cache_key, data, model)
+            if not has_response:
+                _record_ai_error_detail("empty_response", "Ollama Antwort enthielt keinen response-Text", model=model)
             return data, model
         logger.warning("Ollama response malformed with model %s", model)
+        _record_ai_error_detail("malformed_response", "Ollama Antwort war kein JSON-Objekt", model=model)
+    if not _get_ai_error_details():
+        _record_ai_error_detail("no_text_response", "Ollama lieferte keine verwertbare Antwort")
     return {}, ""
 
 
@@ -6383,6 +6812,7 @@ def _openai_compatible_generate(
         normalized_models = ["qwen3:8b"]
     prompt_text = str(prompt or "").strip()
     if not prompt_text:
+        _record_ai_error_detail("empty_prompt", "Prompt ist leer")
         return {}, ""
     prompt_char_limit = _resolve_openai_compatible_prompt_limit_chars()
     if prompt_char_limit is not None and len(prompt_text) > prompt_char_limit:
@@ -6390,6 +6820,7 @@ def _openai_compatible_generate(
     resolved_base_url = str(config.get("base_url") or "").strip()
     request_url = _normalize_openai_compatible_url(resolved_base_url, "chat/completions")
     if not request_url:
+        _record_ai_error_detail("not_configured", "OpenAI-kompatible Base URL fehlt")
         return {}, ""
     cache_key = (
         _ollama_cache_key(
@@ -6455,6 +6886,12 @@ def _openai_compatible_generate(
                     break
             except requests.HTTPError as exc:
                 detail = _extract_openai_compatible_error_detail(exc.response)
+                _record_ai_error_detail(
+                    "provider_http_error",
+                    detail or str(exc),
+                    model=model,
+                    http_status=int(exc.response.status_code) if exc.response is not None else 0,
+                )
                 if exc.response is not None and exc.response.status_code == 503 and _is_openai_compatible_loading_error(detail):
                     if attempt_index < 2:
                         wait_seconds = min(4.0, float(1 + attempt_index))
@@ -6497,6 +6934,7 @@ def _openai_compatible_generate(
                 data = {}
                 break
             except (requests.RequestException, ValueError) as exc:
+                _record_ai_error_detail("provider_request_error", str(exc), model=model)
                 logger.warning("OpenAI-compatible request failed model=%s error=%s", model, exc)
                 data = {}
                 break
@@ -6545,6 +6983,7 @@ def _openai_compatible_generate(
                 model,
                 _summarize_openai_compatible_response(data),
             )
+            _record_ai_error_detail("empty_response", _summarize_openai_compatible_response(data), model=model)
         normalized_payload = {
             "response": response_text,
             "usage": data.get("usage") if isinstance(data, dict) else {},
@@ -6574,6 +7013,8 @@ def _openai_compatible_generate(
             _store_cached_ollama_response(cache_key, normalized_payload, model)
         if response_text:
             return normalized_payload, model
+    if not _get_ai_error_details():
+        _record_ai_error_detail("no_text_response", "OpenAI-kompatibler Endpoint lieferte keine verwertbare Antwort")
     return {}, ""
 
 
@@ -6592,13 +7033,19 @@ def _ai_generate(
     system_prompt: Optional[str] = None,
     purpose: str = "",
 ) -> Tuple[Dict[str, Any], str, str]:
-    resolved_config = config or _get_ai_config_snapshot(settings, purpose=purpose)
+    normalized_purpose = str(purpose or "").strip().lower() or "internal_ai"
+    resolved_config = config or _get_ai_config_snapshot(settings, purpose=normalized_purpose)
     provider = str(resolved_config.get("provider") or AI_PROVIDER_OLLAMA)
     started_at = time.time()
     payload: Dict[str, Any] = {}
     model = ""
     used_provider = provider
+    _reset_ai_error_details()
     try:
+        config_ok, config_error_type, config_error_detail = _validate_ai_generation_config(resolved_config)
+        if not config_ok:
+            _record_ai_error_detail(config_error_type, config_error_detail)
+            return {}, "", used_provider
         if provider == AI_PROVIDER_OPENAI_COMPATIBLE:
             payload, model = _openai_compatible_generate(
                 prompt,
@@ -6637,21 +7084,37 @@ def _ai_generate(
                 or bool((payload or {}).get("usage") if isinstance(payload, dict) else None)
             )
             usage = payload.get("usage") if isinstance(payload, dict) and isinstance(payload.get("usage"), dict) else {}
+            candidate_models = _merge_model_candidates(model_candidates)[:8]
+            error_details = _get_ai_error_details()
+            primary_error = error_details[-1] if error_details else {}
+            if not success and not primary_error:
+                primary_error = {
+                    "error_type": "empty_response",
+                    "error_detail": "KI-Aufruf lieferte keine verwertbare Antwort",
+                    "model": model or "",
+                    "http_status": 0,
+                }
             _record_server_telemetry_event(
                 event_type="ai",
                 module="ai",
                 component="ai_generate",
-                action=str(purpose or "unspecified"),
+                action=normalized_purpose,
                 duration_ms=int((time.time() - started_at) * 1000),
                 success=success,
                 meta={
                     "provider": used_provider,
                     "endpoint_id": resolved_config.get("endpoint_id") or "",
                     "endpoint_name": resolved_config.get("endpoint_name") or "",
+                    "requested_endpoint_id": resolved_config.get("requested_endpoint_id") or "",
+                    "endpoint_missing": bool(resolved_config.get("endpoint_missing")),
+                    "endpoint_enabled": resolved_config.get("enabled") is not False,
                     "base_url": resolved_config.get("base_url") or "",
                     "model": model or "",
-                    "model_candidates": _merge_model_candidates(model_candidates)[:5],
-                    "purpose": str(purpose or "unspecified"),
+                    "selected_model": model or "",
+                    "model_candidates": candidate_models[:5],
+                    "candidate_models": candidate_models,
+                    "purpose": normalized_purpose,
+                    "original_purpose": str(purpose or ""),
                     "prompt_chars": len(str(prompt or "")),
                     "system_prompt_chars": len(str(system_prompt or "")),
                     "response_chars": response_chars,
@@ -6660,6 +7123,10 @@ def _ai_generate(
                     "temperature": temperature,
                     "cached_allowed": bool(use_cache),
                     "usage": usage,
+                    "error_type": primary_error.get("error_type") or "",
+                    "error_detail": primary_error.get("error_detail") or "",
+                    "http_status": _telemetry_int(primary_error.get("http_status"), 0, 0, 599),
+                    "attempt_errors": error_details[-5:],
                 },
             )
         except Exception as exc:
@@ -7010,10 +7477,32 @@ def _sanitize_invoice_position_ai_text(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
-    text = re.sub(r"```[\s\S]*?```", " ", text)
+    text = re.sub(r"^```(?:\w+)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.replace("\r", "\n")
+    bullet_lines = []
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        bullet_match = re.match(r"^(?:[-*•]|\d+[.)])\s+(.+)$", line)
+        if not bullet_match:
+            continue
+        item = bullet_match.group(1).strip()
+        item = re.sub(
+            r"\b(Aufgabe|Notiz|Betreff|Kunde|Leistung|Ergebnis)\s*:\s*",
+            "",
+            item,
+            flags=re.IGNORECASE,
+        )
+        item = re.sub(r"\s+", " ", item).strip(" -")
+        if item:
+            bullet_lines.append(item[:180].rstrip(" ,;:-"))
+    if len(bullet_lines) >= 2:
+        return "\n".join(f"- {item}" for item in bullet_lines[:8])
+
     text = re.sub(r"^[\-\*\d\.\)\s]+", "", text, flags=re.MULTILINE)
     text = re.sub(r"\b(Aufgabe|Notiz|Betreff|Kunde|Leistung|Ergebnis)\s*:\s*", "", text, flags=re.IGNORECASE)
-    text = text.replace("\r", "\n")
     text = re.sub(r"\n{2,}", "\n", text)
     text = re.sub(r"\s*\n\s*", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -10385,6 +10874,7 @@ def serialize_integration_settings(settings: IntegrationSettings, db=None) -> Di
         "remote_deploy_default_max_installs": int(settings.remote_deploy_default_max_installs or 0),
         "remote_deploy_default_expiry_days": int(settings.remote_deploy_default_expiry_days or 0),
         "ai_provider": ai_config["provider"],
+        "ai_default_enabled": settings.ai_default_enabled is not False,
         "ai_base_url": ai_config["base_url"],
         "ai_default_model": _normalize_model_setting_value(settings.ai_default_model),
         "ai_internal_model": _normalize_model_setting_value(settings.ai_internal_model),
@@ -10397,6 +10887,7 @@ def serialize_integration_settings(settings: IntegrationSettings, db=None) -> Di
         "ai_newsletter_model": _normalize_model_setting_value(settings.ai_newsletter_model),
         "ai_meta_hub_model": _normalize_model_setting_value(settings.ai_meta_hub_model),
         "ai_project_folder_model": _normalize_model_setting_value(settings.ai_project_folder_model),
+        "ai_codex_model": _normalize_codex_model_setting_value(settings.ai_codex_model),
         "ai_endpoints": [_serialize_ai_endpoint(endpoint) for endpoint in _parse_ai_endpoints(settings)],
         "ai_purpose_routes": _parse_ai_purpose_routes(settings),
         "ai_purpose_labels": AI_PURPOSE_LABELS,
@@ -20031,6 +20522,7 @@ def get_telemetry_summary(days: int = 14):
     routes: Dict[str, Dict[str, Any]] = {}
     ai_endpoints: Dict[str, Dict[str, Any]] = {}
     ai_models: Dict[str, Dict[str, Any]] = {}
+    ai_error_groups: Dict[str, Dict[str, Any]] = {}
     ai_recent: List[Dict[str, Any]] = []
     sessions: Set[str] = set()
     slow_count = 0
@@ -20114,6 +20606,9 @@ def get_telemetry_summary(days: int = 14):
             base_url = _telemetry_text(row_meta.get("base_url") or "", 220)
             purpose = _telemetry_text(row_meta.get("purpose") or row.action or "unspecified", 120)
             model_name = _telemetry_text(row_meta.get("model") or "unbekannt", 160) or "unbekannt"
+            error_type = _telemetry_text(row_meta.get("error_type") or ("error" if not row.success else ""), 80)
+            error_detail = _telemetry_text(row_meta.get("error_detail") or "", 500)
+            http_status = _telemetry_int(row_meta.get("http_status"), 0, 0, 599)
             endpoint_row = ai_endpoints.setdefault(
                 endpoint_id,
                 {
@@ -20128,6 +20623,7 @@ def get_telemetry_summary(days: int = 14):
                     "last_seen_at": 0,
                     "models": {},
                     "purposes": {},
+                    "error_types": {},
                 },
             )
             endpoint_row["endpoint_name"] = endpoint_name or endpoint_row["endpoint_name"]
@@ -20141,6 +20637,8 @@ def get_telemetry_summary(days: int = 14):
                 endpoint_row["errors"] += 1
             endpoint_row["models"][model_name] = int(endpoint_row["models"].get(model_name) or 0) + 1
             endpoint_row["purposes"][purpose] = int(endpoint_row["purposes"].get(purpose) or 0) + 1
+            if not row.success:
+                endpoint_row["error_types"][error_type or "error"] = int(endpoint_row["error_types"].get(error_type or "error") or 0) + 1
 
             model_row = ai_models.setdefault(
                 model_name,
@@ -20154,6 +20652,7 @@ def get_telemetry_summary(days: int = 14):
                     "last_seen_at": 0,
                     "endpoints": {},
                     "purposes": {},
+                    "error_types": {},
                 },
             )
             model_row["provider"] = provider or model_row["provider"]
@@ -20165,6 +20664,32 @@ def get_telemetry_summary(days: int = 14):
                 model_row["errors"] += 1
             model_row["endpoints"][endpoint_name] = int(model_row["endpoints"].get(endpoint_name) or 0) + 1
             model_row["purposes"][purpose] = int(model_row["purposes"].get(purpose) or 0) + 1
+            if not row.success:
+                model_row["error_types"][error_type or "error"] = int(model_row["error_types"].get(error_type or "error") or 0) + 1
+                group_key = f"{purpose}|{endpoint_id}|{model_name}|{error_type or 'error'}"
+                group = ai_error_groups.setdefault(
+                    group_key,
+                    {
+                        "purpose": purpose,
+                        "endpoint_id": endpoint_id,
+                        "endpoint_name": endpoint_name,
+                        "model": model_name,
+                        "provider": provider,
+                        "error_type": error_type or "error",
+                        "http_status": http_status,
+                        "error_detail": error_detail,
+                        "count": 0,
+                        "duration_total_ms": 0,
+                        "max_duration_ms": 0,
+                        "last_seen_at": 0,
+                    },
+                )
+                group["count"] += 1
+                group["duration_total_ms"] += row_duration
+                group["max_duration_ms"] = max(group["max_duration_ms"], row_duration)
+                group["last_seen_at"] = max(group["last_seen_at"], row.created_at or 0)
+                group["http_status"] = http_status or group["http_status"]
+                group["error_detail"] = error_detail or group["error_detail"]
             if len(ai_recent) < 30:
                 ai_recent.append(
                     {
@@ -20180,6 +20705,15 @@ def get_telemetry_summary(days: int = 14):
                         "prompt_chars": _telemetry_int(row_meta.get("prompt_chars"), 0),
                         "response_chars": _telemetry_int(row_meta.get("response_chars"), 0),
                         "response_format": _telemetry_text(row_meta.get("response_format") or "", 40),
+                        "error_type": error_type,
+                        "error_detail": error_detail,
+                        "http_status": http_status,
+                        "selected_model": _telemetry_text(row_meta.get("selected_model") or model_name, 160),
+                        "candidate_models": [
+                            _telemetry_text(item, 160)
+                            for item in (row_meta.get("candidate_models") if isinstance(row_meta.get("candidate_models"), list) else row_meta.get("model_candidates") or [])
+                            if _telemetry_text(item, 160)
+                        ][:8],
                     }
                 )
     module_rows = []
@@ -20207,6 +20741,11 @@ def get_telemetry_summary(days: int = 14):
             key=lambda item: item["count"],
             reverse=True,
         )[:8]
+        endpoint["error_types"] = sorted(
+            [{"error_type": key, "count": value} for key, value in endpoint["error_types"].items()],
+            key=lambda item: item["count"],
+            reverse=True,
+        )[:6]
         ai_endpoint_rows.append(endpoint)
     ai_model_rows = []
     for model in ai_models.values():
@@ -20222,7 +20761,17 @@ def get_telemetry_summary(days: int = 14):
             key=lambda item: item["count"],
             reverse=True,
         )[:8]
+        model["error_types"] = sorted(
+            [{"error_type": key, "count": value} for key, value in model["error_types"].items()],
+            key=lambda item: item["count"],
+            reverse=True,
+        )[:6]
         ai_model_rows.append(model)
+    ai_error_group_rows = []
+    for group in ai_error_groups.values():
+        count = max(1, int(group["count"] or 0))
+        group["avg_duration_ms"] = round(int(group.pop("duration_total_ms") or 0) / count)
+        ai_error_group_rows.append(group)
     used_modules = {key for key, value in modules.items() if int(value.get("views") or 0) > 0}
     unused_hints = [
         {"module": key, "label": label}
@@ -20261,6 +20810,11 @@ def get_telemetry_summary(days: int = 14):
                 key=lambda item: (item["count"], item["last_seen_at"]),
                 reverse=True,
             )[:20],
+            "error_groups": sorted(
+                ai_error_group_rows,
+                key=lambda item: (item["count"], item["last_seen_at"]),
+                reverse=True,
+            )[:25],
             "recent": ai_recent,
         },
         "unused_hints": unused_hints,
@@ -23957,8 +24511,10 @@ def update_integrations(data: IntegrationSettingsUpdate):
                 "ai_newsletter_model",
                 "ai_meta_hub_model",
                 "ai_project_folder_model",
+                "ai_codex_model",
             }:
-                setattr(settings, field, _normalize_model_setting_value(value))
+                normalizer = _normalize_codex_model_setting_value if field == "ai_codex_model" else _normalize_model_setting_value
+                setattr(settings, field, normalizer(value))
                 continue
             setattr(settings, field, value)
         if incoming_mailboxes is not None:
@@ -23968,7 +24524,7 @@ def update_integrations(data: IntegrationSettingsUpdate):
             normalized_endpoints = _merge_ai_endpoints(settings, incoming_ai_endpoints)
             settings.ai_endpoints_json = json.dumps(normalized_endpoints, ensure_ascii=False)
         if incoming_ai_routes is not None:
-            endpoint_ids = {endpoint["id"] for endpoint in _parse_ai_endpoints(settings)}
+            endpoint_ids = {endpoint["id"] for endpoint in _parse_ai_endpoints(settings) if endpoint.get("enabled") is not False}
             safe_routes = {}
             if isinstance(incoming_ai_routes, dict):
                 for purpose in AI_PURPOSE_LABELS:
@@ -23994,6 +24550,9 @@ def probe_ai_connection_models(data: AiConnectionProbeRequest):
     with SessionLocal() as db:
         settings = db.query(IntegrationSettings).first()
         config = _build_ai_config_from_request(data, settings)
+    config_ok, config_error_type, config_error_detail = _validate_ai_generation_config(config)
+    if not config_ok:
+        raise HTTPException(400, f"{config_error_detail} ({config_error_type})")
     provider = str(config.get("provider") or AI_PROVIDER_OLLAMA)
     base_url = str(config.get("base_url") or "").strip()
     if not base_url:
@@ -24026,6 +24585,9 @@ def test_ai_connection(data: AiConnectionProbeRequest):
     with SessionLocal() as db:
         settings = db.query(IntegrationSettings).first()
         config = _build_ai_config_from_request(data, settings)
+    config_ok, config_error_type, config_error_detail = _validate_ai_generation_config(config)
+    if not config_ok:
+        raise HTTPException(400, f"{config_error_detail} ({config_error_type})")
     provider = str(config.get("provider") or AI_PROVIDER_OLLAMA)
     base_url = str(config.get("base_url") or "").strip()
     if not base_url:
@@ -24034,9 +24596,12 @@ def test_ai_connection(data: AiConnectionProbeRequest):
         provider_models = _list_openai_compatible_models(config, timeout_seconds=8)
     else:
         provider_models = _list_ollama_models(timeout_seconds=8, base_url=base_url)
-    models = provider_models or _configured_ai_models_for_picker(config)
     configured_default_model = str(config.get("configured_default_model") or "").strip()
-    if configured_default_model:
+    codex_model = str(config.get("codex_model") or "").strip() if config.get("is_codex_bridge") else ""
+    models = _merge_model_candidates(codex_model, provider_models or _configured_ai_models_for_picker(config))
+    if codex_model:
+        model_candidates = [codex_model]
+    elif configured_default_model:
         model_candidates = [configured_default_model]
     elif provider_models:
         model_candidates = provider_models
@@ -24051,6 +24616,7 @@ def test_ai_connection(data: AiConnectionProbeRequest):
         "Antworte exakt mit OK.",
         model_candidates=model_candidates,
         config=config,
+        purpose="endpoint_test",
         timeout=30,
         temperature=0,
         max_tokens=20,
@@ -24823,9 +25389,9 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
         if not unity_id:
             raise HTTPException(400, "Missing unity_id")
 
-        name = "Arbeitszeit"
-        text = _build_task_position_text(task)
-        header = None
+        name = _normalize_space(payload.name) or "Arbeitszeit"
+        text = str(payload.text or "").strip() or _build_task_position_text(task)
+        header = _normalize_space(payload.header)
 
         client = SevdeskClient(config)
         try:
@@ -24885,12 +25451,12 @@ def sevdesk_task_to_invoice(task_id: int, payload: SevdeskTaskDraftRequest):
             if draft:
                 existing_invoice_id = int(draft.get("id"))
                 invoice_snapshot = client.get_invoice(existing_invoice_id) or draft
-                header = _build_sevdesk_draft_header(client, config, invoice_snapshot, draft)
+                header = header or _build_sevdesk_draft_header(client, config, invoice_snapshot, draft)
                 invoice_payload = client.build_invoice_payload(
                     contact_id, invoice_id=existing_invoice_id, invoice_snapshot=invoice_snapshot, header=header
                 )
             else:
-                header = _build_sevdesk_draft_header(client, config)
+                header = header or _build_sevdesk_draft_header(client, config)
                 invoice_payload = client.build_invoice_payload(contact_id, header=header)
             response = client.save_invoice(invoice_payload, client.build_positions(positions, invoice_id=existing_invoice_id))
         except SevdeskError as exc:
@@ -25049,6 +25615,34 @@ def sevdesk_project_folder_to_invoice(folder_id: int, payload: SevdeskProjectFol
                         if sevdesk_invoice_id:
                             task["sevdesk_invoice_id"] = sevdesk_invoice_id
             content["streams"] = streams
+            if payload.close_project:
+                archive = content.get("archive") if isinstance(content.get("archive"), dict) else {}
+                archive.update({
+                    "is_archived": True,
+                    "archived_at": now_ms,
+                    "closed_at": now_ms,
+                    "reason": "completed",
+                    "sevdesk_invoice_id": sevdesk_invoice_id,
+                    "sevdesk_customer_number": resolved_customer_number or customer_number,
+                })
+                content["archive"] = archive
+                content["completion"] = {
+                    "completed_at": now_ms,
+                    "invoice_title": (payload.invoice_title or f"sevDesk-Entwurf {folder.title}").strip(),
+                    "sevdesk_invoice_id": sevdesk_invoice_id,
+                    "sevdesk_customer_number": resolved_customer_number or customer_number,
+                }
+                activities = content.get("activities") if isinstance(content.get("activities"), list) else []
+                invoice_suffix = f" (sevDesk #{sevdesk_invoice_id})" if sevdesk_invoice_id else ""
+                activities.insert(0, {
+                    "id": uuid.uuid4().hex,
+                    "text": f"Projekt abgeschlossen und Rechnungsentwurf übergeben{invoice_suffix}",
+                    "at": now_ms,
+                })
+                content["activities"] = activities[:30]
+                folder.status = "green"
+                folder.current_state = "Abgeschlossen"
+                folder.next_step = "Rechnungsentwurf in sevDesk prüfen und versenden."
             folder.content_json = json.dumps(content, ensure_ascii=False)
             folder.updated_at = now_ms
             db.commit()
@@ -25167,7 +25761,7 @@ def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
                     results.append(
                         {"customer_number": customer_number, "ok": False, "error": "Contact not found"}
                     )
-                continue
+                    continue
                 contact_id = int(contact.get("id"))
                 if resolved_customer_number and resolved_customer_number != customer_number:
                     customer_number = resolved_customer_number
@@ -25181,7 +25775,7 @@ def sevdesk_tasks_sync(payload: SevdeskTaskSyncRequest):
                     results.append(
                         {"customer_number": customer_number, "ok": False, "error": "Missing unity id"}
                     )
-                continue
+                    continue
 
                 text = _summarize_tasks_for_invoice(customer_tasks)
                 positions = [
@@ -25907,6 +26501,8 @@ TEXT_ASSIST_MODULE_PURPOSES = {
     "customer-development": "customer_development",
     "notes": "internal_ai",
     "knowledge": "internal_ai",
+    "tasks": "internal_ai",
+    "day_tasks": "internal_ai",
 }
 
 
