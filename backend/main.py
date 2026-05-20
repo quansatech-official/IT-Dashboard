@@ -7815,6 +7815,7 @@ def _build_sevdesk_material_effort_stats(
         ),
     }
     config = getattr(client, "config", None)
+    invoice_position_jobs: List[Tuple[str, int, float]] = []
 
     for invoice in paid_invoices:
         paid_date = _invoice_date_for_paid(invoice)
@@ -7837,15 +7838,23 @@ def _build_sevdesk_material_effort_stats(
         if invoice_id <= 0:
             bucket["otherRevenueEur"] += invoice_amount
             continue
-        try:
-            position_rows = _list_sevdesk_invoice_positions(client, invoice_id)
-        except SevdeskError:
+        invoice_position_jobs.append((period_key, invoice_id, invoice_amount))
+
+    def apply_position_rows(
+        period_key: str,
+        invoice_amount: float,
+        position_rows: List[Dict[str, Any]],
+        *,
+        fetch_failed: bool = False,
+    ) -> None:
+        bucket = periods[period_key]
+        if fetch_failed:
             bucket["positionFetchErrors"] += 1
             bucket["otherRevenueEur"] += invoice_amount
-            continue
+            return
         if not position_rows:
             bucket["otherRevenueEur"] += invoice_amount
-            continue
+            return
         bucket["invoicesWithPositions"] += 1
         for row in position_rows:
             amount = round(float(_parse_sevdesk_amount(row) or 0.0), 2)
@@ -7871,6 +7880,25 @@ def _build_sevdesk_material_effort_stats(
                 bucket["hardwareRevenueEur"] += amount
             else:
                 bucket["materialUnclassifiedRevenueEur"] += amount
+
+    if invoice_position_jobs:
+        max_workers = min(8, len(invoice_position_jobs))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_list_sevdesk_invoice_positions, client, invoice_id): (
+                    period_key,
+                    invoice_amount,
+                )
+                for period_key, invoice_id, invoice_amount in invoice_position_jobs
+            }
+            for future in as_completed(futures):
+                period_key, invoice_amount = futures[future]
+                try:
+                    position_rows = future.result()
+                except Exception:
+                    apply_position_rows(period_key, invoice_amount, [], fetch_failed=True)
+                    continue
+                apply_position_rows(period_key, invoice_amount, position_rows)
 
     for bucket in periods.values():
         material_total = (
