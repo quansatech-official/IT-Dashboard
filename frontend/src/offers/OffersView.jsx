@@ -4134,16 +4134,12 @@ export default function OffersView() {
     error: "",
     replacePositions: false
   });
-  const previewWrapperRef = useRef(null);
-  const previewSectionRef = useRef(null);
   const documentBuildRef = useRef(null);
   const offerHeaderRef = useRef(null);
   const lastSavedOffersRef = useRef({});
   const offersFetchedRef = useRef(false);
   const lastOfferIndexRef = useRef(0);
   const draftInitializedRef = useRef(false);
-  const [previewScale, setPreviewScale] = useState(0.7);
-  const [previewMaxHeight, setPreviewMaxHeight] = useState("70vh");
   const crashRecoveryTimer = useRef(null);
   const serverSaveInFlightRef = useRef({});
   const crashRecoveryCheckedRef = useRef(false);
@@ -4246,35 +4242,6 @@ export default function OffersView() {
   };
 
   useEffect(() => {
-    if (!previewWrapperRef.current) return;
-    const element = previewWrapperRef.current;
-    const updateScale = () => {
-      const width =
-        element.clientWidth ||
-        element.getBoundingClientRect().width ||
-        window.innerWidth ||
-        0;
-      const a4WidthPx = 210 * 3.7795275591;
-      if (!width) {
-        setPreviewScale(0.68);
-        return;
-      }
-      const chromeOffset = 4;
-      const usableWidth = Math.max(0, width - chromeOffset);
-      const next = Math.min(1, usableWidth / a4WidthPx);
-      setPreviewScale(Math.max(0.52, next * 0.88));
-    };
-    updateScale();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", updateScale);
-      return () => window.removeEventListener("resize", updateScale);
-    }
-    const observer = new ResizeObserver(updateScale);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
     let active = true;
     fetch("/api/smtp_settings")
       .then((res) => (res && res.ok ? res.json() : null))
@@ -4323,39 +4290,6 @@ export default function OffersView() {
       console.warn("[offers] price calc drafts save failed", error);
     }
   }, [priceCalcDrafts]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    const computeHeight = () => {
-      const previewEl = previewWrapperRef.current;
-      if (!previewEl) return;
-      const firstPage = previewEl.querySelector("[data-pdf-page]");
-      const measuredHeight = firstPage
-        ? Math.round(firstPage.getBoundingClientRect().height)
-        : 0;
-      const a4HeightPx = 297 * 3.7795275591;
-      const fallbackHeight = Math.round(a4HeightPx * previewScale);
-      const nextHeight = Math.max(220, measuredHeight || fallbackHeight);
-      if (nextHeight > 0) {
-        const px = `${nextHeight}px`;
-        setPreviewMaxHeight(px);
-        previewEl.style.height = px;
-      }
-    };
-    computeHeight();
-    window.addEventListener("resize", computeHeight);
-    let observer;
-    if (typeof ResizeObserver !== "undefined") {
-      observer = new ResizeObserver(computeHeight);
-      if (previewWrapperRef.current?.parentElement) {
-        observer.observe(previewWrapperRef.current.parentElement);
-      }
-    }
-    return () => {
-      window.removeEventListener("resize", computeHeight);
-      if (observer) observer.disconnect();
-    };
-  }, [mainTab, activeOffer?.id, previewScale]);
 
   useEffect(() => {
     if (!importerOpen) return;
@@ -7033,44 +6967,57 @@ export default function OffersView() {
                       </div>
                     </section>
 
-                    <aside
-                      className="space-y-3 xl:sticky xl:top-5 self-start"
-                      ref={previewSectionRef}
-                    >
+                    <aside className="space-y-3 xl:sticky xl:top-5 self-start">
                       <div className="rounded-3xl border border-sand-200 bg-white p-3 shadow-soft">
                         <SectionHeader
                           icon={Eye}
                           kicker="Live Vorschau"
                           title="PDF Layout"
-                          description="Auf eine A4-Seite in der Höhe begrenzt, vertikal scrollbar."
+                          description="Gleicher Renderer wie Download und große Vorschau."
                           badge={
                             activeOffer ? (
-                              <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600">
-                                {activeOffer.status}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-full border border-sand-200 bg-sand-100 px-2 py-1 text-[10px] uppercase tracking-wide text-sand-600">
+                                  {activeOffer.status}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPreviewOfferId(activeOffer.id);
+                                    setPreviewMode("offer");
+                                  }}
+                                  className="inline-flex items-center gap-1.5 rounded-full border border-sand-200 bg-white px-2.5 py-1 text-[10px] uppercase tracking-wide text-sand-600 hover:bg-sand-100"
+                                  title="Vorschau vergrößern"
+                                >
+                                  <ExternalLink size={11} />
+                                  Großansicht
+                                </button>
+                              </div>
                             ) : null
                           }
                         />
                       </div>
                       <section className="overflow-hidden rounded-3xl border border-sand-200 bg-white shadow-soft">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!activeOffer) return;
-                            setPreviewOfferId(activeOffer.id);
-                            setPreviewMode("offer");
+                        <div
+                          className="w-full bg-sand-100"
+                          style={{
+                            height: "min(72vh, 760px)",
+                            minHeight: activeOffer ? "520px" : "260px"
                           }}
-                          className="w-full overflow-hidden text-left"
-                          title={activeOffer ? "Vorschau vergrößern" : ""}
                         >
-                          <div
-                            ref={previewWrapperRef}
-                            style={{ maxHeight: previewMaxHeight, height: previewMaxHeight }}
-                            className={`w-full overflow-auto bg-sand-50 ${activeOffer ? "cursor-zoom-in" : ""}`}
-                          >
-                            <OfferPreview offer={activeOffer} scale={previewScale} />
-                          </div>
-                        </button>
+                          {activeOffer ? (
+                            <OfferPdfPreview
+                              offer={activeOffer}
+                              mode="offer"
+                              showToolbar={false}
+                              style={{ width: "100%", height: "100%", border: "none" }}
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center p-4 text-sm text-sand-500">
+                              Kein Angebot ausgewählt.
+                            </div>
+                          )}
+                        </div>
                       </section>
                     </aside>
                   </div>

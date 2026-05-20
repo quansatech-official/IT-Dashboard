@@ -787,7 +787,7 @@ export const buildOfferPdfBlob = async (offer, mode = "offer") => {
   return pdf(<OfferPdfDocument offer={prepared} mode={mode} />).toBlob();
 };
 
-export function OfferPdfPreview({ offer, mode = "offer", style }) {
+export function OfferPdfPreview({ offer, mode = "offer", style, showToolbar = true }) {
   const [prepared, setPrepared] = useState(null);
   useEffect(() => {
     let cancelled = false;
@@ -821,7 +821,7 @@ export function OfferPdfPreview({ offer, mode = "offer", style }) {
     );
   }
   return (
-    <PDFViewer showToolbar style={style || { width: "100%", height: "100%", border: "none" }}>
+    <PDFViewer showToolbar={showToolbar} style={style || { width: "100%", height: "100%", border: "none" }}>
       <OfferPdfDocument offer={prepared} mode={mode} />
     </PDFViewer>
   );
